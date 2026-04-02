@@ -322,9 +322,11 @@ impl StructPayloadIndex {
         hw_counter: &HardwareCounterCell,
     ) -> OperationResult<Vec<FieldIndex>> {
         let payload_storage = self.payload.borrow();
-        let mut builders = self
-            .selector(payload_schema)
-            .index_builder(field, payload_schema)?;
+        let mut builders = self.selector(payload_schema).index_builder(
+            field,
+            payload_schema,
+            self.id_tracker.clone(),
+        )?;
 
         // Special null index complements every index. Seed it with the segment's total
         // point count so `iter_falses()` returns points that are missing from payload
