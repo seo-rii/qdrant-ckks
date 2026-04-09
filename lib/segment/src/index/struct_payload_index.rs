@@ -166,12 +166,15 @@ impl StructPayloadIndex {
         let mut rebuild = false;
         let mut is_dirty = false;
 
+        let id_tracker = self.id_tracker.borrow();
+        let deleted_points = id_tracker.deleted_point_bitslice();
+
         let mut indexes = if payload_schema.types.is_empty() {
             let indexes = self.selector(&payload_schema.schema).new_index(
                 field,
                 &payload_schema.schema,
                 create_if_missing,
-                &self.id_tracker.borrow(),
+                deleted_points,
             )?;
 
             if let Some(mut indexes) = indexes {
@@ -202,7 +205,6 @@ impl StructPayloadIndex {
                 vec![]
             }
         } else {
-            let id_tracker_borrow = self.id_tracker.borrow();
             payload_schema
                 .types
                 .iter()
@@ -216,7 +218,7 @@ impl StructPayloadIndex {
                             &self.path,
                             total_point_count,
                             create_if_missing,
-                            &id_tracker_borrow,
+                            deleted_points,
                         )
                     })
                 })
@@ -322,11 +324,14 @@ impl StructPayloadIndex {
         hw_counter: &HardwareCounterCell,
     ) -> OperationResult<Vec<FieldIndex>> {
         let payload_storage = self.payload.borrow();
-        let mut builders = self.selector(payload_schema).index_builder(
-            field,
-            payload_schema,
-            self.id_tracker.clone(),
-        )?;
+        let mut builders = {
+            let id_tracker = self.id_tracker.borrow();
+            self.selector(payload_schema).index_builder(
+                field,
+                payload_schema,
+                id_tracker.deleted_point_bitslice(),
+            )?
+        };
 
         // Special null index complements every index. Seed it with the segment's total
         // point count so `iter_falses()` returns points that are missing from payload
