@@ -1,6 +1,7 @@
 mod lloyd_max;
 mod permutation;
 pub mod rotation;
+pub mod simd;
 
 use std::alloc::Layout;
 use std::borrow::Cow;
