@@ -64,11 +64,12 @@ pub trait PayloadFieldIndex {
 
     /// Iterate conditions for payload blocks with minimum size of `threshold`
     /// Required for building HNSW index
-    fn payload_blocks(
+    fn for_each_payload_block(
         &self,
         threshold: usize,
         key: PayloadKeyType,
-    ) -> Box<dyn Iterator<Item = OperationResult<PayloadBlockCondition>> + '_>;
+        f: &mut dyn FnMut(PayloadBlockCondition) -> OperationResult<()>,
+    ) -> OperationResult<()>;
 }
 
 pub trait ValueIndexer {
@@ -258,13 +259,14 @@ impl FieldIndex {
             .estimate_cardinality(condition, hw_counter)
     }
 
-    pub fn payload_blocks(
+    pub fn for_each_payload_block(
         &self,
         threshold: usize,
         key: PayloadKeyType,
-    ) -> Box<dyn Iterator<Item = OperationResult<PayloadBlockCondition>> + '_> {
+        f: &mut dyn FnMut(PayloadBlockCondition) -> OperationResult<()>,
+    ) -> OperationResult<()> {
         self.get_payload_field_index()
-            .payload_blocks(threshold, key)
+            .for_each_payload_block(threshold, key, f)
     }
 
     pub fn add_point(
