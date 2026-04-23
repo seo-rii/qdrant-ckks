@@ -310,19 +310,24 @@ service:
   # metrics_prefix: qdrant_
 
 # qdrant-ckks encryption configuration.
-# Payload encryption uses AES-256-GCM for selected text fields. CKKS vector
-# encryption is delegated to an external OpenFHE bridge executable.
+# This is only runtime key material and bridge configuration. Collection-level
+# enablement and field/vector selection live in collection params under `ckks`.
 ckks:
   enabled: false
-  # Base64url-no-padding encoded 32-byte key. Prefer injecting with
-  # QDRANT__CKKS__MASTER_KEY_B64 rather than committing it to config files.
+  # Default base64url-no-padding encoded 32-byte key. Prefer per-collection
+  # environment variables like QDRANT__CKKS__COLLECTIONS__docs__MASTER_KEY_B64.
   master_key_b64: null
-  # Capability-style key id recorded in encryption envelopes.
+  # Default capability-style key id recorded in encryption envelopes.
   key_id: null
-  # Dot-separated payload string fields to encrypt before storage.
-  payload_text_fields: []
-  # Path to an executable that implements docs/ckks.md bridge protocol.
+  # Default path to an executable that implements docs/ckks.md bridge protocol.
   openfhe_bridge_path: null
+  # Collection-specific runtime key material. Do not commit real keys here.
+  collections: {}
+  # collections:
+  #   docs:
+  #     key_id: tenant-a:docs
+  #     master_key_b64: null
+  #     openfhe_bridge_path: /usr/local/bin/openfhe-bridge
 
 cluster:
   # Use `enabled: true` to run Qdrant in distributed deployment mode

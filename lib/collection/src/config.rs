@@ -64,6 +64,62 @@ impl From<&WalConfig> for WalOptions {
     }
 }
 
+#[cfg(test)]
+mod ckks_tests {
+    use validator::Validate;
+
+    use super::*;
+
+    #[test]
+    fn ckks_collection_config_round_trips_without_key_material() {
+        let params = CollectionParams {
+            ckks: Some(CkksCollectionConfig {
+                enabled: true,
+                key_id: Some("tenant-a:docs".to_string()),
+                payload_text_fields: vec!["body".to_string(), "document.summary".to_string()],
+                vector_names: vec!["embedding".to_string()],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let serialized = serde_json::to_string(&params).unwrap();
+        assert!(serialized.contains("\"ckks\""));
+        assert!(serialized.contains("tenant-a:docs"));
+        assert!(!serialized.contains("master_key"));
+
+        let deserialized: CollectionParams = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.ckks, params.ckks);
+        deserialized.validate().unwrap();
+    }
+
+    #[test]
+    fn ckks_collection_config_rejects_invalid_key_ids_and_field_paths() {
+        let invalid_key = CkksCollectionConfig {
+            enabled: true,
+            key_id: Some("tenant/key".to_string()),
+            payload_text_fields: vec!["body".to_string()],
+            vector_names: Vec::new(),
+        };
+        assert!(invalid_key.validate().is_err());
+
+        let invalid_field = CkksCollectionConfig {
+            enabled: true,
+            key_id: Some("tenant-a:docs".to_string()),
+            payload_text_fields: vec!["body..text".to_string()],
+            vector_names: Vec::new(),
+        };
+        assert!(invalid_field.validate().is_err());
+
+        let marker_field = CkksCollectionConfig {
+            enabled: true,
+            key_id: Some("tenant-a:docs".to_string()),
+            payload_text_fields: vec!["$qdrant_ckks.body".to_string()],
+            vector_names: Vec::new(),
+        };
+        assert!(marker_field.validate().is_err());
+    }
+}
+
 impl Default for WalConfig {
     fn default() -> Self {
         WalConfig {
@@ -82,6 +138,73 @@ pub enum ShardingMethod {
     #[default]
     Auto,
     Custom,
+}
+
+#[derive(
+    Debug, Deserialize, Serialize, JsonSchema, Validate, Anonymize, Clone, PartialEq, Eq, Hash,
+)]
+#[serde(rename_all = "snake_case")]
+pub struct CkksCollectionConfig {
+    /// Enable encryption for this collection.
+    #[serde(default)]
+    #[anonymize(false)]
+    pub enabled: bool,
+    /// Public key id recorded in encryption envelopes. Key material is resolved from runtime config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[validate(custom(function = "validate_ckks_key_id"))]
+    #[anonymize(false)]
+    pub key_id: Option<String>,
+    /// Dot-separated payload string fields encrypted before storage.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[validate(custom(function = "validate_ckks_payload_fields"))]
+    #[anonymize(true)]
+    pub payload_text_fields: Vec<String>,
+    /// Named dense vectors that should be encrypted through the OpenFHE CKKS bridge.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[anonymize(false)]
+    pub vector_names: Vec<VectorNameBuf>,
+}
+
+impl Default for CkksCollectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            key_id: None,
+            payload_text_fields: Vec::new(),
+            vector_names: Vec::new(),
+        }
+    }
+}
+
+fn validate_ckks_key_id(key_id: &str) -> Result<(), validator::ValidationError> {
+    if key_id.is_empty()
+        || key_id.len() > 128
+        || !key_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b':' | b'-'))
+    {
+        return Err(validator::ValidationError::new("invalid_ckks_key_id"));
+    }
+
+    Ok(())
+}
+
+fn validate_ckks_payload_fields(fields: &[String]) -> Result<(), validator::ValidationError> {
+    for field in fields {
+        if field.is_empty()
+            || field.starts_with('.')
+            || field.ends_with('.')
+            || field
+                .split('.')
+                .any(|part| part.is_empty() || part == "$qdrant_ckks" || part.contains('\0'))
+        {
+            return Err(validator::ValidationError::new(
+                "invalid_ckks_payload_field",
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Validate, Anonymize, Clone, PartialEq, Eq)]
@@ -137,6 +260,10 @@ pub struct CollectionParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[validate(nested)]
     pub sparse_vectors: Option<BTreeMap<VectorNameBuf, SparseVectorParams>>,
+    /// Collection-local encryption settings. Secret key material is never stored here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[validate(nested)]
+    pub ckks: Option<CkksCollectionConfig>,
 }
 
 impl CollectionParams {
@@ -165,6 +292,7 @@ impl CollectionParams {
             read_fan_out_delay_ms: _, // May be changed,
             on_disk_payload: _, // May be changed
             sparse_vectors,  // Parameters may be changes, but not the structure
+            ckks: _,         // May be changed; key material is resolved at runtime
         } = other;
 
         self.vectors.check_compatible(vectors)?;
@@ -373,6 +501,7 @@ impl CollectionParams {
             read_fan_out_delay_ms: None,
             on_disk_payload: default_on_disk_payload(),
             sparse_vectors: None,
+            ckks: None,
         }
     }
 

@@ -25,18 +25,36 @@ Selected JSON string fields are replaced with a single marker object:
 The AEAD associated data binds ciphertexts to `collection`, `point_id`, and field
 path. Moving a ciphertext to another point or field must fail authentication.
 
-Runtime config:
+Collection params enable encryption and select fields/vectors per collection:
+
+```yaml
+params:
+  ckks:
+    enabled: true
+    key_id: tenant-a:docs
+    payload_text_fields: [body]
+    vector_names: [embedding]
+```
+
+Runtime settings provide key material per collection. Prefer injecting keys
+through environment variables such as
+`QDRANT__CKKS__COLLECTIONS__docs__MASTER_KEY_B64` instead of committing them to
+config files:
 
 ```yaml
 ckks:
   enabled: true
-  key_id: tenant-a:payload
-  master_key_b64: base64url-no-pad-32-byte-key
-  payload_text_fields: [body]
+  collections:
+    docs:
+      key_id: tenant-a:docs
+      master_key_b64: base64url-no-pad-32-byte-key
+      openfhe_bridge_path: /usr/local/bin/openfhe-bridge
 ```
 
-Prefer injecting `master_key_b64` through `QDRANT__CKKS__MASTER_KEY_B64`
-instead of committing it to a config file.
+If both collection params and the matching `ckks.collections.<name>` runtime
+entry specify `key_id`, they must match. Otherwise the collection value wins,
+then the collection runtime value, then the global default. This prevents
+accidentally encrypting a collection with the wrong key.
 
 ## CKKS vectors
 

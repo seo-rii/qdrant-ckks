@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use collection::config::{CollectionConfigInternal, CollectionParams, ShardingMethod};
+use collection::config::{
+    CkksCollectionConfig, CollectionConfigInternal, CollectionParams, ShardingMethod,
+};
 use collection::operations::config_diff::{
     CollectionParamsDiff, HnswConfigDiff, OptimizersConfigDiff, QuantizationConfigDiff,
     WalConfigDiff,
@@ -166,6 +168,10 @@ pub struct CreateCollection {
     /// Sparse vector data config.
     #[validate(nested)]
     pub sparse_vectors: Option<BTreeMap<VectorNameBuf, SparseVectorParams>>,
+    /// Collection-local encryption settings. Secret key material is resolved from runtime config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[validate(nested)]
+    pub ckks: Option<CkksCollectionConfig>,
     /// Strict-mode config.
     #[validate(nested)]
     pub strict_mode_config: Option<StrictModeConfig>,
@@ -446,6 +452,7 @@ impl From<CollectionConfigInternal> for CreateCollection {
             read_fan_out_delay_ms: _,
             on_disk_payload,
             sparse_vectors,
+            ckks,
         } = params;
 
         Self {
@@ -460,6 +467,7 @@ impl From<CollectionConfigInternal> for CreateCollection {
             optimizers_config: Some(optimizer_config.into()),
             quantization_config,
             sparse_vectors,
+            ckks,
             strict_mode_config,
             uuid,
             metadata,

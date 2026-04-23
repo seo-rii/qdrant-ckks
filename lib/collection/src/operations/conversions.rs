@@ -326,6 +326,7 @@ impl TryFrom<api::grpc::qdrant::CollectionParamsDiff> for CollectionParamsDiff {
             read_fan_out_factor,
             read_fan_out_delay_ms,
             on_disk_payload,
+            ckks: None,
         })
     }
 }
@@ -442,6 +443,7 @@ impl From<CollectionInfo> for api::grpc::qdrant::CollectionInfo {
             read_fan_out_factor,
             sharding_method,
             sparse_vectors,
+            ckks: _,
         } = params;
 
         api::grpc::qdrant::CollectionInfo {
@@ -1935,6 +1937,7 @@ impl TryFrom<api::grpc::qdrant::CollectionConfig> for CollectionConfig {
                             .map(sharding_method_from_proto)
                             .transpose()?,
                         read_fan_out_delay_ms,
+                        ckks: None,
                     }
                 }
             },

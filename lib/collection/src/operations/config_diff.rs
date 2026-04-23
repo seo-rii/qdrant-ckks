@@ -12,7 +12,7 @@ use segment::types::{
 use serde::{Deserialize, Serialize};
 use validator::{Validate, ValidationErrors};
 
-use crate::config::{CollectionParams, WalConfig};
+use crate::config::{CkksCollectionConfig, CollectionParams, WalConfig};
 use crate::optimizers_builder::OptimizersConfig;
 
 pub trait DiffConfig<Diff>: Clone {
@@ -102,6 +102,10 @@ pub struct CollectionParamsDiff {
     /// Note: those payload values that are involved in filtering and are indexed - remain in RAM.
     #[serde(default)]
     pub on_disk_payload: Option<bool>,
+    /// Collection-local encryption settings. Set `enabled: false` to disable collection encryption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[validate(nested)]
+    pub ckks: Option<CkksCollectionConfig>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Validate, Clone, PartialEq)]
@@ -301,6 +305,7 @@ impl DiffConfig<CollectionParamsDiff> for CollectionParams {
             read_fan_out_factor,
             read_fan_out_delay_ms,
             on_disk_payload,
+            ckks,
         } = diff;
 
         CollectionParams {
@@ -314,6 +319,7 @@ impl DiffConfig<CollectionParamsDiff> for CollectionParams {
             sharding_method: self.sharding_method,
             sparse_vectors: self.sparse_vectors.clone(),
             vectors: self.vectors.clone(),
+            ckks: ckks.clone().or_else(|| self.ckks.clone()),
         }
     }
 }
@@ -426,6 +432,7 @@ impl From<CollectionParams> for CollectionParamsDiff {
             read_fan_out_factor,
             read_fan_out_delay_ms,
             on_disk_payload,
+            ckks,
             shard_number: _,
             sharding_method: _,
             sparse_vectors: _,
@@ -438,6 +445,7 @@ impl From<CollectionParams> for CollectionParamsDiff {
             read_fan_out_factor,
             read_fan_out_delay_ms,
             on_disk_payload: Some(on_disk_payload),
+            ckks,
         }
     }
 }
@@ -528,6 +536,7 @@ mod tests {
             read_fan_out_factor: None,
             read_fan_out_delay_ms: None,
             on_disk_payload: None,
+            ckks: None,
         };
 
         let new_params = params.update(&diff);
@@ -535,6 +544,47 @@ mod tests {
         assert_eq!(new_params.replication_factor.get(), 1);
         assert_eq!(new_params.write_consistency_factor.get(), 2);
         assert!(new_params.on_disk_payload);
+    }
+
+    #[test]
+    fn test_ckks_collection_params_update_preserves_or_disables_encryption() {
+        let enabled_ckks = CkksCollectionConfig {
+            enabled: true,
+            key_id: Some("tenant-a:docs".to_string()),
+            payload_text_fields: vec!["body".to_string()],
+            vector_names: vec!["embedding".to_string()],
+        };
+        let params = CollectionParams {
+            ckks: Some(enabled_ckks.clone()),
+            ..CollectionParams::empty()
+        };
+
+        let unchanged = params.update(&CollectionParamsDiff {
+            replication_factor: None,
+            write_consistency_factor: None,
+            read_fan_out_factor: None,
+            read_fan_out_delay_ms: None,
+            on_disk_payload: None,
+            ckks: None,
+        });
+        assert_eq!(unchanged.ckks, Some(enabled_ckks));
+
+        let disabled = CkksCollectionConfig {
+            enabled: false,
+            key_id: Some("tenant-a:docs".to_string()),
+            payload_text_fields: Vec::new(),
+            vector_names: Vec::new(),
+        };
+        let updated = params.update(&CollectionParamsDiff {
+            replication_factor: None,
+            write_consistency_factor: None,
+            read_fan_out_factor: None,
+            read_fan_out_delay_ms: None,
+            on_disk_payload: None,
+            ckks: Some(disabled.clone()),
+        });
+
+        assert_eq!(updated.ckks, Some(disabled));
     }
 
     #[test]

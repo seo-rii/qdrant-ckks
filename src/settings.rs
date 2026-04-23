@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::{env, fmt, io};
 
 use api::grpc::transport_channel_pool::{
@@ -224,22 +225,49 @@ pub struct GpuConfig {
 }
 
 #[derive(Deserialize, Clone, Default, Validate)]
-pub struct CkksConfig {
-    /// Enable qdrant-ckks encryption helpers.
-    #[serde(default)]
-    pub enabled: bool,
-    /// Key id used in encrypted payload and CKKS vector envelopes.
+pub struct CkksCollectionKeyConfig {
+    /// Runtime key id for one collection. If omitted, collection params or default key id are used.
     #[serde(default)]
     pub key_id: Option<String>,
-    /// Base64url-no-padding encoded 32-byte AES key for payload text encryption.
+    /// Base64url-no-padding encoded 32-byte AES key for this collection.
     #[serde(default)]
     pub master_key_b64: Option<String>,
-    /// Dot-separated payload field paths to encrypt before storage, for example `body`.
-    #[serde(default)]
-    pub payload_text_fields: Vec<String>,
-    /// External OpenFHE bridge executable for CKKS vector encryption.
+    /// External OpenFHE bridge executable for this collection.
     #[serde(default)]
     pub openfhe_bridge_path: Option<String>,
+}
+
+impl fmt::Debug for CkksCollectionKeyConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CkksCollectionKeyConfig")
+            .field("key_id", &self.key_id)
+            .field(
+                "master_key_b64",
+                &self.master_key_b64.as_ref().map(|_| "[redacted]"),
+            )
+            .field("openfhe_bridge_path", &self.openfhe_bridge_path)
+            .finish()
+    }
+}
+
+#[derive(Deserialize, Clone, Default, Validate)]
+pub struct CkksConfig {
+    /// Global CKKS master switch. Collections still need `params.ckks.enabled: true`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Default key id used when neither collection params nor collection runtime config set one.
+    #[serde(default)]
+    pub key_id: Option<String>,
+    /// Default base64url-no-padding encoded 32-byte AES key.
+    #[serde(default)]
+    pub master_key_b64: Option<String>,
+    /// Default external OpenFHE bridge executable for CKKS vector encryption.
+    #[serde(default)]
+    pub openfhe_bridge_path: Option<String>,
+    /// Collection-specific key material. Prefer this over default key material.
+    #[serde(default)]
+    #[validate(nested)]
+    pub collections: HashMap<String, CkksCollectionKeyConfig>,
 }
 
 impl fmt::Debug for CkksConfig {
@@ -251,8 +279,8 @@ impl fmt::Debug for CkksConfig {
                 "master_key_b64",
                 &self.master_key_b64.as_ref().map(|_| "[redacted]"),
             )
-            .field("payload_text_fields", &self.payload_text_fields)
             .field("openfhe_bridge_path", &self.openfhe_bridge_path)
+            .field("collections", &self.collections)
             .finish()
     }
 }
@@ -558,7 +586,7 @@ mod tests {
             default_http_client_disconnect_timeout_sec()
         );
         assert!(!config.ckks.enabled);
-        assert!(config.ckks.payload_text_fields.is_empty());
+        assert!(config.ckks.collections.is_empty());
 
         config
             .validate()

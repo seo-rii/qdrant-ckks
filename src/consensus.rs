@@ -1569,6 +1569,7 @@ mod tests {
                                 write_consistency_factor: None,
                                 quantization_config: None,
                                 sharding_method: None,
+                                ckks: None,
                                 strict_mode_config: None,
                                 uuid: None,
                                 metadata: None,

@@ -108,6 +108,7 @@ impl TryFrom<grpc::CreateCollection> for CollectionMetaOperations {
                 sharding_method: sharding_method
                     .map(sharding_method_from_proto)
                     .transpose()?,
+                ckks: None,
                 strict_mode_config: strict_mode_config.map(strict_mode_from_api),
                 uuid: None,
                 metadata: if metadata.is_empty() {
