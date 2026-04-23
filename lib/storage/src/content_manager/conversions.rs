@@ -83,6 +83,7 @@ impl TryFrom<grpc::CreateCollection> for CollectionMetaOperations {
             quantization_config,
             sharding_method,
             sparse_vectors_config,
+            ckks,
             strict_mode_config,
             metadata,
         } = value;
@@ -108,7 +109,7 @@ impl TryFrom<grpc::CreateCollection> for CollectionMetaOperations {
                 sharding_method: sharding_method
                     .map(sharding_method_from_proto)
                     .transpose()?,
-                ckks: None,
+                ckks: ckks.map(TryInto::try_into).transpose()?,
                 strict_mode_config: strict_mode_config.map(strict_mode_from_api),
                 uuid: None,
                 metadata: if metadata.is_empty() {
@@ -372,5 +373,35 @@ impl From<ConsensusThreadStatus> for grpc::ConsensusThreadStatus {
                 )),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod ckks_grpc_tests {
+    use super::*;
+
+    #[test]
+    fn create_collection_preserves_ckks_config_from_grpc() {
+        let operation = CollectionMetaOperations::try_from(grpc::CreateCollection {
+            collection_name: "docs".to_string(),
+            ckks: Some(grpc::CkksCollectionConfig {
+                enabled: true,
+                key_id: Some("tenant-a:docs".to_string()),
+                payload_text_fields: vec!["body".to_string()],
+                vector_names: vec!["embedding".to_string()],
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let CollectionMetaOperations::CreateCollection(operation) = operation else {
+            panic!("expected create collection operation");
+        };
+        let ckks = operation.create_collection.ckks.unwrap();
+
+        assert!(ckks.enabled);
+        assert_eq!(ckks.key_id.as_deref(), Some("tenant-a:docs"));
+        assert_eq!(ckks.payload_text_fields, vec!["body".to_string()]);
+        assert_eq!(ckks.vector_names, vec!["embedding".to_string()]);
     }
 }

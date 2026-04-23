@@ -1203,6 +1203,11 @@ pub struct CreateCollection {
     /// Arbitrary JSON metadata for the collection
     #[prost(map = "string, message", tag = "18")]
     pub metadata: ::std::collections::HashMap<::prost::alloc::string::String, Value>,
+    /// Collection-local qdrant-ckks encryption settings.
+    /// Secret key material is provided by runtime config, not by this message.
+    #[prost(message, optional, tag = "19")]
+    #[validate(nested)]
+    pub ckks: ::core::option::Option<CkksCollectionConfig>,
 }
 #[derive(validator::Validate)]
 #[derive(serde::Serialize)]
@@ -1317,6 +1322,11 @@ pub struct CollectionParams {
     /// Define number of milliseconds to wait before attempting to read from another replica.
     #[prost(uint64, optional, tag = "11")]
     pub read_fan_out_delay_ms: ::core::option::Option<u64>,
+    /// Collection-local qdrant-ckks encryption settings.
+    /// Secret key material is provided by runtime config, not by this message.
+    #[prost(message, optional, tag = "12")]
+    #[validate(nested)]
+    pub ckks: ::core::option::Option<CkksCollectionConfig>,
 }
 #[derive(validator::Validate)]
 #[derive(serde::Serialize)]
@@ -1340,6 +1350,28 @@ pub struct CollectionParamsDiff {
     /// Define number of milliseconds to wait before attempting to read from another replica.
     #[prost(uint64, optional, tag = "5")]
     pub read_fan_out_delay_ms: ::core::option::Option<u64>,
+    /// Collection-local qdrant-ckks encryption settings. Set enabled=false to disable.
+    #[prost(message, optional, tag = "6")]
+    #[validate(nested)]
+    pub ckks: ::core::option::Option<CkksCollectionConfig>,
+}
+#[derive(validator::Validate)]
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CkksCollectionConfig {
+    /// Enable encryption for this collection.
+    #[prost(bool, tag = "1")]
+    pub enabled: bool,
+    /// Public key id recorded in encryption envelopes. Key material is resolved from runtime config.
+    #[prost(string, optional, tag = "2")]
+    pub key_id: ::core::option::Option<::prost::alloc::string::String>,
+    /// Dot-separated payload string fields encrypted before storage.
+    #[prost(string, repeated, tag = "3")]
+    pub payload_text_fields: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Named dense vectors that should be encrypted through the OpenFHE CKKS bridge.
+    #[prost(string, repeated, tag = "4")]
+    pub vector_names: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]

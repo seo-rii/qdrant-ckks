@@ -26,6 +26,7 @@ use segment::types::{
 };
 use shard::retrieve::record_internal::RecordInternal;
 use tonic::Status;
+use validator::Validate;
 
 use super::cluster_ops::{ReplicatePoints, ReplicatePointsOperation, ReshardingDirection};
 use super::consistency_params::ReadConsistency;
@@ -36,7 +37,7 @@ use super::types::{
     VectorsConfigDiff,
 };
 use crate::config::{
-    CollectionParams, ShardingMethod, WalConfig, default_replication_factor,
+    CkksCollectionConfig, CollectionParams, ShardingMethod, WalConfig, default_replication_factor,
     default_write_consistency_factor,
 };
 use crate::lookup::WithLookup;
@@ -298,6 +299,46 @@ impl From<api::grpc::qdrant::WalConfigDiff> for WalConfigDiff {
     }
 }
 
+impl TryFrom<api::grpc::qdrant::CkksCollectionConfig> for CkksCollectionConfig {
+    type Error = Status;
+
+    fn try_from(value: api::grpc::qdrant::CkksCollectionConfig) -> Result<Self, Self::Error> {
+        let api::grpc::qdrant::CkksCollectionConfig {
+            enabled,
+            key_id,
+            payload_text_fields,
+            vector_names,
+        } = value;
+        let config = Self {
+            enabled,
+            key_id,
+            payload_text_fields,
+            vector_names,
+        };
+        config
+            .validate()
+            .map_err(|err| Status::invalid_argument(format!("invalid ckks config: {err}")))?;
+        Ok(config)
+    }
+}
+
+impl From<CkksCollectionConfig> for api::grpc::qdrant::CkksCollectionConfig {
+    fn from(value: CkksCollectionConfig) -> Self {
+        let CkksCollectionConfig {
+            enabled,
+            key_id,
+            payload_text_fields,
+            vector_names,
+        } = value;
+        Self {
+            enabled,
+            key_id,
+            payload_text_fields,
+            vector_names,
+        }
+    }
+}
+
 impl TryFrom<api::grpc::qdrant::CollectionParamsDiff> for CollectionParamsDiff {
     type Error = Status;
 
@@ -308,6 +349,7 @@ impl TryFrom<api::grpc::qdrant::CollectionParamsDiff> for CollectionParamsDiff {
             read_fan_out_factor,
             on_disk_payload,
             read_fan_out_delay_ms,
+            ckks,
         } = value;
         Ok(Self {
             replication_factor: replication_factor
@@ -326,7 +368,7 @@ impl TryFrom<api::grpc::qdrant::CollectionParamsDiff> for CollectionParamsDiff {
             read_fan_out_factor,
             read_fan_out_delay_ms,
             on_disk_payload,
-            ckks: None,
+            ckks: ckks.map(TryInto::try_into).transpose()?,
         })
     }
 }
@@ -443,7 +485,7 @@ impl From<CollectionInfo> for api::grpc::qdrant::CollectionInfo {
             read_fan_out_factor,
             sharding_method,
             sparse_vectors,
-            ckks: _,
+            ckks,
         } = params;
 
         api::grpc::qdrant::CollectionInfo {
@@ -507,6 +549,7 @@ impl From<CollectionInfo> for api::grpc::qdrant::CollectionInfo {
                         }
                     }),
                     read_fan_out_delay_ms,
+                    ckks: ckks.map(Into::into),
                 }),
                 hnsw_config: Some(api::grpc::qdrant::HnswConfigDiff {
                     m: Some(m as u64),
@@ -1880,6 +1923,7 @@ impl TryFrom<api::grpc::qdrant::CollectionConfig> for CollectionConfig {
                         sharding_method,
                         sparse_vectors_config,
                         read_fan_out_delay_ms,
+                        ckks,
                     } = params;
                     CollectionParams {
                         vectors: match vectors_config {
@@ -1937,7 +1981,7 @@ impl TryFrom<api::grpc::qdrant::CollectionConfig> for CollectionConfig {
                             .map(sharding_method_from_proto)
                             .transpose()?,
                         read_fan_out_delay_ms,
-                        ckks: None,
+                        ckks: ckks.map(TryInto::try_into).transpose()?,
                     }
                 }
             },
@@ -1967,6 +2011,46 @@ impl TryFrom<api::grpc::qdrant::CollectionConfig> for CollectionConfig {
                 Some(api::conversions::json::proto_to_payloads(metadata)?)
             },
         })
+    }
+}
+
+#[cfg(test)]
+mod ckks_grpc_tests {
+    use super::*;
+
+    #[test]
+    fn collection_params_diff_preserves_ckks_config_from_grpc() {
+        let diff = api::grpc::qdrant::CollectionParamsDiff {
+            ckks: Some(api::grpc::qdrant::CkksCollectionConfig {
+                enabled: true,
+                key_id: Some("tenant-a:docs".to_string()),
+                payload_text_fields: vec!["body".to_string()],
+                vector_names: vec!["embedding".to_string()],
+            }),
+            ..Default::default()
+        };
+
+        let converted = CollectionParamsDiff::try_from(diff).unwrap();
+        let ckks = converted.ckks.unwrap();
+
+        assert!(ckks.enabled);
+        assert_eq!(ckks.key_id.as_deref(), Some("tenant-a:docs"));
+        assert_eq!(ckks.payload_text_fields, vec!["body".to_string()]);
+        assert_eq!(ckks.vector_names, vec!["embedding".to_string()]);
+    }
+
+    #[test]
+    fn grpc_ckks_config_rejects_invalid_key_id() {
+        let config = api::grpc::qdrant::CkksCollectionConfig {
+            enabled: true,
+            key_id: Some("tenant/key".to_string()),
+            payload_text_fields: vec!["body".to_string()],
+            vector_names: Vec::new(),
+        };
+
+        let err = CkksCollectionConfig::try_from(config).unwrap_err();
+
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
     }
 }
 
