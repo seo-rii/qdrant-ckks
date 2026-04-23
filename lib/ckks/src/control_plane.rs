@@ -1,0 +1,342 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+use thiserror::Error;
+
+pub const GENERIC_CIPHERTEXT_MARKER: &str = "$qdrant_ciphertext";
+pub const PAYLOAD_AES_GCM_PROVIDER: &str = "payload/aes-256-gcm@v1";
+pub const VECTOR_OPENFHE_CKKS_PROVIDER: &str = "vector/openfhe-ckks@v1";
+pub const METADATA_BLIND_INDEX_PROVIDER: &str = "metadata/blind-index-hmac@v1";
+pub const PAYLOAD_FIELD_BINDING: &str = "payload-field/v1";
+pub const VECTOR_ENVELOPE_BINDING: &str = "vector-envelope/v1";
+pub const METADATA_VALUE_BINDING: &str = "metadata-value/v1";
+
+#[derive(Error, Debug, PartialEq, Eq)]
+pub enum ControlPlaneError {
+    #[error("crypto identifier is invalid: {0}")]
+    InvalidIdentifier(String),
+    #[error("ciphertext envelope version must be at least 1")]
+    InvalidEnvelopeVersion,
+    #[error("stored ciphertext envelope is malformed")]
+    MalformedEnvelope,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CryptoCapability {
+    PayloadValue,
+    VectorCiphertext,
+    MetadataValue,
+    MetadataExactMatchToken,
+}
+
+impl CryptoCapability {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::PayloadValue => "payload_value",
+            Self::VectorCiphertext => "vector_ciphertext",
+            Self::MetadataValue => "metadata_value",
+            Self::MetadataExactMatchToken => "metadata_exact_match_token",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct CiphertextEnvelope {
+    pub version: u16,
+    pub capability: CryptoCapability,
+    pub provider: String,
+    pub instance_fingerprint: String,
+    pub key_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<String>,
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub headers: Map<String, Value>,
+    pub body: String,
+}
+
+impl CiphertextEnvelope {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        version: u16,
+        capability: CryptoCapability,
+        provider: impl Into<String>,
+        instance_fingerprint: impl Into<String>,
+        key_id: impl Into<String>,
+        binding: Option<String>,
+        headers: Map<String, Value>,
+        body: impl Into<String>,
+    ) -> Result<Self, ControlPlaneError> {
+        let provider = provider.into();
+        let instance_fingerprint = instance_fingerprint.into();
+        let key_id = key_id.into();
+        let body = body.into();
+
+        if version == 0 {
+            return Err(ControlPlaneError::InvalidEnvelopeVersion);
+        }
+        validate_identifier(&provider)?;
+        validate_identifier(&instance_fingerprint)?;
+        validate_identifier(&key_id)?;
+        if let Some(binding) = &binding {
+            validate_identifier(binding)?;
+        }
+        if body.is_empty() {
+            return Err(ControlPlaneError::InvalidIdentifier("body".to_string()));
+        }
+
+        Ok(Self {
+            version,
+            capability,
+            provider,
+            instance_fingerprint,
+            key_id,
+            binding,
+            headers,
+            body,
+        })
+    }
+
+    pub fn to_stored_value(&self) -> Value {
+        let serialized = serde_json::to_value(self).expect("ciphertext envelope must serialize");
+        Value::Object(Map::from_iter([(
+            GENERIC_CIPHERTEXT_MARKER.to_string(),
+            serialized,
+        )]))
+    }
+
+    pub fn from_stored_value(value: &Value) -> Result<Option<Self>, ControlPlaneError> {
+        let Value::Object(object) = value else {
+            return Ok(None);
+        };
+        let Some(stored) = object.get(GENERIC_CIPHERTEXT_MARKER) else {
+            return Ok(None);
+        };
+        if object.len() != 1 {
+            return Err(ControlPlaneError::MalformedEnvelope);
+        }
+
+        let envelope: Self = serde_json::from_value(stored.clone())
+            .map_err(|_| ControlPlaneError::MalformedEnvelope)?;
+        if envelope.version == 0 {
+            return Err(ControlPlaneError::InvalidEnvelopeVersion);
+        }
+
+        Ok(Some(envelope))
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct CryptoRegistry {
+    payload_provider_ids: BTreeSet<String>,
+    vector_provider_ids: BTreeSet<String>,
+    metadata_provider_ids: BTreeSet<String>,
+}
+
+impl CryptoRegistry {
+    pub fn register_payload_provider(&mut self, provider_id: impl Into<String>) {
+        self.payload_provider_ids.insert(provider_id.into());
+    }
+
+    pub fn register_vector_provider(&mut self, provider_id: impl Into<String>) {
+        self.vector_provider_ids.insert(provider_id.into());
+    }
+
+    pub fn register_metadata_provider(&mut self, provider_id: impl Into<String>) {
+        self.metadata_provider_ids.insert(provider_id.into());
+    }
+
+    pub fn payload_provider_ids(&self) -> impl Iterator<Item = &str> {
+        self.payload_provider_ids.iter().map(String::as_str)
+    }
+
+    pub fn vector_provider_ids(&self) -> impl Iterator<Item = &str> {
+        self.vector_provider_ids.iter().map(String::as_str)
+    }
+
+    pub fn metadata_provider_ids(&self) -> impl Iterator<Item = &str> {
+        self.metadata_provider_ids.iter().map(String::as_str)
+    }
+}
+
+pub trait CryptoSuite {
+    fn register(&self, registry: &mut CryptoRegistry);
+}
+
+pub trait PayloadProviderFactory: Send + Sync {
+    fn provider_id(&self) -> &'static str;
+}
+
+pub trait VectorProviderFactory: Send + Sync {
+    fn provider_id(&self) -> &'static str;
+}
+
+pub trait MetadataProviderFactory: Send + Sync {
+    fn provider_id(&self) -> &'static str;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledPayloadRule {
+    pub rule_id: String,
+    pub instance: String,
+    pub provider: String,
+    pub binding: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledVectorRule {
+    pub rule_id: String,
+    pub vector_name: String,
+    pub instance: String,
+    pub provider: String,
+    pub binding: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledMetadataRule {
+    pub rule_id: String,
+    pub key: String,
+    pub instance: String,
+    pub provider: String,
+    pub binding: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CompiledCollectionCryptoPlan {
+    payload_rules: Vec<CompiledPayloadRule>,
+    vector_rules: BTreeMap<String, CompiledVectorRule>,
+    metadata_rules: Vec<CompiledMetadataRule>,
+}
+
+impl CompiledCollectionCryptoPlan {
+    pub fn add_payload_rule(&mut self, rule: CompiledPayloadRule) {
+        self.payload_rules.push(rule);
+    }
+
+    pub fn add_vector_rule(&mut self, rule: CompiledVectorRule) {
+        self.vector_rules.insert(rule.vector_name.clone(), rule);
+    }
+
+    pub fn add_metadata_rule(&mut self, rule: CompiledMetadataRule) {
+        self.metadata_rules.push(rule);
+    }
+
+    pub fn payload_rules(&self) -> &[CompiledPayloadRule] {
+        &self.payload_rules
+    }
+
+    pub fn vector_rule(&self, vector_name: &str) -> Option<&CompiledVectorRule> {
+        self.vector_rules.get(vector_name)
+    }
+
+    pub fn metadata_rules(&self) -> &[CompiledMetadataRule] {
+        &self.metadata_rules
+    }
+}
+
+fn validate_identifier(value: &str) -> Result<(), ControlPlaneError> {
+    if value.is_empty()
+        || value.len() > 255
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-' | b'/' | b'@')
+        })
+    {
+        return Err(ControlPlaneError::InvalidIdentifier(value.to_string()));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct BasicSuite;
+
+    impl CryptoSuite for BasicSuite {
+        fn register(&self, registry: &mut CryptoRegistry) {
+            registry.register_payload_provider(PAYLOAD_AES_GCM_PROVIDER);
+            registry.register_vector_provider(VECTOR_OPENFHE_CKKS_PROVIDER);
+            registry.register_metadata_provider(METADATA_BLIND_INDEX_PROVIDER);
+        }
+    }
+
+    #[test]
+    fn ciphertext_envelope_round_trips_and_rejects_marker_bypass() {
+        let envelope = CiphertextEnvelope::new(
+            1,
+            CryptoCapability::PayloadValue,
+            PAYLOAD_AES_GCM_PROVIDER,
+            "sha256:test",
+            "tenant-a:payload:v1",
+            Some(PAYLOAD_FIELD_BINDING.to_string()),
+            Map::from_iter([("field".to_string(), Value::String("body".to_string()))]),
+            "AQID",
+        )
+        .unwrap();
+
+        let stored = envelope.to_stored_value();
+        assert_eq!(
+            CiphertextEnvelope::from_stored_value(&stored).unwrap(),
+            Some(envelope.clone()),
+        );
+
+        let bypass = Value::Object(Map::from_iter([
+            (
+                GENERIC_CIPHERTEXT_MARKER.to_string(),
+                serde_json::to_value(&envelope).unwrap(),
+            ),
+            (
+                "plaintext".to_string(),
+                Value::String("still here".to_string()),
+            ),
+        ]));
+        assert_eq!(
+            CiphertextEnvelope::from_stored_value(&bypass),
+            Err(ControlPlaneError::MalformedEnvelope),
+        );
+    }
+
+    #[test]
+    fn registry_and_compiled_plan_track_capability_scoped_providers() {
+        let mut registry = CryptoRegistry::default();
+        BasicSuite.register(&mut registry);
+
+        assert_eq!(
+            registry.payload_provider_ids().collect::<Vec<_>>(),
+            vec![PAYLOAD_AES_GCM_PROVIDER],
+        );
+        assert_eq!(
+            registry.vector_provider_ids().collect::<Vec<_>>(),
+            vec![VECTOR_OPENFHE_CKKS_PROVIDER],
+        );
+        assert_eq!(
+            registry.metadata_provider_ids().collect::<Vec<_>>(),
+            vec![METADATA_BLIND_INDEX_PROVIDER],
+        );
+
+        let mut plan = CompiledCollectionCryptoPlan::default();
+        plan.add_payload_rule(CompiledPayloadRule {
+            rule_id: "body_conf".to_string(),
+            instance: "docs_payload_v1".to_string(),
+            provider: PAYLOAD_AES_GCM_PROVIDER.to_string(),
+            binding: Some(PAYLOAD_FIELD_BINDING.to_string()),
+        });
+        plan.add_vector_rule(CompiledVectorRule {
+            rule_id: "embedding_conf".to_string(),
+            vector_name: "embedding".to_string(),
+            instance: "docs_vector_v1".to_string(),
+            provider: VECTOR_OPENFHE_CKKS_PROVIDER.to_string(),
+            binding: Some(VECTOR_ENVELOPE_BINDING.to_string()),
+        });
+
+        assert_eq!(plan.payload_rules().len(), 1);
+        assert_eq!(
+            plan.vector_rule("embedding")
+                .map(|rule| rule.provider.as_str()),
+            Some(VECTOR_OPENFHE_CKKS_PROVIDER),
+        );
+    }
+}
