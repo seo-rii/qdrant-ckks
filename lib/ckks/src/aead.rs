@@ -261,7 +261,7 @@ impl AeadCipher {
     }
 }
 
-fn validate_key_id(key_id: &str) -> Result<(), EncryptionError> {
+pub(crate) fn validate_key_id(key_id: &str) -> Result<(), EncryptionError> {
     if key_id.is_empty() || key_id.len() > MAX_KEY_ID_LEN {
         return Err(EncryptionError::InvalidKeyId);
     }
