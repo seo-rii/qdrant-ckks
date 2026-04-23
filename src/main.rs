@@ -229,6 +229,7 @@ fn main() -> anyhow::Result<()> {
 
     // Validate as soon as possible, but we must initialize logging first
     settings.validate_and_warn();
+    crate::common::ckks::validate_runtime_config(&settings.ckks)?;
 
     fs::create_dir_all(&settings.storage.storage_path)?;
 

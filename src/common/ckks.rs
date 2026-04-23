@@ -1,3 +1,5 @@
+use std::fs;
+
 use collection::config::CkksCollectionConfig;
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_ckks::{
@@ -18,6 +20,10 @@ pub enum CkksSetupError {
     InvalidMasterKeyEncoding,
     #[error("ckks.master_key_b64 must decode to exactly 32 bytes")]
     InvalidMasterKeyLength,
+    #[error("ckks key id is invalid for {scope}")]
+    InvalidRuntimeKeyId { scope: String },
+    #[error("ckks OpenFHE bridge path is invalid: {path}")]
+    InvalidOpenFheBridgePath { path: String },
     #[error(
         "collection ckks key id does not match runtime key id for collection {collection_name}"
     )]
@@ -63,19 +69,46 @@ pub fn payload_text_encryptor_for_collection(
         .and_then(|runtime| runtime.master_key_b64.as_deref())
         .or(runtime_config.master_key_b64.as_deref())
         .ok_or(CkksSetupError::MissingMasterKey)?;
-    let master_key = Zeroizing::new(
-        BASE64URL_NOPAD
-            .decode(master_key_b64.as_bytes())
-            .map_err(|_| CkksSetupError::InvalidMasterKeyEncoding)?,
-    );
-    let master_key = SecretKey::try_from_slice(master_key.as_slice())
-        .map_err(|_| CkksSetupError::InvalidMasterKeyLength)?;
+    let master_key = decode_master_key(master_key_b64)?;
     let cipher = AeadCipher::new(key_id, master_key)
         .map_err(|err| CkksSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
     let policy = PayloadEncryptionPolicy::new(collection_config.payload_text_fields.clone())?;
     let encryptor = PayloadTextEncryptor::new(collection, cipher)?;
 
     Ok(Some((encryptor, policy)))
+}
+
+pub fn validate_runtime_config(runtime_config: &CkksConfig) -> Result<(), CkksSetupError> {
+    if !runtime_config.enabled {
+        return Ok(());
+    }
+
+    if let Some(key_id) = runtime_config.key_id.as_deref() {
+        validate_runtime_key_id(key_id, "ckks.key_id")?;
+    }
+    if let Some(master_key_b64) = runtime_config.master_key_b64.as_deref() {
+        let _ = decode_master_key(master_key_b64)?;
+    }
+    if let Some(path) = runtime_config.openfhe_bridge_path.as_deref() {
+        validate_bridge_path(path)?;
+    }
+
+    for (collection_name, collection_config) in &runtime_config.collections {
+        if let Some(key_id) = collection_config.key_id.as_deref() {
+            validate_runtime_key_id(
+                key_id,
+                &format!("ckks.collections.{collection_name}.key_id"),
+            )?;
+        }
+        if let Some(master_key_b64) = collection_config.master_key_b64.as_deref() {
+            let _ = decode_master_key(master_key_b64)?;
+        }
+        if let Some(path) = collection_config.openfhe_bridge_path.as_deref() {
+            validate_bridge_path(path)?;
+        }
+    }
+
+    Ok(())
 }
 
 pub fn openfhe_bridge_for_collection<'a>(
@@ -96,6 +129,55 @@ pub fn openfhe_bridge_for_collection<'a>(
         .get(collection)
         .and_then(|runtime| runtime.openfhe_bridge_path.as_deref())
         .or(runtime_config.openfhe_bridge_path.as_deref())
+}
+
+fn decode_master_key(master_key_b64: &str) -> Result<SecretKey, CkksSetupError> {
+    let master_key = Zeroizing::new(
+        BASE64URL_NOPAD
+            .decode(master_key_b64.as_bytes())
+            .map_err(|_| CkksSetupError::InvalidMasterKeyEncoding)?,
+    );
+    SecretKey::try_from_slice(master_key.as_slice())
+        .map_err(|_| CkksSetupError::InvalidMasterKeyLength)
+}
+
+fn validate_runtime_key_id(key_id: &str, scope: &str) -> Result<(), CkksSetupError> {
+    if key_id.is_empty()
+        || key_id.len() > 128
+        || !key_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b':' | b'-'))
+    {
+        return Err(CkksSetupError::InvalidRuntimeKeyId {
+            scope: scope.to_string(),
+        });
+    }
+
+    Ok(())
+}
+
+fn validate_bridge_path(path: &str) -> Result<(), CkksSetupError> {
+    let metadata = fs::metadata(path).map_err(|_| CkksSetupError::InvalidOpenFheBridgePath {
+        path: path.to_string(),
+    })?;
+    if !metadata.is_file() {
+        return Err(CkksSetupError::InvalidOpenFheBridgePath {
+            path: path.to_string(),
+        });
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return Err(CkksSetupError::InvalidOpenFheBridgePath {
+                path: path.to_string(),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -260,6 +342,55 @@ mod tests {
 
         let serialized = serde_json::to_string(&payload).unwrap();
         assert!(!serialized.contains("secret body"));
+    }
+
+    #[test]
+    fn runtime_config_validation_checks_provided_keys_and_bridge_paths() {
+        let mut config = CkksConfig {
+            enabled: true,
+            master_key_b64: Some("not base64!".to_string()),
+            ..CkksConfig::default()
+        };
+        assert_eq!(
+            validate_runtime_config(&config),
+            Err(CkksSetupError::InvalidMasterKeyEncoding),
+        );
+
+        config.master_key_b64 = Some(BASE64URL_NOPAD.encode(b"too short"));
+        assert_eq!(
+            validate_runtime_config(&config),
+            Err(CkksSetupError::InvalidMasterKeyLength),
+        );
+
+        config.master_key_b64 = Some(BASE64URL_NOPAD.encode(&[9u8; 32]));
+        config.key_id = Some("tenant/key".to_string());
+        assert_eq!(
+            validate_runtime_config(&config),
+            Err(CkksSetupError::InvalidRuntimeKeyId {
+                scope: "ckks.key_id".to_string(),
+            }),
+        );
+
+        config.key_id = Some("tenant-a:payload".to_string());
+        config.openfhe_bridge_path = Some("/definitely/not/a/qdrant-ckks-bridge".to_string());
+        assert_eq!(
+            validate_runtime_config(&config),
+            Err(CkksSetupError::InvalidOpenFheBridgePath {
+                path: "/definitely/not/a/qdrant-ckks-bridge".to_string(),
+            }),
+        );
+
+        let bridge = tempfile::NamedTempFile::new().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut permissions = bridge.as_file().metadata().unwrap().permissions();
+            permissions.set_mode(0o700);
+            bridge.as_file().set_permissions(permissions).unwrap();
+        }
+        config.openfhe_bridge_path = Some(bridge.path().display().to_string());
+        validate_runtime_config(&config).unwrap();
     }
 
     #[test]

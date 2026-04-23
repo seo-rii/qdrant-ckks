@@ -55,6 +55,9 @@ If both collection params and the matching `ckks.collections.<name>` runtime
 entry specify `key_id`, they must match. Otherwise the collection value wins,
 then the collection runtime value, then the global default. This prevents
 accidentally encrypting a collection with the wrong key.
+When `ckks.enabled` is true, startup validates any configured key ids, master
+keys, and OpenFHE bridge paths so bad runtime key material fails before the
+first encrypted write.
 
 ## CKKS vectors
 
