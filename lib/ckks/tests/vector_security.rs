@@ -1,4 +1,5 @@
 use std::fs;
+use std::time::Duration;
 
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_ckks::{
@@ -209,6 +210,80 @@ printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}'
         encrypted.ciphertext,
         BASE64URL_NOPAD.encode(b"openfhe-cipher"),
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn command_openfhe_backend_times_out_and_kills_hung_bridge() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("hung-openfhe-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+sleep 10
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new(&script_path).with_timeout(Duration::from_millis(50));
+    let encryptor = CkksVectorEncryptor::new(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        backend,
+    )
+    .unwrap();
+
+    let err = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0])
+        .unwrap_err();
+
+    assert!(matches!(err, CkksError::Backend(message) if message.contains("timed out")));
+}
+
+#[cfg(unix)]
+#[test]
+fn command_openfhe_backend_rejects_oversized_bridge_output() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("noisy-openfhe-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+for _ in {1..128}; do
+  printf x
+done
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new(&script_path).with_max_output_bytes(32);
+    let encryptor = CkksVectorEncryptor::new(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        backend,
+    )
+    .unwrap();
+
+    let err = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0])
+        .unwrap_err();
+
+    assert!(matches!(err, CkksError::Backend(message) if message.contains("stdout exceeded")));
 }
 
 #[test]

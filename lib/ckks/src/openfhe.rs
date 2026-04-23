@@ -1,6 +1,8 @@
-use std::io::Write;
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use data_encoding::BASE64URL_NOPAD;
 use serde::{Deserialize, Serialize};
@@ -9,10 +11,15 @@ use crate::vector::{
     CKKS_SCHEME, CkksEncryptionInput, CkksError, CkksParameters, CkksVectorBackend,
 };
 
+const DEFAULT_BRIDGE_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommandOpenFheBackend {
     program: PathBuf,
     args: Vec<String>,
+    timeout: Duration,
+    max_output_bytes: usize,
 }
 
 impl CommandOpenFheBackend {
@@ -20,6 +27,8 @@ impl CommandOpenFheBackend {
         Self {
             program: program.into(),
             args: Vec::new(),
+            timeout: DEFAULT_BRIDGE_TIMEOUT,
+            max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
         }
     }
 
@@ -29,6 +38,16 @@ impl CommandOpenFheBackend {
         S: Into<String>,
     {
         self.args.extend(args.into_iter().map(Into::into));
+        self
+    }
+
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    pub fn with_max_output_bytes(mut self, max_output_bytes: usize) -> Self {
+        self.max_output_bytes = max_output_bytes;
         self
     }
 }
@@ -69,18 +88,51 @@ impl CkksVectorBackend for CommandOpenFheBackend {
         }
         drop(child.stdin.take());
 
-        let output = child.wait_with_output().map_err(|err| {
-            CkksError::Backend(format!("failed to read OpenFHE bridge response: {err}"))
-        })?;
-        if !output.status.success() {
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| CkksError::Backend("failed to open bridge stdout".to_string()))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| CkksError::Backend("failed to open bridge stderr".to_string()))?;
+        let stdout_reader = read_capped(stdout, self.max_output_bytes);
+        let stderr_reader = read_capped(stderr, self.max_output_bytes);
+
+        let status = wait_with_timeout(&mut child, self.timeout)?;
+        let stdout = stdout_reader
+            .join()
+            .map_err(|_| CkksError::Backend("bridge stdout reader panicked".to_string()))?
+            .map_err(|err| {
+                CkksError::Backend(format!("failed to read OpenFHE bridge response: {err}"))
+            })?;
+        let stderr = stderr_reader
+            .join()
+            .map_err(|_| CkksError::Backend("bridge stderr reader panicked".to_string()))?
+            .map_err(|err| {
+                CkksError::Backend(format!("failed to drain OpenFHE bridge stderr: {err}"))
+            })?;
+        if stdout.truncated {
+            return Err(CkksError::Backend(format!(
+                "OpenFHE bridge stdout exceeded {} bytes",
+                self.max_output_bytes,
+            )));
+        }
+        if stderr.truncated {
+            return Err(CkksError::Backend(format!(
+                "OpenFHE bridge stderr exceeded {} bytes",
+                self.max_output_bytes,
+            )));
+        }
+        if !status.success() {
             return Err(CkksError::Backend(format!(
                 "OpenFHE bridge exited with status {}",
-                output.status,
+                status,
             )));
         }
 
         let response: CommandOpenFheResponse =
-            serde_json::from_slice(&output.stdout).map_err(|err| {
+            serde_json::from_slice(&stdout.bytes).map_err(|err| {
                 CkksError::Backend(format!("failed to parse OpenFHE bridge response: {err}"))
             })?;
         if response.version != 1 {
@@ -95,6 +147,53 @@ impl CkksVectorBackend for CommandOpenFheBackend {
             .map_err(|_| {
                 CkksError::Backend("OpenFHE bridge returned invalid ciphertext".to_string())
             })
+    }
+}
+
+#[derive(Debug)]
+struct CappedOutput {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+fn read_capped<R>(reader: R, max_bytes: usize) -> thread::JoinHandle<io::Result<CappedOutput>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let limit = max_bytes.saturating_add(1);
+        let mut bytes = Vec::new();
+        reader.take(limit as u64).read_to_end(&mut bytes)?;
+        let truncated = bytes.len() > max_bytes;
+        if truncated {
+            bytes.truncate(max_bytes);
+        }
+        Ok(CappedOutput { bytes, truncated })
+    })
+}
+
+fn wait_with_timeout(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> Result<std::process::ExitStatus, CkksError> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait().map_err(|err| {
+            CkksError::Backend(format!("failed to poll OpenFHE bridge status: {err}"))
+        })? {
+            return Ok(status);
+        }
+
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(CkksError::Backend(format!(
+                "OpenFHE bridge timed out after {} ms",
+                timeout.as_millis(),
+            )));
+        }
+
+        thread::sleep(Duration::from_millis(10));
     }
 }
 

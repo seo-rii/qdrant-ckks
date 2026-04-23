@@ -81,6 +81,9 @@ ciphertexts created for incompatible contexts.
 
 `CommandOpenFheBackend` invokes an external bridge binary. The bridge reads one
 JSON request from stdin and writes one JSON response to stdout.
+The subprocess backend enforces a timeout and caps stdout/stderr collection so a
+hung or noisy bridge cannot block Qdrant indefinitely or force unbounded memory
+growth. Returned errors do not include the request body or bridge stderr.
 
 Request fields:
 
