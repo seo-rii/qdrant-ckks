@@ -185,6 +185,26 @@ mod ckks_tests {
             }),
         );
     }
+
+    #[test]
+    fn encryption_config_rejects_metadata_selector_until_transport_support_exists() {
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                rules: vec![EncryptionRuleRef {
+                    id: "tenant_index".to_string(),
+                    selector: EncryptionSelector::MetadataKeys {
+                        keys: vec!["tenant_id".to_string()],
+                    },
+                    instance: "docs_meta_eq_v1".to_string(),
+                    binding: Some("metadata-value/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        assert!(params.validate().is_err());
+    }
 }
 
 impl Default for WalConfig {
@@ -540,6 +560,11 @@ fn validate_encryption_rules(
         if !ids.insert(rule.id.as_str()) {
             return Err(validator::ValidationError::new(
                 "duplicate_encryption_rule_id",
+            ));
+        }
+        if matches!(rule.selector, EncryptionSelector::MetadataKeys { .. }) {
+            return Err(validator::ValidationError::new(
+                "unsupported_encryption_selector",
             ));
         }
     }
