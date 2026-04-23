@@ -309,9 +309,38 @@ service:
   # Prefix for the names of metrics in the /metrics API.
   # metrics_prefix: qdrant_
 
-# qdrant-ckks encryption configuration.
-# This is only runtime key material and bridge configuration. Collection-level
-# enablement and field/vector selection live in collection params under `ckks`.
+# Generic crypto control-plane configuration.
+# Prefer this for new deployments. Collection-level enablement and selectors live
+# in collection params under `encryption`.
+crypto:
+  instances: {}
+  materials: {}
+  backends: {}
+  # instances:
+  #   docs_payload_v1:
+  #     provider: payload/aes-256-gcm@v1
+  #     materials:
+  #       sym_key: tenant-a/payload-v1
+  #   docs_vector_v1:
+  #     provider: vector/openfhe-ckks@v1
+  #     backend_ref: openfhe_local
+  #     options:
+  #       profile: ckks-16384-d4
+  # materials:
+  #   tenant-a/payload-v1:
+  #     kind: symmetric_key_32
+  #     source: env
+  #     env: QDRANT_PAYLOAD_KEY_B64
+  # backends:
+  #   openfhe_local:
+  #     kind: process_pool
+  #     program: /usr/local/bin/openfhe-bridge
+  #     size: 4
+  #     timeout_ms: 5000
+
+# Legacy qdrant-ckks runtime configuration.
+# This remains supported through an adapter into the generic `crypto` control plane.
+# Collection-level enablement and field/vector selection live in collection params under `ckks`.
 ckks:
   enabled: false
   # Default base64url-no-padding encoded 32-byte key. Prefer per-collection

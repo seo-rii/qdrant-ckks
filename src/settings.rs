@@ -11,7 +11,7 @@ use common::flags::FeatureFlags;
 use config::{Config, ConfigError, Environment, File, FileFormat, Source};
 use serde::Deserialize;
 use storage::types::StorageConfig;
-use validator::{Validate, ValidationError};
+use validator::{Validate, ValidationError, ValidationErrors};
 
 use crate::common::audit::AuditConfig;
 use crate::common::debugger::DebuggerConfig;
@@ -224,6 +224,289 @@ pub struct GpuConfig {
     pub allow_emulated: bool,
 }
 
+fn validate_crypto_runtime_identifier(value: &str) -> Result<(), ValidationError> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-' | b'/' | b'@')
+        })
+    {
+        return Err(ValidationError::new("invalid_crypto_runtime_identifier"));
+    }
+
+    Ok(())
+}
+
+fn validate_optional_crypto_runtime_identifier(
+    value: &Option<String>,
+) -> Result<(), ValidationError> {
+    if let Some(value) = value {
+        validate_crypto_runtime_identifier(value)?;
+    }
+
+    Ok(())
+}
+
+fn validate_crypto_material_bindings(
+    bindings: &HashMap<String, String>,
+) -> Result<(), ValidationError> {
+    for (role, reference) in bindings {
+        validate_crypto_runtime_identifier(role)?;
+        validate_crypto_runtime_identifier(reference)?;
+    }
+
+    Ok(())
+}
+
+fn default_crypto_options() -> serde_json::Value {
+    serde_json::Value::Object(Default::default())
+}
+
+#[derive(Deserialize, Clone, Default, Validate)]
+pub struct CryptoMaterialConfig {
+    #[validate(custom(function = "validate_crypto_runtime_identifier"))]
+    pub kind: String,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub env: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub value_b64: Option<String>,
+}
+
+impl fmt::Debug for CryptoMaterialConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CryptoMaterialConfig")
+            .field("kind", &self.kind)
+            .field("source", &self.source)
+            .field("env", &self.env)
+            .field("path", &self.path)
+            .field("value_b64", &self.value_b64.as_ref().map(|_| "[redacted]"))
+            .finish()
+    }
+}
+
+#[derive(Debug, Deserialize, Clone, Default, Validate)]
+pub struct CryptoBackendConfig {
+    #[validate(custom(function = "validate_crypto_runtime_identifier"))]
+    pub kind: String,
+    #[serde(default)]
+    pub program: Option<String>,
+    #[serde(default)]
+    pub size: Option<usize>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct CryptoInstanceConfig {
+    pub provider: String,
+    #[serde(default)]
+    pub materials: HashMap<String, String>,
+    #[serde(default)]
+    pub backend_ref: Option<String>,
+    #[serde(default = "default_crypto_options")]
+    pub options: serde_json::Value,
+}
+
+impl Validate for CryptoInstanceConfig {
+    fn validate(&self) -> Result<(), ValidationErrors> {
+        let mut errors = ValidationErrors::new();
+
+        if let Err(error) = validate_crypto_runtime_identifier(&self.provider) {
+            errors.add("provider", error);
+        }
+        if let Err(error) = validate_crypto_material_bindings(&self.materials) {
+            errors.add("materials", error);
+        }
+        if let Err(error) = validate_optional_crypto_runtime_identifier(&self.backend_ref) {
+            errors.add("backend_ref", error);
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone, Default, Validate)]
+pub struct CryptoSettings {
+    #[serde(default)]
+    #[validate(nested)]
+    pub instances: HashMap<String, CryptoInstanceConfig>,
+    #[serde(default)]
+    #[validate(nested)]
+    pub materials: HashMap<String, CryptoMaterialConfig>,
+    #[serde(default)]
+    #[validate(nested)]
+    pub backends: HashMap<String, CryptoBackendConfig>,
+}
+
+impl CryptoSettings {
+    pub const LEGACY_CKKS_PAYLOAD_INSTANCE: &str = "legacy_ckks_payload";
+    pub const LEGACY_CKKS_VECTOR_INSTANCE: &str = "legacy_ckks_vector";
+
+    pub fn is_configured(&self) -> bool {
+        !self.instances.is_empty() || !self.materials.is_empty() || !self.backends.is_empty()
+    }
+
+    pub fn legacy_ckks_payload_instance_for_collection(collection: &str) -> String {
+        format!("{}/{}", Self::LEGACY_CKKS_PAYLOAD_INSTANCE, collection)
+    }
+
+    pub fn legacy_ckks_vector_instance_for_collection(collection: &str) -> String {
+        format!("{}/{}", Self::LEGACY_CKKS_VECTOR_INSTANCE, collection)
+    }
+
+    pub fn from_legacy_ckks(ckks: &CkksConfig) -> Self {
+        let mut settings = Self::default();
+
+        let insert_payload_instance =
+            |settings: &mut Self,
+             instance_name: String,
+             key_id: Option<String>,
+             material_ref: Option<String>| {
+                let materials = material_ref
+                    .into_iter()
+                    .map(|reference| ("sym_key".to_string(), reference))
+                    .collect();
+                settings.instances.insert(
+                    instance_name,
+                    CryptoInstanceConfig {
+                        provider: "payload/aes-256-gcm@v1".to_string(),
+                        materials,
+                        backend_ref: None,
+                        options: serde_json::json!({ "key_id": key_id }),
+                    },
+                );
+            };
+        let insert_vector_instance =
+            |settings: &mut Self,
+             instance_name: String,
+             key_id: Option<String>,
+             backend_ref: Option<String>| {
+                settings.instances.insert(
+                    instance_name,
+                    CryptoInstanceConfig {
+                        provider: "vector/openfhe-ckks@v1".to_string(),
+                        materials: HashMap::new(),
+                        backend_ref,
+                        options: serde_json::json!({ "key_id": key_id }),
+                    },
+                );
+            };
+
+        let default_material_ref = ckks
+            .master_key_b64
+            .as_ref()
+            .map(|_| "legacy_ckks/default/master_key".to_string());
+        if let Some(master_key_b64) = &ckks.master_key_b64 {
+            settings.materials.insert(
+                "legacy_ckks/default/master_key".to_string(),
+                CryptoMaterialConfig {
+                    kind: "symmetric_key_32".to_string(),
+                    source: Some("inline".to_string()),
+                    env: None,
+                    path: None,
+                    value_b64: Some(master_key_b64.clone()),
+                },
+            );
+        }
+
+        let default_backend_ref = ckks
+            .openfhe_bridge_path
+            .as_ref()
+            .map(|_| "legacy_ckks/default/backend".to_string());
+        if let Some(path) = &ckks.openfhe_bridge_path {
+            settings.backends.insert(
+                "legacy_ckks/default/backend".to_string(),
+                CryptoBackendConfig {
+                    kind: "process_pool".to_string(),
+                    program: Some(path.clone()),
+                    size: Some(1),
+                    timeout_ms: None,
+                },
+            );
+        }
+
+        if ckks.enabled || ckks.key_id.is_some() || default_material_ref.is_some() {
+            insert_payload_instance(
+                &mut settings,
+                Self::LEGACY_CKKS_PAYLOAD_INSTANCE.to_string(),
+                ckks.key_id.clone(),
+                default_material_ref.clone(),
+            );
+        }
+
+        if ckks.enabled || ckks.key_id.is_some() || default_backend_ref.is_some() {
+            insert_vector_instance(
+                &mut settings,
+                Self::LEGACY_CKKS_VECTOR_INSTANCE.to_string(),
+                ckks.key_id.clone(),
+                default_backend_ref.clone(),
+            );
+        }
+
+        for (collection, config) in &ckks.collections {
+            if !config.is_configured() {
+                continue;
+            }
+
+            let material_ref = config
+                .master_key_b64
+                .as_ref()
+                .map(|_| format!("legacy_ckks/{collection}/master_key"));
+            if let Some(master_key_b64) = &config.master_key_b64 {
+                settings.materials.insert(
+                    format!("legacy_ckks/{collection}/master_key"),
+                    CryptoMaterialConfig {
+                        kind: "symmetric_key_32".to_string(),
+                        source: Some("inline".to_string()),
+                        env: None,
+                        path: None,
+                        value_b64: Some(master_key_b64.clone()),
+                    },
+                );
+            }
+
+            let backend_ref = config
+                .openfhe_bridge_path
+                .as_ref()
+                .map(|_| format!("legacy_ckks/{collection}/backend"));
+            if let Some(path) = &config.openfhe_bridge_path {
+                settings.backends.insert(
+                    format!("legacy_ckks/{collection}/backend"),
+                    CryptoBackendConfig {
+                        kind: "process_pool".to_string(),
+                        program: Some(path.clone()),
+                        size: Some(1),
+                        timeout_ms: None,
+                    },
+                );
+            }
+
+            insert_payload_instance(
+                &mut settings,
+                Self::legacy_ckks_payload_instance_for_collection(collection),
+                config.key_id.clone().or_else(|| ckks.key_id.clone()),
+                material_ref.or_else(|| default_material_ref.clone()),
+            );
+            insert_vector_instance(
+                &mut settings,
+                Self::legacy_ckks_vector_instance_for_collection(collection),
+                config.key_id.clone().or_else(|| ckks.key_id.clone()),
+                backend_ref.or_else(|| default_backend_ref.clone()),
+            );
+        }
+
+        settings
+    }
+}
+
 #[derive(Deserialize, Clone, Default, Validate)]
 pub struct CkksCollectionKeyConfig {
     /// Runtime key id for one collection. If omitted, collection params or default key id are used.
@@ -247,6 +530,12 @@ impl fmt::Debug for CkksCollectionKeyConfig {
             )
             .field("openfhe_bridge_path", &self.openfhe_bridge_path)
             .finish()
+    }
+}
+
+impl CkksCollectionKeyConfig {
+    pub fn is_configured(&self) -> bool {
+        self.key_id.is_some() || self.master_key_b64.is_some() || self.openfhe_bridge_path.is_some()
     }
 }
 
@@ -285,7 +574,29 @@ impl fmt::Debug for CkksConfig {
     }
 }
 
+impl CkksConfig {
+    pub fn is_configured(&self) -> bool {
+        self.enabled
+            || self.key_id.is_some()
+            || self.master_key_b64.is_some()
+            || self.openfhe_bridge_path.is_some()
+            || self
+                .collections
+                .values()
+                .any(CkksCollectionKeyConfig::is_configured)
+    }
+}
+
+fn validate_settings_crypto_sections(settings: &Settings) -> Result<(), ValidationError> {
+    if settings.crypto.is_configured() && settings.ckks.is_configured() {
+        return Err(ValidationError::new("conflicting_runtime_crypto_sections"));
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Deserialize, Clone, Validate)]
+#[validate(schema(function = "validate_settings_crypto_sections"))]
 pub struct Settings {
     #[serde(default)]
     pub log_level: Option<String>,
@@ -319,6 +630,9 @@ pub struct Settings {
     /// Audit logging configuration.
     #[serde(default)]
     pub audit: Option<AuditConfig>,
+    #[serde(default)]
+    #[validate(nested)]
+    pub crypto: CryptoSettings,
     #[serde(default)]
     #[validate(nested)]
     pub ckks: CkksConfig,
@@ -585,6 +899,7 @@ mod tests {
             config.service.http_client_disconnect_timeout_sec,
             default_http_client_disconnect_timeout_sec()
         );
+        assert!(!config.crypto.is_configured());
         assert!(!config.ckks.enabled);
         assert!(config.ckks.collections.is_empty());
 
@@ -691,6 +1006,74 @@ mod tests {
         assert_eq!(config.service.http_keep_alive_timeout_sec, 120);
         assert_eq!(config.service.http_client_request_timeout_sec, 45);
         assert_eq!(config.service.http_client_disconnect_timeout_sec, 60);
+    }
+
+    #[test]
+    fn test_crypto_and_ckks_sections_conflict() {
+        let config = Config::builder()
+            .add_source(File::from_str(DEFAULT_CONFIG, FileFormat::Yaml))
+            .add_source(File::from_str(
+                r#"
+crypto:
+  instances:
+    docs_payload_v1:
+      provider: payload/aes-256-gcm@v1
+      materials:
+        sym_key: tenant-a/payload-v1
+  materials:
+    tenant-a/payload-v1:
+      kind: symmetric_key_32
+      source: inline
+      value_b64: AQID
+ckks:
+  enabled: true
+"#,
+                FileFormat::Yaml,
+            ))
+            .build()
+            .expect("failed to build config")
+            .try_deserialize::<Settings>()
+            .expect("failed to deserialize config");
+
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_crypto_settings_from_legacy_ckks() {
+        let crypto = CryptoSettings::from_legacy_ckks(&CkksConfig {
+            enabled: true,
+            key_id: Some("tenant-a:docs".to_string()),
+            master_key_b64: Some("AQID".to_string()),
+            openfhe_bridge_path: Some("/usr/local/bin/openfhe-bridge".to_string()),
+            collections: HashMap::from([(
+                "docs".to_string(),
+                CkksCollectionKeyConfig {
+                    key_id: Some("tenant-a:docs-override".to_string()),
+                    master_key_b64: Some("BAUG".to_string()),
+                    openfhe_bridge_path: Some("/usr/local/bin/openfhe-bridge-docs".to_string()),
+                },
+            )]),
+        });
+
+        assert!(crypto.is_configured());
+        assert!(
+            crypto
+                .instances
+                .contains_key(CryptoSettings::LEGACY_CKKS_PAYLOAD_INSTANCE)
+        );
+        assert!(
+            crypto
+                .instances
+                .contains_key(&CryptoSettings::legacy_ckks_payload_instance_for_collection("docs"))
+        );
+        assert!(
+            crypto
+                .materials
+                .contains_key("legacy_ckks/default/master_key")
+        );
+        assert!(crypto.materials.contains_key("legacy_ckks/docs/master_key"));
+        assert!(crypto.backends.contains_key("legacy_ckks/default/backend"));
+        assert!(crypto.backends.contains_key("legacy_ckks/docs/backend"));
     }
 
     #[expect(clippy::disallowed_types, reason = "#[sealed_test] uses std::fs::File")]

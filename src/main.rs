@@ -229,7 +229,8 @@ fn main() -> anyhow::Result<()> {
 
     // Validate as soon as possible, but we must initialize logging first
     settings.validate_and_warn();
-    crate::common::ckks::validate_runtime_config(&settings.ckks)?;
+    crate::common::crypto::validate_runtime_config(&settings)?;
+    let _effective_crypto = crate::common::crypto::effective_settings(&settings);
 
     fs::create_dir_all(&settings.storage.storage_path)?;
 
