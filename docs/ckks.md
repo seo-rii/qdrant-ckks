@@ -61,32 +61,44 @@ first encrypted write.
 
 ## CKKS vectors
 
-`EncryptedCkksVector` stores OpenFHE CKKS ciphertext bytes, not plaintext
-embeddings:
+`EncryptedCkksVector` stores an AEAD-sealed metadata envelope. The sealed body
+contains the OpenFHE CKKS ciphertext plus `key_id`, `vector_name`, `slots`, and
+`context_digest`, so storage-side tampering of vector metadata fails closed. The
+AEAD key comes from the collection CKKS runtime key material, while the OpenFHE
+public material still encrypts the embedding itself:
 
 ```json
 {
   "version": 1,
   "scheme": "openfhe-ckks",
-  "key_id": "tenant-a:ckks",
-  "vector_name": "embedding",
-  "slots": 3,
-  "context_digest": "...",
-  "ciphertext": "..."
+  "envelope": {
+    "version": 1,
+    "algorithm": "AES-256-GCM",
+    "key_id": "tenant-a:ckks",
+    "nonce": "...",
+    "ciphertext": "..."
+  }
 }
 ```
 
-The `context_digest` is a SHA-256 digest over the CKKS parameters, serialized
-OpenFHE crypto context, and public key. It is intended to prevent mixing
-ciphertexts created for incompatible contexts.
+The vector envelope uses the same `collection`, `point_id`, and `vector_name`
+AAD binding as payload encryption. Moving an encrypted vector envelope to a
+different point or vector name must fail authentication after unwrap.
+Inside the sealed body, `context_digest` is still the SHA-256 digest over the
+CKKS parameters, serialized OpenFHE crypto context, and public key. It is
+intended to prevent mixing ciphertexts created for incompatible contexts.
 
 ## OpenFHE bridge protocol
 
-`CommandOpenFheBackend` invokes an external bridge binary. The bridge reads one
-JSON request from stdin and writes one JSON response to stdout.
-The subprocess backend enforces a timeout and caps stdout/stderr collection so a
-hung or noisy bridge cannot block Qdrant indefinitely or force unbounded memory
-growth. Returned errors do not include the request body or bridge stderr.
+`CommandOpenFheBackend` invokes an external bridge binary as a long-lived worker.
+The bridge reads newline-delimited JSON requests from stdin and writes one
+newline-delimited JSON response per request to stdout. The backend reuses the
+same child process while the bridge stays healthy and respawns it if the worker
+exits between requests.
+The subprocess backend still enforces a timeout and caps stdout/stderr
+collection so a hung or noisy bridge cannot block Qdrant indefinitely or force
+unbounded memory growth. Returned errors do not include the request body or
+bridge stderr.
 
 Request fields:
 

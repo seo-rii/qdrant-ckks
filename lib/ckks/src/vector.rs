@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::aead::validate_key_id;
+use crate::aead::{
+    AeadCipher, EncryptedEnvelope, EncryptionContext, EncryptionError, SecretKey, validate_key_id,
+};
 
 pub const CKKS_SCHEME: &str = "openfhe-ckks";
 const VERSION: u8 = 1;
@@ -29,8 +31,16 @@ pub enum CkksError {
     NonFiniteValue { index: usize },
     #[error("openfhe backend returned empty ciphertext")]
     EmptyCiphertext,
+    #[error("unsupported ckks vector envelope version {0}")]
+    UnsupportedEnvelopeVersion(u8),
+    #[error("unsupported ckks vector scheme {0}")]
+    UnsupportedScheme(String),
+    #[error("ckks vector envelope is malformed: {0}")]
+    MalformedEnvelope(String),
     #[error("openfhe backend failed: {0}")]
     Backend(String),
+    #[error(transparent)]
+    Envelope(#[from] EncryptionError),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,11 +179,7 @@ pub trait CkksVectorBackend {
 pub struct EncryptedCkksVector {
     pub version: u8,
     pub scheme: String,
-    pub key_id: String,
-    pub vector_name: String,
-    pub slots: usize,
-    pub context_digest: String,
-    pub ciphertext: String,
+    pub envelope: EncryptedEnvelope,
 }
 
 impl Debug for EncryptedCkksVector {
@@ -181,17 +187,23 @@ impl Debug for EncryptedCkksVector {
         f.debug_struct("EncryptedCkksVector")
             .field("version", &self.version)
             .field("scheme", &self.scheme)
-            .field("key_id", &self.key_id)
-            .field("vector_name", &self.vector_name)
-            .field("slots", &self.slots)
-            .field("context_digest", &self.context_digest)
-            .field("ciphertext_len", &self.ciphertext.len())
+            .field("envelope", &self.envelope)
             .finish()
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct VerifiedCkksVector {
+    pub key_id: String,
+    pub vector_name: String,
+    pub slots: usize,
+    pub context_digest: String,
+    pub ciphertext: String,
+}
+
 pub struct CkksVectorEncryptor<B> {
-    key_id: String,
+    metadata_cipher: AeadCipher,
     vector_name: String,
     parameters: CkksParameters,
     backend: B,
@@ -205,6 +217,7 @@ where
         key_id: impl Into<String>,
         vector_name: impl Into<String>,
         parameters: CkksParameters,
+        metadata_key: SecretKey,
         backend: B,
     ) -> Result<Self, CkksError> {
         let key_id = key_id.into();
@@ -218,7 +231,7 @@ where
         parameters.validate()?;
 
         Ok(Self {
-            key_id,
+            metadata_cipher: AeadCipher::new(key_id, metadata_key)?,
             vector_name,
             parameters,
             backend,
@@ -271,14 +284,81 @@ where
             return Err(CkksError::EmptyCiphertext);
         }
 
+        let envelope = self.metadata_cipher.encrypt(
+            serde_json::to_vec(&VerifiedCkksVector {
+                key_id: self.metadata_cipher.key_id().to_string(),
+                vector_name: self.vector_name.clone(),
+                slots: values.len(),
+                context_digest: public_material.digest_for(&self.parameters),
+                ciphertext: BASE64URL_NOPAD.encode(&ciphertext),
+            })
+            .map_err(|err| CkksError::MalformedEnvelope(err.to_string()))?
+            .as_slice(),
+            EncryptionContext::ckks_vector(collection, point_id, &self.vector_name),
+        )?;
+
         Ok(EncryptedCkksVector {
             version: VERSION,
             scheme: CKKS_SCHEME.to_string(),
-            key_id: self.key_id.clone(),
-            vector_name: self.vector_name.clone(),
-            slots: values.len(),
-            context_digest: public_material.digest_for(&self.parameters),
-            ciphertext: BASE64URL_NOPAD.encode(&ciphertext),
+            envelope,
         })
+    }
+
+    pub fn open(
+        &self,
+        collection: &str,
+        point_id: &str,
+        encrypted: &EncryptedCkksVector,
+    ) -> Result<VerifiedCkksVector, CkksError> {
+        if encrypted.version != VERSION {
+            return Err(CkksError::UnsupportedEnvelopeVersion(encrypted.version));
+        }
+        if encrypted.scheme != CKKS_SCHEME {
+            return Err(CkksError::UnsupportedScheme(encrypted.scheme.clone()));
+        }
+
+        let verified: VerifiedCkksVector = serde_json::from_slice(&self.metadata_cipher.decrypt(
+            &encrypted.envelope,
+            EncryptionContext::ckks_vector(collection, point_id, &self.vector_name),
+        )?)
+        .map_err(|err| CkksError::MalformedEnvelope(err.to_string()))?;
+
+        if verified.key_id != self.metadata_cipher.key_id() {
+            return Err(CkksError::MalformedEnvelope(
+                "stored key id does not match active key".to_string(),
+            ));
+        }
+        if verified.vector_name != self.vector_name {
+            return Err(CkksError::MalformedEnvelope(
+                "stored vector name does not match encryptor".to_string(),
+            ));
+        }
+        if verified.slots == 0 || verified.slots > self.parameters.batch_size as usize {
+            return Err(CkksError::MalformedEnvelope(
+                "stored slot count is out of range".to_string(),
+            ));
+        }
+        let digest = BASE64URL_NOPAD
+            .decode(verified.context_digest.as_bytes())
+            .map_err(|_| {
+                CkksError::MalformedEnvelope("stored context digest is invalid".to_string())
+            })?;
+        if digest.len() != 32 {
+            return Err(CkksError::MalformedEnvelope(
+                "stored context digest has unexpected length".to_string(),
+            ));
+        }
+        let ciphertext = BASE64URL_NOPAD
+            .decode(verified.ciphertext.as_bytes())
+            .map_err(|_| {
+                CkksError::MalformedEnvelope("stored ciphertext is invalid".to_string())
+            })?;
+        if ciphertext.is_empty() {
+            return Err(CkksError::MalformedEnvelope(
+                "stored ciphertext is empty".to_string(),
+            ));
+        }
+
+        Ok(verified)
     }
 }

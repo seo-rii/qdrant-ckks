@@ -19,5 +19,5 @@ pub use payload::{
 };
 pub use vector::{
     CKKS_SCHEME, CkksEncryptionInput, CkksError, CkksParameters, CkksPublicMaterial,
-    CkksVectorBackend, CkksVectorEncryptor, EncryptedCkksVector,
+    CkksVectorBackend, CkksVectorEncryptor, EncryptedCkksVector, VerifiedCkksVector,
 };

@@ -41,6 +41,7 @@ fn encryptor() -> CkksVectorEncryptor<SealedTestBackend> {
         "tenant-a:ckks",
         "embedding",
         CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
         SealedTestBackend,
     )
     .unwrap()
@@ -51,20 +52,23 @@ fn ckks_vector_envelope_does_not_serialize_plain_embedding() {
     let encrypted = encryptor()
         .encrypt("docs", "point-1", &public_material(), &[0.125, -42.5, 9.75])
         .unwrap();
+    let verified = encryptor().open("docs", "point-1", &encrypted).unwrap();
 
     assert_eq!(encrypted.scheme, "openfhe-ckks");
-    assert_eq!(encrypted.key_id, "tenant-a:ckks");
-    assert_eq!(encrypted.vector_name, "embedding");
-    assert_eq!(encrypted.slots, 3);
+    assert_eq!(encrypted.envelope.key_id, "tenant-a:ckks");
+    assert_eq!(verified.key_id, "tenant-a:ckks");
+    assert_eq!(verified.vector_name, "embedding");
+    assert_eq!(verified.slots, 3);
 
     let serialized = serde_json::to_string(&encrypted).unwrap();
     assert!(!serialized.contains("0.125"));
     assert!(!serialized.contains("-42.5"));
     assert!(!serialized.contains("9.75"));
+    assert!(!serialized.contains("\"vector_name\":\"embedding\""));
 
     let debug = format!("{encrypted:?}");
-    assert!(debug.contains("ciphertext_len"));
-    assert!(!debug.contains(&encrypted.ciphertext));
+    assert!(debug.contains("EncryptedEnvelope"));
+    assert!(!debug.contains(&encrypted.envelope.ciphertext));
 }
 
 #[test]
@@ -106,6 +110,7 @@ fn vector_validation_fails_closed_before_backend_call() {
         "tenant-a:ckks",
         "embedding",
         small_params,
+        SecretKey::from_bytes([29u8; 32]),
         SealedTestBackend,
     )
     .unwrap();
@@ -149,6 +154,7 @@ fn constructor_rejects_invalid_identifiers_and_public_material() {
             "tenant/key",
             "embedding",
             CkksParameters::openfhe_default_128_bit(),
+            SecretKey::from_bytes([29u8; 32]),
             SealedTestBackend,
         )
         .err(),
@@ -159,6 +165,7 @@ fn constructor_rejects_invalid_identifiers_and_public_material() {
             "tenant-a:ckks",
             "bad\0name",
             CkksParameters::openfhe_default_128_bit(),
+            SecretKey::from_bytes([29u8; 32]),
             SealedTestBackend,
         )
         .err(),
@@ -181,12 +188,12 @@ fn command_openfhe_backend_uses_bridge_protocol() {
         &script_path,
         r#"#!/usr/bin/env bash
 set -euo pipefail
-request="$(cat)"
+IFS= read -r request
 case "$request" in
   *'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*) ;;
   *) exit 7 ;;
 esac
-printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}'
+printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
 "#,
     )
     .unwrap();
@@ -194,20 +201,34 @@ printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}'
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new(&script_path);
+    let backend = CommandOpenFheBackend::new("bash").with_args([script_path.display().to_string()]);
     let encryptor = CkksVectorEncryptor::new(
         "tenant-a:ckks",
         "embedding",
         CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
         backend,
     )
     .unwrap();
-    let encrypted = encryptor
+    let first = encryptor
         .encrypt("docs", "point-1", &public_material(), &[1.0, 2.0])
+        .unwrap();
+    let second = encryptor
+        .encrypt("docs", "point-2", &public_material(), &[3.0, 4.0])
         .unwrap();
 
     assert_eq!(
-        encrypted.ciphertext,
+        encryptor
+            .open("docs", "point-1", &first)
+            .unwrap()
+            .ciphertext,
+        BASE64URL_NOPAD.encode(b"openfhe-cipher"),
+    );
+    assert_eq!(
+        encryptor
+            .open("docs", "point-2", &second)
+            .unwrap()
+            .ciphertext,
         BASE64URL_NOPAD.encode(b"openfhe-cipher"),
     );
 }
@@ -223,7 +244,7 @@ fn command_openfhe_backend_times_out_and_kills_hung_bridge() {
         &script_path,
         r#"#!/usr/bin/env bash
 set -euo pipefail
-cat >/dev/null
+IFS= read -r _request
 sleep 10
 "#,
     )
@@ -232,11 +253,14 @@ sleep 10
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new(&script_path).with_timeout(Duration::from_millis(50));
+    let backend = CommandOpenFheBackend::new("bash")
+        .with_args([script_path.display().to_string()])
+        .with_timeout(Duration::from_millis(50));
     let encryptor = CkksVectorEncryptor::new(
         "tenant-a:ckks",
         "embedding",
         CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
         backend,
     )
     .unwrap();
@@ -259,7 +283,7 @@ fn command_openfhe_backend_rejects_oversized_bridge_output() {
         &script_path,
         r#"#!/usr/bin/env bash
 set -euo pipefail
-cat >/dev/null
+IFS= read -r _request
 for _ in {1..128}; do
   printf x
 done
@@ -270,11 +294,14 @@ done
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new(&script_path).with_max_output_bytes(32);
+    let backend = CommandOpenFheBackend::new("bash")
+        .with_args([script_path.display().to_string()])
+        .with_max_output_bytes(32);
     let encryptor = CkksVectorEncryptor::new(
         "tenant-a:ckks",
         "embedding",
         CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
         backend,
     )
     .unwrap();
@@ -286,6 +313,61 @@ done
     assert!(matches!(err, CkksError::Backend(message) if message.contains("stdout exceeded")));
 }
 
+#[cfg(unix)]
+#[test]
+fn command_openfhe_backend_reuses_worker_process_when_bridge_supports_streaming() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("loop-openfhe-bridge.sh");
+    let count_path = dir.path().join("counts.log");
+    fs::write(
+        &script_path,
+        format!(
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+count_file={}
+printf 'start\n' >> "$count_file"
+while IFS= read -r request; do
+  case "$request" in
+    *'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*) ;;
+    *) exit 7 ;;
+  esac
+  printf 'request\n' >> "$count_file"
+  printf '{{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}}\n'
+done
+"#,
+            count_path.display(),
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new("bash").with_args([script_path.display().to_string()]);
+    let encryptor = CkksVectorEncryptor::new(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+
+    encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0])
+        .unwrap();
+    encryptor
+        .encrypt("docs", "point-2", &public_material(), &[2.0])
+        .unwrap();
+    drop(encryptor);
+
+    let counts = fs::read_to_string(count_path).unwrap();
+    assert_eq!(counts.lines().filter(|line| *line == "start").count(), 1);
+    assert_eq!(counts.lines().filter(|line| *line == "request").count(), 2);
+}
+
 #[test]
 fn encrypted_ckks_vector_has_stable_json_shape() {
     let encrypted = encryptor()
@@ -295,9 +377,52 @@ fn encrypted_ckks_vector_has_stable_json_shape() {
 
     assert_eq!(value["version"], json!(1));
     assert_eq!(value["scheme"], json!("openfhe-ckks"));
-    assert_eq!(value["key_id"], json!("tenant-a:ckks"));
-    assert_eq!(value["vector_name"], json!("embedding"));
-    assert_eq!(value["slots"], json!(1));
-    assert!(value["context_digest"].as_str().unwrap().len() >= 32);
-    assert!(value["ciphertext"].as_str().unwrap().len() >= 32);
+    assert_eq!(value["envelope"]["key_id"], json!("tenant-a:ckks"));
+    assert!(value["envelope"]["nonce"].as_str().unwrap().len() >= 16);
+    assert!(value["envelope"]["ciphertext"].as_str().unwrap().len() >= 32);
+}
+
+#[test]
+fn vector_metadata_tampering_fails_authentication() {
+    let encryptor = encryptor();
+    let mut encrypted = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0, 2.0, 3.0])
+        .unwrap();
+
+    let mut raw = BASE64URL_NOPAD
+        .decode(encrypted.envelope.ciphertext.as_bytes())
+        .unwrap();
+    raw[0] ^= 0x01;
+    encrypted.envelope.ciphertext = BASE64URL_NOPAD.encode(&raw);
+
+    assert!(matches!(
+        encryptor.open("docs", "point-1", &encrypted),
+        Err(CkksError::Envelope(_)),
+    ));
+}
+
+#[test]
+fn vector_envelope_is_bound_to_collection_point_and_vector() {
+    let encryptor = encryptor();
+    let encrypted = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0, 2.0])
+        .unwrap();
+
+    assert!(matches!(
+        encryptor.open("docs", "point-2", &encrypted),
+        Err(CkksError::Envelope(_)),
+    ));
+
+    let other_vector = CkksVectorEncryptor::new(
+        "tenant-a:ckks",
+        "other",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        SealedTestBackend,
+    )
+    .unwrap();
+    assert!(matches!(
+        other_vector.open("docs", "point-1", &encrypted),
+        Err(CkksError::Envelope(_)),
+    ));
 }
