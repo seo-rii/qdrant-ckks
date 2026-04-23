@@ -5885,6 +5885,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "qdrant-ckks"
+version = "0.1.0"
+dependencies = [
+ "data-encoding",
+ "proptest",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "zeroize",
+]
+
+[[package]]
 name = "qdrant-edge-py"
 version = "0.6.0"
 dependencies = [

@@ -262,6 +262,7 @@ prost-for-raft = { package = "prost", version = "=0.11.9" } # version of prost u
 raft = { version = "0.7.0", features = ["prost-codec"], default-features = false }
 rand = "0.10.0"
 rand_distr = "0.6.0"
+ring = "0.17.14"
 rmp-serde = "~1.3"
 reqwest = { version = "0.13.2", default-features = false, features = [
     "json",
@@ -307,6 +308,7 @@ bitvec = "1.0.1"
 smallvec = { version = "1.15.1", features = ["write"] }
 dashmap = "6.1"
 walkdir = "2.5.0"
+zeroize = "1.8.2"
 
 [patch.crates-io]
 tonic = { git = "https://github.com/qdrant/tonic", branch = "v0.11.0-qdrant" }
@@ -345,6 +347,7 @@ required-features = ["service_debug"]
 members = [
     "lib/api",
     "lib/collection",
+    "lib/ckks",
     "lib/common/*",
     "lib/edge",
     "lib/edge/python",
