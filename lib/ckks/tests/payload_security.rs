@@ -96,6 +96,31 @@ fn encrypting_already_encrypted_payload_is_idempotent() {
 }
 
 #[test]
+fn malformed_marker_does_not_bypass_encryption() {
+    let encryptor = encryptor();
+    let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
+    let mut payload = object(json!({
+        "body": {
+            "$qdrant_ckks": {
+                "kind": "payload_text"
+            },
+            "plaintext": "secret body"
+        }
+    }));
+
+    assert!(!is_encrypted_payload_value(payload.get("body").unwrap()));
+    assert_eq!(
+        encryptor.encrypt_selected_fields("point-1", &mut payload, &policy),
+        Err(PayloadEncryptionError::MalformedEnvelope(
+            "body".to_string()
+        )),
+    );
+
+    let serialized = serde_json::to_string(&payload).unwrap();
+    assert!(serialized.contains("secret body"));
+}
+
+#[test]
 fn nested_payload_paths_are_supported() {
     let encryptor = encryptor();
     let policy = PayloadEncryptionPolicy::new(["document.body"]).unwrap();

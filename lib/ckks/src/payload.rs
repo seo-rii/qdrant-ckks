@@ -117,7 +117,7 @@ impl PayloadTextEncryptor {
                 continue;
             };
 
-            if is_encrypted_payload_value(value) {
+            if extract_envelope(value, field)?.is_some() {
                 continue;
             }
 
@@ -176,7 +176,9 @@ impl PayloadTextEncryptor {
 }
 
 pub fn is_encrypted_payload_value(value: &Value) -> bool {
-    matches!(value, Value::Object(object) if object.contains_key(ENCRYPTED_PAYLOAD_MARKER))
+    extract_envelope(value, ENCRYPTED_PAYLOAD_MARKER)
+        .map(|envelope| envelope.is_some())
+        .unwrap_or(false)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
