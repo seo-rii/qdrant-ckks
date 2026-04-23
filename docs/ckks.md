@@ -25,6 +25,19 @@ Selected JSON string fields are replaced with a single marker object:
 The AEAD associated data binds ciphertexts to `collection`, `point_id`, and field
 path. Moving a ciphertext to another point or field must fail authentication.
 
+Runtime config:
+
+```yaml
+ckks:
+  enabled: true
+  key_id: tenant-a:payload
+  master_key_b64: base64url-no-pad-32-byte-key
+  payload_text_fields: [body]
+```
+
+Prefer injecting `master_key_b64` through `QDRANT__CKKS__MASTER_KEY_B64`
+instead of committing it to a config file.
+
 ## CKKS vectors
 
 `EncryptedCkksVector` stores OpenFHE CKKS ciphertext bytes, not plaintext

@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::{env, io};
+use std::{env, fmt, io};
 
 use api::grpc::transport_channel_pool::{
     DEFAULT_CONNECT_TIMEOUT, DEFAULT_GRPC_TIMEOUT, DEFAULT_POOL_SIZE,
@@ -223,6 +223,40 @@ pub struct GpuConfig {
     pub allow_emulated: bool,
 }
 
+#[derive(Deserialize, Clone, Default, Validate)]
+pub struct CkksConfig {
+    /// Enable qdrant-ckks encryption helpers.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Key id used in encrypted payload and CKKS vector envelopes.
+    #[serde(default)]
+    pub key_id: Option<String>,
+    /// Base64url-no-padding encoded 32-byte AES key for payload text encryption.
+    #[serde(default)]
+    pub master_key_b64: Option<String>,
+    /// Dot-separated payload field paths to encrypt before storage, for example `body`.
+    #[serde(default)]
+    pub payload_text_fields: Vec<String>,
+    /// External OpenFHE bridge executable for CKKS vector encryption.
+    #[serde(default)]
+    pub openfhe_bridge_path: Option<String>,
+}
+
+impl fmt::Debug for CkksConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CkksConfig")
+            .field("enabled", &self.enabled)
+            .field("key_id", &self.key_id)
+            .field(
+                "master_key_b64",
+                &self.master_key_b64.as_ref().map(|_| "[redacted]"),
+            )
+            .field("payload_text_fields", &self.payload_text_fields)
+            .field("openfhe_bridge_path", &self.openfhe_bridge_path)
+            .finish()
+    }
+}
+
 #[derive(Debug, Deserialize, Clone, Validate)]
 pub struct Settings {
     #[serde(default)]
@@ -257,6 +291,9 @@ pub struct Settings {
     /// Audit logging configuration.
     #[serde(default)]
     pub audit: Option<AuditConfig>,
+    #[serde(default)]
+    #[validate(nested)]
+    pub ckks: CkksConfig,
 }
 
 impl Settings {
@@ -520,6 +557,8 @@ mod tests {
             config.service.http_client_disconnect_timeout_sec,
             default_http_client_disconnect_timeout_sec()
         );
+        assert!(!config.ckks.enabled);
+        assert!(config.ckks.payload_text_fields.is_empty());
 
         config
             .validate()

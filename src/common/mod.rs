@@ -1,5 +1,6 @@
 pub mod audit;
 pub mod auth;
+pub mod ckks;
 pub mod collections;
 pub mod debugger;
 pub mod error_reporting;
