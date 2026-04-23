@@ -18,7 +18,7 @@ use segment::types::{
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use validator::Validate;
+use validator::{Validate, ValidationError, ValidationErrors};
 use wal::WalOptions;
 
 use crate::operations::config_diff::{DiffConfig, QuantizationConfigDiff};
@@ -118,6 +118,73 @@ mod ckks_tests {
         };
         assert!(marker_field.validate().is_err());
     }
+
+    #[test]
+    fn encryption_config_round_trips_and_rejects_legacy_conflicts() {
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                rules: vec![
+                    EncryptionRuleRef {
+                        id: "body_conf".to_string(),
+                        selector: EncryptionSelector::PayloadPaths {
+                            paths: vec!["body".to_string()],
+                        },
+                        instance: "docs_payload_v1".to_string(),
+                        binding: Some("payload-field/v1".to_string()),
+                    },
+                    EncryptionRuleRef {
+                        id: "embedding_conf".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec!["embedding".to_string()],
+                        },
+                        instance: "docs_vector_v1".to_string(),
+                        binding: Some("vector-envelope/v1".to_string()),
+                    },
+                ],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let serialized = serde_json::to_string(&params).unwrap();
+        assert!(serialized.contains("\"encryption\""));
+        let deserialized: CollectionParams = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.encryption, params.encryption);
+        deserialized.validate().unwrap();
+
+        let conflicting = CollectionParams {
+            ckks: Some(CkksCollectionConfig {
+                enabled: true,
+                key_id: Some("tenant-a:docs".to_string()),
+                payload_text_fields: vec!["body".to_string()],
+                vector_names: Vec::new(),
+            }),
+            ..params
+        };
+        assert!(conflicting.validate().is_err());
+    }
+
+    #[test]
+    fn ckks_config_adapts_to_generic_encryption_rules() {
+        let ckks = CkksCollectionConfig {
+            enabled: true,
+            key_id: Some("tenant-a:docs".to_string()),
+            payload_text_fields: vec!["body".to_string()],
+            vector_names: vec!["embedding".to_string()],
+        };
+
+        let encryption = CollectionEncryptionConfig::from_legacy_ckks(&ckks).unwrap();
+        assert_eq!(encryption.rules.len(), 2);
+        assert_eq!(
+            encryption.legacy_ckks_projection(),
+            Some(CkksCollectionConfig {
+                enabled: true,
+                key_id: None,
+                payload_text_fields: vec!["body".to_string()],
+                vector_names: vec!["embedding".to_string()],
+            }),
+        );
+    }
 }
 
 impl Default for WalConfig {
@@ -207,7 +274,293 @@ fn validate_ckks_payload_fields(fields: &[String]) -> Result<(), validator::Vali
     Ok(())
 }
 
+#[derive(
+    Debug, Deserialize, Serialize, JsonSchema, Validate, Anonymize, Clone, PartialEq, Eq, Hash,
+)]
+#[serde(rename_all = "snake_case")]
+pub struct CollectionEncryptionConfig {
+    #[validate(range(min = 1))]
+    #[anonymize(false)]
+    pub version: u16,
+    #[validate(nested)]
+    #[validate(custom(function = "validate_encryption_rules"))]
+    pub rules: Vec<EncryptionRuleRef>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Anonymize, Clone, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub struct EncryptionRuleRef {
+    #[anonymize(false)]
+    pub id: String,
+    pub selector: EncryptionSelector,
+    #[anonymize(false)]
+    pub instance: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[anonymize(false)]
+    pub binding: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Anonymize, Clone, PartialEq, Eq, Hash)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EncryptionSelector {
+    PayloadPaths {
+        #[validate(custom(function = "validate_encryption_payload_paths"))]
+        #[anonymize(true)]
+        paths: Vec<String>,
+    },
+    VectorNames {
+        #[validate(length(min = 1))]
+        #[anonymize(false)]
+        names: Vec<VectorNameBuf>,
+    },
+    MetadataKeys {
+        #[validate(custom(function = "validate_encryption_metadata_keys"))]
+        #[anonymize(true)]
+        keys: Vec<String>,
+    },
+}
+
+impl CollectionEncryptionConfig {
+    pub fn from_legacy_ckks(value: &CkksCollectionConfig) -> Option<Self> {
+        if !value.enabled {
+            return None;
+        }
+
+        let mut rules = Vec::new();
+        if !value.payload_text_fields.is_empty() {
+            rules.push(EncryptionRuleRef {
+                id: "legacy_ckks_payload".to_string(),
+                selector: EncryptionSelector::PayloadPaths {
+                    paths: value.payload_text_fields.clone(),
+                },
+                instance: "legacy_ckks_payload".to_string(),
+                binding: Some("payload-field/v1".to_string()),
+            });
+        }
+        if !value.vector_names.is_empty() {
+            rules.push(EncryptionRuleRef {
+                id: "legacy_ckks_vector".to_string(),
+                selector: EncryptionSelector::VectorNames {
+                    names: value.vector_names.clone(),
+                },
+                instance: "legacy_ckks_vector".to_string(),
+                binding: Some("vector-envelope/v1".to_string()),
+            });
+        }
+        if rules.is_empty() {
+            return None;
+        }
+
+        Some(Self { version: 1, rules })
+    }
+
+    pub fn legacy_ckks_projection(&self) -> Option<CkksCollectionConfig> {
+        let mut payload_text_fields = Vec::new();
+        let mut vector_names = Vec::new();
+
+        for rule in &self.rules {
+            match &rule.selector {
+                EncryptionSelector::PayloadPaths { paths } => {
+                    payload_text_fields.extend(paths.clone());
+                }
+                EncryptionSelector::VectorNames { names } => {
+                    vector_names.extend(names.clone());
+                }
+                EncryptionSelector::MetadataKeys { .. } => return None,
+            }
+        }
+
+        if payload_text_fields.is_empty() && vector_names.is_empty() {
+            return None;
+        }
+
+        Some(CkksCollectionConfig {
+            enabled: true,
+            key_id: None,
+            payload_text_fields,
+            vector_names,
+        })
+    }
+}
+
+impl Validate for EncryptionSelector {
+    fn validate(&self) -> Result<(), ValidationErrors> {
+        let (field, result) = match self {
+            Self::PayloadPaths { paths } => ("paths", validate_encryption_payload_paths(paths)),
+            Self::VectorNames { names } => {
+                let result = if names.is_empty() {
+                    Err(ValidationError::new("length"))
+                } else {
+                    Ok(())
+                };
+                ("names", result)
+            }
+            Self::MetadataKeys { keys } => ("keys", validate_encryption_metadata_keys(keys)),
+        };
+
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let mut errors = ValidationErrors::new();
+                errors.add(field, error);
+                Err(errors)
+            }
+        }
+    }
+}
+
+impl Validate for EncryptionRuleRef {
+    fn validate(&self) -> Result<(), ValidationErrors> {
+        let mut errors = ValidationErrors::new();
+
+        if let Err(error) = validate_crypto_identifier(&self.id) {
+            errors.add("id", error);
+        }
+        let selector_error = match &self.selector {
+            EncryptionSelector::PayloadPaths { paths } => validate_encryption_payload_paths(paths),
+            EncryptionSelector::VectorNames { names } => {
+                if names.is_empty() {
+                    Err(ValidationError::new("length"))
+                } else {
+                    Ok(())
+                }
+            }
+            EncryptionSelector::MetadataKeys { keys } => validate_encryption_metadata_keys(keys),
+        };
+        if let Err(error) = selector_error {
+            errors.add("selector", error);
+        }
+        if let Err(error) = validate_crypto_identifier(&self.instance) {
+            errors.add("instance", error);
+        }
+        if let Err(error) = validate_optional_binding_name(&self.binding) {
+            errors.add("binding", error);
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl EncryptionSelector {
+    pub fn payload_paths(&self) -> Option<&[String]> {
+        match self {
+            Self::PayloadPaths { paths } => Some(paths),
+            _ => None,
+        }
+    }
+
+    pub fn vector_names(&self) -> Option<&[VectorNameBuf]> {
+        match self {
+            Self::VectorNames { names } => Some(names),
+            _ => None,
+        }
+    }
+}
+
+fn validate_crypto_identifier(value: &str) -> Result<(), validator::ValidationError> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value.bytes().all(|b| {
+            b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b':' | b'-' | b'/' | b'@')
+        })
+    {
+        return Err(validator::ValidationError::new("invalid_crypto_identifier"));
+    }
+
+    Ok(())
+}
+
+fn validate_optional_binding_name(
+    value: &Option<String>,
+) -> Result<(), validator::ValidationError> {
+    if let Some(value) = value {
+        validate_crypto_identifier(value)?;
+    }
+
+    Ok(())
+}
+
+fn validate_encryption_payload_paths(fields: &[String]) -> Result<(), validator::ValidationError> {
+    if fields.is_empty() {
+        return Err(validator::ValidationError::new(
+            "invalid_encryption_payload_paths",
+        ));
+    }
+
+    for field in fields {
+        if field.is_empty()
+            || field.starts_with('.')
+            || field.ends_with('.')
+            || field.split('.').any(|part| {
+                part.is_empty()
+                    || matches!(part, "$qdrant_ckks" | "$qdrant_ciphertext")
+                    || part.contains('\0')
+            })
+        {
+            return Err(validator::ValidationError::new(
+                "invalid_encryption_payload_paths",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_encryption_metadata_keys(keys: &[String]) -> Result<(), validator::ValidationError> {
+    if keys.is_empty() {
+        return Err(validator::ValidationError::new(
+            "invalid_encryption_metadata_keys",
+        ));
+    }
+
+    for key in keys {
+        if key.is_empty() || key.contains('\0') {
+            return Err(validator::ValidationError::new(
+                "invalid_encryption_metadata_keys",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_encryption_rules(
+    rules: &[EncryptionRuleRef],
+) -> Result<(), validator::ValidationError> {
+    if rules.is_empty() {
+        return Err(validator::ValidationError::new("invalid_encryption_rules"));
+    }
+
+    let mut ids = HashSet::new();
+    for rule in rules {
+        if !ids.insert(rule.id.as_str()) {
+            return Err(validator::ValidationError::new(
+                "duplicate_encryption_rule_id",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_collection_encryption_sections(
+    params: &CollectionParams,
+) -> Result<(), validator::ValidationError> {
+    if params.encryption.is_some() && params.ckks.is_some() {
+        return Err(validator::ValidationError::new(
+            "conflicting_collection_encryption_sections",
+        ));
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Validate, Anonymize, Clone, PartialEq, Eq)]
+#[validate(schema(function = "validate_collection_encryption_sections"))]
 #[serde(rename_all = "snake_case")]
 pub struct CollectionParams {
     /// Configuration of the vector storage
@@ -260,6 +613,10 @@ pub struct CollectionParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[validate(nested)]
     pub sparse_vectors: Option<BTreeMap<VectorNameBuf, SparseVectorParams>>,
+    /// Capability-oriented collection encryption rules. Secret key material is never stored here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[validate(nested)]
+    pub encryption: Option<CollectionEncryptionConfig>,
     /// Collection-local encryption settings. Secret key material is never stored here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[validate(nested)]
@@ -292,6 +649,7 @@ impl CollectionParams {
             read_fan_out_delay_ms: _, // May be changed,
             on_disk_payload: _, // May be changed
             sparse_vectors,  // Parameters may be changes, but not the structure
+            encryption: _,   // May be changed; runtime instances resolve outside collection config
             ckks: _,         // May be changed; key material is resolved at runtime
         } = other;
 
@@ -501,8 +859,17 @@ impl CollectionParams {
             read_fan_out_delay_ms: None,
             on_disk_payload: default_on_disk_payload(),
             sparse_vectors: None,
+            encryption: None,
             ckks: None,
         }
+    }
+
+    pub fn effective_encryption(&self) -> Option<CollectionEncryptionConfig> {
+        self.encryption.clone().or_else(|| {
+            self.ckks
+                .as_ref()
+                .and_then(CollectionEncryptionConfig::from_legacy_ckks)
+        })
     }
 
     fn missing_vector_error(&self, vector_name: &VectorName) -> CollectionError {

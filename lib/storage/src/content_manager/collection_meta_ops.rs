@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
 use collection::config::{
-    CkksCollectionConfig, CollectionConfigInternal, CollectionParams, ShardingMethod,
+    CkksCollectionConfig, CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams,
+    ShardingMethod,
 };
 use collection::operations::config_diff::{
     CollectionParamsDiff, HnswConfigDiff, OptimizersConfigDiff, QuantizationConfigDiff,
@@ -104,8 +105,21 @@ impl From<RenameAlias> for AliasOperations {
     }
 }
 
+fn validate_create_collection_encryption_sections(
+    create_collection: &CreateCollection,
+) -> Result<(), validator::ValidationError> {
+    if create_collection.encryption.is_some() && create_collection.ckks.is_some() {
+        return Err(validator::ValidationError::new(
+            "conflicting_collection_encryption_sections",
+        ));
+    }
+
+    Ok(())
+}
+
 /// Operation for creating new collection and (optionally) specify index params
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Validate, PartialEq, Eq, Hash, Clone)]
+#[validate(schema(function = "validate_create_collection_encryption_sections"))]
 #[serde(rename_all = "snake_case")]
 pub struct CreateCollection {
     /// Vector data config.
@@ -168,6 +182,10 @@ pub struct CreateCollection {
     /// Sparse vector data config.
     #[validate(nested)]
     pub sparse_vectors: Option<BTreeMap<VectorNameBuf, SparseVectorParams>>,
+    /// Capability-oriented collection encryption rules. Secret key material is never stored here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[validate(nested)]
+    pub encryption: Option<CollectionEncryptionConfig>,
     /// Collection-local encryption settings. Secret key material is resolved from runtime config.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[validate(nested)]
@@ -452,6 +470,7 @@ impl From<CollectionConfigInternal> for CreateCollection {
             read_fan_out_delay_ms: _,
             on_disk_payload,
             sparse_vectors,
+            encryption,
             ckks,
         } = params;
 
@@ -467,6 +486,7 @@ impl From<CollectionConfigInternal> for CreateCollection {
             optimizers_config: Some(optimizer_config.into()),
             quantization_config,
             sparse_vectors,
+            encryption,
             ckks,
             strict_mode_config,
             uuid,

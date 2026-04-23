@@ -12,7 +12,9 @@ use segment::types::{
 use serde::{Deserialize, Serialize};
 use validator::{Validate, ValidationErrors};
 
-use crate::config::{CkksCollectionConfig, CollectionParams, WalConfig};
+use crate::config::{
+    CkksCollectionConfig, CollectionEncryptionConfig, CollectionParams, WalConfig,
+};
 use crate::optimizers_builder::OptimizersConfig;
 
 pub trait DiffConfig<Diff>: Clone {
@@ -86,7 +88,20 @@ pub struct WalConfigDiff {
     pub wal_retain_closed: Option<usize>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq, Eq, Hash)]
+fn validate_collection_encryption_diff_sections(
+    diff: &CollectionParamsDiff,
+) -> Result<(), validator::ValidationError> {
+    if diff.encryption.is_some() && diff.ckks.is_some() {
+        return Err(validator::ValidationError::new(
+            "conflicting_collection_encryption_sections",
+        ));
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Validate, Clone, PartialEq, Eq, Hash)]
+#[validate(schema(function = "validate_collection_encryption_diff_sections"))]
 pub struct CollectionParamsDiff {
     /// Number of replicas for each shard
     pub replication_factor: Option<NonZeroU32>,
@@ -102,6 +117,10 @@ pub struct CollectionParamsDiff {
     /// Note: those payload values that are involved in filtering and are indexed - remain in RAM.
     #[serde(default)]
     pub on_disk_payload: Option<bool>,
+    /// Capability-oriented collection encryption rules. Secret key material is never stored here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[validate(nested)]
+    pub encryption: Option<CollectionEncryptionConfig>,
     /// Collection-local encryption settings. Set `enabled: false` to disable collection encryption.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[validate(nested)]
@@ -305,6 +324,7 @@ impl DiffConfig<CollectionParamsDiff> for CollectionParams {
             read_fan_out_factor,
             read_fan_out_delay_ms,
             on_disk_payload,
+            encryption,
             ckks,
         } = diff;
 
@@ -319,6 +339,7 @@ impl DiffConfig<CollectionParamsDiff> for CollectionParams {
             sharding_method: self.sharding_method,
             sparse_vectors: self.sparse_vectors.clone(),
             vectors: self.vectors.clone(),
+            encryption: encryption.clone().or_else(|| self.encryption.clone()),
             ckks: ckks.clone().or_else(|| self.ckks.clone()),
         }
     }
@@ -432,6 +453,7 @@ impl From<CollectionParams> for CollectionParamsDiff {
             read_fan_out_factor,
             read_fan_out_delay_ms,
             on_disk_payload,
+            encryption,
             ckks,
             shard_number: _,
             sharding_method: _,
@@ -445,6 +467,7 @@ impl From<CollectionParams> for CollectionParamsDiff {
             read_fan_out_factor,
             read_fan_out_delay_ms,
             on_disk_payload: Some(on_disk_payload),
+            encryption,
             ckks,
         }
     }
@@ -536,6 +559,7 @@ mod tests {
             read_fan_out_factor: None,
             read_fan_out_delay_ms: None,
             on_disk_payload: None,
+            encryption: None,
             ckks: None,
         };
 
@@ -565,6 +589,7 @@ mod tests {
             read_fan_out_factor: None,
             read_fan_out_delay_ms: None,
             on_disk_payload: None,
+            encryption: None,
             ckks: None,
         });
         assert_eq!(unchanged.ckks, Some(enabled_ckks));
@@ -581,10 +606,60 @@ mod tests {
             read_fan_out_factor: None,
             read_fan_out_delay_ms: None,
             on_disk_payload: None,
+            encryption: None,
             ckks: Some(disabled.clone()),
         });
 
         assert_eq!(updated.ckks, Some(disabled));
+    }
+
+    #[test]
+    fn test_encryption_diff_updates_and_rejects_legacy_conflicts() {
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                rules: vec![crate::config::EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: crate::config::EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let diff = CollectionParamsDiff {
+            replication_factor: None,
+            write_consistency_factor: None,
+            read_fan_out_factor: None,
+            read_fan_out_delay_ms: None,
+            on_disk_payload: None,
+            encryption: None,
+            ckks: None,
+        };
+        assert_eq!(params.update(&diff).encryption, params.encryption);
+
+        let conflicting = CollectionParamsDiff {
+            ckks: Some(CkksCollectionConfig {
+                enabled: true,
+                key_id: Some("tenant-a:docs".to_string()),
+                payload_text_fields: vec!["body".to_string()],
+                vector_names: Vec::new(),
+            }),
+            ..CollectionParamsDiff {
+                replication_factor: None,
+                write_consistency_factor: None,
+                read_fan_out_factor: None,
+                read_fan_out_delay_ms: None,
+                on_disk_payload: None,
+                encryption: params.encryption.clone(),
+                ckks: None,
+            }
+        };
+
+        assert!(conflicting.validate().is_err());
     }
 
     #[test]

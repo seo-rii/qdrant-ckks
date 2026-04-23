@@ -368,6 +368,7 @@ impl TryFrom<api::grpc::qdrant::CollectionParamsDiff> for CollectionParamsDiff {
             read_fan_out_factor,
             read_fan_out_delay_ms,
             on_disk_payload,
+            encryption: None,
             ckks: ckks.map(TryInto::try_into).transpose()?,
         })
     }
@@ -485,8 +486,10 @@ impl From<CollectionInfo> for api::grpc::qdrant::CollectionInfo {
             read_fan_out_factor,
             sharding_method,
             sparse_vectors,
+            encryption,
             ckks,
         } = params;
+        let ckks = ckks.or_else(|| encryption.and_then(|config| config.legacy_ckks_projection()));
 
         api::grpc::qdrant::CollectionInfo {
             status: match status {
@@ -1981,6 +1984,7 @@ impl TryFrom<api::grpc::qdrant::CollectionConfig> for CollectionConfig {
                             .map(sharding_method_from_proto)
                             .transpose()?,
                         read_fan_out_delay_ms,
+                        encryption: None,
                         ckks: ckks.map(TryInto::try_into).transpose()?,
                     }
                 }
