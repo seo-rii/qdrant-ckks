@@ -1,0 +1,54 @@
+name: qdrant-ckks CI
+
+on:
+  push:
+    branches: [ckks]
+  pull_request:
+    branches: [ckks]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ckks-tests:
+    name: CKKS and collection-scoped encryption tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: ckks-ci
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libunwind-dev
+
+      - name: Run qdrant-ckks crate security tests
+        run: cargo test --locked -p qdrant-ckks
+
+      - name: Run collection CKKS config tests
+        run: cargo test --locked -p collection ckks --lib
+
+      - name: Run qdrant CKKS runtime tests
+        run: cargo test --locked -p qdrant ckks
+
+      - name: Run storage create-collection compatibility test
+        run: cargo test --locked -p storage alias
+
+      - name: Validate default settings parsing
+        run: cargo test --locked -p qdrant settings::tests::test_default_config
