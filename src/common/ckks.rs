@@ -4,6 +4,7 @@ use qdrant_ckks::{
     AeadCipher, PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
 };
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use crate::settings::CkksConfig;
 
@@ -62,10 +63,12 @@ pub fn payload_text_encryptor_for_collection(
         .and_then(|runtime| runtime.master_key_b64.as_deref())
         .or(runtime_config.master_key_b64.as_deref())
         .ok_or(CkksSetupError::MissingMasterKey)?;
-    let master_key = BASE64URL_NOPAD
-        .decode(master_key_b64.as_bytes())
-        .map_err(|_| CkksSetupError::InvalidMasterKeyEncoding)?;
-    let master_key = SecretKey::try_from_slice(&master_key)
+    let master_key = Zeroizing::new(
+        BASE64URL_NOPAD
+            .decode(master_key_b64.as_bytes())
+            .map_err(|_| CkksSetupError::InvalidMasterKeyEncoding)?,
+    );
+    let master_key = SecretKey::try_from_slice(master_key.as_slice())
         .map_err(|_| CkksSetupError::InvalidMasterKeyLength)?;
     let cipher = AeadCipher::new(key_id, master_key)
         .map_err(|err| CkksSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
