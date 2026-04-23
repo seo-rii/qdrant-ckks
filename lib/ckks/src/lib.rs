@@ -5,7 +5,12 @@
 //! serializable and testable without linking OpenFHE into every Qdrant build.
 
 pub mod aead;
+pub mod payload;
 
 pub use aead::{
     AeadCipher, EncryptedEnvelope, EncryptionContext, EncryptionError, EncryptionPurpose, SecretKey,
+};
+pub use payload::{
+    ENCRYPTED_PAYLOAD_MARKER, PayloadEncryptionError, PayloadEncryptionPolicy,
+    PayloadTextEncryptor, is_encrypted_payload_value,
 };
