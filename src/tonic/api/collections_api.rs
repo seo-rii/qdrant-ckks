@@ -22,16 +22,22 @@ use tonic::{Request, Response, Status};
 
 use super::validate;
 use crate::common::collections::*;
+use crate::common::crypto::validate_create_collection_crypto_runtime;
+use crate::settings::Settings;
 use crate::tonic::api::collections_common::get;
 use crate::tonic::auth::extract_auth;
 
 pub struct CollectionsService {
     dispatcher: Arc<Dispatcher>,
+    settings: Settings,
 }
 
 impl CollectionsService {
-    pub fn new(dispatcher: Arc<Dispatcher>) -> Self {
-        Self { dispatcher }
+    pub fn new(dispatcher: Arc<Dispatcher>, settings: Settings) -> Self {
+        Self {
+            dispatcher,
+            settings,
+        }
     }
 
     async fn perform_operation<O>(
@@ -99,10 +105,39 @@ impl Collections for CollectionsService {
 
     async fn create(
         &self,
-        request: Request<CreateCollection>,
+        mut request: Request<CreateCollection>,
     ) -> Result<Response<CollectionOperationResponse>, Status> {
         validate(request.get_ref())?;
-        self.perform_operation(request).await
+        let auth = extract_auth(&mut request);
+        let operation = request.into_inner();
+        let wait_timeout = operation.timeout.map(Duration::from_secs);
+        let meta_operation: storage::content_manager::collection_meta_ops::CollectionMetaOperations =
+            operation.try_into()?;
+        let storage::content_manager::collection_meta_ops::CollectionMetaOperations::CreateCollection(
+            create_operation,
+        ) = meta_operation
+        else {
+            unreachable!("grpc create collection must convert to create meta op");
+        };
+        validate_create_collection_crypto_runtime(
+            &self.settings,
+            &create_operation.collection_name,
+            &create_operation.create_collection,
+        )?;
+
+        let timing = Instant::now();
+        let result = self
+            .dispatcher
+            .submit_collection_meta_op(
+                storage::content_manager::collection_meta_ops::CollectionMetaOperations::CreateCollection(create_operation),
+                auth,
+                wait_timeout,
+            )
+            .await?;
+
+        Ok(Response::new(CollectionOperationResponse::from((
+            timing, result,
+        ))))
     }
 
     async fn update(

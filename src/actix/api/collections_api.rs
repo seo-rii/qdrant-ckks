@@ -21,6 +21,8 @@ use crate::actix::api::StrictCollectionPath;
 use crate::actix::auth::ActixAuth;
 use crate::actix::helpers::{self, process_response};
 use crate::common::collections::*;
+use crate::common::crypto::validate_create_collection_crypto_runtime;
+use crate::settings::Settings;
 
 #[derive(Debug, Deserialize, Validate)]
 pub struct WaitTimeout {
@@ -113,12 +115,20 @@ async fn create_collection(
     dispatcher: web::Data<Dispatcher>,
     collection: Path<StrictCollectionPath>,
     operation: Json<CreateCollection>,
+    settings: web::Data<Settings>,
     Query(query): Query<WaitTimeout>,
     ActixAuth(auth): ActixAuth,
 ) -> HttpResponse {
     let timing = Instant::now();
-    let create_collection_op =
-        CreateCollectionOperation::new(collection.collection_name.clone(), operation.into_inner());
+    let collection_name = collection.collection_name.clone();
+    let operation = operation.into_inner();
+    if let Err(err) =
+        validate_create_collection_crypto_runtime(settings.get_ref(), &collection_name, &operation)
+    {
+        return process_response::<bool>(Err(err), timing, None);
+    }
+
+    let create_collection_op = CreateCollectionOperation::new(collection_name, operation);
 
     let Ok(create_collection_op) = create_collection_op else {
         return process_response(create_collection_op, timing, None);

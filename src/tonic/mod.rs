@@ -113,7 +113,7 @@ pub fn init(
 
         let qdrant_service = QdrantService::default();
         let health_service = HealthService::default();
-        let collections_service = CollectionsService::new(dispatcher.clone());
+        let collections_service = CollectionsService::new(dispatcher.clone(), settings.clone());
         let points_service = PointsService::new(dispatcher.clone(), settings.clone());
         let snapshot_service = SnapshotsService::new(dispatcher.clone());
 

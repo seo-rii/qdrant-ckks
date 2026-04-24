@@ -1,13 +1,17 @@
 use std::fs;
 
-use collection::config::{CollectionEncryptionConfig, CollectionParams, EncryptionSelector};
+use collection::config::{
+    CkksCollectionConfig, CollectionEncryptionConfig, CollectionParams, EncryptionSelector,
+};
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_ckks::{
     AeadCipher, PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionError,
-    PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
+    PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey, VECTOR_OPENFHE_CKKS_PROVIDER,
 };
 use segment::types::Payload;
 use serde_json::Value;
+use storage::content_manager::collection_meta_ops::CreateCollection;
+use storage::content_manager::errors::StorageError;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -161,6 +165,50 @@ pub fn payload_write_plan_for_collection(
         return Ok(None);
     };
     generic_payload_write_plan(&effective_settings(settings), collection_name, &encryption)
+}
+
+pub fn validate_create_collection_crypto_runtime(
+    settings: &Settings,
+    collection_name: &str,
+    create_collection: &CreateCollection,
+) -> Result<(), StorageError> {
+    let params = CollectionParams {
+        encryption: create_collection.encryption.clone(),
+        ckks: create_collection.ckks.clone(),
+        ..CollectionParams::empty()
+    };
+    validate_collection_crypto_runtime(settings, collection_name, &params)
+}
+
+pub fn validate_collection_crypto_runtime(
+    settings: &Settings,
+    collection_name: &str,
+    params: &CollectionParams,
+) -> Result<(), StorageError> {
+    if let Some(encryption) = &params.encryption {
+        return validate_generic_collection_crypto_runtime(
+            &effective_settings(settings),
+            collection_name,
+            encryption,
+        );
+    }
+
+    let Some(ckks) = params.ckks.as_ref() else {
+        return Ok(());
+    };
+
+    if settings.ckks.is_configured() {
+        return validate_legacy_collection_crypto_runtime(&settings.ckks, collection_name, ckks);
+    }
+
+    let Some(encryption) = CollectionEncryptionConfig::from_legacy_ckks(ckks) else {
+        return Ok(());
+    };
+    validate_generic_collection_crypto_runtime(
+        &effective_settings(settings),
+        collection_name,
+        &encryption,
+    )
 }
 
 pub fn effective_settings(settings: &Settings) -> CryptoSettings {
@@ -351,6 +399,97 @@ fn generic_payload_write_plan(
     }
 }
 
+fn validate_generic_collection_crypto_runtime(
+    runtime_settings: &CryptoSettings,
+    collection_name: &str,
+    encryption: &CollectionEncryptionConfig,
+) -> Result<(), StorageError> {
+    let payload_rules: Vec<_> = encryption
+        .rules
+        .iter()
+        .filter(|rule| matches!(rule.selector, EncryptionSelector::PayloadPaths { .. }))
+        .cloned()
+        .collect();
+    if !payload_rules.is_empty() {
+        let payload_only_encryption = CollectionEncryptionConfig {
+            version: encryption.version,
+            key_id: encryption.key_id.clone(),
+            crypto_schema_version: encryption.crypto_schema_version,
+            encryption_epoch: encryption.encryption_epoch,
+            migration_state: encryption.migration_state.clone(),
+            rules: payload_rules,
+        };
+        generic_payload_write_plan(runtime_settings, collection_name, &payload_only_encryption)
+            .map_err(|err| {
+                StorageError::bad_input(format!(
+                    "collection {collection_name} payload crypto runtime validation failed: {err}"
+                ))
+            })?;
+    }
+
+    for rule in &encryption.rules {
+        if !matches!(rule.selector, EncryptionSelector::VectorNames { .. }) {
+            continue;
+        }
+
+        let Some(instance) = runtime_settings.instances.get(&rule.instance) else {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} references unknown crypto instance {}",
+                rule.instance
+            )));
+        };
+        if instance.provider != VECTOR_OPENFHE_CKKS_PROVIDER {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} rule {} must use provider {VECTOR_OPENFHE_CKKS_PROVIDER}, found {}",
+                rule.id, instance.provider
+            )));
+        }
+
+        let instance_key_id = match instance.options.get("key_id") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(key_id)) => Some(key_id.as_str()),
+            Some(_) => {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {} key_id option must be a string",
+                    rule.instance
+                )));
+            }
+        };
+        match (encryption.key_id.as_deref(), instance_key_id) {
+            (Some(collection_key_id), Some(runtime_key_id))
+                if collection_key_id != runtime_key_id =>
+            {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} key id does not match vector crypto instance {} key id",
+                    rule.instance
+                )));
+            }
+            (None, None) => {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {} is missing a key id",
+                    rule.instance
+                )));
+            }
+            _ => {}
+        }
+
+        let Some(backend_ref) = instance.backend_ref.as_deref() else {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} vector crypto instance {} is missing backend_ref",
+                rule.instance
+            )));
+        };
+        if !runtime_settings.backends.contains_key(backend_ref) {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} vector crypto instance {} references unknown backend {backend_ref}",
+                rule.instance
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 fn resolve_payload_key_id<'a>(
     collection_name: &str,
     encryption: &'a CollectionEncryptionConfig,
@@ -451,6 +590,64 @@ fn decode_material_key(
             material: material_name.to_string(),
         }
     })
+}
+
+fn validate_legacy_collection_crypto_runtime(
+    runtime_config: &crate::settings::CkksConfig,
+    collection_name: &str,
+    collection_config: &CkksCollectionConfig,
+) -> Result<(), StorageError> {
+    if !collection_config.payload_text_fields.is_empty() {
+        crate::common::ckks::payload_text_encryptor_for_collection(
+            runtime_config,
+            collection_name,
+            Some(collection_config),
+        )
+        .map_err(|err| {
+            StorageError::bad_input(format!(
+                "collection {collection_name} payload crypto runtime validation failed: {err}"
+            ))
+        })?;
+    }
+
+    if collection_config.vector_names.is_empty() {
+        return Ok(());
+    }
+    if crate::common::ckks::openfhe_bridge_for_collection(
+        runtime_config,
+        collection_name,
+        Some(collection_config),
+    )
+    .is_none()
+    {
+        return Err(StorageError::bad_input(format!(
+            "collection {collection_name} CKKS vector runtime validation failed: missing OpenFHE bridge backend"
+        )));
+    }
+
+    let collection_runtime = runtime_config.collections.get(collection_name);
+    let collection_runtime_key_id =
+        collection_runtime.and_then(|runtime| runtime.key_id.as_deref());
+    match (
+        collection_config.key_id.as_deref(),
+        collection_runtime_key_id,
+    ) {
+        (Some(collection_key_id), Some(runtime_key_id)) if collection_key_id != runtime_key_id => {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} key id does not match CKKS runtime key id"
+            )));
+        }
+        (Some(_), _) => {}
+        (None, Some(_)) => {}
+        (None, None) if runtime_config.key_id.is_none() => {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} CKKS vector runtime validation failed: missing key id"
+            )));
+        }
+        (None, None) => {}
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -734,6 +931,144 @@ mod tests {
                 collection: "docs".to_string(),
                 instance: "missing_payload_v1".to_string(),
             },
+        );
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_accepts_generic_payload_and_vector_rules() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([
+                    (
+                        "docs_payload_v1".to_string(),
+                        CryptoInstanceConfig {
+                            provider: PAYLOAD_AES_GCM_PROVIDER.to_string(),
+                            materials: HashMap::from([(
+                                PAYLOAD_SYM_KEY_ROLE.to_string(),
+                                "tenant-a/payload-v1".to_string(),
+                            )]),
+                            backend_ref: None,
+                            options: json!({ "key_id": "tenant-a:docs" }),
+                        },
+                    ),
+                    (
+                        "docs_vector_v1".to_string(),
+                        CryptoInstanceConfig {
+                            provider: VECTOR_OPENFHE_CKKS_PROVIDER.to_string(),
+                            materials: HashMap::new(),
+                            backend_ref: Some("openfhe_local".to_string()),
+                            options: json!({ "key_id": "tenant-a:docs" }),
+                        },
+                    ),
+                ]),
+                materials: HashMap::from([(
+                    "tenant-a/payload-v1".to_string(),
+                    CryptoMaterialConfig {
+                        kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        env: None,
+                        path: None,
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[7u8; 32])),
+                    },
+                )]),
+                backends: HashMap::from([(
+                    "openfhe_local".to_string(),
+                    CryptoBackendConfig {
+                        kind: "process_pool".to_string(),
+                        program: Some("/usr/local/bin/openfhe-bridge".to_string()),
+                        size: Some(1),
+                        timeout_ms: Some(5_000),
+                    },
+                )]),
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![
+                    EncryptionRuleRef {
+                        id: "body_conf".to_string(),
+                        selector: EncryptionSelector::PayloadPaths {
+                            paths: vec!["body".to_string()],
+                        },
+                        instance: "docs_payload_v1".to_string(),
+                        binding: Some("payload-field/v1".to_string()),
+                    },
+                    EncryptionRuleRef {
+                        id: "embedding_conf".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec!["embedding".to_string()],
+                        },
+                        instance: "docs_vector_v1".to_string(),
+                        binding: Some("vector-envelope/v1".to_string()),
+                    },
+                ],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        validate_collection_crypto_runtime(&settings, "docs", &params).unwrap();
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_rejects_vector_provider_mismatch() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_payload_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_AES_GCM_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            "tenant-a/payload-v1".to_string(),
+                        )]),
+                        backend_ref: None,
+                        options: json!({ "key_id": "tenant-a:docs" }),
+                    },
+                )]),
+                materials: HashMap::from([(
+                    "tenant-a/payload-v1".to_string(),
+                    CryptoMaterialConfig {
+                        kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        env: None,
+                        path: None,
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[7u8; 32])),
+                    },
+                )]),
+                backends: HashMap::new(),
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "embedding_conf".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["embedding".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("vector-envelope/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = validate_collection_crypto_runtime(&settings, "docs", &params).unwrap_err();
+        assert!(
+            matches!(err, StorageError::BadInput { description } if description.contains(VECTOR_OPENFHE_CKKS_PROVIDER))
         );
     }
 }
