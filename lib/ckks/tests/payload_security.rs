@@ -40,6 +40,7 @@ fn selected_body_field_is_encrypted_without_leaking_plaintext() {
     assert!(serialized.contains(ENCRYPTED_PAYLOAD_MARKER));
     assert!(serialized.contains("\"schema_version\":1"));
     assert!(serialized.contains("\"encryption_epoch\":0"));
+    assert!(serialized.contains("\"material_fingerprint\""));
     assert!(!serialized.contains("classified body text"));
     assert!(serialized.contains("public title"));
 

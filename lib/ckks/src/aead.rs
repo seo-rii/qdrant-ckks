@@ -5,6 +5,7 @@ use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
 use ring::hkdf;
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use zeroize::Zeroize;
 
@@ -35,6 +36,8 @@ pub enum EncryptionError {
     UnsupportedAlgorithm(String),
     #[error("envelope key id does not match the active key")]
     KeyMismatch,
+    #[error("envelope material fingerprint does not match the active key")]
+    MaterialFingerprintMismatch,
     #[error("envelope field is not valid base64url without padding")]
     InvalidEncoding,
     #[error("nonce must decode to 96 bits")]
@@ -182,6 +185,8 @@ pub struct EncryptedEnvelope {
     pub version: u8,
     pub algorithm: String,
     pub key_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub material_fingerprint: String,
     pub nonce: String,
     pub ciphertext: String,
 }
@@ -192,6 +197,7 @@ impl Debug for EncryptedEnvelope {
             .field("version", &self.version)
             .field("algorithm", &self.algorithm)
             .field("key_id", &self.key_id)
+            .field("material_fingerprint", &self.material_fingerprint)
             .field("nonce", &"[redacted]")
             .field("ciphertext_len", &self.ciphertext.len())
             .finish()
@@ -200,6 +206,7 @@ impl Debug for EncryptedEnvelope {
 
 pub struct AeadCipher {
     key_id: String,
+    material_fingerprint: String,
     key: SecretKey,
 }
 
@@ -207,11 +214,20 @@ impl AeadCipher {
     pub fn new(key_id: impl Into<String>, key: SecretKey) -> Result<Self, EncryptionError> {
         let key_id = key_id.into();
         validate_key_id(&key_id)?;
-        Ok(Self { key_id, key })
+        let material_fingerprint = key.material_fingerprint();
+        Ok(Self {
+            key_id,
+            material_fingerprint,
+            key,
+        })
     }
 
     pub fn key_id(&self) -> &str {
         &self.key_id
+    }
+
+    pub fn material_fingerprint(&self) -> &str {
+        &self.material_fingerprint
     }
 
     pub fn encrypt(
@@ -240,6 +256,7 @@ impl AeadCipher {
             version: VERSION,
             algorithm: ALGORITHM.to_string(),
             key_id: self.key_id.clone(),
+            material_fingerprint: self.material_fingerprint.clone(),
             nonce: BASE64URL_NOPAD.encode(&nonce_bytes),
             ciphertext: BASE64URL_NOPAD.encode(&in_out),
         })
@@ -260,6 +277,11 @@ impl AeadCipher {
         }
         if envelope.key_id != self.key_id {
             return Err(EncryptionError::KeyMismatch);
+        }
+        if !envelope.material_fingerprint.is_empty()
+            && envelope.material_fingerprint != self.material_fingerprint
+        {
+            return Err(EncryptionError::MaterialFingerprintMismatch);
         }
         validate_key_id(&envelope.key_id)?;
 
@@ -286,6 +308,15 @@ impl AeadCipher {
             .open_in_place(nonce, Aad::from(aad.as_slice()), &mut ciphertext)
             .map_err(|_| EncryptionError::OpenFailed)?;
         Ok(plaintext.to_vec())
+    }
+}
+
+impl SecretKey {
+    fn material_fingerprint(&self) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(b"qdrant-ckks-aead-material-fingerprint-v1");
+        hasher.update(self.as_bytes());
+        BASE64URL_NOPAD.encode(&hasher.finalize())
     }
 }
 

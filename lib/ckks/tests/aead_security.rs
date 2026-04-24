@@ -22,6 +22,8 @@ fn encrypt_decrypt_round_trip_uses_fresh_nonce() {
     let first = cipher.encrypt(plaintext, context).unwrap();
     let second = cipher.encrypt(plaintext, context).unwrap();
 
+    assert!(!first.material_fingerprint.is_empty());
+    assert_eq!(first.material_fingerprint, cipher.material_fingerprint());
     assert_ne!(first.nonce, second.nonce);
     assert_ne!(first.ciphertext, second.ciphertext);
     assert_eq!(cipher.decrypt(&first, context).unwrap(), plaintext);
@@ -98,6 +100,19 @@ fn envelope_metadata_is_rejected_before_decryption() {
 }
 
 #[test]
+fn envelope_material_fingerprint_must_match_active_key() {
+    let cipher = fixed_cipher();
+    let other_cipher =
+        AeadCipher::new("tenant-a:primary", SecretKey::from_bytes([8u8; 32])).unwrap();
+    let envelope = cipher.encrypt(b"metadata", payload_context("42")).unwrap();
+
+    assert_eq!(
+        other_cipher.decrypt(&envelope, payload_context("42")),
+        Err(EncryptionError::MaterialFingerprintMismatch),
+    );
+}
+
+#[test]
 fn key_ids_are_strict_ascii_capability_names() {
     assert!(AeadCipher::new("valid._:-09AZaz", SecretKey::from_bytes([1u8; 32])).is_ok());
     assert_eq!(
@@ -141,7 +156,7 @@ fn derived_subkeys_separate_payload_and_vector_domains() {
     );
     assert_eq!(
         vector_cipher.decrypt(&envelope, context),
-        Err(EncryptionError::OpenFailed),
+        Err(EncryptionError::MaterialFingerprintMismatch),
     );
 }
 
