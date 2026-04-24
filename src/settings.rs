@@ -333,8 +333,14 @@ impl Validate for CryptoInstanceConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone, Default, Validate)]
+const fn default_allow_inline_key_material() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize, Clone, Validate)]
 pub struct CryptoSettings {
+    #[serde(default = "default_allow_inline_key_material")]
+    pub allow_inline_key_material: bool,
     #[serde(default)]
     #[validate(nested)]
     pub instances: HashMap<String, CryptoInstanceConfig>,
@@ -344,6 +350,17 @@ pub struct CryptoSettings {
     #[serde(default)]
     #[validate(nested)]
     pub backends: HashMap<String, CryptoBackendConfig>,
+}
+
+impl Default for CryptoSettings {
+    fn default() -> Self {
+        Self {
+            allow_inline_key_material: default_allow_inline_key_material(),
+            instances: HashMap::new(),
+            materials: HashMap::new(),
+            backends: HashMap::new(),
+        }
+    }
 }
 
 impl CryptoSettings {
@@ -364,6 +381,7 @@ impl CryptoSettings {
 
     pub fn from_legacy_ckks(ckks: &CkksConfig) -> Self {
         let mut settings = Self::default();
+        settings.allow_inline_key_material = ckks.allow_inline_key_material;
 
         let insert_payload_instance =
             |settings: &mut Self,
@@ -539,11 +557,14 @@ impl CkksCollectionKeyConfig {
     }
 }
 
-#[derive(Deserialize, Clone, Default, Validate)]
+#[derive(Deserialize, Clone, Validate)]
 pub struct CkksConfig {
     /// Global CKKS master switch. Collections still need `params.ckks.enabled: true`.
     #[serde(default)]
     pub enabled: bool,
+    /// Allow inline key material in runtime config. Set false in production/security mode.
+    #[serde(default = "default_allow_inline_key_material")]
+    pub allow_inline_key_material: bool,
     /// Default key id used when neither collection params nor collection runtime config set one.
     #[serde(default)]
     pub key_id: Option<String>,
@@ -559,10 +580,24 @@ pub struct CkksConfig {
     pub collections: HashMap<String, CkksCollectionKeyConfig>,
 }
 
+impl Default for CkksConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allow_inline_key_material: default_allow_inline_key_material(),
+            key_id: None,
+            master_key_b64: None,
+            openfhe_bridge_path: None,
+            collections: HashMap::new(),
+        }
+    }
+}
+
 impl fmt::Debug for CkksConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CkksConfig")
             .field("enabled", &self.enabled)
+            .field("allow_inline_key_material", &self.allow_inline_key_material)
             .field("key_id", &self.key_id)
             .field(
                 "master_key_b64",
@@ -1042,6 +1077,7 @@ ckks:
     fn test_crypto_settings_from_legacy_ckks() {
         let crypto = CryptoSettings::from_legacy_ckks(&CkksConfig {
             enabled: true,
+            allow_inline_key_material: true,
             key_id: Some("tenant-a:docs".to_string()),
             master_key_b64: Some("AQID".to_string()),
             openfhe_bridge_path: Some("/usr/local/bin/openfhe-bridge".to_string()),

@@ -13,6 +13,8 @@ pub enum CryptoSetupError {
     },
     #[error("crypto material {material} source does not match configured fields")]
     MaterialSourceMismatch { material: String },
+    #[error("crypto material {material} uses inline key material but inline material is disabled")]
+    InlineMaterialDisabled { material: String },
     #[error("crypto backend {backend} of kind {kind} requires program")]
     MissingBackendProgram { backend: String, kind: String },
     #[error(
@@ -53,7 +55,7 @@ pub fn validate_runtime_config(settings: &Settings) -> Result<(), CryptoSetupErr
 
 fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetupError> {
     for (material_name, material) in &settings.materials {
-        validate_material(material_name, material)?;
+        validate_material(material_name, material, settings.allow_inline_key_material)?;
     }
 
     for (backend_name, backend) in &settings.backends {
@@ -87,6 +89,7 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
 fn validate_material(
     material_name: &str,
     material: &CryptoMaterialConfig,
+    allow_inline_key_material: bool,
 ) -> Result<(), CryptoSetupError> {
     let configured_sources = usize::from(material.env.is_some())
         + usize::from(material.path.is_some())
@@ -119,7 +122,13 @@ fn validate_material(
                 && material.env.is_none()
                 && material.path.is_none() =>
         {
-            Ok(())
+            if allow_inline_key_material {
+                Ok(())
+            } else {
+                Err(CryptoSetupError::InlineMaterialDisabled {
+                    material: material_name.to_string(),
+                })
+            }
         }
         Some("env" | "file" | "inline") => Err(CryptoSetupError::MaterialSourceMismatch {
             material: material_name.to_string(),
@@ -157,6 +166,7 @@ mod tests {
     #[test]
     fn validate_crypto_settings_rejects_missing_material_and_backend_refs() {
         let mut settings = CryptoSettings {
+            allow_inline_key_material: true,
             instances: HashMap::from([(
                 "docs_payload_v1".to_string(),
                 CryptoInstanceConfig {
@@ -214,6 +224,7 @@ mod tests {
                     path: Some("/tmp/key.bin".to_string()),
                     value_b64: Some("AQID".to_string()),
                 },
+                true,
             ),
             Err(CryptoSetupError::InvalidMaterialSourceCount {
                 material: "tenant-a/payload-v1".to_string(),
@@ -230,10 +241,36 @@ mod tests {
                     path: None,
                     value_b64: None,
                 },
+                true,
             ),
             Err(CryptoSetupError::UnsupportedMaterialSource {
                 material: "tenant-a/payload-v1".to_string(),
                 material_source: "kms".to_string(),
+            }),
+        );
+    }
+
+    #[test]
+    fn validate_crypto_settings_can_reject_inline_key_material() {
+        let settings = CryptoSettings {
+            allow_inline_key_material: false,
+            materials: HashMap::from([(
+                "tenant-a/payload-v1".to_string(),
+                CryptoMaterialConfig {
+                    kind: "symmetric_key_32".to_string(),
+                    source: Some("inline".to_string()),
+                    env: None,
+                    path: None,
+                    value_b64: Some("AQID".to_string()),
+                },
+            )]),
+            ..CryptoSettings::default()
+        };
+
+        assert_eq!(
+            validate_crypto_settings(&settings),
+            Err(CryptoSetupError::InlineMaterialDisabled {
+                material: "tenant-a/payload-v1".to_string(),
             }),
         );
     }

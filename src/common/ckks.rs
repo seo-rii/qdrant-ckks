@@ -22,6 +22,8 @@ pub enum CkksSetupError {
     InvalidMasterKeyEncoding,
     #[error("ckks.master_key_b64 must decode to exactly 32 bytes")]
     InvalidMasterKeyLength,
+    #[error("{scope} uses inline key material but inline key material is disabled")]
+    InlineMasterKeyDisabled { scope: String },
     #[error("ckks key id is invalid for {scope}")]
     InvalidRuntimeKeyId { scope: String },
     #[error("ckks OpenFHE bridge path is invalid: {path}")]
@@ -67,10 +69,27 @@ pub fn payload_text_encryptor_for_collection(
     }
     .ok_or(CkksSetupError::MissingKeyId)?;
 
-    let master_key_b64 = collection_runtime
-        .and_then(|runtime| runtime.master_key_b64.as_deref())
-        .or(runtime_config.master_key_b64.as_deref())
-        .ok_or(CkksSetupError::MissingMasterKey)?;
+    let (master_key_b64, master_key_scope) = if let Some(master_key_b64) =
+        collection_runtime.and_then(|runtime| runtime.master_key_b64.as_deref())
+    {
+        (
+            master_key_b64,
+            format!("ckks.collections.{collection}.master_key_b64"),
+        )
+    } else {
+        (
+            runtime_config
+                .master_key_b64
+                .as_deref()
+                .ok_or(CkksSetupError::MissingMasterKey)?,
+            "ckks.master_key_b64".to_string(),
+        )
+    };
+    if !runtime_config.allow_inline_key_material {
+        return Err(CkksSetupError::InlineMasterKeyDisabled {
+            scope: master_key_scope,
+        });
+    }
     let master_key = decode_master_key(master_key_b64)?;
     let payload_key = master_key
         .derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)
@@ -92,6 +111,11 @@ pub fn validate_runtime_config(runtime_config: &CkksConfig) -> Result<(), CkksSe
         validate_runtime_key_id(key_id, "ckks.key_id")?;
     }
     if let Some(master_key_b64) = runtime_config.master_key_b64.as_deref() {
+        if !runtime_config.allow_inline_key_material {
+            return Err(CkksSetupError::InlineMasterKeyDisabled {
+                scope: "ckks.master_key_b64".to_string(),
+            });
+        }
         let _ = decode_master_key(master_key_b64)?;
     }
     if let Some(path) = runtime_config.openfhe_bridge_path.as_deref() {
@@ -106,6 +130,11 @@ pub fn validate_runtime_config(runtime_config: &CkksConfig) -> Result<(), CkksSe
             )?;
         }
         if let Some(master_key_b64) = collection_config.master_key_b64.as_deref() {
+            if !runtime_config.allow_inline_key_material {
+                return Err(CkksSetupError::InlineMasterKeyDisabled {
+                    scope: format!("ckks.collections.{collection_name}.master_key_b64"),
+                });
+            }
             let _ = decode_master_key(master_key_b64)?;
         }
         if let Some(path) = collection_config.openfhe_bridge_path.as_deref() {
@@ -340,6 +369,53 @@ mod tests {
         assert_eq!(
             setup_err(&config, &collection_config),
             CkksSetupError::InvalidMasterKeyLength,
+        );
+    }
+
+    #[test]
+    fn inline_master_key_material_can_be_rejected() {
+        let collection_config = enabled_collection_config();
+        let config = CkksConfig {
+            enabled: true,
+            allow_inline_key_material: false,
+            key_id: Some("tenant-a:payload".to_string()),
+            master_key_b64: Some(BASE64URL_NOPAD.encode(&[1u8; 32])),
+            ..CkksConfig::default()
+        };
+
+        assert_eq!(
+            setup_err(&config, &collection_config),
+            CkksSetupError::InlineMasterKeyDisabled {
+                scope: "ckks.master_key_b64".to_string(),
+            },
+        );
+        assert_eq!(
+            validate_runtime_config(&config),
+            Err(CkksSetupError::InlineMasterKeyDisabled {
+                scope: "ckks.master_key_b64".to_string(),
+            }),
+        );
+
+        let mut collection_scoped_config = CkksConfig {
+            enabled: true,
+            allow_inline_key_material: false,
+            key_id: Some("tenant-a:payload".to_string()),
+            ..CkksConfig::default()
+        };
+        collection_scoped_config.collections.insert(
+            "docs".to_string(),
+            CkksCollectionKeyConfig {
+                key_id: None,
+                master_key_b64: Some(BASE64URL_NOPAD.encode(&[2u8; 32])),
+                openfhe_bridge_path: None,
+            },
+        );
+
+        assert_eq!(
+            setup_err(&collection_scoped_config, &collection_config),
+            CkksSetupError::InlineMasterKeyDisabled {
+                scope: "ckks.collections.docs.master_key_b64".to_string(),
+            },
         );
     }
 
