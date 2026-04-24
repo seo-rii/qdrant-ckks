@@ -6,7 +6,8 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::aead::{
-    AeadCipher, EncryptedEnvelope, EncryptionContext, EncryptionError, SecretKey, validate_key_id,
+    AeadCipher, CKKS_VECTOR_KEY_DOMAIN, EncryptedEnvelope, EncryptionContext, EncryptionError,
+    SecretKey, validate_key_id,
 };
 
 pub const CKKS_SCHEME: &str = "openfhe-ckks";
@@ -229,6 +230,7 @@ where
         }
 
         parameters.validate()?;
+        let metadata_key = metadata_key.derive_subkey(CKKS_VECTOR_KEY_DOMAIN)?;
 
         Ok(Self {
             metadata_cipher: AeadCipher::new(key_id, metadata_key)?,

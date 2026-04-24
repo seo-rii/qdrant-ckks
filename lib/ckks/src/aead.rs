@@ -2,6 +2,7 @@ use std::fmt::{self, Debug, Formatter};
 
 use data_encoding::BASE64URL_NOPAD;
 use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
+use ring::hkdf;
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -13,6 +14,10 @@ const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
 const MAX_KEY_ID_LEN: usize = 128;
+const HKDF_SALT: &[u8] = b"qdrant-ckks-aead-master-key-v1";
+
+pub const PAYLOAD_TEXT_KEY_DOMAIN: &[u8] = b"qdrant/payload-text/v1";
+pub const CKKS_VECTOR_KEY_DOMAIN: &[u8] = b"qdrant/vector-envelope/v1";
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum EncryptionError {
@@ -22,6 +27,8 @@ pub enum EncryptionError {
     InvalidKeyId,
     #[error("failed to obtain cryptographically secure random bytes")]
     RandomFailure,
+    #[error("failed to derive encryption subkey")]
+    KeyDerivationFailed,
     #[error("unsupported envelope version {0}")]
     UnsupportedVersion(u8),
     #[error("unsupported envelope algorithm {0}")]
@@ -44,6 +51,14 @@ pub struct SecretKey {
     bytes: [u8; KEY_LEN],
 }
 
+struct SecretKeyLen;
+
+impl hkdf::KeyType for SecretKeyLen {
+    fn len(&self) -> usize {
+        KEY_LEN
+    }
+}
+
 impl SecretKey {
     pub fn generate() -> Result<Self, EncryptionError> {
         let rng = SystemRandom::new();
@@ -61,6 +76,19 @@ impl SecretKey {
         let bytes: [u8; KEY_LEN] = bytes
             .try_into()
             .map_err(|_| EncryptionError::InvalidKeyLength)?;
+        Ok(Self { bytes })
+    }
+
+    pub fn derive_subkey(&self, domain: &[u8]) -> Result<Self, EncryptionError> {
+        let salt = hkdf::Salt::new(hkdf::HKDF_SHA256, HKDF_SALT);
+        let prk = salt.extract(self.as_bytes());
+        let info = [domain];
+        let okm = prk
+            .expand(&info, SecretKeyLen)
+            .map_err(|_| EncryptionError::KeyDerivationFailed)?;
+        let mut bytes = [0u8; KEY_LEN];
+        okm.fill(&mut bytes)
+            .map_err(|_| EncryptionError::KeyDerivationFailed)?;
         Ok(Self { bytes })
     }
 

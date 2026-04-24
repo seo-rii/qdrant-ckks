@@ -1,6 +1,9 @@
 use data_encoding::BASE64URL_NOPAD;
 use proptest::prelude::*;
-use qdrant_ckks::{AeadCipher, EncryptionContext, EncryptionError, SecretKey};
+use qdrant_ckks::{
+    AeadCipher, CKKS_VECTOR_KEY_DOMAIN, EncryptionContext, EncryptionError,
+    PAYLOAD_TEXT_KEY_DOMAIN, SecretKey,
+};
 
 fn fixed_cipher() -> AeadCipher {
     AeadCipher::new("tenant-a:primary", SecretKey::from_bytes([7u8; 32])).unwrap()
@@ -108,6 +111,37 @@ fn key_ids_are_strict_ascii_capability_names() {
     assert_eq!(
         AeadCipher::new("테넌트", SecretKey::from_bytes([1u8; 32])).err(),
         Some(EncryptionError::InvalidKeyId),
+    );
+}
+
+#[test]
+fn derived_subkeys_separate_payload_and_vector_domains() {
+    let master_key = SecretKey::from_bytes([19u8; 32]);
+    let payload_cipher = AeadCipher::new(
+        "tenant-a:primary",
+        master_key.derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN).unwrap(),
+    )
+    .unwrap();
+    let vector_cipher = AeadCipher::new(
+        "tenant-a:primary",
+        master_key.derive_subkey(CKKS_VECTOR_KEY_DOMAIN).unwrap(),
+    )
+    .unwrap();
+    let context = payload_context("42");
+    let envelope = payload_cipher
+        .encrypt(b"domain separated", context)
+        .unwrap();
+
+    assert_eq!(
+        payload_cipher
+            .decrypt(&envelope, context)
+            .unwrap()
+            .as_slice(),
+        b"domain separated",
+    );
+    assert_eq!(
+        vector_cipher.decrypt(&envelope, context),
+        Err(EncryptionError::OpenFailed),
     );
 }
 

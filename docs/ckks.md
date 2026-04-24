@@ -61,6 +61,10 @@ If both collection params and the matching `ckks.collections.<name>` runtime
 entry specify `key_id`, they must match. Otherwise the collection value wins,
 then the collection runtime value, then the global default. This prevents
 accidentally encrypting a collection with the wrong key.
+The configured 32-byte master key is not used directly as an AEAD key. Qdrant
+derives purpose-specific HKDF-SHA256 subkeys for payload text
+(`qdrant/payload-text/v1`) and CKKS vector envelopes
+(`qdrant/vector-envelope/v1`) before constructing AES-GCM ciphers.
 When `ckks.enabled` is true, startup validates any configured key ids, master
 keys, and OpenFHE bridge paths so bad runtime key material fails before the
 first encrypted write.
