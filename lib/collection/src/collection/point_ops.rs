@@ -8,6 +8,7 @@ use futures::stream::FuturesUnordered;
 use futures::{StreamExt as _, TryFutureExt, TryStreamExt as _, future};
 use itertools::Itertools;
 use segment::data_types::order_by::{Direction, OrderBy};
+use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
 use segment::json_path::JsonPath;
 use segment::types::{Payload, ShardKey, WithPayload, WithPayloadInterface};
 use shard::count::CountRequestInternal;
@@ -18,9 +19,13 @@ use super::Collection;
 use crate::config::EncryptionSelector;
 use crate::operations::consistency_params::ReadConsistency;
 use crate::operations::payload_ops::PayloadOps;
-use crate::operations::point_ops::{PointInsertOperationsInternal, PointOperations, WriteOrdering};
+use crate::operations::point_ops::{
+    BatchVectorStructPersisted, PointInsertOperationsInternal, PointOperations,
+    VectorStructPersisted, WriteOrdering,
+};
 use crate::operations::shard_selector_internal::ShardSelectorInternal;
 use crate::operations::types::*;
+use crate::operations::vector_ops::VectorOperations;
 use crate::operations::{CollectionUpdateOperations, OperationWithClockTag};
 use crate::shards::shard::ShardId;
 use crate::shards::shard_trait::WaitUntil;
@@ -167,92 +172,174 @@ impl Collection {
 
                     !encrypted_path.value_get(&payload.0).is_empty()
                 };
-
-            for rule in &encryption.rules {
-                let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
-                    continue;
+            let vector_write_touches_encrypted_name =
+                |vector: &VectorStructPersisted, encrypted_name: &str| match vector {
+                    VectorStructPersisted::Single(_) | VectorStructPersisted::MultiDense(_) => {
+                        encrypted_name == DEFAULT_VECTOR_NAME
+                    }
+                    VectorStructPersisted::Named(vectors) => vectors.contains_key(encrypted_name),
                 };
 
-                for encrypted_path in paths {
-                    let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
-                        CollectionError::bad_input(format!(
-                            "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                        ))
-                    })?;
+            for rule in &encryption.rules {
+                match &rule.selector {
+                    EncryptionSelector::PayloadPaths { paths } => {
+                        for encrypted_path in paths {
+                            let encrypted_json_path =
+                                encrypted_path.parse::<JsonPath>().map_err(|err| {
+                                    CollectionError::bad_input(format!(
+                                        "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                                    ))
+                                })?;
 
-                    let touches_encrypted_payload = match &operation {
-                        CollectionUpdateOperations::PointOperation(point_operation) => {
-                            match point_operation {
-                                PointOperations::UpsertPoints(insert_operation)
-                                | PointOperations::UpsertPointsConditional(
-                                    shard::operations::point_ops::ConditionalInsertOperationInternal {
-                                        points_op: insert_operation,
-                                        condition: _,
-                                        update_mode: _,
-                                    },
-                                ) => match insert_operation {
-                                    PointInsertOperationsInternal::PointsBatch(batch) => batch
-                                        .payloads
-                                        .as_ref()
-                                        .is_some_and(|payloads| {
-                                            payloads.iter().flatten().any(|payload| {
-                                                payload_write_touches_encrypted_path(
-                                                    payload,
-                                                    None,
-                                                    &encrypted_json_path,
-                                                )
-                                            })
-                                        }),
-                                    PointInsertOperationsInternal::PointsList(points) => points
-                                        .iter()
-                                        .filter_map(|point| point.payload.as_ref())
-                                        .any(|payload| {
-                                            payload_write_touches_encrypted_path(
-                                                payload,
-                                                None,
-                                                &encrypted_json_path,
-                                            )
-                                        }),
-                                },
-                                PointOperations::SyncPoints(sync_operation) => sync_operation
-                                    .points
-                                    .iter()
-                                    .filter_map(|point| point.payload.as_ref())
-                                    .any(|payload| {
-                                        payload_write_touches_encrypted_path(
-                                            payload,
-                                            None,
-                                            &encrypted_json_path,
-                                        )
-                                    }),
-                                PointOperations::DeletePoints { .. }
-                                | PointOperations::DeletePointsByFilter(_) => false,
+                            let touches_encrypted_payload = match &operation {
+                                CollectionUpdateOperations::PointOperation(point_operation) => {
+                                    match point_operation {
+                                        PointOperations::UpsertPoints(insert_operation)
+                                        | PointOperations::UpsertPointsConditional(
+                                            shard::operations::point_ops::ConditionalInsertOperationInternal {
+                                                points_op: insert_operation,
+                                                condition: _,
+                                                update_mode: _,
+                                            },
+                                        ) => match insert_operation {
+                                            PointInsertOperationsInternal::PointsBatch(batch) => {
+                                                batch.payloads.as_ref().is_some_and(|payloads| {
+                                                    payloads.iter().flatten().any(|payload| {
+                                                        payload_write_touches_encrypted_path(
+                                                            payload,
+                                                            None,
+                                                            &encrypted_json_path,
+                                                        )
+                                                    })
+                                                })
+                                            }
+                                            PointInsertOperationsInternal::PointsList(points) => {
+                                                points
+                                                    .iter()
+                                                    .filter_map(|point| point.payload.as_ref())
+                                                    .any(|payload| {
+                                                        payload_write_touches_encrypted_path(
+                                                            payload,
+                                                            None,
+                                                            &encrypted_json_path,
+                                                        )
+                                                    })
+                                            }
+                                        },
+                                        PointOperations::SyncPoints(sync_operation) => {
+                                            sync_operation
+                                                .points
+                                                .iter()
+                                                .filter_map(|point| point.payload.as_ref())
+                                                .any(|payload| {
+                                                    payload_write_touches_encrypted_path(
+                                                        payload,
+                                                        None,
+                                                        &encrypted_json_path,
+                                                    )
+                                                })
+                                        }
+                                        PointOperations::DeletePoints { .. }
+                                        | PointOperations::DeletePointsByFilter(_) => false,
+                                    }
+                                }
+                                CollectionUpdateOperations::PayloadOperation(
+                                    PayloadOps::SetPayload(operation)
+                                    | PayloadOps::OverwritePayload(operation),
+                                ) => payload_write_touches_encrypted_path(
+                                    &operation.payload,
+                                    operation.key.as_ref(),
+                                    &encrypted_json_path,
+                                ),
+                                CollectionUpdateOperations::VectorOperation(_)
+                                | CollectionUpdateOperations::PayloadOperation(
+                                    PayloadOps::DeletePayload(_)
+                                    | PayloadOps::ClearPayload { .. }
+                                    | PayloadOps::ClearPayloadByFilter(_),
+                                )
+                                | CollectionUpdateOperations::FieldIndexOperation(_) => false,
+                                #[cfg(feature = "staging")]
+                                CollectionUpdateOperations::StagingOperation(_) => false,
+                            };
+
+                            if touches_encrypted_payload {
+                                return Err(CollectionError::bad_input(format!(
+                                    "cannot write plaintext payload for encrypted field '{encrypted_path}'; configure runtime payload encryption before writing this field",
+                                )));
                             }
                         }
-                        CollectionUpdateOperations::PayloadOperation(
-                            PayloadOps::SetPayload(operation)
-                            | PayloadOps::OverwritePayload(operation),
-                        ) => payload_write_touches_encrypted_path(
-                            &operation.payload,
-                            operation.key.as_ref(),
-                            &encrypted_json_path,
-                        ),
-                        CollectionUpdateOperations::VectorOperation(_)
-                        | CollectionUpdateOperations::PayloadOperation(
-                            PayloadOps::DeletePayload(_)
-                            | PayloadOps::ClearPayload { .. }
-                            | PayloadOps::ClearPayloadByFilter(_),
-                        )
-                        | CollectionUpdateOperations::FieldIndexOperation(_) => false,
-                        #[cfg(feature = "staging")]
-                        CollectionUpdateOperations::StagingOperation(_) => false,
-                    };
-
-                    if touches_encrypted_payload {
-                        return Err(CollectionError::bad_input(format!(
-                            "cannot write plaintext payload for encrypted field '{encrypted_path}'; configure runtime payload encryption before writing this field",
-                        )));
                     }
+                    EncryptionSelector::VectorNames { names } => {
+                        for encrypted_name in names {
+                            let touches_encrypted_vector = match &operation {
+                                CollectionUpdateOperations::PointOperation(point_operation) => {
+                                    match point_operation {
+                                        PointOperations::UpsertPoints(insert_operation)
+                                        | PointOperations::UpsertPointsConditional(
+                                            shard::operations::point_ops::ConditionalInsertOperationInternal {
+                                                points_op: insert_operation,
+                                                condition: _,
+                                                update_mode: _,
+                                            },
+                                        ) => match insert_operation {
+                                            PointInsertOperationsInternal::PointsBatch(batch) => {
+                                                match &batch.vectors {
+                                                    BatchVectorStructPersisted::Single(_)
+                                                    | BatchVectorStructPersisted::MultiDense(_) => {
+                                                        encrypted_name == DEFAULT_VECTOR_NAME
+                                                    }
+                                                    BatchVectorStructPersisted::Named(vectors) => {
+                                                        vectors.contains_key(encrypted_name)
+                                                    }
+                                                }
+                                            }
+                                            PointInsertOperationsInternal::PointsList(points) => {
+                                                points.iter().any(|point| {
+                                                    vector_write_touches_encrypted_name(
+                                                        &point.vector,
+                                                        encrypted_name,
+                                                    )
+                                                })
+                                            }
+                                        },
+                                        PointOperations::SyncPoints(sync_operation) => {
+                                            sync_operation.points.iter().any(|point| {
+                                                vector_write_touches_encrypted_name(
+                                                    &point.vector,
+                                                    encrypted_name,
+                                                )
+                                            })
+                                        }
+                                        PointOperations::DeletePoints { .. }
+                                        | PointOperations::DeletePointsByFilter(_) => false,
+                                    }
+                                }
+                                CollectionUpdateOperations::VectorOperation(
+                                    VectorOperations::UpdateVectors(operation),
+                                ) => operation.points.iter().any(|point| {
+                                    vector_write_touches_encrypted_name(
+                                        &point.vector,
+                                        encrypted_name,
+                                    )
+                                }),
+                                CollectionUpdateOperations::VectorOperation(
+                                    VectorOperations::DeleteVectors(_, _)
+                                    | VectorOperations::DeleteVectorsByFilter(_, _),
+                                )
+                                | CollectionUpdateOperations::PayloadOperation(_)
+                                | CollectionUpdateOperations::FieldIndexOperation(_) => false,
+                                #[cfg(feature = "staging")]
+                                CollectionUpdateOperations::StagingOperation(_) => false,
+                            };
+
+                            if touches_encrypted_vector {
+                                return Err(CollectionError::bad_input(format!(
+                                    "cannot write plaintext vector for encrypted vector '{encrypted_name}'; configure runtime CKKS vector encryption before writing this vector",
+                                )));
+                            }
+                        }
+                    }
+                    EncryptionSelector::MetadataKeys { .. } => {}
                 }
             }
         }

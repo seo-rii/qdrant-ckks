@@ -18,13 +18,16 @@ use collection::operations::types::{
     CollectionError, CountRequestInternal, PointRequestInternal, RecommendRequestInternal,
     ScrollRequestInternal, UpdateStatus,
 };
+use collection::operations::vector_ops::{
+    PointVectorsPersisted, UpdateVectorsOp, VectorOperations,
+};
 use collection::recommendations::recommend_by;
 use collection::shards::replica_set::replica_set_state::{ReplicaSetState, ReplicaState};
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use fs_err::File;
 use itertools::Itertools;
 use segment::data_types::order_by::{Direction, OrderBy, OrderByInterface};
-use segment::data_types::vectors::VectorStructInternal;
+use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, VectorStructInternal};
 use segment::types::{
     Condition, ExtendedPointId, FieldCondition, Filter, HasIdCondition, Payload,
     PayloadFieldSchema, PayloadSchemaType, PointIdType, WithPayloadInterface,
@@ -978,6 +981,92 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
         )
         .await
         .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn encrypted_vector_rejects_plaintext_vector_writes() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection = simple_collection_fixture(collection_dir.path(), 1).await;
+
+    collection
+        .update_params_from_diff(CollectionParamsDiff {
+            replication_factor: None,
+            write_consistency_factor: None,
+            read_fan_out_factor: None,
+            read_fan_out_delay_ms: None,
+            on_disk_payload: None,
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "default_vector".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec![DEFAULT_VECTOR_NAME.to_string()],
+                    },
+                    instance: "docs_vector_v1".to_string(),
+                    binding: Some("vector-envelope/v1".to_string()),
+                }],
+            }),
+            ckks: None,
+        })
+        .await
+        .unwrap();
+
+    let plaintext_upsert =
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                id: 1.into(),
+                vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                payload: None,
+            }]),
+        ));
+    let err = collection
+        .update_from_client_simple(
+            plaintext_upsert,
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("plaintext vector")
+                && description.contains("runtime CKKS vector encryption")
+    ));
+
+    let plaintext_vector_update = CollectionUpdateOperations::VectorOperation(
+        VectorOperations::UpdateVectors(UpdateVectorsOp {
+            points: vec![PointVectorsPersisted {
+                id: 1.into(),
+                vector: VectorStructPersisted::from(vec![0.0, 1.0, 0.0, 0.0]),
+            }],
+            update_filter: None,
+        }),
+    );
+    let err = collection
+        .update_from_client_simple(
+            plaintext_vector_update,
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("plaintext vector")
+                && description.contains("runtime CKKS vector encryption")
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread")]
