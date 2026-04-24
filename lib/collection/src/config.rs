@@ -177,6 +177,74 @@ mod ckks_tests {
     }
 
     #[test]
+    fn encryption_config_rejects_overlapping_payload_paths() {
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![
+                    EncryptionRuleRef {
+                        id: "document_conf".to_string(),
+                        selector: EncryptionSelector::PayloadPaths {
+                            paths: vec!["document".to_string()],
+                        },
+                        instance: "docs_payload_v1".to_string(),
+                        binding: Some("payload-field/v1".to_string()),
+                    },
+                    EncryptionRuleRef {
+                        id: "document_body_conf".to_string(),
+                        selector: EncryptionSelector::PayloadPaths {
+                            paths: vec!["document.body".to_string()],
+                        },
+                        instance: "docs_payload_v1".to_string(),
+                        binding: Some("payload-field/v1".to_string()),
+                    },
+                ],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        assert!(params.validate().is_err());
+    }
+
+    #[test]
+    fn encryption_config_rejects_duplicate_vector_names_across_rules() {
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![
+                    EncryptionRuleRef {
+                        id: "embedding_primary".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec!["embedding".to_string()],
+                        },
+                        instance: "docs_vector_v1".to_string(),
+                        binding: Some("vector-envelope/v1".to_string()),
+                    },
+                    EncryptionRuleRef {
+                        id: "embedding_secondary".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec!["embedding".to_string()],
+                        },
+                        instance: "docs_vector_v2".to_string(),
+                        binding: Some("vector-envelope/v1".to_string()),
+                    },
+                ],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        assert!(params.validate().is_err());
+    }
+
+    #[test]
     fn collection_params_reject_encryption_changes_without_migration() {
         let ckks = CkksCollectionConfig {
             enabled: true,
@@ -714,6 +782,8 @@ fn validate_encryption_rules(
     }
 
     let mut ids = HashSet::new();
+    let mut payload_paths = Vec::<&str>::new();
+    let mut vector_names = HashSet::new();
     for rule in rules {
         if !ids.insert(rule.id.as_str()) {
             return Err(validator::ValidationError::new(
@@ -725,9 +795,44 @@ fn validate_encryption_rules(
                 "unsupported_encryption_selector",
             ));
         }
+        match &rule.selector {
+            EncryptionSelector::PayloadPaths { paths } => {
+                for path in paths {
+                    if payload_paths
+                        .iter()
+                        .any(|existing| encryption_paths_overlap(existing, path))
+                    {
+                        return Err(validator::ValidationError::new(
+                            "overlapping_encryption_selector",
+                        ));
+                    }
+                    payload_paths.push(path);
+                }
+            }
+            EncryptionSelector::VectorNames { names } => {
+                for name in names {
+                    if !vector_names.insert(name.as_str()) {
+                        return Err(validator::ValidationError::new(
+                            "overlapping_encryption_selector",
+                        ));
+                    }
+                }
+            }
+            EncryptionSelector::MetadataKeys { .. } => {}
+        }
     }
 
     Ok(())
+}
+
+fn encryption_paths_overlap(left: &str, right: &str) -> bool {
+    left == right
+        || left
+            .strip_prefix(right)
+            .is_some_and(|suffix| suffix.starts_with('.'))
+        || right
+            .strip_prefix(left)
+            .is_some_and(|suffix| suffix.starts_with('.'))
 }
 
 fn validate_collection_encryption_sections(
