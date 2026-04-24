@@ -159,6 +159,49 @@ fn keyring_encrypts_with_active_key_and_decrypts_retired_key() {
 }
 
 #[test]
+fn keyring_requires_matching_fingerprint_before_decrypt() {
+    let context = payload_context("42");
+    let envelope = AeadCipher::new("tenant-a:payload", SecretKey::from_bytes([31u8; 32]))
+        .unwrap()
+        .encrypt(b"not in this keyring", context)
+        .unwrap();
+    let keyring = AeadKeyring::new(
+        AeadCipher::new("tenant-a:payload", SecretKey::from_bytes([32u8; 32])).unwrap(),
+    );
+
+    assert_eq!(
+        keyring.decrypt(&envelope, context),
+        Err(EncryptionError::KeyMismatch),
+    );
+}
+
+#[test]
+fn keyring_returns_open_failed_for_matching_retired_tamper() {
+    let context = payload_context("42");
+    let retired_cipher =
+        AeadCipher::new("tenant-a:payload-old", SecretKey::from_bytes([33u8; 32])).unwrap();
+    let mut envelope = retired_cipher.encrypt(b"before rotation", context).unwrap();
+    let mut raw = BASE64URL_NOPAD
+        .decode(envelope.ciphertext.as_bytes())
+        .unwrap();
+    raw[0] ^= 0x80;
+    envelope.ciphertext = BASE64URL_NOPAD.encode(&raw);
+
+    let keyring = AeadKeyring::new(
+        AeadCipher::new("tenant-a:payload-new", SecretKey::from_bytes([34u8; 32])).unwrap(),
+    )
+    .with_retired(retired_cipher)
+    .with_retired(
+        AeadCipher::new("tenant-a:payload-old", SecretKey::from_bytes([35u8; 32])).unwrap(),
+    );
+
+    assert_eq!(
+        keyring.decrypt(&envelope, context),
+        Err(EncryptionError::OpenFailed),
+    );
+}
+
+#[test]
 fn key_ids_are_strict_ascii_capability_names() {
     assert!(AeadCipher::new("valid._:-09AZaz", SecretKey::from_bytes([1u8; 32])).is_ok());
     assert_eq!(

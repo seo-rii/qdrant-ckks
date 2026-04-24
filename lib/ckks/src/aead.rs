@@ -425,27 +425,70 @@ impl AeadKeyring {
         context: EncryptionContext<'_>,
         aad_suffix: &[u8],
     ) -> Result<Vec<u8>, EncryptionError> {
-        match self
-            .active
-            .decrypt_with_aad_suffix(envelope, context, aad_suffix)
-        {
-            Ok(plaintext) => Ok(plaintext),
-            Err(active_error @ EncryptionError::KeyMismatch)
-            | Err(active_error @ EncryptionError::MaterialFingerprintMismatch)
-            | Err(active_error @ EncryptionError::OpenFailed) => {
-                for retired in &self.retired {
-                    match retired.decrypt_with_aad_suffix(envelope, context, aad_suffix) {
-                        Ok(plaintext) => return Ok(plaintext),
-                        Err(EncryptionError::KeyMismatch)
-                        | Err(EncryptionError::MaterialFingerprintMismatch)
-                        | Err(EncryptionError::OpenFailed) => {}
-                        Err(error) => return Err(error),
-                    }
-                }
+        if envelope.version != VERSION {
+            return Err(EncryptionError::UnsupportedVersion(envelope.version));
+        }
+        if envelope.algorithm != ALGORITHM {
+            return Err(EncryptionError::UnsupportedAlgorithm(
+                envelope.algorithm.clone(),
+            ));
+        }
+        validate_key_id(&envelope.key_id)?;
 
-                Err(active_error)
+        if !envelope.material_fingerprint.is_empty() {
+            if self.active.key_id == envelope.key_id
+                && self.active.material_fingerprint == envelope.material_fingerprint
+            {
+                return self
+                    .active
+                    .decrypt_with_aad_suffix(envelope, context, aad_suffix);
             }
-            Err(error) => Err(error),
+
+            for retired in &self.retired {
+                if retired.key_id == envelope.key_id
+                    && retired.material_fingerprint == envelope.material_fingerprint
+                {
+                    return retired.decrypt_with_aad_suffix(envelope, context, aad_suffix);
+                }
+            }
+
+            return Err(EncryptionError::KeyMismatch);
+        }
+
+        let mut found_key_id = false;
+        let mut open_failed = false;
+
+        if self.active.key_id == envelope.key_id {
+            found_key_id = true;
+            match self
+                .active
+                .decrypt_with_aad_suffix(envelope, context, aad_suffix)
+            {
+                Ok(plaintext) => return Ok(plaintext),
+                Err(EncryptionError::OpenFailed) => open_failed = true,
+                Err(error) => return Err(error),
+            }
+        }
+
+        for retired in &self.retired {
+            if retired.key_id != envelope.key_id {
+                continue;
+            }
+
+            found_key_id = true;
+            match retired.decrypt_with_aad_suffix(envelope, context, aad_suffix) {
+                Ok(plaintext) => return Ok(plaintext),
+                Err(EncryptionError::OpenFailed) => open_failed = true,
+                Err(error) => return Err(error),
+            }
+        }
+
+        if open_failed {
+            Err(EncryptionError::OpenFailed)
+        } else if found_key_id {
+            Err(EncryptionError::MaterialFingerprintMismatch)
+        } else {
+            Err(EncryptionError::KeyMismatch)
         }
     }
 }
