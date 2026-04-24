@@ -876,6 +876,111 @@ async fn encrypted_payload_field_rejects_payload_index() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection = simple_collection_fixture(collection_dir.path(), 1).await;
+
+    collection
+        .update_params_from_diff(CollectionParamsDiff {
+            replication_factor: None,
+            write_consistency_factor: None,
+            read_fan_out_factor: None,
+            read_fan_out_delay_ms: None,
+            on_disk_payload: None,
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "document_body".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["document.body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ckks: None,
+        })
+        .await
+        .unwrap();
+
+    let plaintext_upsert =
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                id: 1.into(),
+                vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                payload: Some(
+                    serde_json::from_str(r#"{"document":{"body":"secret body"}}"#).unwrap(),
+                ),
+            }]),
+        ));
+    let err = collection
+        .update_from_client_simple(
+            plaintext_upsert,
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("plaintext payload")
+                && description.contains("document.body")
+    ));
+
+    let keyed_plaintext_payload =
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
+            payload: serde_json::from_str(r#"{"body":"secret body"}"#).unwrap(),
+            points: Some(vec![1.into()]),
+            filter: None,
+            key: Some("document".parse().unwrap()),
+        }));
+    let err = collection
+        .update_from_client_simple(
+            keyed_plaintext_payload,
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("plaintext payload")
+                && description.contains("document.body")
+    ));
+
+    let public_payload = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+        PointInsertOperationsInternal::from(vec![PointStructPersisted {
+            id: 2.into(),
+            vector: VectorStructPersisted::from(vec![0.0, 1.0, 0.0, 0.0]),
+            payload: Some(serde_json::from_str(r#"{"document":{"summary":"public"}}"#).unwrap()),
+        }]),
+    ));
+
+    collection
+        .update_from_client_simple(
+            public_payload,
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_collection_delete_points_by_filter() {
     test_collection_delete_points_by_filter_with_shards(1).await;
     test_collection_delete_points_by_filter_with_shards(N_SHARDS).await;

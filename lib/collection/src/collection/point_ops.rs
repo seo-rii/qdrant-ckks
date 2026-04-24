@@ -8,14 +8,17 @@ use futures::stream::FuturesUnordered;
 use futures::{StreamExt as _, TryFutureExt, TryStreamExt as _, future};
 use itertools::Itertools;
 use segment::data_types::order_by::{Direction, OrderBy};
-use segment::types::{ShardKey, WithPayload, WithPayloadInterface};
+use segment::json_path::JsonPath;
+use segment::types::{Payload, ShardKey, WithPayload, WithPayloadInterface};
 use shard::count::CountRequestInternal;
 use shard::retrieve::record_internal::RecordInternal;
 use shard::scroll::ScrollRequestInternal;
 
 use super::Collection;
+use crate::config::EncryptionSelector;
 use crate::operations::consistency_params::ReadConsistency;
-use crate::operations::point_ops::WriteOrdering;
+use crate::operations::payload_ops::PayloadOps;
+use crate::operations::point_ops::{PointInsertOperationsInternal, PointOperations, WriteOrdering};
 use crate::operations::shard_selector_internal::ShardSelectorInternal;
 use crate::operations::types::*;
 use crate::operations::{CollectionUpdateOperations, OperationWithClockTag};
@@ -149,6 +152,111 @@ impl Collection {
         shard_keys_selection: Option<ShardKey>,
         hw_measurement_acc: HwMeasurementAcc,
     ) -> CollectionResult<UpdateResult> {
+        if let Some(encryption) = self
+            .collection_config
+            .read()
+            .await
+            .params
+            .effective_encryption()
+        {
+            let payload_write_touches_encrypted_path =
+                |payload: &Payload, key: Option<&JsonPath>, encrypted_path: &JsonPath| {
+                    if let Some(key) = key {
+                        return key.compatible(encrypted_path);
+                    }
+
+                    !encrypted_path.value_get(&payload.0).is_empty()
+                };
+
+            for rule in &encryption.rules {
+                let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
+                    continue;
+                };
+
+                for encrypted_path in paths {
+                    let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
+                        CollectionError::bad_input(format!(
+                            "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                        ))
+                    })?;
+
+                    let touches_encrypted_payload = match &operation {
+                        CollectionUpdateOperations::PointOperation(point_operation) => {
+                            match point_operation {
+                                PointOperations::UpsertPoints(insert_operation)
+                                | PointOperations::UpsertPointsConditional(
+                                    shard::operations::point_ops::ConditionalInsertOperationInternal {
+                                        points_op: insert_operation,
+                                        condition: _,
+                                        update_mode: _,
+                                    },
+                                ) => match insert_operation {
+                                    PointInsertOperationsInternal::PointsBatch(batch) => batch
+                                        .payloads
+                                        .as_ref()
+                                        .is_some_and(|payloads| {
+                                            payloads.iter().flatten().any(|payload| {
+                                                payload_write_touches_encrypted_path(
+                                                    payload,
+                                                    None,
+                                                    &encrypted_json_path,
+                                                )
+                                            })
+                                        }),
+                                    PointInsertOperationsInternal::PointsList(points) => points
+                                        .iter()
+                                        .filter_map(|point| point.payload.as_ref())
+                                        .any(|payload| {
+                                            payload_write_touches_encrypted_path(
+                                                payload,
+                                                None,
+                                                &encrypted_json_path,
+                                            )
+                                        }),
+                                },
+                                PointOperations::SyncPoints(sync_operation) => sync_operation
+                                    .points
+                                    .iter()
+                                    .filter_map(|point| point.payload.as_ref())
+                                    .any(|payload| {
+                                        payload_write_touches_encrypted_path(
+                                            payload,
+                                            None,
+                                            &encrypted_json_path,
+                                        )
+                                    }),
+                                PointOperations::DeletePoints { .. }
+                                | PointOperations::DeletePointsByFilter(_) => false,
+                            }
+                        }
+                        CollectionUpdateOperations::PayloadOperation(
+                            PayloadOps::SetPayload(operation)
+                            | PayloadOps::OverwritePayload(operation),
+                        ) => payload_write_touches_encrypted_path(
+                            &operation.payload,
+                            operation.key.as_ref(),
+                            &encrypted_json_path,
+                        ),
+                        CollectionUpdateOperations::VectorOperation(_)
+                        | CollectionUpdateOperations::PayloadOperation(
+                            PayloadOps::DeletePayload(_)
+                            | PayloadOps::ClearPayload { .. }
+                            | PayloadOps::ClearPayloadByFilter(_),
+                        )
+                        | CollectionUpdateOperations::FieldIndexOperation(_) => false,
+                        #[cfg(feature = "staging")]
+                        CollectionUpdateOperations::StagingOperation(_) => false,
+                    };
+
+                    if touches_encrypted_payload {
+                        return Err(CollectionError::bad_input(format!(
+                            "cannot write plaintext payload for encrypted field '{encrypted_path}'; configure runtime payload encryption before writing this field",
+                        )));
+                    }
+                }
+            }
+        }
+
         let shard_holder = self.shards_holder.clone().read_owned().await;
         let start_time = std::time::Instant::now();
 
