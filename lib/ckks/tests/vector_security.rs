@@ -49,10 +49,13 @@ fn encryptor() -> CkksVectorEncryptor<SealedTestBackend> {
 
 #[test]
 fn ckks_vector_envelope_does_not_serialize_plain_embedding() {
+    let material = public_material();
     let encrypted = encryptor()
-        .encrypt("docs", "point-1", &public_material(), &[0.125, -42.5, 9.75])
+        .encrypt("docs", "point-1", &material, &[0.125, -42.5, 9.75])
         .unwrap();
-    let verified = encryptor().open("docs", "point-1", &encrypted).unwrap();
+    let verified = encryptor()
+        .open("docs", "point-1", &material, &encrypted)
+        .unwrap();
 
     assert_eq!(encrypted.scheme, "openfhe-ckks");
     assert_eq!(encrypted.envelope.key_id, "tenant-a:ckks");
@@ -86,6 +89,39 @@ fn context_digest_changes_with_public_material_and_parameters() {
         other_key.digest_for(&CkksParameters::openfhe_default_128_bit()),
     );
     assert_ne!(base_digest, base.digest_for(&other_params));
+}
+
+#[test]
+fn open_rejects_context_digest_mismatch() {
+    let material = public_material();
+    let encrypted = encryptor()
+        .encrypt("docs", "point-1", &material, &[1.0, 2.0])
+        .unwrap();
+    let other_material =
+        CkksPublicMaterial::new(b"openfhe crypto context".to_vec(), b"other key".to_vec()).unwrap();
+
+    assert!(matches!(
+        encryptor().open("docs", "point-1", &other_material, &encrypted),
+        Err(CkksError::MalformedEnvelope(message))
+            if message.contains("context digest does not match")
+    ));
+
+    let mut other_params = CkksParameters::openfhe_default_128_bit();
+    other_params.multiplicative_depth += 1;
+    let other_encryptor = CkksVectorEncryptor::new(
+        "tenant-a:ckks",
+        "embedding",
+        other_params,
+        SecretKey::from_bytes([29u8; 32]),
+        SealedTestBackend,
+    )
+    .unwrap();
+
+    assert!(matches!(
+        other_encryptor.open("docs", "point-1", &material, &encrypted),
+        Err(CkksError::MalformedEnvelope(message))
+            if message.contains("context digest does not match")
+    ));
 }
 
 #[test]
@@ -219,14 +255,14 @@ printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
 
     assert_eq!(
         encryptor
-            .open("docs", "point-1", &first)
+            .open("docs", "point-1", &public_material(), &first)
             .unwrap()
             .ciphertext,
         BASE64URL_NOPAD.encode(b"openfhe-cipher"),
     );
     assert_eq!(
         encryptor
-            .open("docs", "point-2", &second)
+            .open("docs", "point-2", &public_material(), &second)
             .unwrap()
             .ciphertext,
         BASE64URL_NOPAD.encode(b"openfhe-cipher"),
@@ -396,7 +432,7 @@ fn vector_metadata_tampering_fails_authentication() {
     encrypted.envelope.ciphertext = BASE64URL_NOPAD.encode(&raw);
 
     assert!(matches!(
-        encryptor.open("docs", "point-1", &encrypted),
+        encryptor.open("docs", "point-1", &public_material(), &encrypted),
         Err(CkksError::Envelope(_)),
     ));
 }
@@ -409,7 +445,7 @@ fn vector_envelope_is_bound_to_collection_point_and_vector() {
         .unwrap();
 
     assert!(matches!(
-        encryptor.open("docs", "point-2", &encrypted),
+        encryptor.open("docs", "point-2", &public_material(), &encrypted),
         Err(CkksError::Envelope(_)),
     ));
 
@@ -422,7 +458,7 @@ fn vector_envelope_is_bound_to_collection_point_and_vector() {
     )
     .unwrap();
     assert!(matches!(
-        other_vector.open("docs", "point-1", &encrypted),
+        other_vector.open("docs", "point-1", &public_material(), &encrypted),
         Err(CkksError::Envelope(_)),
     ));
 }

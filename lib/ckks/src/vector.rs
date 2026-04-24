@@ -308,6 +308,7 @@ where
         &self,
         collection: &str,
         point_id: &str,
+        expected_public_material: &CkksPublicMaterial,
         encrypted: &EncryptedCkksVector,
     ) -> Result<VerifiedCkksVector, CkksError> {
         if encrypted.version != VERSION {
@@ -346,6 +347,11 @@ where
         if digest.len() != 32 {
             return Err(CkksError::MalformedEnvelope(
                 "stored context digest has unexpected length".to_string(),
+            ));
+        }
+        if verified.context_digest != expected_public_material.digest_for(&self.parameters) {
+            return Err(CkksError::MalformedEnvelope(
+                "stored context digest does not match active context".to_string(),
             ));
         }
         let ciphertext = BASE64URL_NOPAD
