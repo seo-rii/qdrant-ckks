@@ -1138,6 +1138,41 @@ async fn encrypted_vector_rejects_plaintext_vector_writes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn encrypted_vector_rejects_search_path() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, vector_encryption_config()).await;
+
+    let err = collection
+        .search(
+            SearchRequestInternal {
+                vector: vec![1.0, 0.0, 0.0, 0.0].into(),
+                with_payload: None,
+                with_vector: None,
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: None,
+                score_threshold: None,
+            }
+            .into(),
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot search encrypted vector")
+                && description.contains("CKKS-native vector search is not implemented")
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn collection_params_diff_rejects_crypto_mutation() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection = simple_collection_fixture(collection_dir.path(), 1).await;

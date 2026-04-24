@@ -14,6 +14,7 @@ use shard::search::CoreSearchRequestBatch;
 use tokio::time::Instant;
 
 use super::Collection;
+use crate::config::EncryptionSelector;
 use crate::events::SlowQueryEvent;
 use crate::operations::consistency_params::ReadConsistency;
 use crate::operations::shard_selector_internal::ShardSelectorInternal;
@@ -37,10 +38,10 @@ impl Collection {
             searches: vec![request],
         };
         let results = self
-            .do_core_search_batch(
+            .core_search_batch(
                 request_batch,
                 read_consistency,
-                shard_selection,
+                shard_selection.clone(),
                 timeout,
                 hw_measurement_acc,
             )
@@ -60,6 +61,27 @@ impl Collection {
         // shortcuts batch if all requests with limit=0
         if request.searches.iter().all(|s| s.limit == 0) {
             return Ok(vec![]);
+        }
+        if let Some(encryption) = self
+            .collection_config
+            .read()
+            .await
+            .params
+            .effective_encryption()
+        {
+            for rule in &encryption.rules {
+                let EncryptionSelector::VectorNames { names } = &rule.selector else {
+                    continue;
+                };
+                for search in &request.searches {
+                    let vector_name = search.query.get_vector_name();
+                    if names.iter().any(|name| name == vector_name) {
+                        return Err(CollectionError::bad_input(format!(
+                            "cannot search encrypted vector '{vector_name}'; CKKS-native vector search is not implemented in this branch",
+                        )));
+                    }
+                }
+            }
         }
 
         let is_payload_required = request
