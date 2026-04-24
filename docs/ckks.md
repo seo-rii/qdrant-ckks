@@ -206,9 +206,10 @@ bridge stderr.
 The OpenFHE bridge is part of the trusted computing base because it receives
 plaintext embeddings before producing CKKS ciphertext. Runtime configuration
 therefore accepts only absolute bridge paths that resolve to executable regular
-files, rejects symlinks and world-writable binaries on Unix, and requires the
-binary to be owned by root or the Qdrant process user. Treat any bridge path
-change as privileged code execution under the Qdrant service account.
+files, rejects symlinks and group/world-writable binaries or parent directories
+on Unix, and requires the binary plus every parent directory to be owned by root
+or the Qdrant process user. Treat any bridge path change as privileged code
+execution under the Qdrant service account.
 
 Request fields:
 

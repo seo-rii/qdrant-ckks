@@ -190,7 +190,7 @@ fn validate_runtime_key_id(key_id: &str, scope: &str) -> Result<(), CkksSetupErr
     Ok(())
 }
 
-fn validate_bridge_path(path: &str) -> Result<(), CkksSetupError> {
+pub(crate) fn validate_bridge_path(path: &str) -> Result<(), CkksSetupError> {
     let path_ref = Path::new(path);
     if !path_ref.is_absolute() {
         return Err(CkksSetupError::InvalidOpenFheBridgePath {
@@ -244,6 +244,34 @@ fn validate_bridge_path(path: &str) -> Result<(), CkksSetupError> {
             return Err(CkksSetupError::InvalidOpenFheBridgePath {
                 path: path.to_string(),
             });
+        }
+
+        let mut parent = path_ref.parent();
+        while let Some(directory) = parent {
+            let directory_metadata = fs::symlink_metadata(directory).map_err(|_| {
+                CkksSetupError::InvalidOpenFheBridgePath {
+                    path: path.to_string(),
+                }
+            })?;
+            if directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir() {
+                return Err(CkksSetupError::InvalidOpenFheBridgePath {
+                    path: path.to_string(),
+                });
+            }
+            if directory_metadata.permissions().mode() & 0o022 != 0 {
+                return Err(CkksSetupError::InvalidOpenFheBridgePath {
+                    path: path.to_string(),
+                });
+            }
+
+            let directory_owner = directory_metadata.uid();
+            if directory_owner != 0 && directory_owner != effective_uid {
+                return Err(CkksSetupError::InvalidOpenFheBridgePath {
+                    path: path.to_string(),
+                });
+            }
+
+            parent = directory.parent();
         }
     }
 
@@ -505,28 +533,56 @@ mod tests {
             }),
         );
 
-        let bridge = tempfile::NamedTempFile::new().unwrap();
+        let bridge_dir = tempfile::Builder::new()
+            .prefix("openfhe-bridge")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let bridge_path = bridge_dir.path().join("openfhe-bridge");
+        fs::write(&bridge_path, b"#!/bin/sh\n").unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
 
-            let mut permissions = bridge.as_file().metadata().unwrap().permissions();
+            let mut permissions = fs::metadata(&bridge_path).unwrap().permissions();
             permissions.set_mode(0o777);
-            bridge.as_file().set_permissions(permissions).unwrap();
-            config.openfhe_bridge_path = Some(bridge.path().display().to_string());
+            fs::set_permissions(&bridge_path, permissions).unwrap();
+            config.openfhe_bridge_path = Some(bridge_path.display().to_string());
             assert_eq!(
                 validate_runtime_config(&config),
                 Err(CkksSetupError::InvalidOpenFheBridgePath {
-                    path: bridge.path().display().to_string(),
+                    path: bridge_path.display().to_string(),
                 }),
             );
 
-            let mut permissions = bridge.as_file().metadata().unwrap().permissions();
+            let mut permissions = fs::metadata(&bridge_path).unwrap().permissions();
             permissions.set_mode(0o700);
-            bridge.as_file().set_permissions(permissions).unwrap();
+            fs::set_permissions(&bridge_path, permissions).unwrap();
 
-            let symlink_path = bridge.path().with_extension("link");
-            std::os::unix::fs::symlink(bridge.path(), &symlink_path).unwrap();
+            let writable_parent = tempfile::Builder::new()
+                .prefix("openfhe-writable-parent")
+                .tempdir_in(std::env::current_dir().unwrap())
+                .unwrap();
+            let writable_bridge = writable_parent.path().join("openfhe-bridge");
+            fs::write(&writable_bridge, b"#!/bin/sh\n").unwrap();
+            let mut permissions = fs::metadata(&writable_bridge).unwrap().permissions();
+            permissions.set_mode(0o700);
+            fs::set_permissions(&writable_bridge, permissions).unwrap();
+            let mut permissions = fs::metadata(writable_parent.path()).unwrap().permissions();
+            permissions.set_mode(0o777);
+            fs::set_permissions(writable_parent.path(), permissions).unwrap();
+            config.openfhe_bridge_path = Some(writable_bridge.display().to_string());
+            assert_eq!(
+                validate_runtime_config(&config),
+                Err(CkksSetupError::InvalidOpenFheBridgePath {
+                    path: writable_bridge.display().to_string(),
+                }),
+            );
+            let mut permissions = fs::metadata(writable_parent.path()).unwrap().permissions();
+            permissions.set_mode(0o700);
+            fs::set_permissions(writable_parent.path(), permissions).unwrap();
+
+            let symlink_path = bridge_path.with_extension("link");
+            std::os::unix::fs::symlink(&bridge_path, &symlink_path).unwrap();
             config.openfhe_bridge_path = Some(symlink_path.display().to_string());
             assert_eq!(
                 validate_runtime_config(&config),
@@ -535,7 +591,7 @@ mod tests {
                 }),
             );
         }
-        config.openfhe_bridge_path = Some(bridge.path().display().to_string());
+        config.openfhe_bridge_path = Some(bridge_path.display().to_string());
         validate_runtime_config(&config).unwrap();
     }
 

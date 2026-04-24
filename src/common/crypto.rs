@@ -35,6 +35,8 @@ pub enum CryptoSetupError {
     InlineMaterialDisabled { material: String },
     #[error("crypto backend {backend} of kind {kind} requires program")]
     MissingBackendProgram { backend: String, kind: String },
+    #[error("crypto backend {backend} program path is invalid: {program}")]
+    InvalidBackendProgram { backend: String, program: String },
     #[error(
         "crypto instance {instance} references unknown material {material_ref} for role {role}"
     )]
@@ -326,11 +328,19 @@ fn validate_backend(
     backend_name: &str,
     backend: &CryptoBackendConfig,
 ) -> Result<(), CryptoSetupError> {
-    if matches!(backend.kind.as_str(), "process" | "process_pool") && backend.program.is_none() {
-        return Err(CryptoSetupError::MissingBackendProgram {
-            backend: backend_name.to_string(),
-            kind: backend.kind.clone(),
-        });
+    if matches!(backend.kind.as_str(), "process" | "process_pool") {
+        let Some(program) = backend.program.as_deref() else {
+            return Err(CryptoSetupError::MissingBackendProgram {
+                backend: backend_name.to_string(),
+                kind: backend.kind.clone(),
+            });
+        };
+        crate::common::ckks::validate_bridge_path(program).map_err(|_| {
+            CryptoSetupError::InvalidBackendProgram {
+                backend: backend_name.to_string(),
+                program: program.to_string(),
+            }
+        })?;
     }
 
     Ok(())
@@ -871,6 +881,22 @@ mod tests {
             Err(CryptoSetupError::MissingBackendProgram {
                 backend: "openfhe_local".to_string(),
                 kind: "process_pool".to_string(),
+            }),
+        );
+
+        assert_eq!(
+            validate_backend(
+                "openfhe_local",
+                &CryptoBackendConfig {
+                    kind: "process_pool".to_string(),
+                    program: Some("relative-openfhe-bridge".to_string()),
+                    size: Some(4),
+                    timeout_ms: Some(5_000),
+                },
+            ),
+            Err(CryptoSetupError::InvalidBackendProgram {
+                backend: "openfhe_local".to_string(),
+                program: "relative-openfhe-bridge".to_string(),
             }),
         );
     }
