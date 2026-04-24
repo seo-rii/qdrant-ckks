@@ -325,6 +325,8 @@ crypto:
   #       sym_key: tenant-a/payload-v1
   #   docs_vector_v1:
   #     provider: vector/openfhe-ckks@v1
+  #     materials:
+  #       sym_key: tenant-a/vector-v1
   #     backend_ref: openfhe_local
   #     options:
   #       profile: ckks-16384-d4
@@ -333,6 +335,10 @@ crypto:
   #     kind: symmetric_key_32
   #     source: env
   #     env: QDRANT_PAYLOAD_KEY_B64
+  #   tenant-a/vector-v1:
+  #     kind: symmetric_key_32
+  #     source: env
+  #     env: QDRANT_VECTOR_METADATA_KEY_B64
   # backends:
   #   openfhe_local:
   #     kind: process_pool

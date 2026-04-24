@@ -406,12 +406,17 @@ impl CryptoSettings {
             |settings: &mut Self,
              instance_name: String,
              key_id: Option<String>,
+             material_ref: Option<String>,
              backend_ref: Option<String>| {
+                let materials = material_ref
+                    .into_iter()
+                    .map(|reference| ("sym_key".to_string(), reference))
+                    .collect();
                 settings.instances.insert(
                     instance_name,
                     CryptoInstanceConfig {
                         provider: "vector/openfhe-ckks@v1".to_string(),
-                        materials: HashMap::new(),
+                        materials,
                         backend_ref,
                         options: serde_json::json!({ "key_id": key_id }),
                     },
@@ -465,6 +470,7 @@ impl CryptoSettings {
                 &mut settings,
                 Self::LEGACY_CKKS_VECTOR_INSTANCE.to_string(),
                 ckks.key_id.clone(),
+                default_material_ref.clone(),
                 default_backend_ref.clone(),
             );
         }
@@ -511,12 +517,15 @@ impl CryptoSettings {
                 &mut settings,
                 Self::legacy_ckks_payload_instance_for_collection(collection),
                 config.key_id.clone().or_else(|| ckks.key_id.clone()),
-                material_ref.or_else(|| default_material_ref.clone()),
+                material_ref
+                    .clone()
+                    .or_else(|| default_material_ref.clone()),
             );
             insert_vector_instance(
                 &mut settings,
                 Self::legacy_ckks_vector_instance_for_collection(collection),
                 config.key_id.clone().or_else(|| ckks.key_id.clone()),
+                material_ref.or_else(|| default_material_ref.clone()),
                 backend_ref.or_else(|| default_backend_ref.clone()),
             );
         }
@@ -1101,6 +1110,15 @@ ckks:
             crypto
                 .instances
                 .contains_key(&CryptoSettings::legacy_ckks_payload_instance_for_collection("docs"))
+        );
+        assert_eq!(
+            crypto.instances[CryptoSettings::LEGACY_CKKS_VECTOR_INSTANCE].materials["sym_key"],
+            "legacy_ckks/default/master_key"
+        );
+        assert_eq!(
+            crypto.instances[&CryptoSettings::legacy_ckks_vector_instance_for_collection("docs")]
+                .materials["sym_key"],
+            "legacy_ckks/docs/master_key"
         );
         assert!(
             crypto

@@ -78,6 +78,31 @@ ckks:
       openfhe_bridge_path: /usr/local/bin/openfhe-bridge
 ```
 
+In the generic `crypto` control plane, vector rules must bind both the OpenFHE
+process backend and a `sym_key` metadata key material. The bridge encrypts the
+embedding, while the `sym_key` protects the stored vector envelope metadata:
+
+```yaml
+crypto:
+  instances:
+    docs_vector_v1:
+      provider: vector/openfhe-ckks@v1
+      materials:
+        sym_key: tenant-a/vector-v1
+      backend_ref: openfhe_local
+      options:
+        key_id: tenant-a:docs
+  materials:
+    tenant-a/vector-v1:
+      kind: symmetric_key_32
+      source: env
+      env: QDRANT_VECTOR_METADATA_KEY_B64
+  backends:
+    openfhe_local:
+      kind: process_pool
+      program: /usr/local/bin/openfhe-bridge
+```
+
 If both collection params and the matching `ckks.collections.<name>` runtime
 entry specify `key_id`, they must match. Otherwise the collection value wins,
 then the collection runtime value, then the global default. This prevents
