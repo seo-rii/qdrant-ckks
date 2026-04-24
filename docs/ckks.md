@@ -3,6 +3,23 @@
 This branch adds a small `qdrant-ckks` workspace crate for encrypted payload text
 and OpenFHE CKKS vector ciphertext envelopes.
 
+Current scope is encrypted storage plumbing, not CKKS-native vector search.
+Payload text encryption happens before storage, and CKKS vectors are wrapped as
+ciphertext envelopes, but this branch does not add encrypted query vectors,
+homomorphic scoring, score decryption, or an HNSW-compatible ciphertext search
+executor. Collections that enable CKKS vectors must treat that path as
+at-rest/envelope protection unless a separate plaintext or surrogate search path
+is explicitly configured.
+
+Unsupported search/index features for CKKS ciphertext vectors in this branch:
+
+- HNSW similarity search directly over CKKS ciphertext
+- quantization over CKKS ciphertext
+- recommend/discover flows that require vector arithmetic over encrypted values
+- payload filtering over encrypted metadata
+- shard transfer or snapshot restore without matching runtime keys and OpenFHE
+  context material
+
 ## Payload text
 
 Selected JSON string fields are replaced with a single marker object:
