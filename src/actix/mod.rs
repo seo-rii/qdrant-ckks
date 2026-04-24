@@ -84,6 +84,7 @@ pub fn init(
         let health_checker = web::Data::new(health_checker);
         let web_ui_available = web_ui_folder(&settings);
         let service_config = web::Data::new(settings.service.clone());
+        let settings_data = web::Data::new(settings.clone());
         let audit_config_data = web::Data::new(settings.audit.clone());
 
         let mut api_key_whitelist = vec![
@@ -144,6 +145,7 @@ pub fn init(
                 .app_data(TempFileConfig::default().directory(&upload_dir))
                 .app_data(MultipartFormConfig::default().total_limit(usize::MAX))
                 .app_data(service_config.clone())
+                .app_data(settings_data.clone())
                 .app_data(audit_config_data.clone())
                 .service(index)
                 .configure(config_collections_api)

@@ -36,6 +36,7 @@ use crate::common::inference::service::InferenceType;
 use crate::common::inference::update_requests::convert_point_struct;
 use crate::common::strict_mode::*;
 use crate::common::update::*;
+use crate::settings::Settings;
 
 pub async fn upsert(
     toc_provider: impl CheckedTocProvider,
@@ -44,6 +45,7 @@ pub async fn upsert(
     auth: Auth,
     inference_params: InferenceParams,
     request_hw_counter: RequestHwCounter,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Response<PointsOperationResponseInternal>, Status> {
     let UpsertPoints {
         collection_name,
@@ -79,6 +81,7 @@ pub async fn upsert(
         auth,
         inference_params,
         request_hw_counter.get_counter(),
+        runtime_settings,
     )
     .await?;
 
@@ -435,6 +438,7 @@ pub async fn update_batch(
     auth: Auth,
     inference_params: InferenceParams,
     request_hw_counter: RequestHwCounter,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Response<UpdateBatchResponse>, Status> {
     let UpdateBatchPoints {
         collection_name,
@@ -477,6 +481,7 @@ pub async fn update_batch(
                     auth.clone(),
                     inference_params.clone(),
                     request_hw_counter.clone(),
+                    runtime_settings,
                 )
                 .await
             }

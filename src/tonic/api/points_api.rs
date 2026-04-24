@@ -29,19 +29,21 @@ use crate::common::inference::api_keys::extract_inference_auth;
 use crate::common::inference::params::InferenceParams;
 use crate::common::strict_mode::*;
 use crate::common::update::InternalUpdateParams;
-use crate::settings::ServiceConfig;
+use crate::settings::{ServiceConfig, Settings};
 use crate::tonic::auth::extract_auth;
 
 pub struct PointsService {
     dispatcher: Arc<Dispatcher>,
     service_config: ServiceConfig,
+    settings: Settings,
 }
 
 impl PointsService {
-    pub fn new(dispatcher: Arc<Dispatcher>, service_config: ServiceConfig) -> Self {
+    pub fn new(dispatcher: Arc<Dispatcher>, settings: Settings) -> Self {
         Self {
             dispatcher,
-            service_config,
+            service_config: settings.service.clone(),
+            settings,
         }
     }
 
@@ -83,6 +85,7 @@ impl Points for PointsService {
             auth,
             inference_params,
             hw_metrics,
+            Some(&self.settings),
         )
         .await
         .map(|resp| resp.map(PointsOperationResponse::from))
@@ -293,6 +296,7 @@ impl Points for PointsService {
             auth,
             inference_params,
             hw_metrics,
+            Some(&self.settings),
         )
         .await
     }

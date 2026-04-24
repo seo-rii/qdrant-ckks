@@ -114,6 +114,7 @@ impl PointsInternalService {
             full_internal_auth(),
             inference_params.clone(),
             hw_metrics,
+            None,
         )
         .await
     }

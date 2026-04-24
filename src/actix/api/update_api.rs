@@ -21,7 +21,7 @@ use crate::common::inference::api_keys::InferenceApiKeys;
 use crate::common::inference::params::InferenceParams;
 use crate::common::strict_mode::*;
 use crate::common::update::*;
-use crate::settings::ServiceConfig;
+use crate::settings::{ServiceConfig, Settings};
 
 #[derive(Deserialize, Validate)]
 struct FieldPath {
@@ -37,6 +37,7 @@ async fn upsert_points(
     operation: Json<PointInsertOperations>,
     params: Query<UpdateParams>,
     service_config: web::Data<ServiceConfig>,
+    settings: web::Data<Settings>,
     ActixAuth(auth): ActixAuth,
     api_keys: InferenceApiKeys,
 ) -> impl Responder {
@@ -61,6 +62,7 @@ async fn upsert_points(
         auth,
         inference_params,
         request_hw_counter.get_counter(),
+        Some(settings.get_ref()),
     )
     .await;
 
@@ -331,6 +333,7 @@ async fn update_batch(
     operations: Json<UpdateOperations>,
     params: Query<UpdateParams>,
     service_config: web::Data<ServiceConfig>,
+    settings: web::Data<Settings>,
     ActixAuth(auth): ActixAuth,
     api_keys: InferenceApiKeys,
 ) -> impl Responder {
@@ -355,6 +358,7 @@ async fn update_batch(
         auth,
         inference_params,
         request_hw_counter.get_counter(),
+        Some(settings.get_ref()),
     )
     .await;
 

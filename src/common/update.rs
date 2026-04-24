@@ -24,13 +24,15 @@ use storage::content_manager::collection_verification::check_strict_mode;
 use storage::content_manager::errors::StorageError;
 use storage::content_manager::toc::TableOfContent;
 use storage::dispatcher::Dispatcher;
-use storage::rbac::{Access, Auth};
+use storage::rbac::{Access, AccessRequirements, Auth};
 use validator::Validate;
 
+use crate::common::crypto::payload_write_plan_for_collection;
 use crate::common::inference::params::InferenceParams;
 use crate::common::inference::service::InferenceType;
 use crate::common::inference::update_requests::*;
 use crate::common::strict_mode::*;
+use crate::settings::Settings;
 
 #[serde_with::serde_as]
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, Validate)]
@@ -301,6 +303,7 @@ pub async fn do_upsert_points(
     auth: Auth,
     inference_params: InferenceParams,
     hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
 ) -> Result<(UpdateResult, Option<models::InferenceUsage>), StorageError> {
     use point_ops::UpdateMode;
     use segment::types::Filter;
@@ -313,6 +316,10 @@ pub async fn do_upsert_points(
             &auth,
         )
         .await?;
+
+    let operation =
+        maybe_encrypt_upsert_payloads(toc, &collection_name, operation, &auth, runtime_settings)
+            .await?;
 
     let (operation, shard_key, usage, update_filter, update_mode) = match operation {
         PointInsertOperations::PointsBatch(batch) => {
@@ -741,6 +748,7 @@ pub async fn do_batch_update_points(
     auth: Auth,
     inference_params: InferenceParams,
     hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
 ) -> Result<(Vec<UpdateResult>, Option<InferenceUsage>), StorageError> {
     // Check strict mode for all batch operations, *before applying* them
     let mut toc = None;
@@ -775,6 +783,7 @@ pub async fn do_batch_update_points(
                     auth.clone(),
                     inference_params.clone(),
                     hw_measurement_acc.clone(),
+                    runtime_settings,
                 )
                 .await?;
 
@@ -1129,5 +1138,228 @@ fn get_shard_selector_for_update(
         }
         (None, Some(shard_key)) => ShardSelectorInternal::from(shard_key),
         (None, None) => ShardSelectorInternal::Empty,
+    }
+}
+
+async fn maybe_encrypt_upsert_payloads(
+    toc: &Arc<TableOfContent>,
+    collection_name: &str,
+    mut operation: PointInsertOperations,
+    auth: &Auth,
+    runtime_settings: Option<&Settings>,
+) -> Result<PointInsertOperations, StorageError> {
+    let Some(runtime_settings) = runtime_settings else {
+        return Ok(operation);
+    };
+
+    let collection_pass =
+        auth.check_collection_access(collection_name, AccessRequirements::new(), "upsert_points")?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let collection_config = collection.config_snapshot().await;
+    let Some(plan) = payload_write_plan_for_collection(
+        runtime_settings,
+        collection_name,
+        &collection_config.params,
+    )
+    .map_err(|err| {
+        StorageError::service_error(format!(
+            "payload encryption runtime for collection {collection_name} is invalid: {err}"
+        ))
+    })?
+    else {
+        return Ok(operation);
+    };
+
+    match &mut operation {
+        PointInsertOperations::PointsList(list) => {
+            for point in &mut list.points {
+                if let Some(payload) = &mut point.payload {
+                    plan.encrypt_payload(&point.id.to_string(), payload)
+                        .map_err(|err| {
+                            StorageError::service_error(format!(
+                                "failed to encrypt payload for collection {collection_name}: {err}"
+                            ))
+                        })?;
+                }
+            }
+        }
+        PointInsertOperations::PointsBatch(batch) => {
+            if let Some(payloads) = batch.batch.payloads.as_mut() {
+                for (point_id, payload) in batch.batch.ids.iter().zip(payloads.iter_mut()) {
+                    if let Some(payload) = payload {
+                        plan.encrypt_payload(&point_id.to_string(), payload)
+                            .map_err(|err| {
+                                StorageError::service_error(format!(
+                                    "failed to encrypt payload for collection {collection_name}: {err}"
+                                ))
+                            })?;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(operation)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use collection::config::{
+        CollectionEncryptionConfig, CollectionParams, CryptoMigrationState, EncryptionRuleRef,
+        EncryptionSelector,
+    };
+    use data_encoding::BASE64URL_NOPAD;
+    use qdrant_ckks::is_encrypted_payload_value;
+    use serde_json::json;
+
+    use super::*;
+    use crate::settings::{CryptoInstanceConfig, Settings};
+
+    fn payload_runtime_settings() -> Settings {
+        let mut settings = Settings::new(None).unwrap();
+        settings.crypto.instances = HashMap::from([(
+            "docs_payload_v1".to_string(),
+            CryptoInstanceConfig {
+                provider: "payload/aes-256-gcm@v1".to_string(),
+                materials: HashMap::from([(
+                    "sym_key".to_string(),
+                    "tenant-a/payload-v1".to_string(),
+                )]),
+                backend_ref: None,
+                options: json!({ "key_id": "tenant-a:docs" }),
+            },
+        )]);
+        settings.crypto.materials = HashMap::from([(
+            "tenant-a/payload-v1".to_string(),
+            crate::settings::CryptoMaterialConfig {
+                kind: "symmetric_key_32".to_string(),
+                source: Some("inline".to_string()),
+                env: None,
+                path: None,
+                value_b64: Some(BASE64URL_NOPAD.encode(&[5u8; 32])),
+            },
+        )]);
+        settings
+    }
+
+    fn encrypted_params() -> CollectionParams {
+        CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        }
+    }
+
+    #[test]
+    fn encrypts_points_list_payloads_before_upsert() {
+        let settings = payload_runtime_settings();
+        let plan = payload_write_plan_for_collection(&settings, "docs", &encrypted_params())
+            .unwrap()
+            .unwrap();
+        let mut operation = PointInsertOperations::PointsList(api::rest::schema::PointsList {
+            points: vec![api::rest::PointStruct {
+                id: 1.into(),
+                vector: api::rest::VectorStruct::Single(vec![0.1, 0.2]),
+                payload: Some(segment::types::Payload(
+                    json!({ "body": "secret body" })
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                )),
+            }],
+            shard_key: None,
+            update_filter: None,
+            update_mode: None,
+        });
+
+        match &mut operation {
+            PointInsertOperations::PointsList(list) => {
+                for point in &mut list.points {
+                    if let Some(payload) = &mut point.payload {
+                        plan.encrypt_payload(&point.id.to_string(), payload)
+                            .unwrap();
+                    }
+                }
+            }
+            PointInsertOperations::PointsBatch(_) => unreachable!(),
+        }
+
+        match operation {
+            PointInsertOperations::PointsList(list) => {
+                let body = list.points.into_iter().next().unwrap().payload.unwrap();
+                assert!(is_encrypted_payload_value(body.0.get("body").unwrap()));
+            }
+            PointInsertOperations::PointsBatch(_) => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn encrypts_batch_payloads_before_upsert() {
+        let settings = payload_runtime_settings();
+        let plan = payload_write_plan_for_collection(&settings, "docs", &encrypted_params())
+            .unwrap()
+            .unwrap();
+        let mut operation = PointInsertOperations::PointsBatch(api::rest::schema::PointsBatch {
+            batch: api::rest::schema::Batch {
+                ids: vec![1.into()],
+                vectors: api::rest::schema::BatchVectorStruct::Single(vec![vec![0.1, 0.2]]),
+                payloads: Some(vec![Some(segment::types::Payload(
+                    json!({ "body": "batch secret" })
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ))]),
+            },
+            shard_key: None,
+            update_filter: None,
+            update_mode: None,
+        });
+
+        match &mut operation {
+            PointInsertOperations::PointsBatch(batch) => {
+                for (point_id, payload) in batch
+                    .batch
+                    .ids
+                    .iter()
+                    .zip(batch.batch.payloads.as_mut().unwrap().iter_mut())
+                {
+                    if let Some(payload) = payload {
+                        plan.encrypt_payload(&point_id.to_string(), payload)
+                            .unwrap();
+                    }
+                }
+            }
+            PointInsertOperations::PointsList(_) => unreachable!(),
+        }
+
+        match operation {
+            PointInsertOperations::PointsBatch(batch) => {
+                let payload = batch
+                    .batch
+                    .payloads
+                    .unwrap()
+                    .into_iter()
+                    .next()
+                    .unwrap()
+                    .unwrap();
+                assert!(is_encrypted_payload_value(payload.0.get("body").unwrap()));
+            }
+            PointInsertOperations::PointsList(_) => unreachable!(),
+        }
     }
 }

@@ -1,6 +1,19 @@
-use thiserror::Error;
+use std::fs;
 
-use crate::settings::{CryptoBackendConfig, CryptoMaterialConfig, CryptoSettings, Settings};
+use collection::config::{CollectionEncryptionConfig, CollectionParams, EncryptionSelector};
+use data_encoding::BASE64URL_NOPAD;
+use qdrant_ckks::{
+    AeadCipher, PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionError,
+    PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
+};
+use segment::types::Payload;
+use serde_json::Value;
+use thiserror::Error;
+use zeroize::Zeroizing;
+
+use crate::settings::{
+    CryptoBackendConfig, CryptoInstanceConfig, CryptoMaterialConfig, CryptoSettings, Settings,
+};
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum CryptoSetupError {
@@ -32,6 +45,122 @@ pub enum CryptoSetupError {
     },
     #[error(transparent)]
     LegacyCkks(#[from] crate::common::ckks::CkksSetupError),
+}
+
+const PAYLOAD_SYM_KEY_ROLE: &str = "sym_key";
+const SYMMETRIC_KEY_32_KIND: &str = "symmetric_key_32";
+
+#[derive(Error, Debug, PartialEq, Eq)]
+pub enum PayloadWriteSetupError {
+    #[error("collection {collection} references unknown payload crypto instance {instance}")]
+    UnknownInstance {
+        collection: String,
+        instance: String,
+    },
+    #[error(
+        "collection {collection} rule {rule_id} uses unsupported provider {provider} for payload encryption"
+    )]
+    UnsupportedProvider {
+        collection: String,
+        rule_id: String,
+        provider: String,
+    },
+    #[error("payload crypto instance {instance} must bind role {role} to a symmetric key material")]
+    MissingMaterialBinding { instance: String, role: String },
+    #[error("payload crypto instance {instance} key_id option must be a string")]
+    InvalidInstanceKeyId { instance: String },
+    #[error("collection {collection} payload encryption is missing a key id")]
+    MissingKeyId { collection: String },
+    #[error(
+        "collection {collection} key id does not match payload crypto instance {instance} key id"
+    )]
+    CollectionKeyMismatch {
+        collection: String,
+        instance: String,
+    },
+    #[error("payload crypto material {material} uses unsupported kind {kind}")]
+    UnsupportedMaterialKind { material: String, kind: String },
+    #[error("payload crypto material {material} is missing environment variable {env}")]
+    MissingMaterialEnv { material: String, env: String },
+    #[error("payload crypto material {material} file path is missing")]
+    MissingMaterialPath { material: String },
+    #[error("payload crypto material {material} inline value is missing")]
+    MissingInlineMaterial { material: String },
+    #[error("payload crypto material {material} file {path} could not be read")]
+    UnreadableMaterialFile { material: String, path: String },
+    #[error("payload crypto material {material} must be base64url without padding")]
+    InvalidMaterialEncoding { material: String },
+    #[error("payload crypto material {material} must decode to exactly 32 bytes")]
+    InvalidMaterialLength { material: String },
+    #[error(transparent)]
+    LegacyCkks(#[from] crate::common::ckks::CkksSetupError),
+    #[error(transparent)]
+    Payload(#[from] PayloadEncryptionError),
+}
+
+struct PayloadWriteRule {
+    encryptor: PayloadTextEncryptor,
+    policy: PayloadEncryptionPolicy,
+}
+
+pub struct PayloadWritePlan {
+    rules: Vec<PayloadWriteRule>,
+}
+
+impl PayloadWritePlan {
+    pub fn encrypt_payload(
+        &self,
+        point_id: &str,
+        payload: &mut Payload,
+    ) -> Result<usize, PayloadWriteSetupError> {
+        let mut encrypted = 0;
+
+        for rule in &self.rules {
+            encrypted +=
+                rule.encryptor
+                    .encrypt_selected_fields(point_id, &mut payload.0, &rule.policy)?;
+        }
+
+        Ok(encrypted)
+    }
+}
+
+pub fn payload_write_plan_for_collection(
+    settings: &Settings,
+    collection_name: &str,
+    params: &CollectionParams,
+) -> Result<Option<PayloadWritePlan>, PayloadWriteSetupError> {
+    if let Some(encryption) = &params.encryption {
+        return generic_payload_write_plan(
+            &effective_settings(settings),
+            collection_name,
+            encryption,
+        );
+    }
+
+    let Some(ckks) = params.ckks.as_ref() else {
+        return Ok(None);
+    };
+
+    if settings.ckks.is_configured() {
+        let Some((encryptor, policy)) = crate::common::ckks::payload_text_encryptor_for_collection(
+            &settings.ckks,
+            collection_name,
+            Some(ckks),
+        )?
+        else {
+            return Ok(None);
+        };
+
+        return Ok(Some(PayloadWritePlan {
+            rules: vec![PayloadWriteRule { encryptor, policy }],
+        }));
+    }
+
+    let Some(encryption) = CollectionEncryptionConfig::from_legacy_ckks(ckks) else {
+        return Ok(None);
+    };
+    generic_payload_write_plan(&effective_settings(settings), collection_name, &encryption)
 }
 
 pub fn effective_settings(settings: &Settings) -> CryptoSettings {
@@ -154,14 +283,190 @@ fn validate_backend(
     Ok(())
 }
 
+fn generic_payload_write_plan(
+    runtime_settings: &CryptoSettings,
+    collection_name: &str,
+    encryption: &CollectionEncryptionConfig,
+) -> Result<Option<PayloadWritePlan>, PayloadWriteSetupError> {
+    let mut rules = Vec::new();
+
+    for rule in &encryption.rules {
+        let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
+            continue;
+        };
+        let instance = runtime_settings
+            .instances
+            .get(&rule.instance)
+            .ok_or_else(|| PayloadWriteSetupError::UnknownInstance {
+                collection: collection_name.to_string(),
+                instance: rule.instance.clone(),
+            })?;
+        if instance.provider != PAYLOAD_AES_GCM_PROVIDER {
+            return Err(PayloadWriteSetupError::UnsupportedProvider {
+                collection: collection_name.to_string(),
+                rule_id: rule.id.clone(),
+                provider: instance.provider.clone(),
+            });
+        }
+
+        let material_ref = instance
+            .materials
+            .get(PAYLOAD_SYM_KEY_ROLE)
+            .ok_or_else(|| PayloadWriteSetupError::MissingMaterialBinding {
+                instance: rule.instance.clone(),
+                role: PAYLOAD_SYM_KEY_ROLE.to_string(),
+            })?;
+        let material = runtime_settings
+            .materials
+            .get(material_ref)
+            .ok_or_else(|| PayloadWriteSetupError::MissingMaterialBinding {
+                instance: rule.instance.clone(),
+                role: PAYLOAD_SYM_KEY_ROLE.to_string(),
+            })?;
+        if material.kind != SYMMETRIC_KEY_32_KIND {
+            return Err(PayloadWriteSetupError::UnsupportedMaterialKind {
+                material: material_ref.clone(),
+                kind: material.kind.clone(),
+            });
+        }
+
+        let key_id = resolve_payload_key_id(collection_name, encryption, &rule.instance, instance)?;
+        let master_key = decode_material_key(material_ref, material)?;
+        let payload_key = master_key
+            .derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)
+            .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
+        let cipher = AeadCipher::new(key_id, payload_key)
+            .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
+        let policy = PayloadEncryptionPolicy::new(paths.clone())?;
+        let encryptor = PayloadTextEncryptor::new(collection_name, cipher)?
+            .with_encryption_epoch(encryption.encryption_epoch);
+
+        rules.push(PayloadWriteRule { encryptor, policy });
+    }
+
+    if rules.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(PayloadWritePlan { rules }))
+    }
+}
+
+fn resolve_payload_key_id<'a>(
+    collection_name: &str,
+    encryption: &'a CollectionEncryptionConfig,
+    instance_name: &str,
+    instance: &'a CryptoInstanceConfig,
+) -> Result<&'a str, PayloadWriteSetupError> {
+    let instance_key_id = match instance.options.get("key_id") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(key_id)) => Some(key_id.as_str()),
+        Some(_) => {
+            return Err(PayloadWriteSetupError::InvalidInstanceKeyId {
+                instance: instance_name.to_string(),
+            });
+        }
+    };
+
+    match (encryption.key_id.as_deref(), instance_key_id) {
+        (Some(collection_key_id), Some(runtime_key_id)) if collection_key_id != runtime_key_id => {
+            Err(PayloadWriteSetupError::CollectionKeyMismatch {
+                collection: collection_name.to_string(),
+                instance: instance_name.to_string(),
+            })
+        }
+        (Some(collection_key_id), _) => Ok(collection_key_id),
+        (None, Some(runtime_key_id)) => Ok(runtime_key_id),
+        (None, None) => Err(PayloadWriteSetupError::MissingKeyId {
+            collection: collection_name.to_string(),
+        }),
+    }
+}
+
+fn decode_material_key(
+    material_name: &str,
+    material: &CryptoMaterialConfig,
+) -> Result<SecretKey, PayloadWriteSetupError> {
+    let encoded = match material.source.as_deref() {
+        Some("env") => {
+            let env = material.env.as_deref().ok_or_else(|| {
+                PayloadWriteSetupError::MissingMaterialEnv {
+                    material: material_name.to_string(),
+                    env: "<missing>".to_string(),
+                }
+            })?;
+            std::env::var(env).map_err(|_| PayloadWriteSetupError::MissingMaterialEnv {
+                material: material_name.to_string(),
+                env: env.to_string(),
+            })?
+        }
+        Some("file") => {
+            let path = material.path.as_deref().ok_or_else(|| {
+                PayloadWriteSetupError::MissingMaterialPath {
+                    material: material_name.to_string(),
+                }
+            })?;
+            fs::read_to_string(path).map_err(|_| {
+                PayloadWriteSetupError::UnreadableMaterialFile {
+                    material: material_name.to_string(),
+                    path: path.to_string(),
+                }
+            })?
+        }
+        Some("inline") => material.value_b64.clone().ok_or_else(|| {
+            PayloadWriteSetupError::MissingInlineMaterial {
+                material: material_name.to_string(),
+            }
+        })?,
+        Some(_) | None => {
+            if let Some(env) = material.env.as_deref() {
+                std::env::var(env).map_err(|_| PayloadWriteSetupError::MissingMaterialEnv {
+                    material: material_name.to_string(),
+                    env: env.to_string(),
+                })?
+            } else if let Some(path) = material.path.as_deref() {
+                fs::read_to_string(path).map_err(|_| {
+                    PayloadWriteSetupError::UnreadableMaterialFile {
+                        material: material_name.to_string(),
+                        path: path.to_string(),
+                    }
+                })?
+            } else {
+                material.value_b64.clone().ok_or_else(|| {
+                    PayloadWriteSetupError::MissingInlineMaterial {
+                        material: material_name.to_string(),
+                    }
+                })?
+            }
+        }
+    };
+
+    let encoded = encoded.trim();
+    let decoded = Zeroizing::new(BASE64URL_NOPAD.decode(encoded.as_bytes()).map_err(|_| {
+        PayloadWriteSetupError::InvalidMaterialEncoding {
+            material: material_name.to_string(),
+        }
+    })?);
+    SecretKey::try_from_slice(decoded.as_slice()).map_err(|_| {
+        PayloadWriteSetupError::InvalidMaterialLength {
+            material: material_name.to_string(),
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
+    use collection::config::{
+        CkksCollectionConfig, CollectionEncryptionConfig, CollectionParams, CryptoMigrationState,
+        EncryptionRuleRef, EncryptionSelector,
+    };
+    use data_encoding::BASE64URL_NOPAD;
+    use qdrant_ckks::is_encrypted_payload_value;
     use serde_json::json;
 
     use super::*;
-    use crate::settings::CryptoInstanceConfig;
+    use crate::settings::{CkksConfig, CryptoInstanceConfig};
 
     #[test]
     fn validate_crypto_settings_rejects_missing_material_and_backend_refs() {
@@ -291,6 +596,144 @@ mod tests {
                 backend: "openfhe_local".to_string(),
                 kind: "process_pool".to_string(),
             }),
+        );
+    }
+
+    #[test]
+    fn payload_write_plan_encrypts_generic_payload_fields() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_payload_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_AES_GCM_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            "tenant-a/payload-v1".to_string(),
+                        )]),
+                        backend_ref: None,
+                        options: json!({ "key_id": "tenant-a:docs" }),
+                    },
+                )]),
+                materials: HashMap::from([(
+                    "tenant-a/payload-v1".to_string(),
+                    CryptoMaterialConfig {
+                        kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        env: None,
+                        path: None,
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[7u8; 32])),
+                    },
+                )]),
+                backends: HashMap::new(),
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 5,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
+            .unwrap()
+            .unwrap();
+        let mut payload = segment::types::Payload(
+            json!({ "body": "secret body" })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+
+        assert_eq!(plan.encrypt_payload("point-1", &mut payload).unwrap(), 1);
+        assert!(is_encrypted_payload_value(payload.0.get("body").unwrap()));
+    }
+
+    #[test]
+    fn payload_write_plan_supports_legacy_collection_and_runtime_ckks() {
+        let settings = Settings {
+            ckks: CkksConfig {
+                enabled: true,
+                allow_inline_key_material: true,
+                key_id: Some("tenant-a:docs".to_string()),
+                master_key_b64: Some(BASE64URL_NOPAD.encode(&[9u8; 32])),
+                ..CkksConfig::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            ckks: Some(CkksCollectionConfig {
+                enabled: true,
+                key_id: Some("tenant-a:docs".to_string()),
+                payload_text_fields: vec!["body".to_string()],
+                vector_names: Vec::new(),
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
+            .unwrap()
+            .unwrap();
+        let mut payload = segment::types::Payload(
+            json!({ "body": "legacy secret" })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+
+        assert_eq!(plan.encrypt_payload("point-1", &mut payload).unwrap(), 1);
+        assert!(is_encrypted_payload_value(payload.0.get("body").unwrap()));
+    }
+
+    #[test]
+    fn payload_write_plan_rejects_unknown_payload_instance() {
+        let settings = Settings {
+            crypto: CryptoSettings::default(),
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "missing_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = match payload_write_plan_for_collection(&settings, "docs", &params) {
+            Err(err) => err,
+            Ok(_) => panic!("missing payload instance must fail"),
+        };
+        assert_eq!(
+            err,
+            PayloadWriteSetupError::UnknownInstance {
+                collection: "docs".to_string(),
+                instance: "missing_payload_v1".to_string(),
+            },
         );
     }
 }

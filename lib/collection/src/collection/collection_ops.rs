@@ -321,6 +321,10 @@ impl Collection {
             .clone()
     }
 
+    pub async fn config_snapshot(&self) -> crate::config::CollectionConfigInternal {
+        self.collection_config.read().await.clone()
+    }
+
     pub async fn info(
         &self,
         shard_selection: &ShardSelectorInternal,
