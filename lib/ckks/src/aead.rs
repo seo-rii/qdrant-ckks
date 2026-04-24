@@ -7,10 +7,11 @@ use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 const VERSION: u8 = 1;
 const ALGORITHM: &str = "AES-256-GCM";
+pub const RESOURCE_KEY_WRAP_ALGORITHM: &str = "AES-256-GCM";
 const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
@@ -50,6 +51,8 @@ pub enum EncryptionError {
     SealFailed,
     #[error("decryption authentication failed")]
     OpenFailed,
+    #[error("wrapped resource key master key id does not match")]
+    MasterKeyMismatch,
 }
 
 pub struct SecretKey {
@@ -229,6 +232,145 @@ pub struct AeadCipher {
     key_id: String,
     material_fingerprint: String,
     key: SecretKey,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WrappedKeyBlob {
+    pub version: u8,
+    pub algorithm: String,
+    pub mk_id: String,
+    pub nonce: String,
+    pub wrapped_key: String,
+}
+
+impl Debug for WrappedKeyBlob {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WrappedKeyBlob")
+            .field("version", &self.version)
+            .field("algorithm", &self.algorithm)
+            .field("mk_id", &self.mk_id)
+            .field("nonce", &"[redacted]")
+            .field("wrapped_key_len", &self.wrapped_key.len())
+            .finish()
+    }
+}
+
+pub trait MasterKeyProvider: Send + Sync {
+    fn mk_id(&self) -> &str;
+
+    fn wrap_resource_key(
+        &self,
+        rk_plaintext: &SecretKey,
+        aad: &[u8],
+    ) -> Result<WrappedKeyBlob, EncryptionError>;
+
+    fn unwrap_resource_key(
+        &self,
+        wrapped: &WrappedKeyBlob,
+        aad: &[u8],
+    ) -> Result<SecretKey, EncryptionError>;
+}
+
+pub struct LocalMasterKeyProvider {
+    mk_id: String,
+    key: SecretKey,
+}
+
+impl Debug for LocalMasterKeyProvider {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LocalMasterKeyProvider")
+            .field("mk_id", &self.mk_id)
+            .field("key", &"[redacted; 32 bytes]")
+            .finish()
+    }
+}
+
+impl LocalMasterKeyProvider {
+    pub fn new(mk_id: impl Into<String>, key: SecretKey) -> Result<Self, EncryptionError> {
+        let mk_id = mk_id.into();
+        validate_material_fingerprint_id(&mk_id)?;
+        Ok(Self { mk_id, key })
+    }
+}
+
+impl MasterKeyProvider for LocalMasterKeyProvider {
+    fn mk_id(&self) -> &str {
+        &self.mk_id
+    }
+
+    fn wrap_resource_key(
+        &self,
+        rk_plaintext: &SecretKey,
+        aad: &[u8],
+    ) -> Result<WrappedKeyBlob, EncryptionError> {
+        let rng = SystemRandom::new();
+        let mut nonce_bytes = [0u8; NONCE_LEN];
+        rng.fill(&mut nonce_bytes)
+            .map_err(|_| EncryptionError::RandomFailure)?;
+        let nonce_b64 = BASE64URL_NOPAD.encode(&nonce_bytes);
+
+        let unbound_key = UnboundKey::new(&AES_256_GCM, self.key.as_bytes())
+            .map_err(|_| EncryptionError::SealFailed)?;
+        let key = LessSafeKey::new(unbound_key);
+        let nonce = Nonce::assume_unique_for_key(nonce_bytes);
+        let mut in_out = Zeroizing::new(rk_plaintext.as_bytes().to_vec());
+        let tag = key
+            .seal_in_place_separate_tag(nonce, Aad::from(aad), in_out.as_mut_slice())
+            .map_err(|_| EncryptionError::SealFailed)?;
+        in_out.extend_from_slice(tag.as_ref());
+
+        Ok(WrappedKeyBlob {
+            version: VERSION,
+            algorithm: RESOURCE_KEY_WRAP_ALGORITHM.to_string(),
+            mk_id: self.mk_id.clone(),
+            nonce: nonce_b64,
+            wrapped_key: BASE64URL_NOPAD.encode(in_out.as_slice()),
+        })
+    }
+
+    fn unwrap_resource_key(
+        &self,
+        wrapped: &WrappedKeyBlob,
+        aad: &[u8],
+    ) -> Result<SecretKey, EncryptionError> {
+        if wrapped.version != VERSION {
+            return Err(EncryptionError::UnsupportedVersion(wrapped.version));
+        }
+        if wrapped.algorithm != RESOURCE_KEY_WRAP_ALGORITHM {
+            return Err(EncryptionError::UnsupportedAlgorithm(
+                wrapped.algorithm.clone(),
+            ));
+        }
+        if wrapped.mk_id != self.mk_id {
+            return Err(EncryptionError::MasterKeyMismatch);
+        }
+
+        let nonce_bytes = BASE64URL_NOPAD
+            .decode(wrapped.nonce.as_bytes())
+            .map_err(|_| EncryptionError::InvalidEncoding)?;
+        let nonce_bytes: [u8; NONCE_LEN] = nonce_bytes
+            .try_into()
+            .map_err(|_| EncryptionError::InvalidNonceLength)?;
+        let nonce = Nonce::assume_unique_for_key(nonce_bytes);
+
+        let mut wrapped_key = Zeroizing::new(
+            BASE64URL_NOPAD
+                .decode(wrapped.wrapped_key.as_bytes())
+                .map_err(|_| EncryptionError::InvalidEncoding)?,
+        );
+        if wrapped_key.len() < KEY_LEN + TAG_LEN {
+            return Err(EncryptionError::InvalidCiphertextLength);
+        }
+
+        let unbound_key = UnboundKey::new(&AES_256_GCM, self.key.as_bytes())
+            .map_err(|_| EncryptionError::OpenFailed)?;
+        let key = LessSafeKey::new(unbound_key);
+        let plaintext = key
+            .open_in_place(nonce, Aad::from(aad), wrapped_key.as_mut_slice())
+            .map_err(|_| EncryptionError::OpenFailed)?;
+
+        SecretKey::try_from_slice(plaintext)
+    }
 }
 
 impl AeadCipher {

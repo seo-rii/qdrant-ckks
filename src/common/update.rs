@@ -1239,6 +1239,7 @@ mod tests {
                 env: None,
                 path: None,
                 value_b64: Some(BASE64URL_NOPAD.encode(&[5u8; 32])),
+                ..crate::settings::CryptoMaterialConfig::default()
             },
         )]);
         settings

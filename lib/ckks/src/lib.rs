@@ -12,7 +12,8 @@ pub mod vector;
 
 pub use aead::{
     AeadCipher, AeadKeyring, CKKS_VECTOR_KEY_DOMAIN, EncryptedEnvelope, EncryptionContext,
-    EncryptionError, EncryptionPurpose, PAYLOAD_TEXT_KEY_DOMAIN, SecretKey,
+    EncryptionError, EncryptionPurpose, LocalMasterKeyProvider, MasterKeyProvider,
+    PAYLOAD_TEXT_KEY_DOMAIN, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, WrappedKeyBlob,
 };
 pub use control_plane::{
     CiphertextEnvelope, CompiledCollectionCryptoPlan, CompiledMetadataRule, CompiledPayloadRule,

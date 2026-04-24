@@ -65,10 +65,11 @@ token designs, but collection validation rejects metadata selectors in this
 branch. Payload filtering over encrypted metadata, including range, geo, and
 full-text filtering, is unsupported until a separate blind-index design exists.
 
-Runtime settings provide key material per collection. Prefer injecting keys
-through environment variables such as
-`QDRANT__CKKS__COLLECTIONS__docs__MASTER_KEY_B64` instead of committing them to
-config files:
+Runtime settings provide key material per collection. In the legacy `ckks`
+adapter, `master_key_b64` is a direct 32-byte resource key (RK), not a master
+key-encryption key. Prefer injecting that legacy RK through environment
+variables such as `QDRANT__CKKS__COLLECTIONS__docs__MASTER_KEY_B64` instead of
+committing it to config files:
 
 ```yaml
 ckks:
@@ -81,6 +82,25 @@ ckks:
       openfhe_bridge_path: /usr/local/bin/openfhe-bridge
       openfhe_bridge_sha256_b64: base64url-no-pad-sha256-of-bridge
 ```
+
+The generic `crypto` control plane supports a safer MK/RK hierarchy:
+
+- `wrapping_key_32` is an MK/KEK loaded from env/file/inline material.
+- `wrapped_symmetric_key_32` is a random collection or rule RK wrapped by that
+  MK using AES-256-GCM.
+- Payload text and CKKS vector envelope AEAD keys are still purpose-specific
+  HKDF subkeys derived from the unwrapped RK.
+
+Data envelopes record the runtime `key_id` and material fingerprint used for
+the RK-derived subkey. They do not reference the MK directly, so MK rotation can
+rewrap the stored RK manifest without rewriting payload/vector envelopes. RK
+rotation still requires a data re-encryption job and should use the explicit
+re-encryption mode rather than normal write-path idempotency.
+
+The wrapped RK AES-GCM AAD is a length-prefixed tuple of `qdrant-sec`, `v1`,
+`resource-key-wrap`, the material reference, `rk_epoch`, `scope`, `wrapped_by`,
+and `AES-256-GCM`. Changing the material reference, epoch, scope, or wrapping MK
+therefore requires rewrapping the RK.
 
 In the generic `crypto` control plane, vector rules must bind both the OpenFHE
 process backend and a `sym_key` metadata key material. The bridge encrypts the
@@ -106,10 +126,18 @@ crypto:
         key_id: tenant-a:docs
         material_fingerprint_id: tenant-a/payload@v1
   materials:
-    tenant-a/payload-v1:
-      kind: symmetric_key_32
+    tenant-a/mk-v1:
+      kind: wrapping_key_32
       source: env
-      env: QDRANT_PAYLOAD_KEY_B64
+      env: QDRANT_CRYPTO_MK_B64
+    tenant-a/payload-v1:
+      kind: wrapped_symmetric_key_32
+      wrapped_by: tenant-a/mk-v1
+      wrap_algorithm: AES-256-GCM
+      rk_epoch: 3
+      scope: collection:docs
+      nonce: base64url-no-pad-96-bit-nonce
+      wrapped_key_b64: base64url-no-pad-wrapped-rk
     tenant-a/vector-v1:
       kind: symmetric_key_32
       source: env

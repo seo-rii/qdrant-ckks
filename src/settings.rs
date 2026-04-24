@@ -274,6 +274,19 @@ pub struct CryptoMaterialConfig {
     pub path: Option<String>,
     #[serde(default)]
     pub value_b64: Option<String>,
+    #[serde(default)]
+    #[validate(custom(function = "validate_crypto_runtime_identifier"))]
+    pub wrapped_by: Option<String>,
+    #[serde(default)]
+    pub wrap_algorithm: Option<String>,
+    #[serde(default)]
+    pub nonce: Option<String>,
+    #[serde(default)]
+    pub wrapped_key_b64: Option<String>,
+    #[serde(default)]
+    pub rk_epoch: Option<u64>,
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 impl fmt::Debug for CryptoMaterialConfig {
@@ -284,6 +297,15 @@ impl fmt::Debug for CryptoMaterialConfig {
             .field("env", &self.env)
             .field("path", &self.path)
             .field("value_b64", &self.value_b64.as_ref().map(|_| "[redacted]"))
+            .field("wrapped_by", &self.wrapped_by)
+            .field("wrap_algorithm", &self.wrap_algorithm)
+            .field("nonce", &self.nonce.as_ref().map(|_| "[redacted]"))
+            .field(
+                "wrapped_key_b64",
+                &self.wrapped_key_b64.as_ref().map(|_| "[redacted]"),
+            )
+            .field("rk_epoch", &self.rk_epoch)
+            .field("scope", &self.scope)
             .finish()
     }
 }
@@ -438,6 +460,7 @@ impl CryptoSettings {
                     env: None,
                     path: None,
                     value_b64: Some(master_key_b64.clone()),
+                    ..CryptoMaterialConfig::default()
                 },
             );
         }
@@ -496,6 +519,7 @@ impl CryptoSettings {
                         env: None,
                         path: None,
                         value_b64: Some(master_key_b64.clone()),
+                        ..CryptoMaterialConfig::default()
                     },
                 );
             }

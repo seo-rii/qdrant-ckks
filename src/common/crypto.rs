@@ -6,8 +6,9 @@ use collection::config::{
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_ckks::{
     AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_VECTOR_KEY_DOMAIN,
-    PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionError,
-    PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey, VECTOR_OPENFHE_CKKS_PROVIDER,
+    LocalMasterKeyProvider, MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_TEXT_KEY_DOMAIN,
+    PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
+    RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, VECTOR_OPENFHE_CKKS_PROVIDER, WrappedKeyBlob,
 };
 use segment::types::Payload;
 use serde_json::Value;
@@ -31,6 +32,23 @@ pub enum CryptoSetupError {
     },
     #[error("crypto material {material} source does not match configured fields")]
     MaterialSourceMismatch { material: String },
+    #[error("crypto material {material} wrapped resource key config is invalid: {reason}")]
+    InvalidWrappedMaterial { material: String, reason: String },
+    #[error("crypto material {material} references unknown wrapping key material {wrapped_by}")]
+    UnknownWrappingMaterial {
+        material: String,
+        wrapped_by: String,
+    },
+    #[error(
+        "crypto material {material} wrapping key material {wrapped_by} has unsupported kind {kind}"
+    )]
+    UnsupportedWrappingMaterialKind {
+        material: String,
+        wrapped_by: String,
+        kind: String,
+    },
+    #[error("crypto material {material} uses unsupported wrap algorithm {algorithm}")]
+    UnsupportedWrapAlgorithm { material: String, algorithm: String },
     #[error("crypto material {material} uses inline key material but inline material is disabled")]
     InlineMaterialDisabled { material: String },
     #[error("crypto backend {backend} of kind {kind} requires program")]
@@ -56,6 +74,8 @@ pub enum CryptoSetupError {
 
 const PAYLOAD_SYM_KEY_ROLE: &str = "sym_key";
 const SYMMETRIC_KEY_32_KIND: &str = "symmetric_key_32";
+const WRAPPING_KEY_32_KIND: &str = "wrapping_key_32";
+const WRAPPED_SYMMETRIC_KEY_32_KIND: &str = "wrapped_symmetric_key_32";
 const MATERIAL_FINGERPRINT_ID_OPTION: &str = "material_fingerprint_id";
 const CKKS_PROFILE_OPTION: &str = "profile";
 
@@ -91,6 +111,25 @@ pub enum PayloadWriteSetupError {
     },
     #[error("payload crypto material {material} uses unsupported kind {kind}")]
     UnsupportedMaterialKind { material: String, kind: String },
+    #[error(
+        "payload crypto material {material} references unknown wrapping key material {wrapped_by}"
+    )]
+    UnknownWrappingMaterial {
+        material: String,
+        wrapped_by: String,
+    },
+    #[error(
+        "payload crypto material {material} wrapping key material {wrapped_by} has unsupported kind {kind}"
+    )]
+    UnsupportedWrappingMaterialKind {
+        material: String,
+        wrapped_by: String,
+        kind: String,
+    },
+    #[error("payload crypto material {material} wrapped resource key config is invalid: {reason}")]
+    InvalidWrappedMaterial { material: String, reason: String },
+    #[error("payload crypto material {material} uses unsupported wrap algorithm {algorithm}")]
+    UnsupportedWrapAlgorithm { material: String, algorithm: String },
     #[error("payload crypto material {material} is missing environment variable {env}")]
     MissingMaterialEnv { material: String, env: String },
     #[error("payload crypto material {material} file path is missing")]
@@ -242,6 +281,32 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
         validate_material(material_name, material, settings.allow_inline_key_material)?;
     }
 
+    for (material_name, material) in &settings.materials {
+        if material.kind != WRAPPED_SYMMETRIC_KEY_32_KIND {
+            continue;
+        }
+
+        let wrapped_by = material.wrapped_by.as_deref().ok_or_else(|| {
+            CryptoSetupError::InvalidWrappedMaterial {
+                material: material_name.clone(),
+                reason: "missing wrapped_by".to_string(),
+            }
+        })?;
+        let Some(wrapping_material) = settings.materials.get(wrapped_by) else {
+            return Err(CryptoSetupError::UnknownWrappingMaterial {
+                material: material_name.clone(),
+                wrapped_by: wrapped_by.to_string(),
+            });
+        };
+        if wrapping_material.kind != WRAPPING_KEY_32_KIND {
+            return Err(CryptoSetupError::UnsupportedWrappingMaterialKind {
+                material: material_name.clone(),
+                wrapped_by: wrapped_by.to_string(),
+                kind: wrapping_material.kind.clone(),
+            });
+        }
+    }
+
     for (backend_name, backend) in &settings.backends {
         validate_backend(backend_name, backend)?;
     }
@@ -275,6 +340,24 @@ fn validate_material(
     material: &CryptoMaterialConfig,
     allow_inline_key_material: bool,
 ) -> Result<(), CryptoSetupError> {
+    if material.kind == WRAPPED_SYMMETRIC_KEY_32_KIND {
+        return validate_wrapped_resource_key_material(material_name, material);
+    }
+
+    if material.wrapped_by.is_some()
+        || material.wrap_algorithm.is_some()
+        || material.nonce.is_some()
+        || material.wrapped_key_b64.is_some()
+        || material.rk_epoch.is_some()
+        || material.scope.is_some()
+    {
+        return Err(CryptoSetupError::InvalidWrappedMaterial {
+            material: material_name.to_string(),
+            reason: "wrapped key fields are only valid for wrapped_symmetric_key_32 materials"
+                .to_string(),
+        });
+    }
+
     let configured_sources = usize::from(material.env.is_some())
         + usize::from(material.path.is_some())
         + usize::from(material.value_b64.is_some());
@@ -322,6 +405,55 @@ fn validate_material(
             material_source: source.to_string(),
         }),
     }
+}
+
+fn validate_wrapped_resource_key_material(
+    material_name: &str,
+    material: &CryptoMaterialConfig,
+) -> Result<(), CryptoSetupError> {
+    if material.source.is_some()
+        || material.env.is_some()
+        || material.path.is_some()
+        || material.value_b64.is_some()
+    {
+        return Err(CryptoSetupError::InvalidWrappedMaterial {
+            material: material_name.to_string(),
+            reason: "wrapped resource keys must not configure direct source/env/path/value_b64"
+                .to_string(),
+        });
+    }
+
+    if material.wrapped_by.is_none() {
+        return Err(CryptoSetupError::InvalidWrappedMaterial {
+            material: material_name.to_string(),
+            reason: "missing wrapped_by".to_string(),
+        });
+    }
+    if material.nonce.is_none() {
+        return Err(CryptoSetupError::InvalidWrappedMaterial {
+            material: material_name.to_string(),
+            reason: "missing nonce".to_string(),
+        });
+    }
+    if material.wrapped_key_b64.is_none() {
+        return Err(CryptoSetupError::InvalidWrappedMaterial {
+            material: material_name.to_string(),
+            reason: "missing wrapped_key_b64".to_string(),
+        });
+    }
+
+    let algorithm = material
+        .wrap_algorithm
+        .as_deref()
+        .unwrap_or(RESOURCE_KEY_WRAP_ALGORITHM);
+    if algorithm != RESOURCE_KEY_WRAP_ALGORITHM {
+        return Err(CryptoSetupError::UnsupportedWrapAlgorithm {
+            material: material_name.to_string(),
+            algorithm: algorithm.to_string(),
+        });
+    }
+
+    Ok(())
 }
 
 fn validate_backend(
@@ -388,16 +520,10 @@ fn generic_payload_write_plan(
                 instance: rule.instance.clone(),
                 role: PAYLOAD_SYM_KEY_ROLE.to_string(),
             })?;
-        if material.kind != SYMMETRIC_KEY_32_KIND {
-            return Err(PayloadWriteSetupError::UnsupportedMaterialKind {
-                material: material_ref.clone(),
-                kind: material.kind.clone(),
-            });
-        }
 
         let key_id = resolve_payload_key_id(collection_name, encryption, &rule.instance, instance)?;
-        let master_key = decode_material_key(material_ref, material)?;
-        let payload_key = master_key
+        let resource_key = decode_resource_key(runtime_settings, material_ref, material)?;
+        let payload_key = resource_key
             .derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)
             .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
         let cipher = if let Some(material_fingerprint_id) =
@@ -541,13 +667,7 @@ fn validate_generic_collection_crypto_runtime(
                 rule.instance
             )));
         };
-        if material.kind != SYMMETRIC_KEY_32_KIND {
-            return Err(StorageError::bad_input(format!(
-                "collection {collection_name} vector crypto metadata key material {material_ref} has unsupported kind {}",
-                material.kind
-            )));
-        }
-        let master_key = decode_material_key(material_ref, material).map_err(|err| {
+        let resource_key = decode_resource_key(runtime_settings, material_ref, material).map_err(|err| {
             StorageError::bad_input(format!(
                 "collection {collection_name} vector crypto metadata key validation failed: {err}"
             ))
@@ -560,7 +680,7 @@ fn validate_generic_collection_crypto_runtime(
                     rule.instance
                 )));
             };
-            let metadata_key = master_key.derive_subkey(CKKS_VECTOR_KEY_DOMAIN).map_err(|err| {
+            let metadata_key = resource_key.derive_subkey(CKKS_VECTOR_KEY_DOMAIN).map_err(|err| {
                 StorageError::bad_input(format!(
                     "collection {collection_name} vector crypto metadata key validation failed: {err}"
                 ))
@@ -612,7 +732,121 @@ fn resolve_payload_key_id<'a>(
     }
 }
 
-fn decode_material_key(
+fn decode_resource_key(
+    runtime_settings: &CryptoSettings,
+    material_name: &str,
+    material: &CryptoMaterialConfig,
+) -> Result<SecretKey, PayloadWriteSetupError> {
+    match material.kind.as_str() {
+        SYMMETRIC_KEY_32_KIND => decode_direct_material_key(material_name, material),
+        WRAPPED_SYMMETRIC_KEY_32_KIND => {
+            decode_wrapped_resource_key(runtime_settings, material_name, material)
+        }
+        kind => Err(PayloadWriteSetupError::UnsupportedMaterialKind {
+            material: material_name.to_string(),
+            kind: kind.to_string(),
+        }),
+    }
+}
+
+fn decode_wrapped_resource_key(
+    runtime_settings: &CryptoSettings,
+    material_name: &str,
+    material: &CryptoMaterialConfig,
+) -> Result<SecretKey, PayloadWriteSetupError> {
+    let wrapped_by = material.wrapped_by.as_deref().ok_or_else(|| {
+        PayloadWriteSetupError::InvalidWrappedMaterial {
+            material: material_name.to_string(),
+            reason: "missing wrapped_by".to_string(),
+        }
+    })?;
+    let wrapping_material = runtime_settings.materials.get(wrapped_by).ok_or_else(|| {
+        PayloadWriteSetupError::UnknownWrappingMaterial {
+            material: material_name.to_string(),
+            wrapped_by: wrapped_by.to_string(),
+        }
+    })?;
+    if wrapping_material.kind != WRAPPING_KEY_32_KIND {
+        return Err(PayloadWriteSetupError::UnsupportedWrappingMaterialKind {
+            material: material_name.to_string(),
+            wrapped_by: wrapped_by.to_string(),
+            kind: wrapping_material.kind.clone(),
+        });
+    }
+
+    let algorithm = material
+        .wrap_algorithm
+        .as_deref()
+        .unwrap_or(RESOURCE_KEY_WRAP_ALGORITHM);
+    if algorithm != RESOURCE_KEY_WRAP_ALGORITHM {
+        return Err(PayloadWriteSetupError::UnsupportedWrapAlgorithm {
+            material: material_name.to_string(),
+            algorithm: algorithm.to_string(),
+        });
+    }
+    let nonce =
+        material
+            .nonce
+            .as_ref()
+            .ok_or_else(|| PayloadWriteSetupError::InvalidWrappedMaterial {
+                material: material_name.to_string(),
+                reason: "missing nonce".to_string(),
+            })?;
+    let wrapped_key = material.wrapped_key_b64.as_ref().ok_or_else(|| {
+        PayloadWriteSetupError::InvalidWrappedMaterial {
+            material: material_name.to_string(),
+            reason: "missing wrapped_key_b64".to_string(),
+        }
+    })?;
+
+    let master_key = decode_direct_material_key(wrapped_by, wrapping_material)?;
+    let provider = LocalMasterKeyProvider::new(wrapped_by, master_key)
+        .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
+    let wrapped = WrappedKeyBlob {
+        version: 1,
+        algorithm: algorithm.to_string(),
+        mk_id: wrapped_by.to_string(),
+        nonce: nonce.clone(),
+        wrapped_key: wrapped_key.clone(),
+    };
+    let aad = resource_key_wrap_aad(material_name, material, wrapped_by, algorithm);
+    provider
+        .unwrap_resource_key(&wrapped, &aad)
+        .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))
+}
+
+fn resource_key_wrap_aad(
+    material_name: &str,
+    material: &CryptoMaterialConfig,
+    wrapped_by: &str,
+    algorithm: &str,
+) -> Vec<u8> {
+    let epoch = material
+        .rk_epoch
+        .map(|epoch| epoch.to_string())
+        .unwrap_or_default();
+    let scope = material.scope.as_deref().unwrap_or_default();
+    let values = [
+        "qdrant-sec",
+        "v1",
+        "resource-key-wrap",
+        material_name,
+        &epoch,
+        scope,
+        wrapped_by,
+        algorithm,
+    ];
+
+    let mut aad = Vec::new();
+    for value in values {
+        let bytes = value.as_bytes();
+        aad.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+        aad.extend_from_slice(bytes);
+    }
+    aad
+}
+
+fn decode_direct_material_key(
     material_name: &str,
     material: &CryptoMaterialConfig,
 ) -> Result<SecretKey, PayloadWriteSetupError> {
@@ -750,7 +984,10 @@ mod tests {
         EncryptionRuleRef, EncryptionSelector,
     };
     use data_encoding::BASE64URL_NOPAD;
-    use qdrant_ckks::is_encrypted_payload_value;
+    use qdrant_ckks::{
+        LocalMasterKeyProvider, MasterKeyProvider, RESOURCE_KEY_WRAP_ALGORITHM,
+        is_encrypted_payload_value,
+    };
     use serde_json::json;
 
     use super::*;
@@ -793,6 +1030,7 @@ mod tests {
                 env: None,
                 path: None,
                 value_b64: Some("AQID".to_string()),
+                ..CryptoMaterialConfig::default()
             },
         );
 
@@ -816,6 +1054,7 @@ mod tests {
                     env: None,
                     path: Some("/tmp/key.bin".to_string()),
                     value_b64: Some("AQID".to_string()),
+                    ..CryptoMaterialConfig::default()
                 },
                 true,
             ),
@@ -833,6 +1072,7 @@ mod tests {
                     env: Some("QDRANT_PAYLOAD_KEY".to_string()),
                     path: None,
                     value_b64: None,
+                    ..CryptoMaterialConfig::default()
                 },
                 true,
             ),
@@ -855,6 +1095,7 @@ mod tests {
                     env: None,
                     path: None,
                     value_b64: Some("AQID".to_string()),
+                    ..CryptoMaterialConfig::default()
                 },
             )]),
             ..CryptoSettings::default()
@@ -864,6 +1105,34 @@ mod tests {
             validate_crypto_settings(&settings),
             Err(CryptoSetupError::InlineMaterialDisabled {
                 material: "tenant-a/payload-v1".to_string(),
+            }),
+        );
+    }
+
+    #[test]
+    fn validate_crypto_settings_rejects_wrapped_resource_key_without_mk() {
+        let settings = CryptoSettings {
+            materials: HashMap::from([(
+                "tenant-a/payload-rk-v1".to_string(),
+                CryptoMaterialConfig {
+                    kind: WRAPPED_SYMMETRIC_KEY_32_KIND.to_string(),
+                    wrapped_by: Some("tenant-a/mk-v1".to_string()),
+                    wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
+                    nonce: Some("nonce".to_string()),
+                    wrapped_key_b64: Some("wrapped".to_string()),
+                    rk_epoch: Some(3),
+                    scope: Some("collection:docs".to_string()),
+                    ..CryptoMaterialConfig::default()
+                },
+            )]),
+            ..CryptoSettings::default()
+        };
+
+        assert_eq!(
+            validate_crypto_settings(&settings),
+            Err(CryptoSetupError::UnknownWrappingMaterial {
+                material: "tenant-a/payload-rk-v1".to_string(),
+                wrapped_by: "tenant-a/mk-v1".to_string(),
             }),
         );
     }
@@ -933,6 +1202,7 @@ mod tests {
                         env: None,
                         path: None,
                         value_b64: Some(BASE64URL_NOPAD.encode(&[7u8; 32])),
+                        ..CryptoMaterialConfig::default()
                     },
                 )]),
                 backends: HashMap::new(),
@@ -977,6 +1247,107 @@ mod tests {
                 .and_then(|envelope| envelope.get("material_fingerprint"))
                 .and_then(|fingerprint| fingerprint.as_str()),
             Some("tenant-a/payload@v5"),
+        );
+    }
+
+    #[test]
+    fn payload_write_plan_unwraps_wrapped_resource_key_material() {
+        let mk_material = "tenant-a/mk-v1";
+        let rk_material = "tenant-a/payload-rk-v3";
+        let mut wrapped_rk_config = CryptoMaterialConfig {
+            kind: WRAPPED_SYMMETRIC_KEY_32_KIND.to_string(),
+            wrapped_by: Some(mk_material.to_string()),
+            wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
+            rk_epoch: Some(3),
+            scope: Some("collection:docs".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        let aad = resource_key_wrap_aad(
+            rk_material,
+            &wrapped_rk_config,
+            mk_material,
+            RESOURCE_KEY_WRAP_ALGORITHM,
+        );
+        let wrapped = LocalMasterKeyProvider::new(mk_material, SecretKey::from_bytes([91u8; 32]))
+            .unwrap()
+            .wrap_resource_key(&SecretKey::from_bytes([92u8; 32]), &aad)
+            .unwrap();
+        wrapped_rk_config.nonce = Some(wrapped.nonce);
+        wrapped_rk_config.wrapped_key_b64 = Some(wrapped.wrapped_key);
+
+        let settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_payload_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_AES_GCM_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            rk_material.to_string(),
+                        )]),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a:docs",
+                            "material_fingerprint_id": "tenant-a/payload-rk@v3",
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([
+                    (
+                        mk_material.to_string(),
+                        CryptoMaterialConfig {
+                            kind: WRAPPING_KEY_32_KIND.to_string(),
+                            source: Some("inline".to_string()),
+                            env: None,
+                            path: None,
+                            value_b64: Some(BASE64URL_NOPAD.encode(&[91u8; 32])),
+                            ..CryptoMaterialConfig::default()
+                        },
+                    ),
+                    (rk_material.to_string(), wrapped_rk_config),
+                ]),
+                backends: HashMap::new(),
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let mut payload = segment::types::Payload(
+            json!({ "body": "wrapped resource key secret" })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+
+        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
+            .unwrap()
+            .unwrap();
+        assert_eq!(plan.encrypt_payload("point-1", &mut payload).unwrap(), 1);
+        let body = payload.0.get("body").unwrap();
+        assert!(is_encrypted_payload_value(body));
+        assert_eq!(
+            body.get("$qdrant_ckks")
+                .and_then(|marker| marker.get("envelope"))
+                .and_then(|envelope| envelope.get("material_fingerprint"))
+                .and_then(|fingerprint| fingerprint.as_str()),
+            Some("tenant-a/payload-rk@v3"),
         );
     }
 
@@ -1098,6 +1469,7 @@ mod tests {
                             env: None,
                             path: None,
                             value_b64: Some(BASE64URL_NOPAD.encode(&[7u8; 32])),
+                            ..CryptoMaterialConfig::default()
                         },
                     ),
                     (
@@ -1108,6 +1480,7 @@ mod tests {
                             env: None,
                             path: None,
                             value_b64: Some(BASE64URL_NOPAD.encode(&[8u8; 32])),
+                            ..CryptoMaterialConfig::default()
                         },
                     ),
                 ]),
@@ -1181,6 +1554,7 @@ mod tests {
                         env: None,
                         path: None,
                         value_b64: Some(BASE64URL_NOPAD.encode(&[7u8; 32])),
+                        ..CryptoMaterialConfig::default()
                     },
                 )]),
                 backends: HashMap::new(),
@@ -1240,6 +1614,7 @@ mod tests {
                         env: None,
                         path: None,
                         value_b64: Some(BASE64URL_NOPAD.encode(&[8u8; 32])),
+                        ..CryptoMaterialConfig::default()
                     },
                 )]),
                 backends: HashMap::from([(

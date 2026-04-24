@@ -337,6 +337,18 @@ crypto:
   #       material_fingerprint_id: tenant-a/vector@v1
   #       profile: ckks-128-n16384-d4-scale50
   # materials:
+  #   tenant-a/mk-v1:
+  #     kind: wrapping_key_32
+  #     source: env
+  #     env: QDRANT_CRYPTO_MK_B64
+  #   tenant-a/payload-rk-v3:
+  #     kind: wrapped_symmetric_key_32
+  #     wrapped_by: tenant-a/mk-v1
+  #     wrap_algorithm: AES-256-GCM
+  #     rk_epoch: 3
+  #     scope: collection:docs
+  #     nonce: base64url-no-pad-96-bit-nonce
+  #     wrapped_key_b64: base64url-no-pad-wrapped-rk
   #   tenant-a/payload-v1:
   #     kind: symmetric_key_32
   #     source: env
@@ -358,10 +370,10 @@ crypto:
 # Collection-level enablement and field/vector selection live in collection params under `ckks`.
 ckks:
   enabled: false
-  # Keep false in production/security mode to reject inline `master_key_b64` material.
+  # Keep false in production/security mode to reject inline legacy direct RK material.
   # Set true only for local development fixtures.
   allow_inline_key_material: false
-  # Default base64url-no-padding encoded 32-byte key. Prefer per-collection
+  # Legacy default base64url-no-padding encoded 32-byte direct RK. Prefer per-collection
   # environment variables like QDRANT__CKKS__COLLECTIONS__docs__MASTER_KEY_B64.
   master_key_b64: null
   # Default capability-style key id recorded in encryption envelopes.

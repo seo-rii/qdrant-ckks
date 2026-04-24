@@ -2,7 +2,8 @@ use data_encoding::BASE64URL_NOPAD;
 use proptest::prelude::*;
 use qdrant_ckks::{
     AeadCipher, AeadKeyring, CKKS_VECTOR_KEY_DOMAIN, EncryptionContext, EncryptionError,
-    PAYLOAD_TEXT_KEY_DOMAIN, SecretKey,
+    LocalMasterKeyProvider, MasterKeyProvider, PAYLOAD_TEXT_KEY_DOMAIN,
+    RESOURCE_KEY_WRAP_ALGORITHM, SecretKey,
 };
 
 fn fixed_cipher() -> AeadCipher {
@@ -132,6 +133,76 @@ fn configured_material_fingerprint_id_replaces_raw_key_fingerprint() {
         )
         .err(),
         Some(EncryptionError::InvalidMaterialFingerprintId),
+    );
+}
+
+#[test]
+fn local_master_key_provider_wraps_resource_key_with_aad() {
+    let aad = b"qdrant-sec\x00resource-key-wrap\x00docs\x00rk-epoch-3";
+    let provider =
+        LocalMasterKeyProvider::new("tenant-a/mk@v1", SecretKey::from_bytes([55u8; 32])).unwrap();
+    let resource_key = SecretKey::from_bytes([77u8; 32]);
+    let payload_cipher = AeadCipher::new(
+        "tenant-a:payload",
+        resource_key.derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN).unwrap(),
+    )
+    .unwrap();
+    let context = payload_context("42");
+    let envelope = payload_cipher
+        .encrypt(b"wrapped resource key data", context)
+        .unwrap();
+
+    let wrapped = provider.wrap_resource_key(&resource_key, aad).unwrap();
+    assert_eq!(wrapped.version, 1);
+    assert_eq!(wrapped.algorithm, RESOURCE_KEY_WRAP_ALGORITHM);
+    assert_eq!(wrapped.mk_id, "tenant-a/mk@v1");
+
+    let unwrapped =
+        LocalMasterKeyProvider::new("tenant-a/mk@v1", SecretKey::from_bytes([55u8; 32]))
+            .unwrap()
+            .unwrap_resource_key(&wrapped, aad)
+            .unwrap();
+    let unwrapped_cipher = AeadCipher::new(
+        "tenant-a:payload",
+        unwrapped.derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        unwrapped_cipher
+            .decrypt(&envelope, context)
+            .unwrap()
+            .as_slice(),
+        b"wrapped resource key data",
+    );
+    assert_eq!(
+        provider.unwrap_resource_key(&wrapped, b"wrong aad").err(),
+        Some(EncryptionError::OpenFailed),
+    );
+}
+
+#[test]
+fn wrapped_resource_key_debug_redacts_wrapped_key_material() {
+    let provider =
+        LocalMasterKeyProvider::new("tenant-a/mk@v1", SecretKey::from_bytes([56u8; 32])).unwrap();
+    let wrapped = provider
+        .wrap_resource_key(&SecretKey::from_bytes([78u8; 32]), b"aad")
+        .unwrap();
+
+    let debug_provider = format!("{provider:?}");
+    let debug_wrapped = format!("{wrapped:?}");
+
+    assert!(debug_provider.contains("redacted"));
+    assert!(!debug_provider.contains("56"));
+    assert!(debug_wrapped.contains("wrapped_key_len"));
+    assert!(!debug_wrapped.contains(&wrapped.nonce));
+    assert!(!debug_wrapped.contains(&wrapped.wrapped_key));
+    assert_eq!(
+        LocalMasterKeyProvider::new("tenant-a/other-mk", SecretKey::from_bytes([56u8; 32]))
+            .unwrap()
+            .unwrap_resource_key(&wrapped, b"aad")
+            .err(),
+        Some(EncryptionError::MasterKeyMismatch),
     );
 }
 
