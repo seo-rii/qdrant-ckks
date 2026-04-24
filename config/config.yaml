@@ -353,7 +353,7 @@ crypto:
   #     size: 4
   #     timeout_ms: 5000
 
-# Legacy qdrant-ckks runtime configuration.
+# Legacy qdrant-sec runtime configuration for the CKKS adapter.
 # This remains supported through an adapter into the generic `crypto` control plane.
 # Collection-level enablement and field/vector selection live in collection params under `ckks`.
 ckks:

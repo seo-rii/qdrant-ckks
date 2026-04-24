@@ -1,18 +1,18 @@
-name: qdrant-ckks CI
+name: qdrant-sec CI
 
 on:
   push:
-    branches: [ckks]
+    branches: [sec]
   pull_request:
-    branches: [ckks]
+    branches: [sec]
   workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  ckks-tests:
-    name: CKKS and collection-scoped encryption tests
+  qdrant-sec-tests:
+    name: qdrant-sec encryption boundary tests
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -26,7 +26,7 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          key: ckks-ci
+          key: qdrant-sec-ci
 
       - name: Install protoc
         uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
@@ -38,13 +38,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang libunwind-dev
 
-      - name: Run qdrant-ckks crate security tests
+      - name: Run qdrant-sec crypto crate security tests
         run: cargo test --locked -p qdrant-ckks
 
-      - name: Run collection CKKS config tests
+      - name: Run collection qdrant-sec config tests
         run: cargo test --locked -p collection ckks --lib
 
-      - name: Run qdrant CKKS runtime tests
+      - name: Run qdrant-sec runtime tests
         run: cargo test --locked -p qdrant ckks
 
       - name: Run storage create-collection compatibility test

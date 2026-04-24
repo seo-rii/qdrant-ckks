@@ -1,8 +1,8 @@
-# qdrant-ckks Large Work Plan
+# qdrant-sec Large Work Plan
 
 이 문서는 `RISK_REGISTER.md`의 대형 작업을 구현 순서대로 정리한다. 작은 방어 패치는 이미 별도 커밋으로 일부 처리됐고, 여기서는 설계, migration, 테스트 인프라, 구조 변경이 필요한 작업만 다룬다.
 
-기준 브랜치: `ckks`  
+기준 브랜치: `sec`
 작성일: 2026-04-24
 
 ## 작업 원칙
@@ -306,4 +306,3 @@
 
 - 문서만 보고도 현재 지원 범위와 실패 모드를 이해할 수 있다.
 - release gate가 security tests, migration tests, cluster tests, bridge tests를 모두 요구한다.
-

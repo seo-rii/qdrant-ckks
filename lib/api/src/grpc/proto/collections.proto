@@ -487,7 +487,7 @@ message CreateCollection {
   optional StrictModeConfig strict_mode_config = 17;
   // Arbitrary JSON metadata for the collection
   map<string, Value> metadata = 18;
-  // Collection-local qdrant-ckks encryption settings.
+  // Collection-local qdrant-sec encryption settings.
   // Secret key material is provided by runtime config, not by this message.
   optional CkksCollectionConfig ckks = 19;
 }
@@ -557,7 +557,7 @@ message CollectionParams {
   optional SparseVectorConfig sparse_vectors_config = 10;
   // Define number of milliseconds to wait before attempting to read from another replica.
   optional uint64 read_fan_out_delay_ms = 11;
-  // Collection-local qdrant-ckks encryption settings.
+  // Collection-local qdrant-sec encryption settings.
   // Secret key material is provided by runtime config, not by this message.
   optional CkksCollectionConfig ckks = 12;
 }
@@ -573,7 +573,7 @@ message CollectionParamsDiff {
   optional uint32 read_fan_out_factor = 4;
   // Define number of milliseconds to wait before attempting to read from another replica.
   optional uint64 read_fan_out_delay_ms = 5;
-  // Collection-local qdrant-ckks encryption settings. Set enabled=false to disable.
+  // Collection-local qdrant-sec encryption settings. Set enabled=false to disable.
   optional CkksCollectionConfig ckks = 6;
 }
 

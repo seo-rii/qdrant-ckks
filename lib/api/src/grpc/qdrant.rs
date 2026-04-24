@@ -1203,7 +1203,7 @@ pub struct CreateCollection {
     /// Arbitrary JSON metadata for the collection
     #[prost(map = "string, message", tag = "18")]
     pub metadata: ::std::collections::HashMap<::prost::alloc::string::String, Value>,
-    /// Collection-local qdrant-ckks encryption settings.
+    /// Collection-local qdrant-sec encryption settings.
     /// Secret key material is provided by runtime config, not by this message.
     #[prost(message, optional, tag = "19")]
     #[validate(nested)]
@@ -1322,7 +1322,7 @@ pub struct CollectionParams {
     /// Define number of milliseconds to wait before attempting to read from another replica.
     #[prost(uint64, optional, tag = "11")]
     pub read_fan_out_delay_ms: ::core::option::Option<u64>,
-    /// Collection-local qdrant-ckks encryption settings.
+    /// Collection-local qdrant-sec encryption settings.
     /// Secret key material is provided by runtime config, not by this message.
     #[prost(message, optional, tag = "12")]
     #[validate(nested)]
@@ -1350,7 +1350,7 @@ pub struct CollectionParamsDiff {
     /// Define number of milliseconds to wait before attempting to read from another replica.
     #[prost(uint64, optional, tag = "5")]
     pub read_fan_out_delay_ms: ::core::option::Option<u64>,
-    /// Collection-local qdrant-ckks encryption settings. Set enabled=false to disable.
+    /// Collection-local qdrant-sec encryption settings. Set enabled=false to disable.
     #[prost(message, optional, tag = "6")]
     #[validate(nested)]
     pub ckks: ::core::option::Option<CkksCollectionConfig>,

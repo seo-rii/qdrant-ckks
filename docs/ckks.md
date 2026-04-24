@@ -1,7 +1,7 @@
-# qdrant-ckks encryption boundary
+# qdrant-sec encryption boundary
 
-This branch adds a small `qdrant-ckks` workspace crate for encrypted payload text
-and OpenFHE CKKS vector ciphertext envelopes.
+The `sec` branch adds a small `qdrant-ckks` workspace crate for encrypted
+payload text and OpenFHE CKKS vector ciphertext envelopes.
 
 Current scope is encrypted storage plumbing, not CKKS-native vector search.
 Payload text encryption happens before storage, and CKKS vectors are wrapped as
