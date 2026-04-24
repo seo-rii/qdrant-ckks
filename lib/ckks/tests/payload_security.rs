@@ -1,7 +1,8 @@
 use proptest::prelude::*;
 use qdrant_ckks::{
-    AeadCipher, AeadKeyring, ENCRYPTED_PAYLOAD_MARKER, EncryptionError, PayloadEncryptionError,
-    PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey, is_encrypted_payload_value,
+    AeadCipher, AeadKeyring, ENCRYPTED_PAYLOAD_MARKER, EncryptionError, ExistingPayloadMode,
+    PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
+    is_encrypted_payload_value,
 };
 use serde_json::{Map, Value, json};
 
@@ -231,6 +232,51 @@ fn encrypting_already_encrypted_payload_is_idempotent() {
         0,
     );
     assert_eq!(serde_json::to_string(&payload).unwrap(), once);
+}
+
+#[test]
+fn existing_payload_mode_can_fail_or_reencrypt_stale_envelopes() {
+    let old_encryptor = encryptor();
+    let new_encryptor = encryptor().with_encryption_epoch(1);
+    let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
+    let mut payload = object(json!({ "body": "rotate this" }));
+
+    old_encryptor
+        .encrypt_selected_fields("point-1", &mut payload, &policy)
+        .unwrap();
+    let mut fail_payload = payload.clone();
+    assert_eq!(
+        new_encryptor.encrypt_selected_fields_with_mode(
+            "point-1",
+            &mut fail_payload,
+            &policy,
+            ExistingPayloadMode::FailIfExisting,
+        ),
+        Err(PayloadEncryptionError::AlreadyEncrypted("body".to_string())),
+    );
+
+    assert_eq!(
+        new_encryptor
+            .encrypt_selected_fields_with_mode(
+                "point-1",
+                &mut payload,
+                &policy,
+                ExistingPayloadMode::ReencryptIfStale,
+            )
+            .unwrap(),
+        1,
+    );
+    let serialized = serde_json::to_string(&payload).unwrap();
+    assert!(serialized.contains("\"encryption_epoch\":1"));
+    assert!(!serialized.contains("rotate this"));
+
+    assert_eq!(
+        new_encryptor
+            .decrypt_selected_fields("point-1", &mut payload, &policy)
+            .unwrap(),
+        1,
+    );
+    assert_eq!(payload.get("body"), Some(&json!("rotate this")));
 }
 
 #[test]

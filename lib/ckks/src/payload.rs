@@ -23,6 +23,8 @@ pub enum PayloadEncryptionError {
     ExpectedString { field: String, found: &'static str },
     #[error("payload field {field} must contain an encrypted qdrant-ckks envelope, found {found}")]
     ExpectedEncryptedEnvelope { field: String, found: &'static str },
+    #[error("payload field is already encrypted: {0}")]
+    AlreadyEncrypted(String),
     #[error("payload field contains a malformed qdrant-ckks envelope: {0}")]
     MalformedEnvelope(String),
     #[error("payload field contains unsupported qdrant-ckks envelope kind: {0}")]
@@ -41,6 +43,13 @@ pub enum PayloadEncryptionError {
 pub struct PayloadEncryptionPolicy {
     fields: Vec<String>,
     strict_missing_fields: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExistingPayloadMode {
+    SkipExisting,
+    ReencryptIfStale,
+    FailIfExisting,
 }
 
 impl PayloadEncryptionPolicy {
@@ -132,6 +141,21 @@ impl PayloadTextEncryptor {
         payload: &mut Map<String, Value>,
         policy: &PayloadEncryptionPolicy,
     ) -> Result<usize, PayloadEncryptionError> {
+        self.encrypt_selected_fields_with_mode(
+            point_id,
+            payload,
+            policy,
+            ExistingPayloadMode::SkipExisting,
+        )
+    }
+
+    pub fn encrypt_selected_fields_with_mode(
+        &self,
+        point_id: &str,
+        payload: &mut Map<String, Value>,
+        policy: &PayloadEncryptionPolicy,
+        existing_mode: ExistingPayloadMode,
+    ) -> Result<usize, PayloadEncryptionError> {
         let mut encrypted = 0;
 
         for field in policy.fields() {
@@ -142,8 +166,54 @@ impl PayloadTextEncryptor {
                 continue;
             };
 
-            if extract_envelope(value, field)?.is_some() {
-                continue;
+            if let Some(existing_envelope) = extract_envelope(value, field)? {
+                match existing_mode {
+                    ExistingPayloadMode::SkipExisting => continue,
+                    ExistingPayloadMode::FailIfExisting => {
+                        return Err(PayloadEncryptionError::AlreadyEncrypted(field.clone()));
+                    }
+                    ExistingPayloadMode::ReencryptIfStale => {
+                        if existing_envelope.schema_version == self.crypto_schema_version
+                            && existing_envelope.encryption_epoch == self.encryption_epoch
+                            && existing_envelope.envelope.key_id == self.keyring.key_id()
+                            && existing_envelope.envelope.material_fingerprint
+                                == self.keyring.material_fingerprint()
+                        {
+                            continue;
+                        }
+
+                        let context =
+                            EncryptionContext::payload_text(&self.collection, point_id, field);
+                        let old_aad_suffix = payload_metadata_aad(
+                            &existing_envelope.kind,
+                            existing_envelope.schema_version,
+                            existing_envelope.encryption_epoch,
+                        );
+                        let plaintext = self.keyring.decrypt_with_aad_suffix(
+                            &existing_envelope.envelope,
+                            context,
+                            &old_aad_suffix,
+                        )?;
+                        let new_aad_suffix = payload_metadata_aad(
+                            PAYLOAD_TEXT_KIND,
+                            self.crypto_schema_version,
+                            self.encryption_epoch,
+                        );
+                        let envelope = self.keyring.encrypt_with_aad_suffix(
+                            &plaintext,
+                            context,
+                            &new_aad_suffix,
+                        )?;
+                        *value = stored_envelope_value(
+                            envelope,
+                            field,
+                            self.crypto_schema_version,
+                            self.encryption_epoch,
+                        )?;
+                        encrypted += 1;
+                        continue;
+                    }
+                }
             }
 
             let plaintext = match value {

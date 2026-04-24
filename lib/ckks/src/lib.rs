@@ -24,7 +24,7 @@ pub use control_plane::{
 };
 pub use openfhe::CommandOpenFheBackend;
 pub use payload::{
-    ENCRYPTED_PAYLOAD_MARKER, PayloadEncryptionError, PayloadEncryptionPolicy,
+    ENCRYPTED_PAYLOAD_MARKER, ExistingPayloadMode, PayloadEncryptionError, PayloadEncryptionPolicy,
     PayloadTextEncryptor, is_encrypted_payload_value,
 };
 pub use vector::{

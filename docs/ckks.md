@@ -129,6 +129,10 @@ Set `crypto.allow_inline_key_material: false` or
 inline key material at startup. Decrypt paths can be configured with active plus
 retired AEAD keys; new writes always use the active key, and envelopes record
 the active key id plus material fingerprint.
+Normal writes skip fields that already contain a well-formed encrypted marker to
+avoid double encryption. Rotation/backfill code must use the explicit
+`ReencryptIfStale` mode so old schema/epoch/key envelopes are opened and sealed
+again under the current active key.
 For generic crypto instances, set `options.material_fingerprint_id` to an
 opaque deployment-local key version id. If omitted, Qdrant falls back to a
 legacy deterministic fingerprint derived from the key material; that fallback is
