@@ -113,6 +113,29 @@ fn envelope_material_fingerprint_must_match_active_key() {
 }
 
 #[test]
+fn configured_material_fingerprint_id_replaces_raw_key_fingerprint() {
+    let cipher = AeadCipher::new_with_material_fingerprint(
+        "tenant-a:primary",
+        SecretKey::from_bytes([7u8; 32]),
+        "tenant-a/payload@v3",
+    )
+    .unwrap();
+    let envelope = cipher.encrypt(b"metadata", payload_context("42")).unwrap();
+
+    assert_eq!(cipher.material_fingerprint(), "tenant-a/payload@v3");
+    assert_eq!(envelope.material_fingerprint, "tenant-a/payload@v3");
+    assert_eq!(
+        AeadCipher::new_with_material_fingerprint(
+            "tenant-a:primary",
+            SecretKey::from_bytes([7u8; 32]),
+            "",
+        )
+        .err(),
+        Some(EncryptionError::InvalidMaterialFingerprintId),
+    );
+}
+
+#[test]
 fn stripping_material_fingerprint_breaks_authentication() {
     let cipher = fixed_cipher();
     let mut envelope = cipher.encrypt(b"metadata", payload_context("42")).unwrap();

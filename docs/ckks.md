@@ -92,7 +92,19 @@ crypto:
       backend_ref: openfhe_local
       options:
         key_id: tenant-a:docs
+        material_fingerprint_id: tenant-a/vector@v1
+    docs_payload_v1:
+      provider: payload/aes-256-gcm@v1
+      materials:
+        sym_key: tenant-a/payload-v1
+      options:
+        key_id: tenant-a:docs
+        material_fingerprint_id: tenant-a/payload@v1
   materials:
+    tenant-a/payload-v1:
+      kind: symmetric_key_32
+      source: env
+      env: QDRANT_PAYLOAD_KEY_B64
     tenant-a/vector-v1:
       kind: symmetric_key_32
       source: env
@@ -116,6 +128,10 @@ Set `crypto.allow_inline_key_material: false` or
 inline key material at startup. Decrypt paths can be configured with active plus
 retired AEAD keys; new writes always use the active key, and envelopes record
 the active key id plus material fingerprint.
+For generic crypto instances, set `options.material_fingerprint_id` to an
+opaque deployment-local key version id. If omitted, Qdrant falls back to a
+legacy deterministic fingerprint derived from the key material; that fallback is
+not secret, but it can reveal key reuse across collections or deployments.
 When `ckks.enabled` is true, startup validates any configured key ids, master
 keys, and OpenFHE bridge paths so bad runtime key material fails before the
 first encrypted write.

@@ -5,8 +5,9 @@ use collection::config::{
 };
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_ckks::{
-    AeadCipher, PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionError,
-    PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey, VECTOR_OPENFHE_CKKS_PROVIDER,
+    AeadCipher, CKKS_VECTOR_KEY_DOMAIN, PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_TEXT_KEY_DOMAIN,
+    PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
+    VECTOR_OPENFHE_CKKS_PROVIDER,
 };
 use segment::types::Payload;
 use serde_json::Value;
@@ -53,6 +54,7 @@ pub enum CryptoSetupError {
 
 const PAYLOAD_SYM_KEY_ROLE: &str = "sym_key";
 const SYMMETRIC_KEY_32_KIND: &str = "symmetric_key_32";
+const MATERIAL_FINGERPRINT_ID_OPTION: &str = "material_fingerprint_id";
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum PayloadWriteSetupError {
@@ -73,6 +75,8 @@ pub enum PayloadWriteSetupError {
     MissingMaterialBinding { instance: String, role: String },
     #[error("payload crypto instance {instance} key_id option must be a string")]
     InvalidInstanceKeyId { instance: String },
+    #[error("payload crypto instance {instance} material_fingerprint_id option must be a string")]
+    InvalidInstanceMaterialFingerprintId { instance: String },
     #[error("collection {collection} payload encryption is missing a key id")]
     MissingKeyId { collection: String },
     #[error(
@@ -383,8 +387,19 @@ fn generic_payload_write_plan(
         let payload_key = master_key
             .derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)
             .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
-        let cipher = AeadCipher::new(key_id, payload_key)
-            .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
+        let cipher = if let Some(material_fingerprint_id) =
+            instance.options.get(MATERIAL_FINGERPRINT_ID_OPTION)
+        {
+            let material_fingerprint_id = material_fingerprint_id.as_str().ok_or_else(|| {
+                PayloadWriteSetupError::InvalidInstanceMaterialFingerprintId {
+                    instance: rule.instance.clone(),
+                }
+            })?;
+            AeadCipher::new_with_material_fingerprint(key_id, payload_key, material_fingerprint_id)
+        } else {
+            AeadCipher::new(key_id, payload_key)
+        }
+        .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
         let policy = PayloadEncryptionPolicy::new(paths.clone())?;
         let encryptor = PayloadTextEncryptor::new(collection_name, cipher)?
             .with_encryption_epoch(encryption.encryption_epoch);
@@ -455,7 +470,7 @@ fn validate_generic_collection_crypto_runtime(
                 )));
             }
         };
-        match (encryption.key_id.as_deref(), instance_key_id) {
+        let key_id = match (encryption.key_id.as_deref(), instance_key_id) {
             (Some(collection_key_id), Some(runtime_key_id))
                 if collection_key_id != runtime_key_id =>
             {
@@ -470,8 +485,9 @@ fn validate_generic_collection_crypto_runtime(
                     rule.instance
                 )));
             }
-            _ => {}
-        }
+            (Some(collection_key_id), _) => collection_key_id,
+            (None, Some(runtime_key_id)) => runtime_key_id,
+        };
 
         let Some(backend_ref) = instance.backend_ref.as_deref() else {
             return Err(StorageError::bad_input(format!(
@@ -504,11 +520,35 @@ fn validate_generic_collection_crypto_runtime(
                 material.kind
             )));
         }
-        decode_material_key(material_ref, material).map_err(|err| {
+        let master_key = decode_material_key(material_ref, material).map_err(|err| {
             StorageError::bad_input(format!(
                 "collection {collection_name} vector crypto metadata key validation failed: {err}"
             ))
         })?;
+        if let Some(material_fingerprint_id) = instance.options.get(MATERIAL_FINGERPRINT_ID_OPTION)
+        {
+            let Some(material_fingerprint_id) = material_fingerprint_id.as_str() else {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {} material_fingerprint_id option must be a string",
+                    rule.instance
+                )));
+            };
+            let metadata_key = master_key.derive_subkey(CKKS_VECTOR_KEY_DOMAIN).map_err(|err| {
+                StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto metadata key validation failed: {err}"
+                ))
+            })?;
+            AeadCipher::new_with_material_fingerprint(
+                key_id,
+                metadata_key,
+                material_fingerprint_id,
+            )
+            .map_err(|err| {
+                StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto metadata key validation failed: {err}"
+                ))
+            })?;
+        }
     }
 
     Ok(())
@@ -834,7 +874,10 @@ mod tests {
                             "tenant-a/payload-v1".to_string(),
                         )]),
                         backend_ref: None,
-                        options: json!({ "key_id": "tenant-a:docs" }),
+                        options: json!({
+                            "key_id": "tenant-a:docs",
+                            "material_fingerprint_id": "tenant-a/payload@v5",
+                        }),
                     },
                 )]),
                 materials: HashMap::from([(
@@ -881,7 +924,15 @@ mod tests {
         );
 
         assert_eq!(plan.encrypt_payload("point-1", &mut payload).unwrap(), 1);
-        assert!(is_encrypted_payload_value(payload.0.get("body").unwrap()));
+        let body = payload.0.get("body").unwrap();
+        assert!(is_encrypted_payload_value(body));
+        assert_eq!(
+            body.get("$qdrant_ckks")
+                .and_then(|marker| marker.get("envelope"))
+                .and_then(|envelope| envelope.get("material_fingerprint"))
+                .and_then(|fingerprint| fingerprint.as_str()),
+            Some("tenant-a/payload@v5"),
+        );
     }
 
     #[test]
@@ -985,7 +1036,10 @@ mod tests {
                                 "tenant-a/vector-v1".to_string(),
                             )]),
                             backend_ref: Some("openfhe_local".to_string()),
-                            options: json!({ "key_id": "tenant-a:docs" }),
+                            options: json!({
+                                "key_id": "tenant-a:docs",
+                                "material_fingerprint_id": "tenant-a/vector@v2",
+                            }),
                         },
                     ),
                 ]),

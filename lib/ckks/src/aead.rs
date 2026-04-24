@@ -26,6 +26,8 @@ pub enum EncryptionError {
     InvalidKeyLength,
     #[error("key id must be 1..=128 ASCII characters from [A-Za-z0-9._:-]")]
     InvalidKeyId,
+    #[error("material fingerprint id must be 1..=128 ASCII characters from [A-Za-z0-9._:/@-]")]
+    InvalidMaterialFingerprintId,
     #[error("failed to obtain cryptographically secure random bytes")]
     RandomFailure,
     #[error("failed to derive encryption subkey")]
@@ -234,6 +236,22 @@ impl AeadCipher {
         let key_id = key_id.into();
         validate_key_id(&key_id)?;
         let material_fingerprint = key.material_fingerprint();
+        Ok(Self {
+            key_id,
+            material_fingerprint,
+            key,
+        })
+    }
+
+    pub fn new_with_material_fingerprint(
+        key_id: impl Into<String>,
+        key: SecretKey,
+        material_fingerprint: impl Into<String>,
+    ) -> Result<Self, EncryptionError> {
+        let key_id = key_id.into();
+        validate_key_id(&key_id)?;
+        let material_fingerprint = material_fingerprint.into();
+        validate_material_fingerprint_id(&material_fingerprint)?;
         Ok(Self {
             key_id,
             material_fingerprint,
@@ -514,5 +532,19 @@ pub(crate) fn validate_key_id(key_id: &str) -> Result<(), EncryptionError> {
         Ok(())
     } else {
         Err(EncryptionError::InvalidKeyId)
+    }
+}
+
+fn validate_material_fingerprint_id(material_fingerprint: &str) -> Result<(), EncryptionError> {
+    if material_fingerprint.is_empty() || material_fingerprint.len() > MAX_KEY_ID_LEN {
+        return Err(EncryptionError::InvalidMaterialFingerprintId);
+    }
+
+    if material_fingerprint.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'/' | b'@' | b'-')
+    }) {
+        Ok(())
+    } else {
+        Err(EncryptionError::InvalidMaterialFingerprintId)
     }
 }
