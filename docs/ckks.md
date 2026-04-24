@@ -32,9 +32,12 @@ Selected JSON string fields are replaced with a single marker object:
       "version": 1,
       "algorithm": "AES-256-GCM",
       "key_id": "tenant-a:payload",
+      "material_fingerprint": "...",
       "nonce": "...",
       "ciphertext": "..."
-    }
+    },
+    "schema_version": 1,
+    "encryption_epoch": 0
   }
 }
 ```
@@ -67,6 +70,7 @@ config files:
 ```yaml
 ckks:
   enabled: true
+  allow_inline_key_material: false
   collections:
     docs:
       key_id: tenant-a:docs
@@ -82,9 +86,33 @@ The configured 32-byte master key is not used directly as an AEAD key. Qdrant
 derives purpose-specific HKDF-SHA256 subkeys for payload text
 (`qdrant/payload-text/v1`) and CKKS vector envelopes
 (`qdrant/vector-envelope/v1`) before constructing AES-GCM ciphers.
+Set `crypto.allow_inline_key_material: false` or
+`ckks.allow_inline_key_material: false` in production/security mode to reject
+inline key material at startup. Decrypt paths can be configured with active plus
+retired AEAD keys; new writes always use the active key, and envelopes record
+the active key id plus material fingerprint.
 When `ckks.enabled` is true, startup validates any configured key ids, master
 keys, and OpenFHE bridge paths so bad runtime key material fails before the
 first encrypted write.
+
+## Storage path threat model
+
+The intended security boundary is encrypt-before-storage for selected payload
+string fields and CKKS vector ciphertext envelopes. This branch does not yet
+claim complete end-to-end leakage coverage for every Qdrant storage and cluster
+path; the table below is the current contract until integration tests cover each
+row.
+
+| Path | Expected protected content | Current status | Required gate before production use |
+| --- | --- | --- | --- |
+| REST/gRPC ingress | Request payload and plaintext embeddings may exist in process memory until encryption completes. | Trusted Qdrant process boundary. | Avoid request/body logging for encrypted fields and embeddings. |
+| WAL | Selected payload strings and CKKS vector metadata should be stored only as envelopes after encryption. | Intended, not yet covered by leakage scan tests. | Add WAL sentinel-string and vector-pattern scans. |
+| Segment files | Selected payload strings should appear as marker/envelope JSON; CKKS vector plaintext should not be stored by the CKKS envelope path. | Intended, not yet covered by full segment scans. | Add segment and optimizer temp-path leakage tests. |
+| Payload indexes | AEAD-encrypted fields are not searchable as plaintext. | Metadata encryption/filtering is rejected; encrypted payload index policy still needs fail-closed coverage. | Reject indexes over encrypted fields unless a blind index exists. |
+| HNSW graph and quantization | CKKS ciphertext vectors are not HNSW-searchable in this branch. | Unsupported. | Reject/avoid CKKS ciphertext vectors in HNSW, quantization, recommend, and discover flows. |
+| Snapshots | Snapshot archives should contain encrypted payload/vector envelopes and enough metadata to preflight required keys/context. | Not yet implemented. | Add snapshot archive leakage scans and restore preflight. |
+| Shard transfer and replication | Sender and receiver must have matching crypto runtime material and CKKS context. | Not yet implemented. | Add cluster capability parity checks and fail-closed transfer tests. |
+| Telemetry, logs, and audit | No plaintext payload bodies or embeddings should be emitted. | Bridge request bodies and stderr are not included in returned errors; broader logging scans are still missing. | Add telemetry/log smoke tests with sentinel values. |
 
 ## CKKS vectors
 
@@ -102,6 +130,7 @@ public material still encrypts the embedding itself:
     "version": 1,
     "algorithm": "AES-256-GCM",
     "key_id": "tenant-a:ckks",
+    "material_fingerprint": "...",
     "nonce": "...",
     "ciphertext": "..."
   }
