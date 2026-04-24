@@ -8,7 +8,8 @@ use shard::files::PAYLOAD_INDEX_CONFIG_FILE;
 pub use shard::payload_index_schema::PayloadIndexSchema;
 
 use crate::collection::Collection;
-use crate::operations::types::{CollectionResult, UpdateResult};
+use crate::config::EncryptionSelector;
+use crate::operations::types::{CollectionError, CollectionResult, UpdateResult};
 use crate::operations::universal_query::formula::ExpressionInternal;
 use crate::operations::{CollectionUpdateOperations, CreateIndex, FieldIndexOperations};
 use crate::problems::unindexed_field;
@@ -47,6 +48,33 @@ impl Collection {
         wait: bool,
         hw_acc: HwMeasurementAcc,
     ) -> CollectionResult<Option<UpdateResult>> {
+        if let Some(encryption) = self
+            .collection_config
+            .read()
+            .await
+            .params
+            .effective_encryption()
+        {
+            for rule in &encryption.rules {
+                let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
+                    continue;
+                };
+
+                for encrypted_path in paths {
+                    let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
+                        CollectionError::bad_input(format!(
+                            "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                        ))
+                    })?;
+                    if field_name.compatible(&encrypted_json_path) {
+                        return Err(CollectionError::bad_input(format!(
+                            "cannot create payload index on encrypted payload field '{field_name}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                        )));
+                    }
+                }
+            }
+        }
+
         self.payload_index_schema.write(|schema| {
             schema
                 .schema

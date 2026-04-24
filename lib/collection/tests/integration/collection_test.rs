@@ -3,7 +3,11 @@ use std::io::{BufReader, BufWriter};
 
 use ahash::AHashSet;
 use api::rest::SearchRequestInternal;
+use collection::config::{
+    CollectionEncryptionConfig, CryptoMigrationState, EncryptionRuleRef, EncryptionSelector,
+};
 use collection::operations::CollectionUpdateOperations;
+use collection::operations::config_diff::CollectionParamsDiff;
 use collection::operations::payload_ops::{PayloadOps, SetPayloadOp};
 use collection::operations::point_ops::{
     BatchPersisted, BatchVectorStructPersisted, PointInsertOperationsInternal, PointOperations,
@@ -11,8 +15,8 @@ use collection::operations::point_ops::{
 };
 use collection::operations::shard_selector_internal::ShardSelectorInternal;
 use collection::operations::types::{
-    CountRequestInternal, PointRequestInternal, RecommendRequestInternal, ScrollRequestInternal,
-    UpdateStatus,
+    CollectionError, CountRequestInternal, PointRequestInternal, RecommendRequestInternal,
+    ScrollRequestInternal, UpdateStatus,
 };
 use collection::recommendations::recommend_by;
 use collection::shards::replica_set::replica_set_state::{ReplicaSetState, ReplicaState};
@@ -806,6 +810,69 @@ async fn test_ordered_scroll_api_with_shards(shard_number: u32) {
             .values()
             .all(|&x| x == 2),
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn encrypted_payload_field_rejects_payload_index() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection = simple_collection_fixture(collection_dir.path(), 1).await;
+
+    collection
+        .update_params_from_diff(CollectionParamsDiff {
+            replication_factor: None,
+            write_consistency_factor: None,
+            read_fan_out_factor: None,
+            read_fan_out_delay_ms: None,
+            on_disk_payload: None,
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "document_body".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["document.body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ckks: None,
+        })
+        .await
+        .unwrap();
+
+    for indexed_field in ["document.body", "document"] {
+        let err = collection
+            .create_payload_index_with_wait(
+                indexed_field.parse().unwrap(),
+                PayloadFieldSchema::FieldType(PayloadSchemaType::Keyword),
+                true,
+                HwMeasurementAcc::new(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            CollectionError::BadInput { description }
+                if description.contains("encrypted payload field")
+                    && description.contains("document.body")
+                    && description.contains("blind index")
+        ));
+    }
+
+    collection
+        .create_payload_index_with_wait(
+            "document.summary".parse().unwrap(),
+            PayloadFieldSchema::FieldType(PayloadSchemaType::Keyword),
+            true,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
