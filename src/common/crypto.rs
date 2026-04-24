@@ -335,11 +335,13 @@ fn validate_backend(
                 kind: backend.kind.clone(),
             });
         };
-        crate::common::ckks::validate_bridge_path(program).map_err(|_| {
-            CryptoSetupError::InvalidBackendProgram {
-                backend: backend_name.to_string(),
-                program: program.to_string(),
-            }
+        crate::common::ckks::validate_bridge_path_with_sha256(
+            program,
+            backend.sha256_b64.as_deref(),
+        )
+        .map_err(|_| CryptoSetupError::InvalidBackendProgram {
+            backend: backend_name.to_string(),
+            program: program.to_string(),
         })?;
     }
 
@@ -874,6 +876,7 @@ mod tests {
                 &CryptoBackendConfig {
                     kind: "process_pool".to_string(),
                     program: None,
+                    sha256_b64: None,
                     size: Some(4),
                     timeout_ms: Some(5_000),
                 },
@@ -890,6 +893,7 @@ mod tests {
                 &CryptoBackendConfig {
                     kind: "process_pool".to_string(),
                     program: Some("relative-openfhe-bridge".to_string()),
+                    sha256_b64: None,
                     size: Some(4),
                     timeout_ms: Some(5_000),
                 },
@@ -1112,6 +1116,7 @@ mod tests {
                     CryptoBackendConfig {
                         kind: "process_pool".to_string(),
                         program: Some("/usr/local/bin/openfhe-bridge".to_string()),
+                        sha256_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
                     },
@@ -1242,6 +1247,7 @@ mod tests {
                     CryptoBackendConfig {
                         kind: "process_pool".to_string(),
                         program: Some("/usr/local/bin/openfhe-bridge".to_string()),
+                        sha256_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
                     },
@@ -1294,6 +1300,7 @@ mod tests {
                     CryptoBackendConfig {
                         kind: "process_pool".to_string(),
                         program: Some("/usr/local/bin/openfhe-bridge".to_string()),
+                        sha256_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
                     },

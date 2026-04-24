@@ -79,6 +79,7 @@ ckks:
       key_id: tenant-a:docs
       master_key_b64: base64url-no-pad-32-byte-key
       openfhe_bridge_path: /usr/local/bin/openfhe-bridge
+      openfhe_bridge_sha256_b64: base64url-no-pad-sha256-of-bridge
 ```
 
 In the generic `crypto` control plane, vector rules must bind both the OpenFHE
@@ -117,6 +118,7 @@ crypto:
     openfhe_local:
       kind: process_pool
       program: /usr/local/bin/openfhe-bridge
+      sha256_b64: base64url-no-pad-sha256-of-bridge
 ```
 
 If both collection params and the matching `ckks.collections.<name>` runtime
@@ -215,8 +217,10 @@ plaintext embeddings before producing CKKS ciphertext. Runtime configuration
 therefore accepts only absolute bridge paths that resolve to executable regular
 files, rejects symlinks and group/world-writable binaries or parent directories
 on Unix, and requires the binary plus every parent directory to be owned by root
-or the Qdrant process user. Treat any bridge path change as privileged code
-execution under the Qdrant service account.
+or the Qdrant process user. Set `sha256_b64` in generic backends or
+`openfhe_bridge_sha256_b64` in legacy CKKS runtime settings to pin the expected
+bridge binary digest. Treat any bridge path change as privileged code execution
+under the Qdrant service account.
 
 Request fields:
 

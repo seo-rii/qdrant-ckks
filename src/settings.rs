@@ -295,6 +295,8 @@ pub struct CryptoBackendConfig {
     #[serde(default)]
     pub program: Option<String>,
     #[serde(default)]
+    pub sha256_b64: Option<String>,
+    #[serde(default)]
     pub size: Option<usize>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
@@ -450,6 +452,7 @@ impl CryptoSettings {
                 CryptoBackendConfig {
                     kind: "process_pool".to_string(),
                     program: Some(path.clone()),
+                    sha256_b64: ckks.openfhe_bridge_sha256_b64.clone(),
                     size: Some(1),
                     timeout_ms: None,
                 },
@@ -507,6 +510,7 @@ impl CryptoSettings {
                     CryptoBackendConfig {
                         kind: "process_pool".to_string(),
                         program: Some(path.clone()),
+                        sha256_b64: config.openfhe_bridge_sha256_b64.clone(),
                         size: Some(1),
                         timeout_ms: None,
                     },
@@ -545,6 +549,9 @@ pub struct CkksCollectionKeyConfig {
     /// External OpenFHE bridge executable for this collection.
     #[serde(default)]
     pub openfhe_bridge_path: Option<String>,
+    /// Optional base64url-no-padding SHA-256 digest for this collection's OpenFHE bridge executable.
+    #[serde(default)]
+    pub openfhe_bridge_sha256_b64: Option<String>,
 }
 
 impl fmt::Debug for CkksCollectionKeyConfig {
@@ -556,13 +563,17 @@ impl fmt::Debug for CkksCollectionKeyConfig {
                 &self.master_key_b64.as_ref().map(|_| "[redacted]"),
             )
             .field("openfhe_bridge_path", &self.openfhe_bridge_path)
+            .field("openfhe_bridge_sha256_b64", &self.openfhe_bridge_sha256_b64)
             .finish()
     }
 }
 
 impl CkksCollectionKeyConfig {
     pub fn is_configured(&self) -> bool {
-        self.key_id.is_some() || self.master_key_b64.is_some() || self.openfhe_bridge_path.is_some()
+        self.key_id.is_some()
+            || self.master_key_b64.is_some()
+            || self.openfhe_bridge_path.is_some()
+            || self.openfhe_bridge_sha256_b64.is_some()
     }
 }
 
@@ -583,6 +594,9 @@ pub struct CkksConfig {
     /// Default external OpenFHE bridge executable for CKKS vector encryption.
     #[serde(default)]
     pub openfhe_bridge_path: Option<String>,
+    /// Optional base64url-no-padding SHA-256 digest for the default OpenFHE bridge executable.
+    #[serde(default)]
+    pub openfhe_bridge_sha256_b64: Option<String>,
     /// Collection-specific key material. Prefer this over default key material.
     #[serde(default)]
     #[validate(nested)]
@@ -597,6 +611,7 @@ impl Default for CkksConfig {
             key_id: None,
             master_key_b64: None,
             openfhe_bridge_path: None,
+            openfhe_bridge_sha256_b64: None,
             collections: HashMap::new(),
         }
     }
@@ -613,6 +628,7 @@ impl fmt::Debug for CkksConfig {
                 &self.master_key_b64.as_ref().map(|_| "[redacted]"),
             )
             .field("openfhe_bridge_path", &self.openfhe_bridge_path)
+            .field("openfhe_bridge_sha256_b64", &self.openfhe_bridge_sha256_b64)
             .field("collections", &self.collections)
             .finish()
     }
@@ -624,6 +640,7 @@ impl CkksConfig {
             || self.key_id.is_some()
             || self.master_key_b64.is_some()
             || self.openfhe_bridge_path.is_some()
+            || self.openfhe_bridge_sha256_b64.is_some()
             || self
                 .collections
                 .values()
@@ -1090,12 +1107,14 @@ ckks:
             key_id: Some("tenant-a:docs".to_string()),
             master_key_b64: Some("AQID".to_string()),
             openfhe_bridge_path: Some("/usr/local/bin/openfhe-bridge".to_string()),
+            openfhe_bridge_sha256_b64: None,
             collections: HashMap::from([(
                 "docs".to_string(),
                 CkksCollectionKeyConfig {
                     key_id: Some("tenant-a:docs-override".to_string()),
                     master_key_b64: Some("BAUG".to_string()),
                     openfhe_bridge_path: Some("/usr/local/bin/openfhe-bridge-docs".to_string()),
+                    openfhe_bridge_sha256_b64: None,
                 },
             )]),
         });

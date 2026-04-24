@@ -7,6 +7,7 @@ use qdrant_ckks::{
     AeadCipher, PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionError, PayloadEncryptionPolicy,
     PayloadTextEncryptor, SecretKey,
 };
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -28,6 +29,8 @@ pub enum CkksSetupError {
     InvalidRuntimeKeyId { scope: String },
     #[error("ckks OpenFHE bridge path is invalid: {path}")]
     InvalidOpenFheBridgePath { path: String },
+    #[error("ckks OpenFHE bridge sha256 does not match: {path}")]
+    InvalidOpenFheBridgeSha256 { path: String },
     #[error(
         "collection ckks key id does not match runtime key id for collection {collection_name}"
     )]
@@ -119,7 +122,10 @@ pub fn validate_runtime_config(runtime_config: &CkksConfig) -> Result<(), CkksSe
         let _ = decode_master_key(master_key_b64)?;
     }
     if let Some(path) = runtime_config.openfhe_bridge_path.as_deref() {
-        validate_bridge_path(path)?;
+        validate_bridge_path_with_sha256(
+            path,
+            runtime_config.openfhe_bridge_sha256_b64.as_deref(),
+        )?;
     }
 
     for (collection_name, collection_config) in &runtime_config.collections {
@@ -137,8 +143,20 @@ pub fn validate_runtime_config(runtime_config: &CkksConfig) -> Result<(), CkksSe
             }
             let _ = decode_master_key(master_key_b64)?;
         }
-        if let Some(path) = collection_config.openfhe_bridge_path.as_deref() {
-            validate_bridge_path(path)?;
+        if collection_config.openfhe_bridge_path.is_some()
+            || collection_config.openfhe_bridge_sha256_b64.is_some()
+        {
+            let path = collection_config
+                .openfhe_bridge_path
+                .as_deref()
+                .or(runtime_config.openfhe_bridge_path.as_deref())
+                .ok_or_else(|| CkksSetupError::InvalidOpenFheBridgePath {
+                    path: format!("ckks.collections.{collection_name}.openfhe_bridge_path"),
+                })?;
+            validate_bridge_path_with_sha256(
+                path,
+                collection_config.openfhe_bridge_sha256_b64.as_deref(),
+            )?;
         }
     }
 
@@ -190,7 +208,10 @@ fn validate_runtime_key_id(key_id: &str, scope: &str) -> Result<(), CkksSetupErr
     Ok(())
 }
 
-pub(crate) fn validate_bridge_path(path: &str) -> Result<(), CkksSetupError> {
+pub(crate) fn validate_bridge_path_with_sha256(
+    path: &str,
+    expected_sha256_b64: Option<&str>,
+) -> Result<(), CkksSetupError> {
     let path_ref = Path::new(path);
     if !path_ref.is_absolute() {
         return Err(CkksSetupError::InvalidOpenFheBridgePath {
@@ -275,6 +296,29 @@ pub(crate) fn validate_bridge_path(path: &str) -> Result<(), CkksSetupError> {
         }
     }
 
+    if let Some(expected_sha256_b64) = expected_sha256_b64 {
+        let expected = BASE64URL_NOPAD
+            .decode(expected_sha256_b64.as_bytes())
+            .map_err(|_| CkksSetupError::InvalidOpenFheBridgeSha256 {
+                path: path.to_string(),
+            })?;
+        if expected.len() != 32 {
+            return Err(CkksSetupError::InvalidOpenFheBridgeSha256 {
+                path: path.to_string(),
+            });
+        }
+
+        let bytes = fs::read(path).map_err(|_| CkksSetupError::InvalidOpenFheBridgePath {
+            path: path.to_string(),
+        })?;
+        let actual = Sha256::digest(&bytes);
+        if actual[..] != expected[..] {
+            return Err(CkksSetupError::InvalidOpenFheBridgeSha256 {
+                path: path.to_string(),
+            });
+        }
+    }
+
     Ok(())
 }
 
@@ -339,6 +383,7 @@ mod tests {
         let collection_config = enabled_collection_config();
         let mut config = CkksConfig {
             enabled: true,
+            allow_inline_key_material: true,
             ..CkksConfig::default()
         };
 
@@ -364,6 +409,7 @@ mod tests {
                 key_id: Some("tenant-b:payload".to_string()),
                 master_key_b64: Some(BASE64URL_NOPAD.encode(&[1u8; 32])),
                 openfhe_bridge_path: None,
+                openfhe_bridge_sha256_b64: None,
             },
         );
         assert_eq!(
@@ -379,6 +425,7 @@ mod tests {
                 key_id: Some("tenant-a:payload".to_string()),
                 master_key_b64: Some("not base64!".to_string()),
                 openfhe_bridge_path: None,
+                openfhe_bridge_sha256_b64: None,
             },
         );
         assert_eq!(
@@ -392,6 +439,7 @@ mod tests {
                 key_id: Some("tenant-a:payload".to_string()),
                 master_key_b64: Some(BASE64URL_NOPAD.encode(b"too short")),
                 openfhe_bridge_path: None,
+                openfhe_bridge_sha256_b64: None,
             },
         );
         assert_eq!(
@@ -436,6 +484,7 @@ mod tests {
                 key_id: None,
                 master_key_b64: Some(BASE64URL_NOPAD.encode(&[2u8; 32])),
                 openfhe_bridge_path: None,
+                openfhe_bridge_sha256_b64: None,
             },
         );
 
@@ -453,6 +502,7 @@ mod tests {
         let collection_config = enabled_collection_config();
         let mut config = CkksConfig {
             enabled: true,
+            allow_inline_key_material: true,
             key_id: Some("default:payload".to_string()),
             master_key_b64: Some(BASE64URL_NOPAD.encode(&[9u8; 32])),
             ..CkksConfig::default()
@@ -463,6 +513,7 @@ mod tests {
                 key_id: None,
                 master_key_b64: Some(encoded_key.clone()),
                 openfhe_bridge_path: Some("/usr/local/bin/openfhe-docs".to_string()),
+                openfhe_bridge_sha256_b64: None,
             },
         );
 
@@ -493,6 +544,7 @@ mod tests {
     fn runtime_config_validation_checks_provided_keys_and_bridge_paths() {
         let mut config = CkksConfig {
             enabled: true,
+            allow_inline_key_material: true,
             master_key_b64: Some("not base64!".to_string()),
             ..CkksConfig::default()
         };
@@ -592,6 +644,16 @@ mod tests {
             );
         }
         config.openfhe_bridge_path = Some(bridge_path.display().to_string());
+        config.openfhe_bridge_sha256_b64 = Some(BASE64URL_NOPAD.encode(&[0u8; 32]));
+        assert_eq!(
+            validate_runtime_config(&config),
+            Err(CkksSetupError::InvalidOpenFheBridgeSha256 {
+                path: bridge_path.display().to_string(),
+            }),
+        );
+
+        let bridge_digest = Sha256::digest(fs::read(&bridge_path).unwrap());
+        config.openfhe_bridge_sha256_b64 = Some(BASE64URL_NOPAD.encode(&bridge_digest));
         validate_runtime_config(&config).unwrap();
     }
 
@@ -608,6 +670,7 @@ mod tests {
                 key_id: None,
                 master_key_b64: None,
                 openfhe_bridge_path: Some("/usr/local/bin/openfhe-docs".to_string()),
+                openfhe_bridge_sha256_b64: None,
             },
         );
 
