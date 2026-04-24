@@ -334,7 +334,7 @@ impl Validate for CryptoInstanceConfig {
 }
 
 const fn default_allow_inline_key_material() -> bool {
-    true
+    false
 }
 
 #[derive(Debug, Deserialize, Clone, Validate)]
@@ -571,7 +571,7 @@ pub struct CkksConfig {
     /// Global CKKS master switch. Collections still need `params.ckks.enabled: true`.
     #[serde(default)]
     pub enabled: bool,
-    /// Allow inline key material in runtime config. Set false in production/security mode.
+    /// Allow inline key material in runtime config. Disabled by default; enable only for local development.
     #[serde(default = "default_allow_inline_key_material")]
     pub allow_inline_key_material: bool,
     /// Default key id used when neither collection params nor collection runtime config set one.
@@ -1128,6 +1128,12 @@ ckks:
         assert!(crypto.materials.contains_key("legacy_ckks/docs/master_key"));
         assert!(crypto.backends.contains_key("legacy_ckks/default/backend"));
         assert!(crypto.backends.contains_key("legacy_ckks/docs/backend"));
+    }
+
+    #[test]
+    fn test_inline_key_material_defaults_to_disabled() {
+        assert!(!CryptoSettings::default().allow_inline_key_material);
+        assert!(!CkksConfig::default().allow_inline_key_material);
     }
 
     #[expect(clippy::disallowed_types, reason = "#[sealed_test] uses std::fs::File")]

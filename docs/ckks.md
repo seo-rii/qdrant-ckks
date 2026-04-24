@@ -127,11 +127,11 @@ The configured 32-byte master key is not used directly as an AEAD key. Qdrant
 derives purpose-specific HKDF-SHA256 subkeys for payload text
 (`qdrant/payload-text/v1`) and CKKS vector envelopes
 (`qdrant/vector-envelope/v1`) before constructing AES-GCM ciphers.
-Set `crypto.allow_inline_key_material: false` or
-`ckks.allow_inline_key_material: false` in production/security mode to reject
-inline key material at startup. Decrypt paths can be configured with active plus
-retired AEAD keys; new writes always use the active key, and envelopes record
-the active key id plus material fingerprint.
+`crypto.allow_inline_key_material` and `ckks.allow_inline_key_material` default
+to `false` so inline key material is rejected at startup unless explicitly
+enabled for local development fixtures. Decrypt paths can be configured with
+active plus retired AEAD keys; new writes always use the active key, and
+envelopes record the active key id plus material fingerprint.
 Normal writes skip fields that already contain a well-formed encrypted marker to
 avoid double encryption. Rotation/backfill code must use the explicit
 `ReencryptIfStale` mode so old schema/epoch/key envelopes are opened and sealed

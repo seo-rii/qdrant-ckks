@@ -313,8 +313,9 @@ service:
 # Prefer this for new deployments. Collection-level enablement and selectors live
 # in collection params under `encryption`.
 crypto:
-  # Set to false in production/security mode to reject `source: inline` key material.
-  allow_inline_key_material: true
+  # Keep false in production/security mode to reject `source: inline` key material.
+  # Set true only for local development fixtures.
+  allow_inline_key_material: false
   instances: {}
   materials: {}
   backends: {}
@@ -356,8 +357,9 @@ crypto:
 # Collection-level enablement and field/vector selection live in collection params under `ckks`.
 ckks:
   enabled: false
-  # Set to false in production/security mode to reject inline `master_key_b64` material.
-  allow_inline_key_material: true
+  # Keep false in production/security mode to reject inline `master_key_b64` material.
+  # Set true only for local development fixtures.
+  allow_inline_key_material: false
   # Default base64url-no-padding encoded 32-byte key. Prefer per-collection
   # environment variables like QDRANT__CKKS__COLLECTIONS__docs__MASTER_KEY_B64.
   master_key_b64: null
