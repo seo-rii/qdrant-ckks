@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::Path;
 
 use collection::config::CkksCollectionConfig;
 use data_encoding::BASE64URL_NOPAD;
@@ -157,6 +158,28 @@ fn validate_runtime_key_id(key_id: &str, scope: &str) -> Result<(), CkksSetupErr
 }
 
 fn validate_bridge_path(path: &str) -> Result<(), CkksSetupError> {
+    let path_ref = Path::new(path);
+    if !path_ref.is_absolute() {
+        return Err(CkksSetupError::InvalidOpenFheBridgePath {
+            path: path.to_string(),
+        });
+    }
+
+    let metadata =
+        fs::symlink_metadata(path).map_err(|_| CkksSetupError::InvalidOpenFheBridgePath {
+            path: path.to_string(),
+        })?;
+    if metadata.file_type().is_symlink() {
+        return Err(CkksSetupError::InvalidOpenFheBridgePath {
+            path: path.to_string(),
+        });
+    }
+    if !metadata.is_file() {
+        return Err(CkksSetupError::InvalidOpenFheBridgePath {
+            path: path.to_string(),
+        });
+    }
+
     let metadata = fs::metadata(path).map_err(|_| CkksSetupError::InvalidOpenFheBridgePath {
         path: path.to_string(),
     })?;
@@ -168,9 +191,23 @@ fn validate_bridge_path(path: &str) -> Result<(), CkksSetupError> {
 
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
         if metadata.permissions().mode() & 0o111 == 0 {
+            return Err(CkksSetupError::InvalidOpenFheBridgePath {
+                path: path.to_string(),
+            });
+        }
+        if metadata.permissions().mode() & 0o002 != 0 {
+            return Err(CkksSetupError::InvalidOpenFheBridgePath {
+                path: path.to_string(),
+            });
+        }
+
+        let owner = metadata.uid();
+        // SAFETY: geteuid has no preconditions and does not dereference pointers.
+        let effective_uid = unsafe { nix::libc::geteuid() };
+        if owner != 0 && owner != effective_uid {
             return Err(CkksSetupError::InvalidOpenFheBridgePath {
                 path: path.to_string(),
             });
@@ -372,6 +409,14 @@ mod tests {
         );
 
         config.key_id = Some("tenant-a:payload".to_string());
+        config.openfhe_bridge_path = Some("relative-openfhe-bridge".to_string());
+        assert_eq!(
+            validate_runtime_config(&config),
+            Err(CkksSetupError::InvalidOpenFheBridgePath {
+                path: "relative-openfhe-bridge".to_string(),
+            }),
+        );
+
         config.openfhe_bridge_path = Some("/definitely/not/a/qdrant-ckks-bridge".to_string());
         assert_eq!(
             validate_runtime_config(&config),
@@ -386,8 +431,29 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
 
             let mut permissions = bridge.as_file().metadata().unwrap().permissions();
+            permissions.set_mode(0o777);
+            bridge.as_file().set_permissions(permissions).unwrap();
+            config.openfhe_bridge_path = Some(bridge.path().display().to_string());
+            assert_eq!(
+                validate_runtime_config(&config),
+                Err(CkksSetupError::InvalidOpenFheBridgePath {
+                    path: bridge.path().display().to_string(),
+                }),
+            );
+
+            let mut permissions = bridge.as_file().metadata().unwrap().permissions();
             permissions.set_mode(0o700);
             bridge.as_file().set_permissions(permissions).unwrap();
+
+            let symlink_path = bridge.path().with_extension("link");
+            std::os::unix::fs::symlink(bridge.path(), &symlink_path).unwrap();
+            config.openfhe_bridge_path = Some(symlink_path.display().to_string());
+            assert_eq!(
+                validate_runtime_config(&config),
+                Err(CkksSetupError::InvalidOpenFheBridgePath {
+                    path: symlink_path.display().to_string(),
+                }),
+            );
         }
         config.openfhe_bridge_path = Some(bridge.path().display().to_string());
         validate_runtime_config(&config).unwrap();
