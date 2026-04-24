@@ -28,6 +28,7 @@ pub use payload::{
     PayloadTextEncryptor, is_encrypted_payload_value,
 };
 pub use vector::{
-    CKKS_SCHEME, CkksEncryptionInput, CkksError, CkksParameters, CkksPublicMaterial,
-    CkksVectorBackend, CkksVectorEncryptor, EncryptedCkksVector, VerifiedCkksVector,
+    CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_SCHEME, CkksEncryptionInput, CkksError,
+    CkksParameters, CkksPublicMaterial, CkksVectorBackend, CkksVectorEncryptor,
+    EncryptedCkksVector, VerifiedCkksVector,
 };

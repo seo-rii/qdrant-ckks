@@ -11,6 +11,7 @@ use crate::aead::{
 };
 
 pub const CKKS_SCHEME: &str = "openfhe-ckks";
+pub const CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50: &str = "ckks-128-n16384-d4-scale50";
 const VERSION: u8 = 1;
 const CRYPTO_SCHEMA_VERSION: u16 = 1;
 const DEFAULT_ENCRYPTION_EPOCH: u64 = 0;
@@ -71,29 +72,23 @@ impl CkksParameters {
         }
     }
 
+    pub const fn security_profile(&self) -> Option<&'static str> {
+        match (
+            self.poly_modulus_degree,
+            self.multiplicative_depth,
+            self.scaling_mod_size,
+            self.first_mod_size,
+        ) {
+            (16_384, 4, 50, 60) => Some(CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50),
+            _ => None,
+        }
+    }
+
     pub fn validate(&self) -> Result<(), CkksError> {
-        if self.poly_modulus_degree < 2_048
-            || self.poly_modulus_degree > 1_048_576
-            || !self.poly_modulus_degree.is_power_of_two()
-        {
-            return Err(CkksError::InvalidParameters(
-                "poly_modulus_degree must be a power of two in 2048..=1048576".to_string(),
-            ));
-        }
-        if self.multiplicative_depth == 0 || self.multiplicative_depth > 64 {
-            return Err(CkksError::InvalidParameters(
-                "multiplicative_depth must be in 1..=64".to_string(),
-            ));
-        }
-        if !(20..=80).contains(&self.scaling_mod_size) {
-            return Err(CkksError::InvalidParameters(
-                "scaling_mod_size must be in 20..=80".to_string(),
-            ));
-        }
-        if self.first_mod_size < self.scaling_mod_size || self.first_mod_size > 90 {
-            return Err(CkksError::InvalidParameters(
-                "first_mod_size must be >= scaling_mod_size and <= 90".to_string(),
-            ));
+        if self.security_profile().is_none() {
+            return Err(CkksError::InvalidParameters(format!(
+                "poly_modulus_degree, multiplicative_depth, scaling_mod_size, and first_mod_size must match allowlisted profile {CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50}",
+            )));
         }
 
         let max_slots = self.poly_modulus_degree / 2;

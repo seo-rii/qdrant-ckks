@@ -3,9 +3,9 @@ use std::time::{Duration, Instant};
 
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_ckks::{
-    AeadCipher, CkksEncryptionInput, CkksError, CkksParameters, CkksPublicMaterial,
-    CkksVectorBackend, CkksVectorEncryptor, CommandOpenFheBackend, EncryptionContext,
-    EncryptionError, SecretKey,
+    AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CkksEncryptionInput, CkksError,
+    CkksParameters, CkksPublicMaterial, CkksVectorBackend, CkksVectorEncryptor,
+    CommandOpenFheBackend, EncryptionContext, EncryptionError, SecretKey,
 };
 use serde_json::json;
 
@@ -156,23 +156,6 @@ fn open_rejects_context_digest_mismatch() {
         Err(CkksError::MalformedEnvelope(message))
             if message.contains("context digest does not match")
     ));
-
-    let mut other_params = CkksParameters::openfhe_default_128_bit();
-    other_params.multiplicative_depth += 1;
-    let other_encryptor = CkksVectorEncryptor::new(
-        "tenant-a:ckks",
-        "embedding",
-        other_params,
-        SecretKey::from_bytes([29u8; 32]),
-        SealedTestBackend,
-    )
-    .unwrap();
-
-    assert!(matches!(
-        other_encryptor.open("docs", "point-1", &material, &encrypted),
-        Err(CkksError::MalformedEnvelope(message))
-            if message.contains("context digest does not match")
-    ));
 }
 
 #[test]
@@ -212,11 +195,23 @@ fn vector_validation_fails_closed_before_backend_call() {
 
 #[test]
 fn ckks_parameter_validation_rejects_unsafe_shapes() {
+    assert_eq!(
+        CkksParameters::openfhe_default_128_bit().security_profile(),
+        Some(CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50),
+    );
+
     let mut params = CkksParameters::openfhe_default_128_bit();
     params.poly_modulus_degree = 12_288;
     assert!(matches!(
         params.validate(),
         Err(CkksError::InvalidParameters(_)),
+    ));
+
+    let mut params = CkksParameters::openfhe_default_128_bit();
+    params.multiplicative_depth = 5;
+    assert!(matches!(
+        params.validate(),
+        Err(CkksError::InvalidParameters(message)) if message.contains("allowlisted profile"),
     ));
 
     let mut params = CkksParameters::openfhe_default_128_bit();

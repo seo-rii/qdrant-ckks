@@ -93,6 +93,7 @@ crypto:
       options:
         key_id: tenant-a:docs
         material_fingerprint_id: tenant-a/vector@v1
+        profile: ckks-128-n16384-d4-scale50
     docs_payload_v1:
       provider: payload/aes-256-gcm@v1
       materials:
@@ -184,6 +185,11 @@ different point or vector name must fail authentication after unwrap.
 Inside the sealed body, `context_digest` is still the SHA-256 digest over the
 CKKS parameters, serialized OpenFHE crypto context, and public key. It is
 intended to prevent mixing ciphertexts created for incompatible contexts.
+CKKS parameters are restricted to the allowlisted
+`ckks-128-n16384-d4-scale50` profile in this branch. `batch_size` may be lower
+than the profile slot count, but raw modulus/depth/scale combinations are
+rejected until the OpenFHE bridge returns and verifies explicit security-level
+metadata.
 
 ## OpenFHE bridge protocol
 

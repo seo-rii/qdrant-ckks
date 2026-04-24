@@ -334,7 +334,7 @@ crypto:
   #     options:
   #       key_id: tenant-a:docs
   #       material_fingerprint_id: tenant-a/vector@v1
-  #       profile: ckks-16384-d4
+  #       profile: ckks-128-n16384-d4-scale50
   # materials:
   #   tenant-a/payload-v1:
   #     kind: symmetric_key_32
