@@ -36,6 +36,12 @@ params:
     vector_names: [embedding]
 ```
 
+Metadata encryption is not implemented yet. The generic control-plane types
+reserve a `metadata_keys` selector for future value encryption and exact-match
+token designs, but collection validation rejects metadata selectors in this
+branch. Payload filtering over encrypted metadata, including range, geo, and
+full-text filtering, is unsupported until a separate blind-index design exists.
+
 Runtime settings provide key material per collection. Prefer injecting keys
 through environment variables such as
 `QDRANT__CKKS__COLLECTIONS__docs__MASTER_KEY_B64` instead of committing them to

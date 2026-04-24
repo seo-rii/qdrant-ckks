@@ -365,6 +365,11 @@ fn validate_ckks_payload_fields(fields: &[String]) -> Result<(), validator::Vali
     Ok(())
 }
 
+/// Capability-oriented collection encryption rules.
+///
+/// Secret key material is never stored here. Metadata selectors are reserved
+/// for future metadata value and blind-index support, but are rejected by
+/// collection validation in this branch.
 #[derive(
     Debug, Deserialize, Serialize, JsonSchema, Validate, Anonymize, Clone, PartialEq, Eq, Hash,
 )]
@@ -404,6 +409,11 @@ pub enum EncryptionSelector {
         #[anonymize(false)]
         names: Vec<VectorNameBuf>,
     },
+    /// Reserved for future metadata encryption support.
+    ///
+    /// This selector is currently rejected by collection validation; AEAD alone
+    /// does not support metadata filtering semantics such as range, geo, or
+    /// full-text filters.
     MetadataKeys {
         #[validate(custom(function = "validate_encryption_metadata_keys"))]
         #[anonymize(true)]
