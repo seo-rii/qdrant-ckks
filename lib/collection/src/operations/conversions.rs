@@ -351,7 +351,7 @@ impl TryFrom<api::grpc::qdrant::CollectionParamsDiff> for CollectionParamsDiff {
             read_fan_out_delay_ms,
             ckks,
         } = value;
-        Ok(Self {
+        let diff = Self {
             replication_factor: replication_factor
                 .map(|factor| {
                     NonZeroU32::new(factor)
@@ -370,7 +370,11 @@ impl TryFrom<api::grpc::qdrant::CollectionParamsDiff> for CollectionParamsDiff {
             on_disk_payload,
             encryption: None,
             ckks: ckks.map(TryInto::try_into).transpose()?,
-        })
+        };
+        diff.validate().map_err(|err| {
+            Status::invalid_argument(format!("invalid collection params diff: {err}"))
+        })?;
+        Ok(diff)
     }
 }
 
@@ -1912,83 +1916,84 @@ impl TryFrom<api::grpc::qdrant::CollectionConfig> for CollectionConfig {
             strict_mode_config,
             metadata,
         } = config;
-        Ok(Self {
-            params: match params {
-                None => return Err(Status::invalid_argument("Malformed CollectionParams type")),
-                Some(params) => {
-                    let api::grpc::qdrant::CollectionParams {
-                        shard_number,
-                        on_disk_payload,
-                        vectors_config,
-                        replication_factor,
-                        write_consistency_factor,
-                        read_fan_out_factor,
-                        sharding_method,
-                        sparse_vectors_config,
-                        read_fan_out_delay_ms,
-                        ckks,
-                    } = params;
-                    CollectionParams {
-                        vectors: match vectors_config {
+        let params = match params {
+            None => return Err(Status::invalid_argument("Malformed CollectionParams type")),
+            Some(params) => {
+                let api::grpc::qdrant::CollectionParams {
+                    shard_number,
+                    on_disk_payload,
+                    vectors_config,
+                    replication_factor,
+                    write_consistency_factor,
+                    read_fan_out_factor,
+                    sharding_method,
+                    sparse_vectors_config,
+                    read_fan_out_delay_ms,
+                    ckks,
+                } = params;
+                CollectionParams {
+                    vectors: match vectors_config {
+                        None => {
+                            return Err(Status::invalid_argument(
+                                "Expected `vectors` - configuration for vector storage",
+                            ));
+                        }
+                        Some(vector_config) => match vector_config.config {
                             None => {
                                 return Err(Status::invalid_argument(
                                     "Expected `vectors` - configuration for vector storage",
                                 ));
                             }
-                            Some(vector_config) => match vector_config.config {
-                                None => {
-                                    return Err(Status::invalid_argument(
-                                        "Expected `vectors` - configuration for vector storage",
-                                    ));
-                                }
-                                Some(api::grpc::qdrant::vectors_config::Config::Params(params)) => {
-                                    VectorsConfig::Single(params.try_into()?)
-                                }
-                                Some(api::grpc::qdrant::vectors_config::Config::ParamsMap(
-                                    params_map,
-                                )) => VectorsConfig::Multi(
-                                    params_map
-                                        .map
-                                        .into_iter()
-                                        .map(|(k, v)| Ok((k, v.try_into()?)))
-                                        .collect::<Result<BTreeMap<_, _>, Status>>()?,
-                                ),
-                            },
+                            Some(api::grpc::qdrant::vectors_config::Config::Params(params)) => {
+                                VectorsConfig::Single(params.try_into()?)
+                            }
+                            Some(api::grpc::qdrant::vectors_config::Config::ParamsMap(
+                                params_map,
+                            )) => VectorsConfig::Multi(
+                                params_map
+                                    .map
+                                    .into_iter()
+                                    .map(|(k, v)| Ok((k, v.try_into()?)))
+                                    .collect::<Result<BTreeMap<_, _>, Status>>()?,
+                            ),
                         },
-                        sparse_vectors: sparse_vectors_config
-                            .map(|v| {
-                                SparseVectorsConfig::try_from(v).map(|SparseVectorsConfig(x)| x)
-                            })
-                            .transpose()?,
-                        shard_number: NonZeroU32::new(shard_number).ok_or_else(|| {
-                            Status::invalid_argument("`shard_number` cannot be zero")
-                        })?,
-                        on_disk_payload,
-                        replication_factor: NonZeroU32::new(
-                            replication_factor
-                                .unwrap_or_else(|| default_replication_factor().get()),
-                        )
-                        .ok_or_else(|| {
-                            Status::invalid_argument("`replication_factor` cannot be zero")
-                        })?,
-                        write_consistency_factor: NonZeroU32::new(
-                            write_consistency_factor
-                                .unwrap_or_else(|| default_write_consistency_factor().get()),
-                        )
-                        .ok_or_else(|| {
-                            Status::invalid_argument("`write_consistency_factor` cannot be zero")
-                        })?,
+                    },
+                    sparse_vectors: sparse_vectors_config
+                        .map(|v| SparseVectorsConfig::try_from(v).map(|SparseVectorsConfig(x)| x))
+                        .transpose()?,
+                    shard_number: NonZeroU32::new(shard_number)
+                        .ok_or_else(|| Status::invalid_argument("`shard_number` cannot be zero"))?,
+                    on_disk_payload,
+                    replication_factor: NonZeroU32::new(
+                        replication_factor.unwrap_or_else(|| default_replication_factor().get()),
+                    )
+                    .ok_or_else(|| {
+                        Status::invalid_argument("`replication_factor` cannot be zero")
+                    })?,
+                    write_consistency_factor: NonZeroU32::new(
+                        write_consistency_factor
+                            .unwrap_or_else(|| default_write_consistency_factor().get()),
+                    )
+                    .ok_or_else(|| {
+                        Status::invalid_argument("`write_consistency_factor` cannot be zero")
+                    })?,
 
-                        read_fan_out_factor,
-                        sharding_method: sharding_method
-                            .map(sharding_method_from_proto)
-                            .transpose()?,
-                        read_fan_out_delay_ms,
-                        encryption: None,
-                        ckks: ckks.map(TryInto::try_into).transpose()?,
-                    }
+                    read_fan_out_factor,
+                    sharding_method: sharding_method
+                        .map(sharding_method_from_proto)
+                        .transpose()?,
+                    read_fan_out_delay_ms,
+                    encryption: None,
+                    ckks: ckks.map(TryInto::try_into).transpose()?,
                 }
-            },
+            }
+        };
+        params
+            .validate()
+            .map_err(|err| Status::invalid_argument(format!("invalid collection params: {err}")))?;
+
+        Ok(Self {
+            params,
             hnsw_config: match hnsw_config {
                 None => return Err(Status::invalid_argument("Malformed HnswConfig type")),
                 Some(hnsw_config) => HnswConfig::from(hnsw_config),
@@ -2049,6 +2054,36 @@ mod ckks_grpc_tests {
             enabled: true,
             key_id: Some("tenant/key".to_string()),
             payload_text_fields: vec!["body".to_string()],
+            vector_names: Vec::new(),
+        };
+
+        let err = CkksCollectionConfig::try_from(config).unwrap_err();
+
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn grpc_ckks_config_rejects_invalid_payload_fields() {
+        for payload_text_fields in [vec!["$qdrant_ckks".to_string()], vec!["a..b".to_string()]] {
+            let config = api::grpc::qdrant::CkksCollectionConfig {
+                enabled: true,
+                key_id: Some("tenant-a:docs".to_string()),
+                payload_text_fields,
+                vector_names: Vec::new(),
+            };
+
+            let err = CkksCollectionConfig::try_from(config).unwrap_err();
+
+            assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        }
+    }
+
+    #[test]
+    fn grpc_ckks_config_rejects_empty_enabled_rules() {
+        let config = api::grpc::qdrant::CkksCollectionConfig {
+            enabled: true,
+            key_id: Some("tenant-a:docs".to_string()),
+            payload_text_fields: Vec::new(),
             vector_names: Vec::new(),
         };
 

@@ -117,6 +117,14 @@ mod ckks_tests {
             vector_names: Vec::new(),
         };
         assert!(marker_field.validate().is_err());
+
+        let empty_enabled = CkksCollectionConfig {
+            enabled: true,
+            key_id: Some("tenant-a:docs".to_string()),
+            payload_text_fields: Vec::new(),
+            vector_names: Vec::new(),
+        };
+        assert!(empty_enabled.validate().is_err());
     }
 
     #[test]
@@ -301,6 +309,7 @@ pub enum ShardingMethod {
 #[derive(
     Debug, Deserialize, Serialize, JsonSchema, Validate, Anonymize, Clone, PartialEq, Eq, Hash,
 )]
+#[validate(schema(function = "validate_ckks_collection_config"))]
 #[serde(rename_all = "snake_case")]
 pub struct CkksCollectionConfig {
     /// Enable encryption for this collection.
@@ -360,6 +369,16 @@ fn validate_ckks_payload_fields(fields: &[String]) -> Result<(), validator::Vali
                 "invalid_ckks_payload_field",
             ));
         }
+    }
+
+    Ok(())
+}
+
+fn validate_ckks_collection_config(
+    config: &CkksCollectionConfig,
+) -> Result<(), validator::ValidationError> {
+    if config.enabled && config.payload_text_fields.is_empty() && config.vector_names.is_empty() {
+        return Err(validator::ValidationError::new("empty_ckks_selectors"));
     }
 
     Ok(())
