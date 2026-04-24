@@ -165,6 +165,77 @@ mod ckks_tests {
     }
 
     #[test]
+    fn collection_params_reject_encryption_changes_without_migration() {
+        let ckks = CkksCollectionConfig {
+            enabled: true,
+            key_id: Some("tenant-a:docs".to_string()),
+            payload_text_fields: vec!["body".to_string()],
+            vector_names: vec!["embedding".to_string()],
+        };
+        let ckks_params = CollectionParams {
+            ckks: Some(ckks.clone()),
+            ..CollectionParams::empty()
+        };
+        assert!(ckks_params.check_compatible(&ckks_params).is_ok());
+
+        let disabled_ckks = CollectionParams {
+            ckks: Some(CkksCollectionConfig {
+                enabled: false,
+                key_id: ckks.key_id.clone(),
+                payload_text_fields: Vec::new(),
+                vector_names: Vec::new(),
+            }),
+            ..CollectionParams::empty()
+        };
+        assert!(ckks_params.check_compatible(&disabled_ckks).is_err());
+        assert!(
+            CollectionParams::empty()
+                .check_compatible(&ckks_params)
+                .is_err()
+        );
+
+        let encryption_params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let changed_encryption = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                rules: vec![EncryptionRuleRef {
+                    id: "summary_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["summary".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        assert!(
+            encryption_params
+                .check_compatible(&encryption_params)
+                .is_ok()
+        );
+        assert!(
+            encryption_params
+                .check_compatible(&changed_encryption)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn ckks_config_adapts_to_generic_encryption_rules() {
         let ckks = CkksCollectionConfig {
             enabled: true,
@@ -674,11 +745,23 @@ impl CollectionParams {
             read_fan_out_delay_ms: _, // May be changed,
             on_disk_payload: _, // May be changed
             sparse_vectors,  // Parameters may be changes, but not the structure
-            encryption: _,   // May be changed; runtime instances resolve outside collection config
-            ckks: _,         // May be changed; key material is resolved at runtime
+            encryption,
+            ckks,
         } = other;
 
         self.vectors.check_compatible(vectors)?;
+
+        if &self.encryption != encryption {
+            return Err(CollectionError::bad_input(
+                "collection encryption config is incompatible: encryption changes require a migration",
+            ));
+        }
+
+        if &self.ckks != ckks {
+            return Err(CollectionError::bad_input(
+                "collection ckks config is incompatible: encryption changes require a migration",
+            ));
+        }
 
         let this_sparse_vectors: HashSet<_> = if let Some(sparse_vectors) = &self.sparse_vectors {
             sparse_vectors.keys().collect()
