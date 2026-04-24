@@ -24,8 +24,11 @@ use collection::operations::vector_ops::{
 use collection::recommendations::recommend_by;
 use collection::shards::replica_set::replica_set_state::{ReplicaSetState, ReplicaState};
 use common::counter::hardware_accumulator::HwMeasurementAcc;
-use fs_err::File;
+use fs_err::{self as fs, File};
 use itertools::Itertools;
+use qdrant_ckks::{
+    AeadCipher, PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
+};
 use segment::data_types::order_by::{Direction, OrderBy, OrderByInterface};
 use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, VectorStructInternal};
 use segment::types::{
@@ -949,6 +952,37 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
                 && description.contains("document.body")
     ));
 
+    let malformed_marker_upsert =
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                id: 3.into(),
+                vector: VectorStructPersisted::from(vec![0.0, 0.0, 1.0, 0.0]),
+                payload: Some(
+                    serde_json::from_str(
+                        r#"{"document":{"body":{"$qdrant_ckks":{"kind":"payload_text"}}}}"#,
+                    )
+                    .unwrap(),
+                ),
+            }]),
+        ));
+    let err = collection
+        .update_from_client_simple(
+            malformed_marker_upsert,
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("plaintext payload")
+                && description.contains("document.body")
+    ));
+
     let public_payload = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
         PointInsertOperationsInternal::from(vec![PointStructPersisted {
             id: 2.into(),
@@ -967,6 +1001,80 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
         )
         .await
         .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_files() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection_path = collection_dir.path().to_path_buf();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
+    let sentinel = "qdrant-ckks-plaintext-sentinel-9f74dcb5";
+    let mut encrypted_payload = Payload(
+        serde_json::json!({ "document": { "body": sentinel } })
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    let metadata_key = SecretKey::from_bytes([31u8; 32])
+        .derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)
+        .unwrap();
+    let encryptor = PayloadTextEncryptor::new(
+        "test",
+        AeadCipher::new("tenant-a:docs", metadata_key).unwrap(),
+    )
+    .unwrap();
+    let policy = PayloadEncryptionPolicy::new(vec!["document.body".to_string()]).unwrap();
+    assert_eq!(
+        encryptor
+            .encrypt_selected_fields("1", &mut encrypted_payload.0, &policy)
+            .unwrap(),
+        1,
+    );
+
+    let encrypted_upsert =
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                id: 1.into(),
+                vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                payload: Some(encrypted_payload),
+            }]),
+        ));
+    collection
+        .update_from_client_simple(
+            encrypted_upsert,
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+    collection.stop_gracefully().await;
+
+    let sentinel = sentinel.as_bytes();
+    let mut pending = vec![collection_path];
+    while let Some(path) = pending.pop() {
+        let metadata = fs::metadata(&path).unwrap();
+        if metadata.is_dir() {
+            for entry in fs::read_dir(&path).unwrap() {
+                pending.push(entry.unwrap().path());
+            }
+            continue;
+        }
+        if !metadata.is_file() {
+            continue;
+        }
+
+        let bytes = fs::read(&path).unwrap();
+        assert!(
+            !bytes
+                .windows(sentinel.len())
+                .any(|window| window == sentinel),
+            "plaintext sentinel leaked into {}",
+            path.display(),
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

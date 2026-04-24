@@ -7,6 +7,7 @@ use common::types::DeferredBehavior;
 use futures::stream::FuturesUnordered;
 use futures::{StreamExt as _, TryFutureExt, TryStreamExt as _, future};
 use itertools::Itertools;
+use qdrant_ckks::is_encrypted_payload_value;
 use segment::data_types::order_by::{Direction, OrderBy};
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
 use segment::json_path::JsonPath;
@@ -170,7 +171,10 @@ impl Collection {
                         return key.compatible(encrypted_path);
                     }
 
-                    !encrypted_path.value_get(&payload.0).is_empty()
+                    encrypted_path
+                        .value_get(&payload.0)
+                        .into_iter()
+                        .any(|value| !is_encrypted_payload_value(value))
                 };
             let vector_write_touches_encrypted_name =
                 |vector: &VectorStructPersisted, encrypted_name: &str| match vector {

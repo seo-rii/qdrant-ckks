@@ -1382,6 +1382,7 @@ dependencies = [
  "parking_lot",
  "pprof",
  "proptest",
+ "qdrant-ckks",
  "rand 0.10.0",
  "ringbuffer",
  "rmp-serde",
