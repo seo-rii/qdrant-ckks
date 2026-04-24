@@ -6,8 +6,8 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::aead::{
-    AeadCipher, CKKS_VECTOR_KEY_DOMAIN, EncryptedEnvelope, EncryptionContext, EncryptionError,
-    SecretKey, validate_key_id,
+    AeadCipher, AeadKeyring, CKKS_VECTOR_KEY_DOMAIN, EncryptedEnvelope, EncryptionContext,
+    EncryptionError, SecretKey, validate_key_id,
 };
 
 pub const CKKS_SCHEME: &str = "openfhe-ckks";
@@ -214,7 +214,7 @@ pub struct VerifiedCkksVector {
 }
 
 pub struct CkksVectorEncryptor<B> {
-    metadata_cipher: AeadCipher,
+    metadata_keyring: AeadKeyring,
     vector_name: String,
     parameters: CkksParameters,
     crypto_schema_version: u16,
@@ -249,7 +249,7 @@ where
         let metadata_key = metadata_key.derive_subkey(CKKS_VECTOR_KEY_DOMAIN)?;
 
         Ok(Self {
-            metadata_cipher: AeadCipher::new(key_id, metadata_key)?,
+            metadata_keyring: AeadKeyring::new(AeadCipher::new(key_id, metadata_key)?),
             vector_name,
             parameters,
             crypto_schema_version: CRYPTO_SCHEMA_VERSION,
@@ -261,6 +261,20 @@ where
     pub fn with_encryption_epoch(mut self, encryption_epoch: u64) -> Self {
         self.encryption_epoch = encryption_epoch;
         self
+    }
+
+    pub fn with_retired_metadata_key(
+        mut self,
+        key_id: impl Into<String>,
+        metadata_key: SecretKey,
+    ) -> Result<Self, CkksError> {
+        let key_id = key_id.into();
+        validate_key_id(&key_id).map_err(|_| CkksError::InvalidKeyId)?;
+        let metadata_key = metadata_key.derive_subkey(CKKS_VECTOR_KEY_DOMAIN)?;
+        self.metadata_keyring = self
+            .metadata_keyring
+            .with_retired(AeadCipher::new(key_id, metadata_key)?);
+        Ok(self)
     }
 
     pub fn encrypt(
@@ -309,11 +323,11 @@ where
             return Err(CkksError::EmptyCiphertext);
         }
 
-        let envelope = self.metadata_cipher.encrypt(
+        let envelope = self.metadata_keyring.encrypt(
             serde_json::to_vec(&VerifiedCkksVector {
                 crypto_schema_version: self.crypto_schema_version,
                 encryption_epoch: self.encryption_epoch,
-                key_id: self.metadata_cipher.key_id().to_string(),
+                key_id: self.metadata_keyring.key_id().to_string(),
                 vector_name: self.vector_name.clone(),
                 slots: values.len(),
                 context_digest: public_material.digest_for(&self.parameters),
@@ -345,15 +359,15 @@ where
             return Err(CkksError::UnsupportedScheme(encrypted.scheme.clone()));
         }
 
-        let verified: VerifiedCkksVector = serde_json::from_slice(&self.metadata_cipher.decrypt(
+        let verified: VerifiedCkksVector = serde_json::from_slice(&self.metadata_keyring.decrypt(
             &encrypted.envelope,
             EncryptionContext::ckks_vector(collection, point_id, &self.vector_name),
         )?)
         .map_err(|err| CkksError::MalformedEnvelope(err.to_string()))?;
 
-        if verified.key_id != self.metadata_cipher.key_id() {
+        if verified.key_id != encrypted.envelope.key_id {
             return Err(CkksError::MalformedEnvelope(
-                "stored key id does not match active key".to_string(),
+                "stored key id does not match envelope key id".to_string(),
             ));
         }
         if verified.crypto_schema_version != self.crypto_schema_version {

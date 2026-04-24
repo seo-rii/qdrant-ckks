@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
-use crate::aead::{AeadCipher, EncryptedEnvelope, EncryptionContext, EncryptionError};
+use crate::aead::{AeadCipher, AeadKeyring, EncryptedEnvelope, EncryptionContext, EncryptionError};
 
 pub const ENCRYPTED_PAYLOAD_MARKER: &str = "$qdrant_ckks";
 const PAYLOAD_TEXT_KIND: &str = "payload_text";
@@ -90,7 +90,7 @@ impl PayloadEncryptionPolicy {
 
 pub struct PayloadTextEncryptor {
     collection: String,
-    cipher: AeadCipher,
+    keyring: AeadKeyring,
     crypto_schema_version: u16,
     encryption_epoch: u64,
 }
@@ -100,6 +100,13 @@ impl PayloadTextEncryptor {
         collection: impl Into<String>,
         cipher: AeadCipher,
     ) -> Result<Self, PayloadEncryptionError> {
+        Self::new_with_keyring(collection, AeadKeyring::new(cipher))
+    }
+
+    pub fn new_with_keyring(
+        collection: impl Into<String>,
+        keyring: AeadKeyring,
+    ) -> Result<Self, PayloadEncryptionError> {
         let collection = collection.into();
         if collection.is_empty() || collection.contains('\0') {
             return Err(PayloadEncryptionError::InvalidFieldPath(
@@ -108,7 +115,7 @@ impl PayloadTextEncryptor {
         }
         Ok(Self {
             collection,
-            cipher,
+            keyring,
             crypto_schema_version: CRYPTO_SCHEMA_VERSION,
             encryption_epoch: DEFAULT_ENCRYPTION_EPOCH,
         })
@@ -150,7 +157,7 @@ impl PayloadTextEncryptor {
             };
 
             let context = EncryptionContext::payload_text(&self.collection, point_id, field);
-            let envelope = self.cipher.encrypt(&plaintext, context)?;
+            let envelope = self.keyring.encrypt(&plaintext, context)?;
             *value = stored_envelope_value(
                 envelope,
                 field,
@@ -194,7 +201,7 @@ impl PayloadTextEncryptor {
                 return Err(PayloadEncryptionError::EncryptionEpochMismatch);
             }
             let context = EncryptionContext::payload_text(&self.collection, point_id, field);
-            let plaintext = self.cipher.decrypt(&envelope.envelope, context)?;
+            let plaintext = self.keyring.decrypt(&envelope.envelope, context)?;
             let plaintext = String::from_utf8(plaintext)
                 .map_err(|err| PayloadEncryptionError::InvalidUtf8(err.to_string()))?;
 

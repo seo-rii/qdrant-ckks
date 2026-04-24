@@ -311,6 +311,67 @@ impl AeadCipher {
     }
 }
 
+pub struct AeadKeyring {
+    active: AeadCipher,
+    retired: Vec<AeadCipher>,
+}
+
+impl AeadKeyring {
+    pub fn new(active: AeadCipher) -> Self {
+        Self {
+            active,
+            retired: Vec::new(),
+        }
+    }
+
+    pub fn with_retired(mut self, retired: AeadCipher) -> Self {
+        self.retired.push(retired);
+        self
+    }
+
+    pub fn key_id(&self) -> &str {
+        self.active.key_id()
+    }
+
+    pub fn material_fingerprint(&self) -> &str {
+        self.active.material_fingerprint()
+    }
+
+    pub fn encrypt(
+        &self,
+        plaintext: &[u8],
+        context: EncryptionContext<'_>,
+    ) -> Result<EncryptedEnvelope, EncryptionError> {
+        self.active.encrypt(plaintext, context)
+    }
+
+    pub fn decrypt(
+        &self,
+        envelope: &EncryptedEnvelope,
+        context: EncryptionContext<'_>,
+    ) -> Result<Vec<u8>, EncryptionError> {
+        match self.active.decrypt(envelope, context) {
+            Ok(plaintext) => Ok(plaintext),
+            Err(active_error @ EncryptionError::KeyMismatch)
+            | Err(active_error @ EncryptionError::MaterialFingerprintMismatch)
+            | Err(active_error @ EncryptionError::OpenFailed) => {
+                for retired in &self.retired {
+                    match retired.decrypt(envelope, context) {
+                        Ok(plaintext) => return Ok(plaintext),
+                        Err(EncryptionError::KeyMismatch)
+                        | Err(EncryptionError::MaterialFingerprintMismatch)
+                        | Err(EncryptionError::OpenFailed) => {}
+                        Err(error) => return Err(error),
+                    }
+                }
+
+                Err(active_error)
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
 impl SecretKey {
     fn material_fingerprint(&self) -> String {
         let mut hasher = Sha256::new();

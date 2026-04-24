@@ -1,6 +1,6 @@
 use proptest::prelude::*;
 use qdrant_ckks::{
-    AeadCipher, ENCRYPTED_PAYLOAD_MARKER, EncryptionError, PayloadEncryptionError,
+    AeadCipher, AeadKeyring, ENCRYPTED_PAYLOAD_MARKER, EncryptionError, PayloadEncryptionError,
     PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey, is_encrypted_payload_value,
 };
 use serde_json::{Map, Value, json};
@@ -68,6 +68,44 @@ fn payload_decrypt_rejects_wrong_encryption_epoch() {
         next_epoch_encryptor.decrypt_selected_fields("point-1", &mut payload, &policy),
         Err(PayloadEncryptionError::EncryptionEpochMismatch),
     );
+}
+
+#[test]
+fn payload_decrypt_accepts_retired_key_but_new_writes_use_active_key() {
+    let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
+    let old_cipher =
+        AeadCipher::new("tenant-a:payload-old", SecretKey::from_bytes([11u8; 32])).unwrap();
+    let old_encryptor = PayloadTextEncryptor::new("docs", old_cipher).unwrap();
+    let mut old_payload = object(json!({ "body": "rotation protected" }));
+
+    old_encryptor
+        .encrypt_selected_fields("point-1", &mut old_payload, &policy)
+        .unwrap();
+
+    let keyring = AeadKeyring::new(
+        AeadCipher::new("tenant-a:payload-new", SecretKey::from_bytes([12u8; 32])).unwrap(),
+    )
+    .with_retired(
+        AeadCipher::new("tenant-a:payload-old", SecretKey::from_bytes([11u8; 32])).unwrap(),
+    );
+    let rotated_encryptor = PayloadTextEncryptor::new_with_keyring("docs", keyring).unwrap();
+
+    assert_eq!(
+        rotated_encryptor
+            .decrypt_selected_fields("point-1", &mut old_payload, &policy)
+            .unwrap(),
+        1,
+    );
+    assert_eq!(old_payload.get("body"), Some(&json!("rotation protected")));
+
+    let mut new_payload = object(json!({ "body": "active key only" }));
+    rotated_encryptor
+        .encrypt_selected_fields("point-2", &mut new_payload, &policy)
+        .unwrap();
+    let serialized = serde_json::to_string(&new_payload).unwrap();
+
+    assert!(serialized.contains("tenant-a:payload-new"));
+    assert!(!serialized.contains("tenant-a:payload-old"));
 }
 
 #[test]

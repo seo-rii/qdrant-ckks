@@ -108,6 +108,40 @@ fn open_rejects_encryption_epoch_mismatch() {
 }
 
 #[test]
+fn vector_open_accepts_retired_metadata_key_but_new_writes_use_active_key() {
+    let material = public_material();
+    let old_encrypted = encryptor()
+        .encrypt("docs", "point-1", &material, &[1.0, 2.0])
+        .unwrap();
+    let rotated_encryptor = CkksVectorEncryptor::new(
+        "tenant-a:ckks-v2",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([30u8; 32]),
+        SealedTestBackend,
+    )
+    .unwrap()
+    .with_retired_metadata_key("tenant-a:ckks", SecretKey::from_bytes([29u8; 32]))
+    .unwrap();
+
+    let verified = rotated_encryptor
+        .open("docs", "point-1", &material, &old_encrypted)
+        .unwrap();
+
+    assert_eq!(verified.key_id, "tenant-a:ckks");
+
+    let new_encrypted = rotated_encryptor
+        .encrypt("docs", "point-2", &material, &[3.0, 4.0])
+        .unwrap();
+    let new_verified = rotated_encryptor
+        .open("docs", "point-2", &material, &new_encrypted)
+        .unwrap();
+
+    assert_eq!(new_encrypted.envelope.key_id, "tenant-a:ckks-v2");
+    assert_eq!(new_verified.key_id, "tenant-a:ckks-v2");
+}
+
+#[test]
 fn open_rejects_context_digest_mismatch() {
     let material = public_material();
     let encrypted = encryptor()

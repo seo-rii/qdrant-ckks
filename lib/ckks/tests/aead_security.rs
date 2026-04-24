@@ -1,7 +1,7 @@
 use data_encoding::BASE64URL_NOPAD;
 use proptest::prelude::*;
 use qdrant_ckks::{
-    AeadCipher, CKKS_VECTOR_KEY_DOMAIN, EncryptionContext, EncryptionError,
+    AeadCipher, AeadKeyring, CKKS_VECTOR_KEY_DOMAIN, EncryptionContext, EncryptionError,
     PAYLOAD_TEXT_KEY_DOMAIN, SecretKey,
 };
 
@@ -109,6 +109,40 @@ fn envelope_material_fingerprint_must_match_active_key() {
     assert_eq!(
         other_cipher.decrypt(&envelope, payload_context("42")),
         Err(EncryptionError::MaterialFingerprintMismatch),
+    );
+}
+
+#[test]
+fn keyring_encrypts_with_active_key_and_decrypts_retired_key() {
+    let context = payload_context("42");
+    let retired_cipher =
+        AeadCipher::new("tenant-a:payload-old", SecretKey::from_bytes([9u8; 32])).unwrap();
+    let retired_envelope = retired_cipher.encrypt(b"before rotation", context).unwrap();
+    let keyring = AeadKeyring::new(
+        AeadCipher::new("tenant-a:payload-new", SecretKey::from_bytes([10u8; 32])).unwrap(),
+    )
+    .with_retired(retired_cipher);
+
+    assert_eq!(
+        keyring
+            .decrypt(&retired_envelope, context)
+            .unwrap()
+            .as_slice(),
+        b"before rotation",
+    );
+
+    let active_envelope = keyring.encrypt(b"after rotation", context).unwrap();
+    assert_eq!(active_envelope.key_id, "tenant-a:payload-new");
+    assert_eq!(
+        active_envelope.material_fingerprint,
+        keyring.material_fingerprint(),
+    );
+    assert_eq!(
+        keyring
+            .decrypt(&active_envelope, context)
+            .unwrap()
+            .as_slice(),
+        b"after rotation",
     );
 }
 
