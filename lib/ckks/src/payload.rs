@@ -66,7 +66,13 @@ impl PayloadEncryptionPolicy {
                 || field.starts_with('.')
                 || field.ends_with('.')
                 || field.split('.').any(|part| {
-                    part.is_empty() || part == ENCRYPTED_PAYLOAD_MARKER || part.contains('\0')
+                    part.is_empty()
+                        || part == ENCRYPTED_PAYLOAD_MARKER
+                        || part.contains('\0')
+                        || part.contains('[')
+                        || part.contains(']')
+                        || part.contains('*')
+                        || part.bytes().all(|byte| byte.is_ascii_digit())
                 })
             {
                 return Err(PayloadEncryptionError::InvalidFieldPath(field));

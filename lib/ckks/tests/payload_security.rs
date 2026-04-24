@@ -405,6 +405,24 @@ fn invalid_policies_are_rejected() {
             "{ENCRYPTED_PAYLOAD_MARKER}.body"
         ))),
     );
+    assert_eq!(
+        PayloadEncryptionPolicy::new(["items[].name"]),
+        Err(PayloadEncryptionError::InvalidFieldPath(
+            "items[].name".to_string()
+        )),
+    );
+    assert_eq!(
+        PayloadEncryptionPolicy::new(["items.*.name"]),
+        Err(PayloadEncryptionError::InvalidFieldPath(
+            "items.*.name".to_string()
+        )),
+    );
+    assert_eq!(
+        PayloadEncryptionPolicy::new(["items.0.name"]),
+        Err(PayloadEncryptionError::InvalidFieldPath(
+            "items.0.name".to_string()
+        )),
+    );
 }
 
 proptest! {

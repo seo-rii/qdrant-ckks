@@ -44,6 +44,9 @@ Selected JSON string fields are replaced with a single marker object:
 
 The AEAD associated data binds ciphertexts to `collection`, `point_id`, and field
 path. Moving a ciphertext to another point or field must fail authentication.
+Payload selectors are object dot paths only. Array syntax, wildcards, and
+numeric path components such as `items[].name`, `items.*.name`, or
+`items.0.name` are rejected instead of being interpreted as array traversal.
 
 Collection params enable encryption and select fields/vectors per collection:
 
