@@ -113,6 +113,18 @@ fn envelope_material_fingerprint_must_match_active_key() {
 }
 
 #[test]
+fn stripping_material_fingerprint_breaks_authentication() {
+    let cipher = fixed_cipher();
+    let mut envelope = cipher.encrypt(b"metadata", payload_context("42")).unwrap();
+    envelope.material_fingerprint.clear();
+
+    assert_eq!(
+        cipher.decrypt(&envelope, payload_context("42")),
+        Err(EncryptionError::OpenFailed),
+    );
+}
+
+#[test]
 fn keyring_encrypts_with_active_key_and_decrypts_retired_key() {
     let context = payload_context("42");
     let retired_cipher =

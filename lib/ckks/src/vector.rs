@@ -323,7 +323,7 @@ where
             return Err(CkksError::EmptyCiphertext);
         }
 
-        let envelope = self.metadata_keyring.encrypt(
+        let envelope = self.metadata_keyring.encrypt_with_aad_suffix(
             serde_json::to_vec(&VerifiedCkksVector {
                 crypto_schema_version: self.crypto_schema_version,
                 encryption_epoch: self.encryption_epoch,
@@ -336,6 +336,7 @@ where
             .map_err(|err| CkksError::MalformedEnvelope(err.to_string()))?
             .as_slice(),
             EncryptionContext::ckks_vector(collection, point_id, &self.vector_name),
+            &vector_metadata_aad(VERSION, CKKS_SCHEME),
         )?;
 
         Ok(EncryptedCkksVector {
@@ -359,11 +360,13 @@ where
             return Err(CkksError::UnsupportedScheme(encrypted.scheme.clone()));
         }
 
-        let verified: VerifiedCkksVector = serde_json::from_slice(&self.metadata_keyring.decrypt(
-            &encrypted.envelope,
-            EncryptionContext::ckks_vector(collection, point_id, &self.vector_name),
-        )?)
-        .map_err(|err| CkksError::MalformedEnvelope(err.to_string()))?;
+        let verified: VerifiedCkksVector =
+            serde_json::from_slice(&self.metadata_keyring.decrypt_with_aad_suffix(
+                &encrypted.envelope,
+                EncryptionContext::ckks_vector(collection, point_id, &self.vector_name),
+                &vector_metadata_aad(encrypted.version, &encrypted.scheme),
+            )?)
+            .map_err(|err| CkksError::MalformedEnvelope(err.to_string()))?;
 
         if verified.key_id != encrypted.envelope.key_id {
             return Err(CkksError::MalformedEnvelope(
@@ -416,4 +419,12 @@ where
 
         Ok(verified)
     }
+}
+
+fn vector_metadata_aad(version: u8, scheme: &str) -> Vec<u8> {
+    let mut aad = Vec::new();
+    aad.extend_from_slice(&version.to_be_bytes());
+    aad.extend_from_slice(&(scheme.len() as u32).to_be_bytes());
+    aad.extend_from_slice(scheme.as_bytes());
+    aad
 }

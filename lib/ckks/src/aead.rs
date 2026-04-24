@@ -159,7 +159,11 @@ impl<'a> EncryptionContext<'a> {
         }
     }
 
-    fn aad_bytes(&self) -> Vec<u8> {
+    fn aad_bytes_with_suffix(
+        &self,
+        envelope_header: &EnvelopeHeader<'_>,
+        aad_suffix: &[u8],
+    ) -> Vec<u8> {
         let values = [
             "qdrant-ckks",
             "v1",
@@ -168,6 +172,10 @@ impl<'a> EncryptionContext<'a> {
             self.point_id.unwrap_or_default(),
             self.field_path.unwrap_or_default(),
             self.vector_name.unwrap_or_default(),
+            envelope_header.algorithm,
+            envelope_header.key_id,
+            envelope_header.material_fingerprint,
+            envelope_header.nonce,
         ];
 
         let mut aad = Vec::new();
@@ -176,8 +184,19 @@ impl<'a> EncryptionContext<'a> {
             aad.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
             aad.extend_from_slice(bytes);
         }
+        aad.extend_from_slice(&envelope_header.version.to_be_bytes());
+        aad.extend_from_slice(&(aad_suffix.len() as u32).to_be_bytes());
+        aad.extend_from_slice(aad_suffix);
         aad
     }
+}
+
+struct EnvelopeHeader<'a> {
+    version: u8,
+    algorithm: &'a str,
+    key_id: &'a str,
+    material_fingerprint: &'a str,
+    nonce: &'a str,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -235,16 +254,35 @@ impl AeadCipher {
         plaintext: &[u8],
         context: EncryptionContext<'_>,
     ) -> Result<EncryptedEnvelope, EncryptionError> {
+        self.encrypt_with_aad_suffix(plaintext, context, &[])
+    }
+
+    pub(crate) fn encrypt_with_aad_suffix(
+        &self,
+        plaintext: &[u8],
+        context: EncryptionContext<'_>,
+        aad_suffix: &[u8],
+    ) -> Result<EncryptedEnvelope, EncryptionError> {
         let rng = SystemRandom::new();
         let mut nonce_bytes = [0u8; NONCE_LEN];
         rng.fill(&mut nonce_bytes)
             .map_err(|_| EncryptionError::RandomFailure)?;
+        let nonce_b64 = BASE64URL_NOPAD.encode(&nonce_bytes);
 
         let unbound_key = UnboundKey::new(&AES_256_GCM, self.key.as_bytes())
             .map_err(|_| EncryptionError::SealFailed)?;
         let key = LessSafeKey::new(unbound_key);
         let nonce = Nonce::assume_unique_for_key(nonce_bytes);
-        let aad = context.aad_bytes();
+        let aad = context.aad_bytes_with_suffix(
+            &EnvelopeHeader {
+                version: VERSION,
+                algorithm: ALGORITHM,
+                key_id: &self.key_id,
+                material_fingerprint: &self.material_fingerprint,
+                nonce: &nonce_b64,
+            },
+            aad_suffix,
+        );
         let mut in_out = plaintext.to_vec();
 
         let tag = key
@@ -257,7 +295,7 @@ impl AeadCipher {
             algorithm: ALGORITHM.to_string(),
             key_id: self.key_id.clone(),
             material_fingerprint: self.material_fingerprint.clone(),
-            nonce: BASE64URL_NOPAD.encode(&nonce_bytes),
+            nonce: nonce_b64,
             ciphertext: BASE64URL_NOPAD.encode(&in_out),
         })
     }
@@ -266,6 +304,15 @@ impl AeadCipher {
         &self,
         envelope: &EncryptedEnvelope,
         context: EncryptionContext<'_>,
+    ) -> Result<Vec<u8>, EncryptionError> {
+        self.decrypt_with_aad_suffix(envelope, context, &[])
+    }
+
+    pub(crate) fn decrypt_with_aad_suffix(
+        &self,
+        envelope: &EncryptedEnvelope,
+        context: EncryptionContext<'_>,
+        aad_suffix: &[u8],
     ) -> Result<Vec<u8>, EncryptionError> {
         if envelope.version != VERSION {
             return Err(EncryptionError::UnsupportedVersion(envelope.version));
@@ -303,7 +350,16 @@ impl AeadCipher {
         let unbound_key = UnboundKey::new(&AES_256_GCM, self.key.as_bytes())
             .map_err(|_| EncryptionError::OpenFailed)?;
         let key = LessSafeKey::new(unbound_key);
-        let aad = context.aad_bytes();
+        let aad = context.aad_bytes_with_suffix(
+            &EnvelopeHeader {
+                version: envelope.version,
+                algorithm: &envelope.algorithm,
+                key_id: &envelope.key_id,
+                material_fingerprint: &envelope.material_fingerprint,
+                nonce: &envelope.nonce,
+            },
+            aad_suffix,
+        );
         let plaintext = key
             .open_in_place(nonce, Aad::from(aad.as_slice()), &mut ciphertext)
             .map_err(|_| EncryptionError::OpenFailed)?;
@@ -342,7 +398,17 @@ impl AeadKeyring {
         plaintext: &[u8],
         context: EncryptionContext<'_>,
     ) -> Result<EncryptedEnvelope, EncryptionError> {
-        self.active.encrypt(plaintext, context)
+        self.encrypt_with_aad_suffix(plaintext, context, &[])
+    }
+
+    pub(crate) fn encrypt_with_aad_suffix(
+        &self,
+        plaintext: &[u8],
+        context: EncryptionContext<'_>,
+        aad_suffix: &[u8],
+    ) -> Result<EncryptedEnvelope, EncryptionError> {
+        self.active
+            .encrypt_with_aad_suffix(plaintext, context, aad_suffix)
     }
 
     pub fn decrypt(
@@ -350,13 +416,25 @@ impl AeadKeyring {
         envelope: &EncryptedEnvelope,
         context: EncryptionContext<'_>,
     ) -> Result<Vec<u8>, EncryptionError> {
-        match self.active.decrypt(envelope, context) {
+        self.decrypt_with_aad_suffix(envelope, context, &[])
+    }
+
+    pub(crate) fn decrypt_with_aad_suffix(
+        &self,
+        envelope: &EncryptedEnvelope,
+        context: EncryptionContext<'_>,
+        aad_suffix: &[u8],
+    ) -> Result<Vec<u8>, EncryptionError> {
+        match self
+            .active
+            .decrypt_with_aad_suffix(envelope, context, aad_suffix)
+        {
             Ok(plaintext) => Ok(plaintext),
             Err(active_error @ EncryptionError::KeyMismatch)
             | Err(active_error @ EncryptionError::MaterialFingerprintMismatch)
             | Err(active_error @ EncryptionError::OpenFailed) => {
                 for retired in &self.retired {
-                    match retired.decrypt(envelope, context) {
+                    match retired.decrypt_with_aad_suffix(envelope, context, aad_suffix) {
                         Ok(plaintext) => return Ok(plaintext),
                         Err(EncryptionError::KeyMismatch)
                         | Err(EncryptionError::MaterialFingerprintMismatch)

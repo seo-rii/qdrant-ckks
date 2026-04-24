@@ -4,7 +4,8 @@ use std::time::Duration;
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_ckks::{
     AeadCipher, CkksEncryptionInput, CkksError, CkksParameters, CkksPublicMaterial,
-    CkksVectorBackend, CkksVectorEncryptor, CommandOpenFheBackend, EncryptionContext, SecretKey,
+    CkksVectorBackend, CkksVectorEncryptor, CommandOpenFheBackend, EncryptionContext,
+    EncryptionError, SecretKey,
 };
 use serde_json::json;
 
@@ -484,6 +485,20 @@ fn vector_metadata_tampering_fails_authentication() {
     assert!(matches!(
         encryptor.open("docs", "point-1", &public_material(), &encrypted),
         Err(CkksError::Envelope(_)),
+    ));
+}
+
+#[test]
+fn vector_header_tampering_fails_authentication() {
+    let encryptor = encryptor();
+    let mut encrypted = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0, 2.0])
+        .unwrap();
+    encrypted.envelope.material_fingerprint.clear();
+
+    assert!(matches!(
+        encryptor.open("docs", "point-1", &public_material(), &encrypted),
+        Err(CkksError::Envelope(EncryptionError::OpenFailed)),
     ));
 }
 

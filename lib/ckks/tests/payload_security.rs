@@ -71,6 +71,86 @@ fn payload_decrypt_rejects_wrong_encryption_epoch() {
 }
 
 #[test]
+fn payload_outer_metadata_tampering_fails_authentication() {
+    let encryptor = encryptor();
+    let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
+    let mut payload = object(json!({ "body": "epoch scoped" }));
+
+    encryptor
+        .encrypt_selected_fields("point-1", &mut payload, &policy)
+        .unwrap();
+
+    payload
+        .get_mut("body")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut(ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("schema_version".to_string(), json!(2));
+    assert_eq!(
+        encryptor.decrypt_selected_fields("point-1", &mut payload, &policy),
+        Err(PayloadEncryptionError::Crypto(EncryptionError::OpenFailed)),
+    );
+
+    payload
+        .get_mut("body")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut(ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("schema_version".to_string(), json!(1));
+    payload
+        .get_mut("body")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut(ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("encryption_epoch".to_string(), json!(1));
+    assert_eq!(
+        encryptor.decrypt_selected_fields("point-1", &mut payload, &policy),
+        Err(PayloadEncryptionError::Crypto(EncryptionError::OpenFailed)),
+    );
+
+    payload
+        .get_mut("body")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut(ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("encryption_epoch".to_string(), json!(0));
+    payload
+        .get_mut("body")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut(ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut("envelope")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("material_fingerprint".to_string(), json!(""));
+    assert_eq!(
+        encryptor.decrypt_selected_fields("point-1", &mut payload, &policy),
+        Err(PayloadEncryptionError::Crypto(EncryptionError::OpenFailed)),
+    );
+}
+
+#[test]
 fn payload_decrypt_accepts_retired_key_but_new_writes_use_active_key() {
     let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
     let old_cipher =

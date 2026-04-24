@@ -157,7 +157,14 @@ impl PayloadTextEncryptor {
             };
 
             let context = EncryptionContext::payload_text(&self.collection, point_id, field);
-            let envelope = self.keyring.encrypt(&plaintext, context)?;
+            let aad_suffix = payload_metadata_aad(
+                PAYLOAD_TEXT_KIND,
+                self.crypto_schema_version,
+                self.encryption_epoch,
+            );
+            let envelope =
+                self.keyring
+                    .encrypt_with_aad_suffix(&plaintext, context, &aad_suffix)?;
             *value = stored_envelope_value(
                 envelope,
                 field,
@@ -192,6 +199,15 @@ impl PayloadTextEncryptor {
                     found: json_type_name(value),
                 }
             })?;
+            let context = EncryptionContext::payload_text(&self.collection, point_id, field);
+            let aad_suffix = payload_metadata_aad(
+                &envelope.kind,
+                envelope.schema_version,
+                envelope.encryption_epoch,
+            );
+            let plaintext =
+                self.keyring
+                    .decrypt_with_aad_suffix(&envelope.envelope, context, &aad_suffix)?;
             if envelope.schema_version != self.crypto_schema_version {
                 return Err(PayloadEncryptionError::UnsupportedSchemaVersion(
                     envelope.schema_version,
@@ -200,8 +216,6 @@ impl PayloadTextEncryptor {
             if envelope.encryption_epoch != self.encryption_epoch {
                 return Err(PayloadEncryptionError::EncryptionEpochMismatch);
             }
-            let context = EncryptionContext::payload_text(&self.collection, point_id, field);
-            let plaintext = self.keyring.decrypt(&envelope.envelope, context)?;
             let plaintext = String::from_utf8(plaintext)
                 .map_err(|err| PayloadEncryptionError::InvalidUtf8(err.to_string()))?;
 
@@ -282,6 +296,17 @@ fn stored_envelope_value(
         ENCRYPTED_PAYLOAD_MARKER.to_string(),
         value,
     )])))
+}
+
+fn payload_metadata_aad(kind: &str, schema_version: u16, encryption_epoch: u64) -> Vec<u8> {
+    let mut aad = Vec::new();
+    for value in [kind.as_bytes()] {
+        aad.extend_from_slice(&(value.len() as u32).to_be_bytes());
+        aad.extend_from_slice(value);
+    }
+    aad.extend_from_slice(&schema_version.to_be_bytes());
+    aad.extend_from_slice(&encryption_epoch.to_be_bytes());
+    aad
 }
 
 fn extract_envelope(
