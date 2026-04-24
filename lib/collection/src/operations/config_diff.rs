@@ -619,6 +619,9 @@ mod tests {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
                 key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: crate::config::CryptoMigrationState::Active,
                 rules: vec![crate::config::EncryptionRuleRef {
                     id: "body_conf".to_string(),
                     selector: crate::config::EncryptionSelector::PayloadPaths {

@@ -12,6 +12,8 @@ use crate::aead::{
 
 pub const CKKS_SCHEME: &str = "openfhe-ckks";
 const VERSION: u8 = 1;
+const CRYPTO_SCHEMA_VERSION: u16 = 1;
+const DEFAULT_ENCRYPTION_EPOCH: u64 = 0;
 const MAX_VECTOR_NAME_LEN: usize = 255;
 
 #[derive(Error, Debug, PartialEq, Eq)]
@@ -38,6 +40,10 @@ pub enum CkksError {
     UnsupportedScheme(String),
     #[error("ckks vector envelope is malformed: {0}")]
     MalformedEnvelope(String),
+    #[error("unsupported ckks crypto schema version {0}")]
+    UnsupportedCryptoSchemaVersion(u16),
+    #[error("ckks vector encryption epoch does not match active encryptor")]
+    EncryptionEpochMismatch,
     #[error("openfhe backend failed: {0}")]
     Backend(String),
     #[error(transparent)]
@@ -196,6 +202,10 @@ impl Debug for EncryptedCkksVector {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct VerifiedCkksVector {
+    #[serde(default = "default_crypto_schema_version")]
+    pub crypto_schema_version: u16,
+    #[serde(default)]
+    pub encryption_epoch: u64,
     pub key_id: String,
     pub vector_name: String,
     pub slots: usize,
@@ -207,7 +217,13 @@ pub struct CkksVectorEncryptor<B> {
     metadata_cipher: AeadCipher,
     vector_name: String,
     parameters: CkksParameters,
+    crypto_schema_version: u16,
+    encryption_epoch: u64,
     backend: B,
+}
+
+const fn default_crypto_schema_version() -> u16 {
+    CRYPTO_SCHEMA_VERSION
 }
 
 impl<B> CkksVectorEncryptor<B>
@@ -236,8 +252,15 @@ where
             metadata_cipher: AeadCipher::new(key_id, metadata_key)?,
             vector_name,
             parameters,
+            crypto_schema_version: CRYPTO_SCHEMA_VERSION,
+            encryption_epoch: DEFAULT_ENCRYPTION_EPOCH,
             backend,
         })
+    }
+
+    pub fn with_encryption_epoch(mut self, encryption_epoch: u64) -> Self {
+        self.encryption_epoch = encryption_epoch;
+        self
     }
 
     pub fn encrypt(
@@ -288,6 +311,8 @@ where
 
         let envelope = self.metadata_cipher.encrypt(
             serde_json::to_vec(&VerifiedCkksVector {
+                crypto_schema_version: self.crypto_schema_version,
+                encryption_epoch: self.encryption_epoch,
                 key_id: self.metadata_cipher.key_id().to_string(),
                 vector_name: self.vector_name.clone(),
                 slots: values.len(),
@@ -330,6 +355,14 @@ where
             return Err(CkksError::MalformedEnvelope(
                 "stored key id does not match active key".to_string(),
             ));
+        }
+        if verified.crypto_schema_version != self.crypto_schema_version {
+            return Err(CkksError::UnsupportedCryptoSchemaVersion(
+                verified.crypto_schema_version,
+            ));
+        }
+        if verified.encryption_epoch != self.encryption_epoch {
+            return Err(CkksError::EncryptionEpochMismatch);
         }
         if verified.vector_name != self.vector_name {
             return Err(CkksError::MalformedEnvelope(

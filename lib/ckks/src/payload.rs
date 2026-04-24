@@ -6,6 +6,8 @@ use crate::aead::{AeadCipher, EncryptedEnvelope, EncryptionContext, EncryptionEr
 
 pub const ENCRYPTED_PAYLOAD_MARKER: &str = "$qdrant_ckks";
 const PAYLOAD_TEXT_KIND: &str = "payload_text";
+const CRYPTO_SCHEMA_VERSION: u16 = 1;
+const DEFAULT_ENCRYPTION_EPOCH: u64 = 0;
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum PayloadEncryptionError {
@@ -25,6 +27,10 @@ pub enum PayloadEncryptionError {
     MalformedEnvelope(String),
     #[error("payload field contains unsupported qdrant-ckks envelope kind: {0}")]
     UnsupportedEnvelopeKind(String),
+    #[error("payload field contains unsupported qdrant-ckks schema version: {0}")]
+    UnsupportedSchemaVersion(u16),
+    #[error("payload field encryption epoch does not match active policy")]
+    EncryptionEpochMismatch,
     #[error("payload plaintext is not valid UTF-8 after decryption: {0}")]
     InvalidUtf8(String),
     #[error(transparent)]
@@ -85,6 +91,8 @@ impl PayloadEncryptionPolicy {
 pub struct PayloadTextEncryptor {
     collection: String,
     cipher: AeadCipher,
+    crypto_schema_version: u16,
+    encryption_epoch: u64,
 }
 
 impl PayloadTextEncryptor {
@@ -98,7 +106,17 @@ impl PayloadTextEncryptor {
                 "collection".to_string(),
             ));
         }
-        Ok(Self { collection, cipher })
+        Ok(Self {
+            collection,
+            cipher,
+            crypto_schema_version: CRYPTO_SCHEMA_VERSION,
+            encryption_epoch: DEFAULT_ENCRYPTION_EPOCH,
+        })
+    }
+
+    pub fn with_encryption_epoch(mut self, encryption_epoch: u64) -> Self {
+        self.encryption_epoch = encryption_epoch;
+        self
     }
 
     pub fn encrypt_selected_fields(
@@ -133,7 +151,12 @@ impl PayloadTextEncryptor {
 
             let context = EncryptionContext::payload_text(&self.collection, point_id, field);
             let envelope = self.cipher.encrypt(&plaintext, context)?;
-            *value = stored_envelope_value(envelope, field)?;
+            *value = stored_envelope_value(
+                envelope,
+                field,
+                self.crypto_schema_version,
+                self.encryption_epoch,
+            )?;
             encrypted += 1;
         }
 
@@ -162,8 +185,16 @@ impl PayloadTextEncryptor {
                     found: json_type_name(value),
                 }
             })?;
+            if envelope.schema_version != self.crypto_schema_version {
+                return Err(PayloadEncryptionError::UnsupportedSchemaVersion(
+                    envelope.schema_version,
+                ));
+            }
+            if envelope.encryption_epoch != self.encryption_epoch {
+                return Err(PayloadEncryptionError::EncryptionEpochMismatch);
+            }
             let context = EncryptionContext::payload_text(&self.collection, point_id, field);
-            let plaintext = self.cipher.decrypt(&envelope, context)?;
+            let plaintext = self.cipher.decrypt(&envelope.envelope, context)?;
             let plaintext = String::from_utf8(plaintext)
                 .map_err(|err| PayloadEncryptionError::InvalidUtf8(err.to_string()))?;
 
@@ -184,7 +215,15 @@ pub fn is_encrypted_payload_value(value: &Value) -> bool {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct StoredPayloadEnvelope {
     kind: String,
+    #[serde(default = "default_crypto_schema_version")]
+    schema_version: u16,
+    #[serde(default)]
+    encryption_epoch: u64,
     envelope: EncryptedEnvelope,
+}
+
+const fn default_crypto_schema_version() -> u16 {
+    CRYPTO_SCHEMA_VERSION
 }
 
 fn locate_path_mut<'a>(
@@ -221,9 +260,13 @@ fn locate_path_mut<'a>(
 fn stored_envelope_value(
     envelope: EncryptedEnvelope,
     field: &str,
+    schema_version: u16,
+    encryption_epoch: u64,
 ) -> Result<Value, PayloadEncryptionError> {
     let envelope = StoredPayloadEnvelope {
         kind: PAYLOAD_TEXT_KIND.to_string(),
+        schema_version,
+        encryption_epoch,
         envelope,
     };
     let value = serde_json::to_value(envelope)
@@ -237,7 +280,7 @@ fn stored_envelope_value(
 fn extract_envelope(
     value: &Value,
     field: &str,
-) -> Result<Option<EncryptedEnvelope>, PayloadEncryptionError> {
+) -> Result<Option<StoredPayloadEnvelope>, PayloadEncryptionError> {
     let Value::Object(object) = value else {
         return Ok(None);
     };
@@ -256,7 +299,7 @@ fn extract_envelope(
         ));
     }
 
-    Ok(Some(envelope.envelope))
+    Ok(Some(envelope))
 }
 
 fn json_type_name(value: &Value) -> &'static str {

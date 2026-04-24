@@ -38,6 +38,8 @@ fn selected_body_field_is_encrypted_without_leaking_plaintext() {
 
     let serialized = serde_json::to_string(&payload).unwrap();
     assert!(serialized.contains(ENCRYPTED_PAYLOAD_MARKER));
+    assert!(serialized.contains("\"schema_version\":1"));
+    assert!(serialized.contains("\"encryption_epoch\":0"));
     assert!(!serialized.contains("classified body text"));
     assert!(serialized.contains("public title"));
 
@@ -48,6 +50,23 @@ fn selected_body_field_is_encrypted_without_leaking_plaintext() {
         1,
     );
     assert_eq!(payload.get("body"), Some(&json!("classified body text")));
+}
+
+#[test]
+fn payload_decrypt_rejects_wrong_encryption_epoch() {
+    let base_encryptor = encryptor();
+    let next_epoch_encryptor = encryptor().with_encryption_epoch(1);
+    let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
+    let mut payload = object(json!({ "body": "epoch scoped" }));
+
+    base_encryptor
+        .encrypt_selected_fields("point-1", &mut payload, &policy)
+        .unwrap();
+
+    assert_eq!(
+        next_epoch_encryptor.decrypt_selected_fields("point-1", &mut payload, &policy),
+        Err(PayloadEncryptionError::EncryptionEpochMismatch),
+    );
 }
 
 #[test]

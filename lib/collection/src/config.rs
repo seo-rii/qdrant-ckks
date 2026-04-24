@@ -133,6 +133,9 @@ mod ckks_tests {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
                 key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
                 rules: vec![
                     EncryptionRuleRef {
                         id: "body_conf".to_string(),
@@ -207,6 +210,9 @@ mod ckks_tests {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
                 key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
                 rules: vec![EncryptionRuleRef {
                     id: "body_conf".to_string(),
                     selector: EncryptionSelector::PayloadPaths {
@@ -222,6 +228,9 @@ mod ckks_tests {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
                 key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
                 rules: vec![EncryptionRuleRef {
                     id: "summary_conf".to_string(),
                     selector: EncryptionSelector::PayloadPaths {
@@ -256,6 +265,9 @@ mod ckks_tests {
         };
 
         let encryption = CollectionEncryptionConfig::from_legacy_ckks(&ckks).unwrap();
+        assert_eq!(encryption.crypto_schema_version, 1);
+        assert_eq!(encryption.encryption_epoch, 0);
+        assert_eq!(encryption.migration_state, CryptoMigrationState::Active);
         assert_eq!(encryption.rules.len(), 2);
         assert_eq!(
             encryption.legacy_ckks_projection(),
@@ -274,6 +286,9 @@ mod ckks_tests {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
                 key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
                 rules: vec![EncryptionRuleRef {
                     id: "tenant_index".to_string(),
                     selector: EncryptionSelector::MetadataKeys {
@@ -308,6 +323,19 @@ pub enum ShardingMethod {
     #[default]
     Auto,
     Custom,
+}
+
+#[derive(
+    Debug, Deserialize, Serialize, JsonSchema, Anonymize, PartialEq, Eq, Hash, Clone, Copy, Default,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum CryptoMigrationState {
+    #[default]
+    Disabled,
+    Encrypting,
+    Active,
+    Rotating,
+    Decrypting,
 }
 
 #[derive(
@@ -406,9 +434,23 @@ pub struct CollectionEncryptionConfig {
     #[validate(custom(function = "validate_ckks_key_id"))]
     #[anonymize(false)]
     pub key_id: Option<String>,
+    #[serde(default = "default_crypto_schema_version")]
+    #[validate(range(min = 1))]
+    #[anonymize(false)]
+    pub crypto_schema_version: u16,
+    #[serde(default)]
+    #[anonymize(false)]
+    pub encryption_epoch: u64,
+    #[serde(default)]
+    #[anonymize(false)]
+    pub migration_state: CryptoMigrationState,
     #[validate(nested)]
     #[validate(custom(function = "validate_encryption_rules"))]
     pub rules: Vec<EncryptionRuleRef>,
+}
+
+const fn default_crypto_schema_version() -> u16 {
+    1
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Anonymize, Clone, PartialEq, Eq, Hash)]
@@ -483,6 +525,9 @@ impl CollectionEncryptionConfig {
         Some(Self {
             version: 1,
             key_id: value.key_id.clone(),
+            crypto_schema_version: default_crypto_schema_version(),
+            encryption_epoch: 0,
+            migration_state: CryptoMigrationState::Active,
             rules,
         })
     }

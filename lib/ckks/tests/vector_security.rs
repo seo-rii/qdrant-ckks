@@ -59,6 +59,8 @@ fn ckks_vector_envelope_does_not_serialize_plain_embedding() {
 
     assert_eq!(encrypted.scheme, "openfhe-ckks");
     assert_eq!(encrypted.envelope.key_id, "tenant-a:ckks");
+    assert_eq!(verified.crypto_schema_version, 1);
+    assert_eq!(verified.encryption_epoch, 0);
     assert_eq!(verified.key_id, "tenant-a:ckks");
     assert_eq!(verified.vector_name, "embedding");
     assert_eq!(verified.slots, 3);
@@ -89,6 +91,20 @@ fn context_digest_changes_with_public_material_and_parameters() {
         other_key.digest_for(&CkksParameters::openfhe_default_128_bit()),
     );
     assert_ne!(base_digest, base.digest_for(&other_params));
+}
+
+#[test]
+fn open_rejects_encryption_epoch_mismatch() {
+    let material = public_material();
+    let encrypted = encryptor()
+        .encrypt("docs", "point-1", &material, &[1.0, 2.0])
+        .unwrap();
+    let next_epoch_encryptor = encryptor().with_encryption_epoch(1);
+
+    assert_eq!(
+        next_epoch_encryptor.open("docs", "point-1", &material, &encrypted),
+        Err(CkksError::EncryptionEpochMismatch),
+    );
 }
 
 #[test]
