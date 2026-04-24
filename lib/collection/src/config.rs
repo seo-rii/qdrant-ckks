@@ -132,6 +132,7 @@ mod ckks_tests {
         let params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
                 rules: vec![
                     EncryptionRuleRef {
                         id: "body_conf".to_string(),
@@ -205,6 +206,7 @@ mod ckks_tests {
         let encryption_params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
                 rules: vec![EncryptionRuleRef {
                     id: "body_conf".to_string(),
                     selector: EncryptionSelector::PayloadPaths {
@@ -219,6 +221,7 @@ mod ckks_tests {
         let changed_encryption = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
                 rules: vec![EncryptionRuleRef {
                     id: "summary_conf".to_string(),
                     selector: EncryptionSelector::PayloadPaths {
@@ -258,7 +261,7 @@ mod ckks_tests {
             encryption.legacy_ckks_projection(),
             Some(CkksCollectionConfig {
                 enabled: true,
-                key_id: None,
+                key_id: Some("tenant-a:docs".to_string()),
                 payload_text_fields: vec!["body".to_string()],
                 vector_names: vec!["embedding".to_string()],
             }),
@@ -270,6 +273,7 @@ mod ckks_tests {
         let params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
                 rules: vec![EncryptionRuleRef {
                     id: "tenant_index".to_string(),
                     selector: EncryptionSelector::MetadataKeys {
@@ -397,6 +401,11 @@ pub struct CollectionEncryptionConfig {
     #[validate(range(min = 1))]
     #[anonymize(false)]
     pub version: u16,
+    /// Public key id recorded in encryption envelopes. Key material is resolved from runtime config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[validate(custom(function = "validate_ckks_key_id"))]
+    #[anonymize(false)]
+    pub key_id: Option<String>,
     #[validate(nested)]
     #[validate(custom(function = "validate_encryption_rules"))]
     pub rules: Vec<EncryptionRuleRef>,
@@ -471,7 +480,11 @@ impl CollectionEncryptionConfig {
             return None;
         }
 
-        Some(Self { version: 1, rules })
+        Some(Self {
+            version: 1,
+            key_id: value.key_id.clone(),
+            rules,
+        })
     }
 
     pub fn legacy_ckks_projection(&self) -> Option<CkksCollectionConfig> {
@@ -496,7 +509,7 @@ impl CollectionEncryptionConfig {
 
         Some(CkksCollectionConfig {
             enabled: true,
-            key_id: None,
+            key_id: self.key_id.clone(),
             payload_text_fields,
             vector_names,
         })

@@ -618,6 +618,7 @@ mod tests {
         let params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
                 rules: vec![crate::config::EncryptionRuleRef {
                     id: "body_conf".to_string(),
                     selector: crate::config::EncryptionSelector::PayloadPaths {
