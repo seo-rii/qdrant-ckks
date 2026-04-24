@@ -1,5 +1,5 @@
 use std::fs;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_ckks::{
@@ -357,6 +357,48 @@ sleep 10
         .unwrap_err();
 
     assert!(matches!(err, CkksError::Backend(message) if message.contains("timed out")));
+}
+
+#[cfg(unix)]
+#[test]
+fn command_openfhe_backend_timeout_does_not_wait_for_stdout_holder() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("stdout-held-openfhe-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+IFS= read -r _request
+(sleep 2) &
+sleep 10
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new("bash")
+        .with_args([script_path.display().to_string()])
+        .with_timeout(Duration::from_millis(50));
+    let encryptor = CkksVectorEncryptor::new(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+
+    let started = Instant::now();
+    let err = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0])
+        .unwrap_err();
+
+    assert!(matches!(err, CkksError::Backend(message) if message.contains("timed out")));
+    assert!(started.elapsed() < Duration::from_secs(1));
 }
 
 #[cfg(unix)]

@@ -1,6 +1,6 @@
 use std::io::{self, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
@@ -22,7 +22,7 @@ pub struct CommandOpenFheBackend {
     args: Vec<String>,
     timeout: Duration,
     max_output_bytes: usize,
-    worker: Arc<Mutex<Option<WorkerProcess>>>,
+    worker: Arc<Mutex<Option<Arc<WorkerProcess>>>>,
 }
 
 impl std::fmt::Debug for CommandOpenFheBackend {
@@ -48,25 +48,83 @@ impl PartialEq for CommandOpenFheBackend {
 impl Eq for CommandOpenFheBackend {}
 
 struct WorkerProcess {
-    child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    child: Mutex<Child>,
+    stdin: Mutex<ChildStdin>,
+    stdout_rx: Mutex<mpsc::Receiver<BridgeStdoutEvent>>,
     stderr_truncated: Arc<AtomicBool>,
-    stderr_thread: Option<JoinHandle<io::Result<()>>>,
+    terminated: AtomicBool,
+    request_lock: Mutex<()>,
+    stdout_thread: Mutex<Option<JoinHandle<()>>>,
+    stderr_thread: Mutex<Option<JoinHandle<io::Result<()>>>>,
+}
+
+enum BridgeStdoutEvent {
+    Response { bytes: Vec<u8>, truncated: bool },
+    Eof,
+    Error(io::Error),
 }
 
 impl WorkerProcess {
-    fn shutdown(&mut self) -> Result<(), CkksError> {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        if let Some(stderr_thread) = self.stderr_thread.take() {
-            stderr_thread
-                .join()
-                .map_err(|_| CkksError::Backend("bridge stderr reader panicked".to_string()))?
-                .map_err(|err| {
-                    CkksError::Backend(format!("failed to drain OpenFHE bridge stderr: {err}"))
-                })?;
+    fn try_wait(&self) -> Result<Option<ExitStatus>, CkksError> {
+        self.child
+            .lock()
+            .map_err(|_| CkksError::Backend("OpenFHE bridge child mutex was poisoned".to_string()))?
+            .try_wait()
+            .map_err(|err| {
+                CkksError::Backend(format!("failed to poll OpenFHE bridge status: {err}"))
+            })
+    }
+
+    fn shutdown(&self, join_readers: bool) -> Result<(), CkksError> {
+        if !self.terminated.swap(true, Ordering::SeqCst) {
+            let mut child = self.child.lock().map_err(|_| {
+                CkksError::Backend("OpenFHE bridge child mutex was poisoned".to_string())
+            })?;
+            let _ = child.kill();
+            let _ = child.wait();
         }
+
+        if join_readers {
+            if let Some(stdout_thread) = self
+                .stdout_thread
+                .lock()
+                .map_err(|_| {
+                    CkksError::Backend(
+                        "OpenFHE bridge stdout thread mutex was poisoned".to_string(),
+                    )
+                })?
+                .take()
+            {
+                stdout_thread
+                    .join()
+                    .map_err(|_| CkksError::Backend("bridge stdout reader panicked".to_string()))?;
+            }
+            if let Some(stderr_thread) = self
+                .stderr_thread
+                .lock()
+                .map_err(|_| {
+                    CkksError::Backend(
+                        "OpenFHE bridge stderr thread mutex was poisoned".to_string(),
+                    )
+                })?
+                .take()
+            {
+                stderr_thread
+                    .join()
+                    .map_err(|_| CkksError::Backend("bridge stderr reader panicked".to_string()))?
+                    .map_err(|err| {
+                        CkksError::Backend(format!("failed to drain OpenFHE bridge stderr: {err}"))
+                    })?;
+            }
+        } else {
+            if let Ok(mut stdout_thread) = self.stdout_thread.lock() {
+                let _ = stdout_thread.take();
+            }
+            if let Ok(mut stderr_thread) = self.stderr_thread.lock() {
+                let _ = stderr_thread.take();
+            }
+        }
+
         Ok(())
     }
 }
@@ -111,9 +169,9 @@ impl Drop for CommandOpenFheBackend {
             return;
         }
         if let Ok(mut worker) = self.worker.lock()
-            && let Some(mut worker) = worker.take()
+            && let Some(worker) = worker.take()
         {
-            let _ = worker.shutdown();
+            let _ = worker.shutdown(false);
         }
     }
 }
@@ -137,92 +195,31 @@ impl CkksVectorBackend for CommandOpenFheBackend {
         request_bytes.push(b'\n');
 
         for attempt in 0..=1 {
-            let mut worker = self.worker.lock().map_err(|_| {
-                CkksError::Backend("OpenFHE bridge worker mutex was poisoned".to_string())
+            let worker_process = self.worker_process()?;
+            let _request_guard = worker_process.request_lock.lock().map_err(|_| {
+                CkksError::Backend("OpenFHE bridge request mutex was poisoned".to_string())
             })?;
-            if let Some(worker_process) = worker.as_mut() {
-                if worker_process
-                    .child
-                    .try_wait()
-                    .map_err(|err| {
-                        CkksError::Backend(format!("failed to poll OpenFHE bridge status: {err}"))
-                    })?
-                    .is_some()
-                {
-                    worker_process.shutdown()?;
-                    *worker = None;
-                }
-            }
-
-            if worker.is_none() {
-                let mut child = Command::new(&self.program)
-                    .args(&self.args)
-                    .stdin(Stdio::piped())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .map_err(|err| {
-                        CkksError::Backend(format!("failed to start OpenFHE bridge: {err}"))
-                    })?;
-                let stdin = child
-                    .stdin
-                    .take()
-                    .ok_or_else(|| CkksError::Backend("failed to open bridge stdin".to_string()))?;
-                let stdout = child.stdout.take().ok_or_else(|| {
-                    CkksError::Backend("failed to open bridge stdout".to_string())
-                })?;
-                let stderr = child.stderr.take().ok_or_else(|| {
-                    CkksError::Backend("failed to open bridge stderr".to_string())
-                })?;
-                let stderr_truncated = Arc::new(AtomicBool::new(false));
-                let stderr_truncated_thread = Arc::clone(&stderr_truncated);
-                let max_output_bytes = self.max_output_bytes;
-                let stderr_thread = thread::spawn(move || {
-                    let mut stderr = stderr;
-                    let mut buffer = [0u8; 4096];
-                    let mut total = 0usize;
-                    loop {
-                        let read = stderr.read(&mut buffer)?;
-                        if read == 0 {
-                            return Ok(());
-                        }
-                        total = total.saturating_add(read);
-                        if total > max_output_bytes {
-                            stderr_truncated_thread.store(true, Ordering::Relaxed);
-                        }
-                    }
-                });
-                *worker = Some(WorkerProcess {
-                    child,
-                    stdin,
-                    stdout: BufReader::new(stdout),
-                    stderr_truncated,
-                    stderr_thread: Some(stderr_thread),
-                });
-            }
-
-            let worker_process = worker.as_mut().unwrap();
             if worker_process.stderr_truncated.load(Ordering::Relaxed) {
-                worker_process.shutdown()?;
-                *worker = None;
+                self.discard_worker(&worker_process, false)?;
                 return Err(CkksError::Backend(format!(
                     "OpenFHE bridge stderr exceeded {} bytes",
                     self.max_output_bytes,
                 )));
             }
 
-            if let Err(err) = worker_process
-                .stdin
-                .write_all(&request_bytes)
-                .and_then(|_| worker_process.stdin.flush())
-            {
+            let write_result = {
+                let mut stdin = worker_process.stdin.lock().map_err(|_| {
+                    CkksError::Backend("OpenFHE bridge stdin mutex was poisoned".to_string())
+                })?;
+                stdin.write_all(&request_bytes).and_then(|_| stdin.flush())
+            };
+            if let Err(err) = write_result {
                 let retry = attempt == 0
                     && matches!(
                         err.kind(),
                         io::ErrorKind::BrokenPipe | io::ErrorKind::UnexpectedEof
                     );
-                worker_process.shutdown()?;
-                *worker = None;
+                self.discard_worker(&worker_process, false)?;
                 if retry {
                     continue;
                 }
@@ -231,97 +228,73 @@ impl CkksVectorBackend for CommandOpenFheBackend {
                 )));
             }
 
-            let child = &mut worker_process.child;
-            let stdout = &mut worker_process.stdout;
-            let (tx, rx) = mpsc::channel();
-            let max_output_bytes = self.max_output_bytes;
             let timeout = self.timeout;
-            let mut timed_out = false;
-            let response = thread::scope(|scope| {
-                scope.spawn(|| {
-                    let mut bytes = Vec::new();
-                    let mut truncated = false;
-                    let mut byte = [0u8; 1];
-                    loop {
-                        match stdout.read(&mut byte) {
-                            Ok(0) => break,
-                            Ok(_) => {
-                                if bytes.len() == max_output_bytes {
-                                    truncated = true;
-                                    break;
-                                }
-                                bytes.push(byte[0]);
-                                if byte[0] == b'\n' {
-                                    break;
-                                }
-                            }
-                            Err(err) => {
-                                let _ = tx.send(Err(err));
-                                return;
-                            }
-                        }
-                    }
-                    let _ = tx.send(Ok((bytes, truncated)));
-                });
-
-                match rx.recv_timeout(timeout) {
-                    Ok(Ok((mut bytes, truncated))) => {
-                        if bytes.last() == Some(&b'\n') {
-                            bytes.pop();
-                            if bytes.last() == Some(&b'\r') {
-                                bytes.pop();
-                            }
-                        }
-                        Ok((bytes, truncated))
-                    }
-                    Ok(Err(err)) => Err(CkksError::Backend(format!(
-                        "failed to read OpenFHE bridge response: {err}",
-                    ))),
-                    Err(mpsc::RecvTimeoutError::Timeout) => {
-                        timed_out = true;
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        Err(CkksError::Backend(format!(
-                            "OpenFHE bridge timed out after {} ms",
-                            timeout.as_millis(),
-                        )))
-                    }
-                    Err(mpsc::RecvTimeoutError::Disconnected) => Err(CkksError::Backend(
-                        "bridge stdout reader disconnected".to_string(),
-                    )),
-                }
-            });
-
-            if timed_out {
-                worker_process.shutdown()?;
-                *worker = None;
-                return Err(CkksError::Backend(format!(
-                    "OpenFHE bridge timed out after {} ms",
-                    timeout.as_millis(),
-                )));
-            }
-
+            let response = worker_process
+                .stdout_rx
+                .lock()
+                .map_err(|_| {
+                    CkksError::Backend(
+                        "OpenFHE bridge stdout receiver mutex was poisoned".to_string(),
+                    )
+                })?
+                .recv_timeout(timeout);
             let (response_bytes, truncated) = match response {
-                Ok(response) => response,
-                Err(err) => {
-                    let retry = attempt == 0
-                        && matches!(
-                            err,
-                            CkksError::Backend(ref message)
-                                if message.contains("failed to read OpenFHE bridge response")
-                                    || message.contains("bridge stdout reader disconnected")
-                        );
-                    worker_process.shutdown()?;
-                    *worker = None;
+                Ok(BridgeStdoutEvent::Response {
+                    mut bytes,
+                    truncated,
+                }) => {
+                    if bytes.last() == Some(&b'\n') {
+                        bytes.pop();
+                        if bytes.last() == Some(&b'\r') {
+                            bytes.pop();
+                        }
+                    }
+                    (bytes, truncated)
+                }
+                Ok(BridgeStdoutEvent::Eof) => {
+                    let retry = attempt == 0;
+                    self.discard_worker(&worker_process, false)?;
                     if retry {
                         continue;
                     }
-                    return Err(err);
+                    return Err(CkksError::Backend(
+                        "OpenFHE bridge returned an empty response".to_string(),
+                    ));
+                }
+                Ok(BridgeStdoutEvent::Error(err)) => {
+                    let retry = attempt == 0
+                        && matches!(
+                            err.kind(),
+                            io::ErrorKind::BrokenPipe | io::ErrorKind::UnexpectedEof
+                        );
+                    self.discard_worker(&worker_process, false)?;
+                    if retry {
+                        continue;
+                    }
+                    return Err(CkksError::Backend(format!(
+                        "failed to read OpenFHE bridge response: {err}",
+                    )));
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    self.discard_worker(&worker_process, false)?;
+                    return Err(CkksError::Backend(format!(
+                        "OpenFHE bridge timed out after {} ms",
+                        timeout.as_millis(),
+                    )));
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    let retry = attempt == 0;
+                    self.discard_worker(&worker_process, false)?;
+                    if retry {
+                        continue;
+                    }
+                    return Err(CkksError::Backend(
+                        "bridge stdout reader disconnected".to_string(),
+                    ));
                 }
             };
             if truncated {
-                let mut worker_process = worker.take().unwrap();
-                worker_process.shutdown()?;
+                self.discard_worker(&worker_process, false)?;
                 return Err(CkksError::Backend(format!(
                     "OpenFHE bridge stdout exceeded {} bytes",
                     self.max_output_bytes,
@@ -329,8 +302,7 @@ impl CkksVectorBackend for CommandOpenFheBackend {
             }
             if response_bytes.is_empty() {
                 let retry = attempt == 0;
-                let mut worker_process = worker.take().unwrap();
-                worker_process.shutdown()?;
+                self.discard_worker(&worker_process, false)?;
                 if retry {
                     continue;
                 }
@@ -338,32 +310,17 @@ impl CkksVectorBackend for CommandOpenFheBackend {
                     "OpenFHE bridge returned an empty response".to_string(),
                 ));
             }
-            let bridge_status = {
-                let worker_process = worker.as_mut().unwrap();
-                if worker_process.stderr_truncated.load(Ordering::Relaxed) {
-                    Err(CkksError::Backend(format!(
-                        "OpenFHE bridge stderr exceeded {} bytes",
-                        self.max_output_bytes,
-                    )))
-                } else {
-                    worker_process.child.try_wait().map_err(|err| {
-                        CkksError::Backend(format!("failed to poll OpenFHE bridge status: {err}"))
-                    })
-                }
-            };
-            let bridge_status = match bridge_status {
-                Ok(bridge_status) => bridge_status,
-                Err(err) => {
-                    if let Some(mut worker_process) = worker.take() {
-                        worker_process.shutdown()?;
-                    }
-                    return Err(err);
-                }
-            };
+            if worker_process.stderr_truncated.load(Ordering::Relaxed) {
+                self.discard_worker(&worker_process, false)?;
+                return Err(CkksError::Backend(format!(
+                    "OpenFHE bridge stderr exceeded {} bytes",
+                    self.max_output_bytes,
+                )));
+            }
+            let bridge_status = worker_process.try_wait()?;
             match bridge_status {
                 Some(status) => {
-                    let mut worker_process = worker.take().unwrap();
-                    worker_process.shutdown()?;
+                    self.discard_worker(&worker_process, false)?;
                     if !status.success() {
                         return Err(CkksError::Backend(format!(
                             "OpenFHE bridge exited with status {}",
@@ -377,18 +334,14 @@ impl CkksVectorBackend for CommandOpenFheBackend {
             let response: CommandOpenFheResponse = match serde_json::from_slice(&response_bytes) {
                 Ok(response) => response,
                 Err(err) => {
-                    if let Some(mut worker_process) = worker.take() {
-                        worker_process.shutdown()?;
-                    }
+                    self.discard_worker(&worker_process, false)?;
                     return Err(CkksError::Backend(format!(
                         "failed to parse OpenFHE bridge response: {err}",
                     )));
                 }
             };
             if response.version != 1 {
-                if let Some(mut worker_process) = worker.take() {
-                    worker_process.shutdown()?;
-                }
+                self.discard_worker(&worker_process, false)?;
                 return Err(CkksError::Backend(format!(
                     "unsupported OpenFHE bridge response version {}",
                     response.version,
@@ -398,9 +351,7 @@ impl CkksVectorBackend for CommandOpenFheBackend {
             return match BASE64URL_NOPAD.decode(response.ciphertext.as_bytes()) {
                 Ok(ciphertext) => Ok(ciphertext),
                 Err(_) => {
-                    if let Some(mut worker_process) = worker.take() {
-                        worker_process.shutdown()?;
-                    }
+                    self.discard_worker(&worker_process, false)?;
                     Err(CkksError::Backend(
                         "OpenFHE bridge returned invalid ciphertext".to_string(),
                     ))
@@ -411,6 +362,143 @@ impl CkksVectorBackend for CommandOpenFheBackend {
         Err(CkksError::Backend(
             "OpenFHE bridge retry budget was exhausted".to_string(),
         ))
+    }
+}
+
+impl CommandOpenFheBackend {
+    fn worker_process(&self) -> Result<Arc<WorkerProcess>, CkksError> {
+        let mut worker = self.worker.lock().map_err(|_| {
+            CkksError::Backend("OpenFHE bridge worker mutex was poisoned".to_string())
+        })?;
+        if let Some(worker_process) = worker.as_ref() {
+            if worker_process.stderr_truncated.load(Ordering::Relaxed) {
+                worker_process.shutdown(false)?;
+                *worker = None;
+                return Err(CkksError::Backend(format!(
+                    "OpenFHE bridge stderr exceeded {} bytes",
+                    self.max_output_bytes,
+                )));
+            }
+            if worker_process.try_wait()?.is_some() {
+                worker_process.shutdown(false)?;
+                *worker = None;
+            }
+        }
+        if let Some(worker_process) = worker.as_ref() {
+            return Ok(Arc::clone(worker_process));
+        }
+
+        let mut child = Command::new(&self.program)
+            .args(&self.args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|err| CkksError::Backend(format!("failed to start OpenFHE bridge: {err}")))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| CkksError::Backend("failed to open bridge stdin".to_string()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| CkksError::Backend("failed to open bridge stdout".to_string()))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| CkksError::Backend("failed to open bridge stderr".to_string()))?;
+
+        let (stdout_tx, stdout_rx) = mpsc::channel();
+        let max_output_bytes = self.max_output_bytes;
+        let stdout_thread = thread::spawn(move || {
+            let mut stdout = BufReader::new(stdout);
+            loop {
+                let mut bytes = Vec::new();
+                let mut truncated = false;
+                let mut byte = [0u8; 1];
+                loop {
+                    match stdout.read(&mut byte) {
+                        Ok(0) => {
+                            if stdout_tx.send(BridgeStdoutEvent::Eof).is_err() {
+                                return;
+                            }
+                            return;
+                        }
+                        Ok(_) => {
+                            if bytes.len() == max_output_bytes {
+                                truncated = true;
+                                break;
+                            }
+                            bytes.push(byte[0]);
+                            if byte[0] == b'\n' {
+                                break;
+                            }
+                        }
+                        Err(err) => {
+                            let _ = stdout_tx.send(BridgeStdoutEvent::Error(err));
+                            return;
+                        }
+                    }
+                }
+                if stdout_tx
+                    .send(BridgeStdoutEvent::Response { bytes, truncated })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+
+        let stderr_truncated = Arc::new(AtomicBool::new(false));
+        let stderr_truncated_thread = Arc::clone(&stderr_truncated);
+        let max_output_bytes = self.max_output_bytes;
+        let stderr_thread = thread::spawn(move || {
+            let mut stderr = stderr;
+            let mut buffer = [0u8; 4096];
+            let mut total = 0usize;
+            loop {
+                let read = stderr.read(&mut buffer)?;
+                if read == 0 {
+                    return Ok(());
+                }
+                total = total.saturating_add(read);
+                if total > max_output_bytes {
+                    stderr_truncated_thread.store(true, Ordering::Relaxed);
+                    return Ok(());
+                }
+            }
+        });
+
+        let worker_process = Arc::new(WorkerProcess {
+            child: Mutex::new(child),
+            stdin: Mutex::new(stdin),
+            stdout_rx: Mutex::new(stdout_rx),
+            stderr_truncated,
+            terminated: AtomicBool::new(false),
+            request_lock: Mutex::new(()),
+            stdout_thread: Mutex::new(Some(stdout_thread)),
+            stderr_thread: Mutex::new(Some(stderr_thread)),
+        });
+        *worker = Some(Arc::clone(&worker_process));
+        Ok(worker_process)
+    }
+
+    fn discard_worker(
+        &self,
+        worker_process: &Arc<WorkerProcess>,
+        join_readers: bool,
+    ) -> Result<(), CkksError> {
+        worker_process.shutdown(join_readers)?;
+        let mut worker = self.worker.lock().map_err(|_| {
+            CkksError::Backend("OpenFHE bridge worker mutex was poisoned".to_string())
+        })?;
+        if worker
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, worker_process))
+        {
+            *worker = None;
+        }
+        Ok(())
     }
 }
 
