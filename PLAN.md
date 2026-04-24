@@ -1,0 +1,309 @@
+# qdrant-ckks Large Work Plan
+
+이 문서는 `RISK_REGISTER.md`의 대형 작업을 구현 순서대로 정리한다. 작은 방어 패치는 이미 별도 커밋으로 일부 처리됐고, 여기서는 설계, migration, 테스트 인프라, 구조 변경이 필요한 작업만 다룬다.
+
+기준 브랜치: `ckks`  
+작성일: 2026-04-24
+
+## 작업 원칙
+
+- 각 단계는 독립 커밋 또는 작은 PR 단위로 끝낸다.
+- 보안 기능은 fail-closed 테스트를 먼저 추가하고 구현한다.
+- collection config 변경, key lifecycle, snapshot/replication 동작은 문서와 테스트 없이 코드만 바꾸지 않는다.
+- legacy `params.ckks`는 boundary adapter로만 남기고, 내부 구현은 generic `params.encryption` 기준으로 수렴시킨다.
+- `RISK_REGISTER.md`는 추적 문서이고 커밋 대상이 아니다.
+
+## Phase 0: 기준선 고정
+
+목표: 이후 대형 변경이 현재 보안 계약을 깨뜨리지 않도록 최소 regression suite를 고정한다.
+
+작업:
+
+- `cargo test -p qdrant-ckks --test aead_security --test payload_security --test vector_security`를 기본 crypto regression으로 고정한다.
+- `cargo test -p collection ckks`를 collection config regression으로 고정한다.
+- 현재 문서화된 미지원 범위가 실제 API/schema와 어긋나지 않는지 확인한다.
+- `RISK_REGISTER.md`의 이미 처리된 항목은 별도 후속 정리에서 상태를 `완료`로 바꾼다.
+
+완료 조건:
+
+- 기준 테스트 명령이 로컬에서 통과한다.
+- 향후 phase별 PR 설명에서 이 기준 테스트를 재사용할 수 있다.
+
+## Phase 1: Crypto Schema와 Migration State Machine
+
+대상 리스크: `CONF-001`, `SEC-003`, `TEST-001`
+
+목표: encryption rule 변경을 일반 config update가 아니라 명시적 migration workflow로 모델링한다.
+
+작업 순서:
+
+- collection config에 `crypto_schema_version` 또는 `encryption_epoch`를 추가한다.
+- encrypted payload marker와 CKKS vector envelope에 schema/epoch를 기록한다.
+- migration 상태를 `Disabled`, `Encrypting`, `Active`, `Rotating`, `Decrypting`으로 정의한다.
+- 일반 collection update에서는 encryption enable/disable/rule 변경을 계속 거부한다.
+- 별도 admin-only migration command 또는 내부 operation type을 설계한다.
+- migration dry-run이 변경 대상 point 수, selector 충돌, key availability를 보고하도록 만든다.
+- disable/decrypt migration은 기본 거부로 두고 명시적 admin flag와 snapshot backup precondition을 요구한다.
+
+테스트:
+
+- migration 없이 encryption config 변경 시 실패한다.
+- migration 시작 후 collection 상태가 `Encrypting` 또는 `Rotating`으로 저장된다.
+- 중단 후 재시작 시 checkpoint부터 재개된다.
+- 잘못된 key/runtime instance가 있으면 migration 시작 전에 실패한다.
+
+완료 조건:
+
+- 동일 collection 안에서 plaintext/ciphertext schema가 silent mixing되지 않는다.
+- migration 없는 enable, disable, selector 변경, key 변경이 모두 fail-closed다.
+
+## Phase 2: Key Lifecycle, Versions, and Rotation
+
+대상 리스크: `SEC-003`
+
+목표: active/retired key를 구분하고, rotation과 old key retirement를 안전한 상태 전이로 만든다.
+
+작업 순서:
+
+- runtime crypto material에 `key_version` 또는 `material_fingerprint`를 추가한다.
+- AEAD envelope와 CKKS vector metadata에 `key_version` 또는 `material_fingerprint`를 기록한다.
+- decrypt path는 active key와 retired key를 허용하되, encrypt path는 active key만 사용한다.
+- re-encrypt job을 Phase 1 migration framework 위에 구현한다.
+- old key retirement 전 full scan verification을 요구한다.
+- inline key material은 production/security mode에서 거부하거나 warning/audit event를 남긴다.
+- KMS/Vault/file descriptor/Unix socket key source는 interface만 먼저 고정하고 구현은 provider별로 분리한다.
+
+테스트:
+
+- old key로 암호화된 payload/vector envelope를 retired key로 복호화할 수 있다.
+- 새 write는 active key로만 암호화된다.
+- old key 제거 전 검증 실패 시 retirement가 중단된다.
+- wrong key, wrong key_id, wrong key_version은 fail-closed다.
+
+완료 조건:
+
+- rotation 중 read/write가 어느 key를 쓰는지 문서와 코드에서 명확하다.
+- key retirement는 검증 없이는 성공할 수 없다.
+
+## Phase 3: Storage Path Threat Model and Plaintext Leakage Tests
+
+대상 리스크: `SEC-004`, `TEST-001`
+
+목표: WAL, segment, payload index, snapshot, shard transfer 경로에서 plaintext 노출 여부를 테스트로 증명한다.
+
+작업 순서:
+
+- `docs/ckks.md`에 ingress, WAL, segment, payload index, HNSW, snapshot, shard transfer, telemetry/log 경로별 plaintext/ciphertext 표를 추가한다.
+- encrypted payload collection에 sentinel string을 upsert하는 integration fixture를 만든다.
+- WAL, segment files, optimizer temp segment, snapshot archive에서 sentinel string이 검색되지 않는 테스트를 추가한다.
+- vector plaintext byte pattern 또는 deterministic fixture vector가 segment/snapshot에 남지 않는지 검사한다.
+- payload index 생성 시 encrypted field는 거부하거나 blind index 요구로 fail-closed한다.
+- telemetry/log/audit output에 plaintext embedding/request body가 들어가지 않는지 smoke test를 추가한다.
+
+테스트:
+
+- plaintext string leakage scan.
+- embedding byte pattern leakage scan.
+- encrypted field index creation reject.
+- snapshot archive scan.
+- optimizer temp path scan.
+
+완료 조건:
+
+- `encrypt before storage` 주장이 테스트로 방어된다.
+- plaintext가 남는 경로가 발견되면 해당 경로는 코드 수정 전까지 문서상 unsupported로 표시된다.
+
+## Phase 4: Snapshot, Restore, Replication, and Cluster Fail-Closed
+
+대상 리스크: `SEC-004`, `TEST-001`
+
+목표: snapshot restore, shard transfer, replica sync에서 key/context 불일치가 silent partial success로 끝나지 않게 한다.
+
+작업 순서:
+
+- snapshot metadata에 필요한 crypto schema, key id/version, CKKS context digest summary를 기록한다.
+- restore preflight에서 runtime key registry와 OpenFHE context availability를 검증한다.
+- missing key, wrong key, wrong key_id, wrong context 정책을 정의한다.
+- partial restore 허용 여부를 명시하고 기본은 fail-closed로 둔다.
+- cluster node별 crypto instance registry health check를 추가한다.
+- shard transfer 전 송신/수신 node의 crypto capability parity를 확인한다.
+
+테스트:
+
+- snapshot restore with missing key 실패.
+- snapshot restore with wrong key 실패.
+- snapshot restore with wrong CKKS context 실패.
+- node A has key, node B missing key 상태에서 write/read/shard transfer 실패.
+- replica join 전에 crypto registry mismatch가 health check에 노출된다.
+
+완료 조건:
+
+- key/context가 맞지 않는 cluster operation이 데이터 일부만 살리고 성공하지 않는다.
+- 운영자가 restore 전에 어떤 runtime material이 필요한지 알 수 있다.
+
+## Phase 5: OpenFHE Bridge Pool, Backpressure, and Protocol Efficiency
+
+대상 리스크: `SEC-002`, `PERF-001`
+
+목표: bridge worker를 단일 mutex 직렬 처리에서 bounded process pool로 바꾸고, timeout/restart 경로를 검증한다.
+
+작업 순서:
+
+- `CryptoBackendConfig.size`가 실제 process pool size로 동작하도록 backend factory를 연결한다.
+- worker pool abstraction을 추가한다.
+- request queue는 bounded로 두고 초과 시 backpressure 또는 explicit overload error를 반환한다.
+- worker별 stdin/stdout reader lifecycle을 독립 관리한다.
+- timeout, EOF, invalid JSON, huge stdout/stderr, process exit 후 worker 재시작을 pool 단위로 처리한다.
+- batch encrypt request/response protocol을 추가한다.
+- bridge init 단계에서 context/public key를 등록하고 request에는 context id만 보내는 cache protocol을 설계한다.
+- binary framing 또는 MessagePack/CBOR 전환은 batch protocol 안정화 후 별도 단계로 진행한다.
+
+테스트:
+
+- concurrent encrypt N개가 pool size만큼 병렬 처리된다.
+- queue 초과 시 bounded error가 반환된다.
+- timeout worker만 재시작되고 다른 worker는 유지된다.
+- no newline, huge stdout, huge stderr, invalid JSON, exit-after-write가 모두 fail-closed다.
+- batch encrypt가 point-by-point 결과와 같은 envelope semantics를 유지한다.
+
+완료 조건:
+
+- bridge throughput이 단일 worker mutex에 의해 전역 직렬화되지 않는다.
+- malicious bridge behavior가 pool 전체를 고착시키지 않는다.
+
+## Phase 6: CKKS Parameter Profiles and OpenFHE Security Verification
+
+대상 리스크: `SEC-005`
+
+목표: 임의 raw parameter가 아니라 검증된 profile 중심으로 CKKS parameter를 받는다.
+
+작업 순서:
+
+- `ckks-128-d4` 같은 allowlisted profile enum을 정의한다.
+- 기존 raw params는 `experimental_raw_params` 또는 feature flag 뒤로 이동한다.
+- OpenFHE bridge가 security level, chain depth, scale/noise budget 검증 결과를 response에 포함하도록 protocol을 확장한다.
+- Qdrant 쪽은 bridge 검증 결과가 없거나 mismatch면 collection create/update를 거부한다.
+- known-safe profile table을 문서화한다.
+
+테스트:
+
+- allowlisted profile은 통과한다.
+- raw params는 experimental flag 없이는 실패한다.
+- OpenFHE security level mismatch는 실패한다.
+- depth/scale/profile mismatch는 context digest와 validation에서 동시에 잡힌다.
+
+완료 조건:
+
+- 사용자가 임의 범위값만으로 unsafe CKKS context를 만들 수 없다.
+- profile과 OpenFHE 검증 결과가 collection config에 명확히 남는다.
+
+## Phase 7: Metadata Encryption and Blind Index Design
+
+대상 리스크: `DOC-001`, `TEST-001`
+
+목표: metadata encryption을 값 암호화와 exact-match 검색용 blind index로 분리해서 구현한다.
+
+작업 순서:
+
+- `metadata_value/aead`와 `metadata_exact_match/blind-index` provider contract를 분리한다.
+- metadata value envelope schema를 정의한다.
+- exact-match token은 deterministic HMAC/HKDF subkey로 만들고 원문 값을 저장하지 않는다.
+- payload filter planner가 encrypted metadata field에 range/geo/full-text filter를 요청하면 거부한다.
+- exact-match filter만 blind index가 있을 때 허용한다.
+- API docs에 지원/비지원 filter matrix를 추가한다.
+
+테스트:
+
+- metadata value는 retrieve 시 권한 있는 경로에서만 복호화된다.
+- exact-match filter는 blind index token으로 동작한다.
+- range/geo/full-text filter는 실패한다.
+- metadata selector가 구현 전 unsupported였던 테스트를 구현 후 새 계약으로 교체한다.
+
+완료 조건:
+
+- "metadata encryption 지원"이라는 문구가 실제 API 동작과 일치한다.
+- AEAD-only metadata field가 검색 가능한 것처럼 보이지 않는다.
+
+## Phase 8: Search Semantics Decision and Executor
+
+대상 리스크: `ARCH-001`, `DOC-002`
+
+목표: encrypted vector collection이 어떤 검색 모델을 지원하는지 타입과 API로 강제한다.
+
+선택지:
+
+- A안: at-rest encryption only. 검색은 plaintext vector 또는 별도 surrogate vector만 사용한다.
+- B안: similarity-preserving/searchable encryption. 별도 보안 모델과 leakage profile을 문서화한다.
+- C안: CKKS homomorphic scoring. HNSW pruning과 분리된 brute-force/rerank executor를 구현한다.
+
+작업 순서:
+
+- 프로젝트 목표를 A/B/C 중 하나 이상으로 결정한다.
+- `VectorCryptoBackend` capability를 `encrypt_point_vector`, `encrypt_query_vector`, `score_ciphertext`, `decrypt_score`, `supports_indexing`, `supports_filtering`로 나눈다.
+- collection create 시 encrypted vector가 dense index에 들어가는지, payload/envelope로 빠지는지 강제한다.
+- query API가 plaintext vector, surrogate vector, encrypted query vector 중 무엇을 받는지 분리한다.
+- C안을 선택하면 HNSW 대신 brute-force/rerank executor를 별도로 추가한다.
+- retrieve with/without decrypt, query failure modes, unsupported Qdrant flows를 문서화한다.
+
+테스트:
+
+- encrypted vector collection에서 unsupported search path는 명확한 error를 반환한다.
+- A안이면 surrogate/plaintext path만 검색된다.
+- C안이면 encrypted query, score_ciphertext, decrypt_score lifecycle이 end-to-end로 검증된다.
+- recommend/discover/quantization/HNSW 지원 여부가 contract test로 고정된다.
+
+완료 조건:
+
+- 사용자가 CKKS vector envelope를 Qdrant HNSW가 검색한다고 오해할 수 없다.
+- 지원되는 검색 모델이 API 타입과 runtime capability로 강제된다.
+
+## Phase 9: Internal Crypto Module Split
+
+대상 리스크: `ARCH-002`, `CONF-003`
+
+목표: `lib/ckks`를 공통 crypto layer와 provider-specific layer로 나눈다.
+
+작업 순서:
+
+- 내부 canonical type을 generic crypto plan으로 고정한다.
+- legacy `params.ckks`는 REST/gRPC boundary에서만 generic plan으로 normalize한다.
+- 공통 AEAD envelope, key derivation, runtime registry를 `lib/crypto` 또는 equivalent module로 이동한다.
+- CKKS vector provider를 `crypto-openfhe-ckks` 성격으로 분리한다.
+- payload AEAD provider와 blind-index provider를 독립 모듈로 둔다.
+- public exports와 docs를 새 경계에 맞춘다.
+
+테스트:
+
+- legacy config와 generic config가 같은 compiled plan으로 normalize된다.
+- legacy projection은 key_id를 잃지 않는다.
+- provider별 tests가 공통 crypto tests와 분리된다.
+
+완료 조건:
+
+- CKKS 고유 코드와 공통 crypto 코드의 책임 경계가 명확하다.
+- 새 provider 추가가 `lib/ckks`에 계속 결합되지 않는다.
+
+## Phase 10: User-Facing Examples and Release Gate
+
+대상 리스크: `DOC-002`, `TEST-001`
+
+목표: 운영자가 실제로 collection 생성부터 query/retrieve/failure mode까지 따라 할 수 있게 한다.
+
+작업 순서:
+
+- runtime config 예제를 generic `crypto.instances/materials/backends` 기준으로 갱신한다.
+- collection create 예제를 legacy와 generic 중 canonical 하나로 정리한다.
+- point upsert, retrieve, decrypt, query 예제를 작성한다.
+- unsupported 기능 목록을 API docs와 `docs/ckks.md`에 맞춘다.
+- PR 전 release gate checklist를 추가한다.
+
+테스트:
+
+- 문서 예제 JSON/YAML이 schema validation을 통과한다.
+- smoke test가 예제 collection create/upsert/retrieve 경로를 실행한다.
+
+완료 조건:
+
+- 문서만 보고도 현재 지원 범위와 실패 모드를 이해할 수 있다.
+- release gate가 security tests, migration tests, cluster tests, bridge tests를 모두 요구한다.
+
