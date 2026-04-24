@@ -37,6 +37,12 @@ impl Collection {
         &self,
         params_diff: CollectionParamsDiff,
     ) -> CollectionResult<()> {
+        if params_diff.encryption.is_some() || params_diff.ckks.is_some() {
+            return Err(CollectionError::bad_input(
+                "collection encryption changes require a dedicated crypto migration path; params diff updates cannot enable, disable, or modify encryption",
+            ));
+        }
+
         {
             let mut config = self.collection_config.write().await;
             config.params = config.params.update(&params_diff);

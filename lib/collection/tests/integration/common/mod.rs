@@ -3,7 +3,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use collection::collection::{Collection, RequestShardTransfer};
-use collection::config::{CollectionConfigInternal, CollectionParams, WalConfig};
+use collection::config::{
+    CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams, WalConfig,
+};
 use collection::operations::types::CollectionResult;
 use collection::operations::vector_params_builder::VectorParamsBuilder;
 use collection::optimizers_builder::OptimizersConfig;
@@ -37,16 +39,40 @@ pub const TEST_OPTIMIZERS_CONFIG: OptimizersConfig = OptimizersConfig {
 
 #[cfg(test)]
 pub async fn simple_collection_fixture(collection_path: &Path, shard_number: u32) -> Collection {
-    let wal_config = WalConfig {
-        wal_capacity_mb: 1,
-        wal_segments_ahead: 0,
-        wal_retain_closed: 1,
-    };
-
     let collection_params = CollectionParams {
         vectors: VectorParamsBuilder::new(4, Distance::Dot).build().into(),
         shard_number: NonZeroU32::new(shard_number).expect("Shard number can not be zero"),
         ..CollectionParams::empty()
+    };
+
+    simple_collection_fixture_with_params(collection_path, collection_params).await
+}
+
+#[cfg(test)]
+pub async fn encrypted_collection_fixture(
+    collection_path: &Path,
+    shard_number: u32,
+    encryption: CollectionEncryptionConfig,
+) -> Collection {
+    let collection_params = CollectionParams {
+        vectors: VectorParamsBuilder::new(4, Distance::Dot).build().into(),
+        shard_number: NonZeroU32::new(shard_number).expect("Shard number can not be zero"),
+        encryption: Some(encryption),
+        ..CollectionParams::empty()
+    };
+
+    simple_collection_fixture_with_params(collection_path, collection_params).await
+}
+
+#[cfg(test)]
+async fn simple_collection_fixture_with_params(
+    collection_path: &Path,
+    collection_params: CollectionParams,
+) -> Collection {
+    let wal_config = WalConfig {
+        wal_capacity_mb: 1,
+        wal_segments_ahead: 0,
+        wal_retain_closed: 1,
     };
 
     let collection_config = CollectionConfigInternal {

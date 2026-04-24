@@ -35,7 +35,45 @@ use segment::types::{
 use serde_json::Map;
 use tempfile::Builder;
 
-use crate::common::{N_SHARDS, load_local_collection, simple_collection_fixture};
+use crate::common::{
+    N_SHARDS, encrypted_collection_fixture, load_local_collection, simple_collection_fixture,
+};
+
+fn payload_encryption_config() -> CollectionEncryptionConfig {
+    CollectionEncryptionConfig {
+        version: 1,
+        key_id: Some("tenant-a:docs".to_string()),
+        crypto_schema_version: 1,
+        encryption_epoch: 0,
+        migration_state: CryptoMigrationState::Active,
+        rules: vec![EncryptionRuleRef {
+            id: "document_body".to_string(),
+            selector: EncryptionSelector::PayloadPaths {
+                paths: vec!["document.body".to_string()],
+            },
+            instance: "docs_payload_v1".to_string(),
+            binding: Some("payload-field/v1".to_string()),
+        }],
+    }
+}
+
+fn vector_encryption_config() -> CollectionEncryptionConfig {
+    CollectionEncryptionConfig {
+        version: 1,
+        key_id: Some("tenant-a:docs".to_string()),
+        crypto_schema_version: 1,
+        encryption_epoch: 0,
+        migration_state: CryptoMigrationState::Active,
+        rules: vec![EncryptionRuleRef {
+            id: "default_vector".to_string(),
+            selector: EncryptionSelector::VectorNames {
+                names: vec![DEFAULT_VECTOR_NAME.to_string()],
+            },
+            instance: "docs_vector_v1".to_string(),
+            binding: Some("vector-envelope/v1".to_string()),
+        }],
+    }
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_collection_updater() {
@@ -818,34 +856,8 @@ async fn test_ordered_scroll_api_with_shards(shard_number: u32) {
 #[tokio::test(flavor = "multi_thread")]
 async fn encrypted_payload_field_rejects_payload_index() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
-    let collection = simple_collection_fixture(collection_dir.path(), 1).await;
-
-    collection
-        .update_params_from_diff(CollectionParamsDiff {
-            replication_factor: None,
-            write_consistency_factor: None,
-            read_fan_out_factor: None,
-            read_fan_out_delay_ms: None,
-            on_disk_payload: None,
-            encryption: Some(CollectionEncryptionConfig {
-                version: 1,
-                key_id: Some("tenant-a:docs".to_string()),
-                crypto_schema_version: 1,
-                encryption_epoch: 0,
-                migration_state: CryptoMigrationState::Active,
-                rules: vec![EncryptionRuleRef {
-                    id: "document_body".to_string(),
-                    selector: EncryptionSelector::PayloadPaths {
-                        paths: vec!["document.body".to_string()],
-                    },
-                    instance: "docs_payload_v1".to_string(),
-                    binding: Some("payload-field/v1".to_string()),
-                }],
-            }),
-            ckks: None,
-        })
-        .await
-        .unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
 
     for indexed_field in ["document.body", "document"] {
         let err = collection
@@ -881,34 +893,8 @@ async fn encrypted_payload_field_rejects_payload_index() {
 #[tokio::test(flavor = "multi_thread")]
 async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
-    let collection = simple_collection_fixture(collection_dir.path(), 1).await;
-
-    collection
-        .update_params_from_diff(CollectionParamsDiff {
-            replication_factor: None,
-            write_consistency_factor: None,
-            read_fan_out_factor: None,
-            read_fan_out_delay_ms: None,
-            on_disk_payload: None,
-            encryption: Some(CollectionEncryptionConfig {
-                version: 1,
-                key_id: Some("tenant-a:docs".to_string()),
-                crypto_schema_version: 1,
-                encryption_epoch: 0,
-                migration_state: CryptoMigrationState::Active,
-                rules: vec![EncryptionRuleRef {
-                    id: "document_body".to_string(),
-                    selector: EncryptionSelector::PayloadPaths {
-                        paths: vec!["document.body".to_string()],
-                    },
-                    instance: "docs_payload_v1".to_string(),
-                    binding: Some("payload-field/v1".to_string()),
-                }],
-            }),
-            ckks: None,
-        })
-        .await
-        .unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
 
     let plaintext_upsert =
         CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
@@ -986,34 +972,8 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
 #[tokio::test(flavor = "multi_thread")]
 async fn encrypted_vector_rejects_plaintext_vector_writes() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
-    let collection = simple_collection_fixture(collection_dir.path(), 1).await;
-
-    collection
-        .update_params_from_diff(CollectionParamsDiff {
-            replication_factor: None,
-            write_consistency_factor: None,
-            read_fan_out_factor: None,
-            read_fan_out_delay_ms: None,
-            on_disk_payload: None,
-            encryption: Some(CollectionEncryptionConfig {
-                version: 1,
-                key_id: Some("tenant-a:docs".to_string()),
-                crypto_schema_version: 1,
-                encryption_epoch: 0,
-                migration_state: CryptoMigrationState::Active,
-                rules: vec![EncryptionRuleRef {
-                    id: "default_vector".to_string(),
-                    selector: EncryptionSelector::VectorNames {
-                        names: vec![DEFAULT_VECTOR_NAME.to_string()],
-                    },
-                    instance: "docs_vector_v1".to_string(),
-                    binding: Some("vector-envelope/v1".to_string()),
-                }],
-            }),
-            ckks: None,
-        })
-        .await
-        .unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, vector_encryption_config()).await;
 
     let plaintext_upsert =
         CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
@@ -1066,6 +1026,32 @@ async fn encrypted_vector_rejects_plaintext_vector_writes() {
         CollectionError::BadInput { description }
             if description.contains("plaintext vector")
                 && description.contains("runtime CKKS vector encryption")
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn collection_params_diff_rejects_crypto_mutation() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection = simple_collection_fixture(collection_dir.path(), 1).await;
+
+    let err = collection
+        .update_params_from_diff(CollectionParamsDiff {
+            replication_factor: None,
+            write_consistency_factor: None,
+            read_fan_out_factor: None,
+            read_fan_out_delay_ms: None,
+            on_disk_payload: None,
+            encryption: Some(payload_encryption_config()),
+            ckks: None,
+        })
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("crypto migration")
+                && description.contains("params diff")
     ));
 }
 
