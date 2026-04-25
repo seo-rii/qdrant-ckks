@@ -1282,7 +1282,6 @@ async fn maybe_encrypt_point_payload_update(
 mod tests {
     use std::collections::HashMap;
 
-    use crate::common::crypto::PayloadWriteSetupError;
     use collection::config::{
         CollectionEncryptionConfig, CollectionParams, CryptoMigrationState, EncryptionRuleRef,
         EncryptionSelector,
@@ -1292,6 +1291,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::common::crypto::PayloadWriteSetupError;
     use crate::settings::{CryptoInstanceConfig, Settings};
 
     fn payload_runtime_settings() -> Settings {
