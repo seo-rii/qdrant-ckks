@@ -245,6 +245,30 @@ mod ckks_tests {
     }
 
     #[test]
+    fn encryption_config_rejects_direct_migration_state_changes() {
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Rotating,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        assert!(params.validate().is_err());
+    }
+
+    #[test]
     fn collection_params_reject_encryption_changes_without_migration() {
         let ckks = CkksCollectionConfig {
             enabled: true,
@@ -492,6 +516,7 @@ fn validate_ckks_collection_config(
 #[derive(
     Debug, Deserialize, Serialize, JsonSchema, Validate, Anonymize, Clone, PartialEq, Eq, Hash,
 )]
+#[validate(schema(function = "validate_collection_encryption_config"))]
 #[serde(rename_all = "snake_case")]
 pub struct CollectionEncryptionConfig {
     #[validate(range(min = 1))]
@@ -519,6 +544,18 @@ pub struct CollectionEncryptionConfig {
 
 const fn default_crypto_schema_version() -> u16 {
     1
+}
+
+fn validate_collection_encryption_config(
+    config: &CollectionEncryptionConfig,
+) -> Result<(), validator::ValidationError> {
+    if config.migration_state != CryptoMigrationState::Active {
+        return Err(validator::ValidationError::new(
+            "crypto_migration_state_requires_migration_job",
+        ));
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Anonymize, Clone, PartialEq, Eq, Hash)]
