@@ -2,9 +2,7 @@ name: Build and publish release packages
 permissions:
   contents: write
 on:
-  release:
-    # 'published' is triggered when publishing draft release, 'created' is not
-    types: [published]
+  workflow_dispatch:
 
 jobs:
   build-linux-binaries:

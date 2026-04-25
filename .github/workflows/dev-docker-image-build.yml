@@ -2,12 +2,6 @@ name: Build and push a branch image to ghcr
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - dev
-      - master
-  repository_dispatch:
-    types: [benchmark-trigger-image-build]
 
 jobs:
   branch-build-and-push:

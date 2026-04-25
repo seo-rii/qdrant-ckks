@@ -1,10 +1,7 @@
 name: Formatter and linter
 
 on:
-  push:
-    branches: [ master, dev ]
-  pull_request:
-    branches: [ '**' ]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
