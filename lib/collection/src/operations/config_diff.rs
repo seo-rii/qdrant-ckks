@@ -91,9 +91,9 @@ pub struct WalConfigDiff {
 fn validate_collection_encryption_diff_sections(
     diff: &CollectionParamsDiff,
 ) -> Result<(), validator::ValidationError> {
-    if diff.encryption.is_some() && diff.ckks.is_some() {
+    if diff.encryption.is_some() || diff.ckks.is_some() {
         return Err(validator::ValidationError::new(
-            "conflicting_collection_encryption_sections",
+            "collection_encryption_diff_requires_crypto_migration",
         ));
     }
 
@@ -568,6 +568,52 @@ mod tests {
         assert_eq!(new_params.replication_factor.get(), 1);
         assert_eq!(new_params.write_consistency_factor.get(), 2);
         assert!(new_params.on_disk_payload);
+    }
+
+    #[test]
+    fn test_collection_params_diff_rejects_crypto_sections() {
+        let encryption = CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a:docs".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 0,
+            migration_state: crate::config::CryptoMigrationState::Active,
+            rules: vec![crate::config::EncryptionRuleRef {
+                id: "body_conf".to_string(),
+                selector: crate::config::EncryptionSelector::PayloadPaths {
+                    paths: vec!["body".to_string()],
+                },
+                instance: "docs_payload_v1".to_string(),
+                binding: Some("payload-field/v1".to_string()),
+            }],
+        };
+
+        let generic_diff = CollectionParamsDiff {
+            replication_factor: None,
+            write_consistency_factor: None,
+            read_fan_out_factor: None,
+            read_fan_out_delay_ms: None,
+            on_disk_payload: None,
+            encryption: Some(encryption),
+            ckks: None,
+        };
+        assert!(generic_diff.validate().is_err());
+
+        let legacy_diff = CollectionParamsDiff {
+            replication_factor: None,
+            write_consistency_factor: None,
+            read_fan_out_factor: None,
+            read_fan_out_delay_ms: None,
+            on_disk_payload: None,
+            encryption: None,
+            ckks: Some(CkksCollectionConfig {
+                enabled: false,
+                key_id: Some("tenant-a:docs".to_string()),
+                payload_text_fields: Vec::new(),
+                vector_names: Vec::new(),
+            }),
+        };
+        assert!(legacy_diff.validate().is_err());
     }
 
     #[test]
