@@ -2028,24 +2028,24 @@ mod ckks_grpc_tests {
     use super::*;
 
     #[test]
-    fn collection_params_diff_preserves_ckks_config_from_grpc() {
+    fn collection_params_diff_rejects_ckks_config_from_grpc() {
         let diff = api::grpc::qdrant::CollectionParamsDiff {
             ckks: Some(api::grpc::qdrant::CkksCollectionConfig {
                 enabled: true,
                 key_id: Some("tenant-a:docs".to_string()),
                 payload_text_fields: vec!["body".to_string()],
-                vector_names: vec!["embedding".to_string()],
+                vector_names: Vec::new(),
             }),
             ..Default::default()
         };
 
-        let converted = CollectionParamsDiff::try_from(diff).unwrap();
-        let ckks = converted.ckks.unwrap();
+        let err = CollectionParamsDiff::try_from(diff).unwrap_err();
 
-        assert!(ckks.enabled);
-        assert_eq!(ckks.key_id.as_deref(), Some("tenant-a:docs"));
-        assert_eq!(ckks.payload_text_fields, vec!["body".to_string()]);
-        assert_eq!(ckks.vector_names, vec!["embedding".to_string()]);
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message()
+                .contains("collection_encryption_diff_requires_crypto_migration")
+        );
     }
 
     #[test]
@@ -2076,6 +2076,20 @@ mod ckks_grpc_tests {
 
             assert_eq!(err.code(), tonic::Code::InvalidArgument);
         }
+    }
+
+    #[test]
+    fn grpc_ckks_config_rejects_vector_names_until_storage_support_exists() {
+        let config = api::grpc::qdrant::CkksCollectionConfig {
+            enabled: true,
+            key_id: Some("tenant-a:docs".to_string()),
+            payload_text_fields: Vec::new(),
+            vector_names: vec!["embedding".to_string()],
+        };
+
+        let err = CkksCollectionConfig::try_from(config).unwrap_err();
+
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
     }
 
     #[test]
