@@ -2,8 +2,6 @@ name: Coverage Report - dev
 
 on:
   workflow_dispatch: # Trigger from UI for selected branch
-  schedule:
-    - cron: "0 0 * * *" # Every day at midnight UTC
 
 env:
   UV_VERSION: 0.9.17
