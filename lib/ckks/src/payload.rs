@@ -80,6 +80,8 @@ impl PayloadEncryptionPolicy {
                 || field.split('.').any(|part| {
                     part.is_empty()
                         || part == ENCRYPTED_PAYLOAD_MARKER
+                        || part == CLIENT_ENCRYPTED_PAYLOAD_MARKER
+                        || part == "$qdrant_ciphertext"
                         || part.contains('\0')
                         || part.contains('[')
                         || part.contains(']')

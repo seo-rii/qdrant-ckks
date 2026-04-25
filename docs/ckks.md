@@ -47,6 +47,76 @@ path. Moving a ciphertext to another point or field must fail authentication.
 Payload selectors are object dot paths only. Array syntax, wildcards, and
 numeric path components such as `items[].name`, `items.*.name`, or
 `items.0.name` are rejected instead of being interpreted as array traversal.
+Selector components that collide with reserved envelope markers
+`$qdrant_ckks`, `$qdrant_client_aead`, or `$qdrant_ciphertext` are rejected.
+
+### Client-side encrypted payloads
+
+Zero-trust client-side payload encryption uses a separate provider from
+server-side `payload/aes-256-gcm@v1` encryption:
+
+```yaml
+crypto:
+  instances:
+    docs_payload_client_v1:
+      provider: payload/client-aead@v1
+      materials: {}
+      options:
+        key_id: tenant-a/client-rk-2026-04
+        key_id_required: true
+params:
+  encryption:
+    version: 1
+    key_id: tenant-a/client-rk-2026-04
+    crypto_schema_version: 1
+    encryption_epoch: 0
+    migration_state: active
+    rules:
+      - id: body_client_conf
+        selector:
+          kind: payload_paths
+          paths: [body]
+        instance: docs_payload_client_v1
+        binding: client-payload-envelope/v1
+```
+
+This provider does not receive plaintext and does not unwrap a data key. The
+client encrypts before insert and Qdrant only validates the envelope schema,
+AAD metadata, key policy, nonce/ciphertext encoding, and optional signature
+shape before storing the opaque ciphertext:
+
+```json
+{
+  "body": {
+    "$qdrant_client_aead": {
+      "version": 1,
+      "kind": "payload_text",
+      "algorithm": "AES-256-GCM",
+      "key_id": "tenant-a/client-rk-2026-04",
+      "rk_id": "tenant-a/client-rk-2026-04",
+      "rk_epoch": 3,
+      "kdf_domain": "qdrant/client-payload-text/v1",
+      "aad": {
+        "collection_id": "docs",
+        "point_id": "1",
+        "field_path": "body",
+        "schema_version": 1
+      },
+      "nonce": "base64url-no-pad-96-bit-nonce",
+      "ciphertext": "base64url-no-pad-client-ciphertext"
+    }
+  }
+}
+```
+
+Client envelopes are not server envelopes. Public writes to a
+`payload/aes-256-gcm@v1` rule reject client-supplied `$qdrant_ckks` markers, and
+`payload/client-aead@v1` rules require `$qdrant_client_aead` markers. Because
+Qdrant does not have the client data key in this mode, it cannot verify the
+AES-GCM tag or decrypt responses; clients or SDKs must decrypt returned
+envelopes. Signature verification and blind-index query integration are not
+implemented yet. Exact-match search requires a future client blind-index field,
+and range, geo, or full-text search over client ciphertext remains unsupported.
 
 Collection params enable encryption and select fields/vectors per collection:
 
@@ -162,10 +232,11 @@ to `false` so inline key material is rejected at startup unless explicitly
 enabled for local development fixtures. Decrypt paths can be configured with
 active plus retired AEAD keys; new writes always use the active key, and
 envelopes record the active key id plus material fingerprint.
-Normal writes skip fields that already contain a well-formed encrypted marker to
-avoid double encryption. Rotation/backfill code must use the explicit
-`ReencryptIfStale` mode so old schema/epoch/key envelopes are opened and sealed
-again under the current active key.
+Server-side public writes reject fields that already contain a
+`$qdrant_ckks` marker so clients cannot smuggle stale or wrong-key envelopes.
+Rotation/backfill code must use the explicit `ReencryptIfStale` mode so old
+schema/epoch/key envelopes are opened and sealed again under the current active
+key.
 For generic crypto instances, set `options.material_fingerprint_id` to an
 opaque deployment-local key version id. If omitted, Qdrant falls back to a
 legacy deterministic fingerprint derived from the key material; that fallback is

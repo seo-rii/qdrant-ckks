@@ -483,6 +483,18 @@ fn invalid_policies_are_rejected() {
         ))),
     );
     assert_eq!(
+        PayloadEncryptionPolicy::new([format!("{CLIENT_ENCRYPTED_PAYLOAD_MARKER}.body")]),
+        Err(PayloadEncryptionError::InvalidFieldPath(format!(
+            "{CLIENT_ENCRYPTED_PAYLOAD_MARKER}.body"
+        ))),
+    );
+    assert_eq!(
+        PayloadEncryptionPolicy::new(["$qdrant_ciphertext.body"]),
+        Err(PayloadEncryptionError::InvalidFieldPath(
+            "$qdrant_ciphertext.body".to_string()
+        )),
+    );
+    assert_eq!(
         PayloadEncryptionPolicy::new(["items[].name"]),
         Err(PayloadEncryptionError::InvalidFieldPath(
             "items[].name".to_string()

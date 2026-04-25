@@ -118,6 +118,22 @@ mod ckks_tests {
         };
         assert!(marker_field.validate().is_err());
 
+        for payload_text_field in [
+            "$qdrant_client_aead.body",
+            "$qdrant_ciphertext.body",
+            "items[].name",
+            "items.*.name",
+            "items.0.name",
+        ] {
+            let invalid_selector = CkksCollectionConfig {
+                enabled: true,
+                key_id: Some("tenant-a:docs".to_string()),
+                payload_text_fields: vec![payload_text_field.to_string()],
+                vector_names: Vec::new(),
+            };
+            assert!(invalid_selector.validate().is_err());
+        }
+
         let vector_field = CkksCollectionConfig {
             enabled: true,
             key_id: Some("tenant-a:docs".to_string()),
@@ -172,6 +188,39 @@ mod ckks_tests {
             ..params
         };
         assert!(conflicting.validate().is_err());
+    }
+
+    #[test]
+    fn encryption_config_rejects_reserved_and_unsupported_payload_paths() {
+        for path in [
+            "$qdrant_ckks.body",
+            "$qdrant_client_aead.body",
+            "$qdrant_ciphertext.body",
+            "items[].name",
+            "items.*.name",
+            "items.0.name",
+        ] {
+            let params = CollectionParams {
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 0,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "payload_conf".to_string(),
+                        selector: EncryptionSelector::PayloadPaths {
+                            paths: vec![path.to_string()],
+                        },
+                        instance: "docs_payload_v1".to_string(),
+                        binding: Some("payload-field/v1".to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            };
+
+            assert!(params.validate().is_err(), "{path} should be rejected");
+        }
     }
 
     #[test]
@@ -473,9 +522,7 @@ fn validate_ckks_payload_fields(fields: &[String]) -> Result<(), validator::Vali
         if field.is_empty()
             || field.starts_with('.')
             || field.ends_with('.')
-            || field
-                .split('.')
-                .any(|part| part.is_empty() || part == "$qdrant_ckks" || part.contains('\0'))
+            || field.split('.').any(invalid_payload_encryption_path_part)
         {
             return Err(validator::ValidationError::new(
                 "invalid_ckks_payload_field",
@@ -772,11 +819,7 @@ fn validate_encryption_payload_paths(fields: &[String]) -> Result<(), validator:
         if field.is_empty()
             || field.starts_with('.')
             || field.ends_with('.')
-            || field.split('.').any(|part| {
-                part.is_empty()
-                    || matches!(part, "$qdrant_ckks" | "$qdrant_ciphertext")
-                    || part.contains('\0')
-            })
+            || field.split('.').any(invalid_payload_encryption_path_part)
         {
             return Err(validator::ValidationError::new(
                 "invalid_encryption_payload_paths",
@@ -785,6 +828,19 @@ fn validate_encryption_payload_paths(fields: &[String]) -> Result<(), validator:
     }
 
     Ok(())
+}
+
+fn invalid_payload_encryption_path_part(part: &str) -> bool {
+    part.is_empty()
+        || matches!(
+            part,
+            "$qdrant_ckks" | "$qdrant_client_aead" | "$qdrant_ciphertext"
+        )
+        || part.contains('\0')
+        || part.contains('[')
+        || part.contains(']')
+        || part.contains('*')
+        || part.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn validate_encryption_metadata_keys(keys: &[String]) -> Result<(), validator::ValidationError> {
