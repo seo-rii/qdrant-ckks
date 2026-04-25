@@ -260,6 +260,7 @@ pub async fn set_payload(
     internal_params: InternalUpdateParams,
     auth: Auth,
     request_hw_counter: RequestHwCounter,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Response<PointsOperationResponseInternal>, Status> {
     let SetPayloadPoints {
         collection_name,
@@ -293,6 +294,7 @@ pub async fn set_payload(
         UpdateParams::from_grpc(wait, ordering, timeout)?,
         auth,
         request_hw_counter.get_counter(),
+        runtime_settings,
     )
     .await?;
 
@@ -307,6 +309,7 @@ pub async fn overwrite_payload(
     internal_params: InternalUpdateParams,
     auth: Auth,
     request_hw_counter: RequestHwCounter,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Response<PointsOperationResponseInternal>, Status> {
     let SetPayloadPoints {
         collection_name,
@@ -340,6 +343,7 @@ pub async fn overwrite_payload(
         UpdateParams::from_grpc(wait, ordering, timeout)?,
         auth,
         request_hw_counter.get_counter(),
+        runtime_settings,
     )
     .await?;
 
@@ -525,6 +529,7 @@ pub async fn update_batch(
                     internal_params,
                     auth.clone(),
                     request_hw_counter.clone(),
+                    runtime_settings,
                 )
                 .await
             }
@@ -552,6 +557,7 @@ pub async fn update_batch(
                     internal_params,
                     auth.clone(),
                     request_hw_counter.clone(),
+                    runtime_settings,
                 )
                 .await
             }

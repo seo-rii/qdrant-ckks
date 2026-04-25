@@ -6,8 +6,8 @@ use collection::config::{
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_ckks::{
     AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_VECTOR_KEY_DOMAIN,
-    LocalMasterKeyProvider, MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_TEXT_KEY_DOMAIN,
-    PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
+    ExistingPayloadMode, LocalMasterKeyProvider, MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER,
+    PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
     RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, VECTOR_OPENFHE_CKKS_PROVIDER, WrappedKeyBlob,
 };
 use segment::types::Payload;
@@ -166,9 +166,12 @@ impl PayloadWritePlan {
         let mut encrypted = 0;
 
         for rule in &self.rules {
-            encrypted +=
-                rule.encryptor
-                    .encrypt_selected_fields(point_id, &mut payload.0, &rule.policy)?;
+            encrypted += rule.encryptor.encrypt_selected_fields_with_mode(
+                point_id,
+                &mut payload.0,
+                &rule.policy,
+                ExistingPayloadMode::FailIfExisting,
+            )?;
         }
 
         Ok(encrypted)

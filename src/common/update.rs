@@ -569,6 +569,7 @@ pub async fn do_set_payload(
     params: UpdateParams,
     auth: Auth,
     hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
 ) -> Result<UpdateResult, StorageError> {
     let toc = toc_provider
         .check_strict_mode(
@@ -578,6 +579,16 @@ pub async fn do_set_payload(
             &auth,
         )
         .await?;
+
+    let operation = maybe_encrypt_point_payload_update(
+        toc,
+        &collection_name,
+        operation,
+        &auth,
+        runtime_settings,
+        "set_payload",
+    )
+    .await?;
 
     let SetPayload {
         points,
@@ -616,6 +627,7 @@ pub async fn do_overwrite_payload(
     params: UpdateParams,
     auth: Auth,
     hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
 ) -> Result<UpdateResult, StorageError> {
     let toc = toc_provider
         .check_strict_mode(
@@ -625,6 +637,16 @@ pub async fn do_overwrite_payload(
             &auth,
         )
         .await?;
+
+    let operation = maybe_encrypt_point_payload_update(
+        toc,
+        &collection_name,
+        operation,
+        &auth,
+        runtime_settings,
+        "overwrite_payload",
+    )
+    .await?;
 
     let SetPayload {
         points,
@@ -811,6 +833,7 @@ pub async fn do_batch_update_points(
                     params,
                     auth.clone(),
                     hw_measurement_acc.clone(),
+                    runtime_settings,
                 )
                 .await?
             }
@@ -823,6 +846,7 @@ pub async fn do_batch_update_points(
                     params,
                     auth.clone(),
                     hw_measurement_acc.clone(),
+                    runtime_settings,
                 )
                 .await?
             }
@@ -1202,10 +1226,63 @@ async fn maybe_encrypt_upsert_payloads(
     Ok(operation)
 }
 
+async fn maybe_encrypt_point_payload_update(
+    toc: &Arc<TableOfContent>,
+    collection_name: &str,
+    mut operation: SetPayload,
+    auth: &Auth,
+    runtime_settings: Option<&Settings>,
+    operation_name: &str,
+) -> Result<SetPayload, StorageError> {
+    let Some(runtime_settings) = runtime_settings else {
+        return Ok(operation);
+    };
+
+    if operation.key.is_some() || operation.filter.is_some() {
+        return Ok(operation);
+    }
+
+    let Some(point_id) = operation
+        .points
+        .as_ref()
+        .and_then(|points| (points.len() == 1).then(|| &points[0]))
+    else {
+        return Ok(operation);
+    };
+
+    let collection_pass =
+        auth.check_collection_access(collection_name, AccessRequirements::new(), operation_name)?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let collection_config = collection.config_snapshot().await;
+    let Some(plan) = payload_write_plan_for_collection(
+        runtime_settings,
+        collection_name,
+        &collection_config.params,
+    )
+    .map_err(|err| {
+        StorageError::service_error(format!(
+            "payload encryption runtime for collection {collection_name} is invalid: {err}"
+        ))
+    })?
+    else {
+        return Ok(operation);
+    };
+
+    plan.encrypt_payload(&point_id.to_string(), &mut operation.payload)
+        .map_err(|err| {
+            StorageError::service_error(format!(
+                "failed to encrypt payload for collection {collection_name}: {err}"
+            ))
+        })?;
+
+    Ok(operation)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
+    use crate::common::crypto::PayloadWriteSetupError;
     use collection::config::{
         CollectionEncryptionConfig, CollectionParams, CryptoMigrationState, EncryptionRuleRef,
         EncryptionSelector,
@@ -1362,5 +1439,28 @@ mod tests {
             }
             PointInsertOperations::PointsList(_) => unreachable!(),
         }
+    }
+
+    #[test]
+    fn payload_write_plan_rejects_client_supplied_envelope() {
+        let settings = payload_runtime_settings();
+        let plan = payload_write_plan_for_collection(&settings, "docs", &encrypted_params())
+            .unwrap()
+            .unwrap();
+        let mut payload = segment::types::Payload(
+            json!({ "body": "client supplied secret" })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+
+        plan.encrypt_payload("1", &mut payload).unwrap();
+
+        assert!(matches!(
+            plan.encrypt_payload("1", &mut payload),
+            Err(PayloadWriteSetupError::Payload(
+                qdrant_ckks::PayloadEncryptionError::AlreadyEncrypted(field)
+            )) if field == "body"
+        ));
     }
 }

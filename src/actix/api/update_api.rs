@@ -200,6 +200,7 @@ async fn set_payload(
     operation: Json<SetPayload>,
     params: Query<UpdateParams>,
     service_config: web::Data<ServiceConfig>,
+    settings: web::Data<Settings>,
     ActixAuth(auth): ActixAuth,
 ) -> impl Responder {
     let operation = operation.into_inner();
@@ -220,6 +221,7 @@ async fn set_payload(
         params.into_inner(),
         auth,
         request_hw_counter.get_counter(),
+        Some(settings.get_ref()),
     )
     .await;
 
@@ -233,6 +235,7 @@ async fn overwrite_payload(
     operation: Json<SetPayload>,
     params: Query<UpdateParams>,
     service_config: web::Data<ServiceConfig>,
+    settings: web::Data<Settings>,
     ActixAuth(auth): ActixAuth,
 ) -> impl Responder {
     let operation = operation.into_inner();
@@ -253,6 +256,7 @@ async fn overwrite_payload(
         params.into_inner(),
         auth,
         request_hw_counter.get_counter(),
+        Some(settings.get_ref()),
     )
     .await;
 

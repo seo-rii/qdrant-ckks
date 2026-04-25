@@ -225,6 +225,7 @@ impl PointsInternalService {
             InternalUpdateParams::from_grpc(shard_id, clock_tag, wait_override),
             full_internal_auth(),
             hw_metrics,
+            None,
         )
         .await
     }
@@ -252,6 +253,7 @@ impl PointsInternalService {
             InternalUpdateParams::from_grpc(shard_id, clock_tag, wait_override),
             full_internal_auth(),
             hw_metrics,
+            None,
         )
         .await
     }

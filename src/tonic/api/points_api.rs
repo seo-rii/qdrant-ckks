@@ -200,6 +200,7 @@ impl Points for PointsService {
             InternalUpdateParams::default(),
             auth,
             hw_metrics,
+            Some(&self.settings),
         )
         .await
         .map(|resp| resp.map(Into::into))
@@ -223,6 +224,7 @@ impl Points for PointsService {
             InternalUpdateParams::default(),
             auth,
             hw_metrics,
+            Some(&self.settings),
         )
         .await
         .map(|resp| resp.map(Into::into))
