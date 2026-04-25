@@ -324,8 +324,8 @@ impl DiffConfig<CollectionParamsDiff> for CollectionParams {
             read_fan_out_factor,
             read_fan_out_delay_ms,
             on_disk_payload,
-            encryption,
-            ckks,
+            encryption: _,
+            ckks: _,
         } = diff;
 
         CollectionParams {
@@ -339,8 +339,8 @@ impl DiffConfig<CollectionParamsDiff> for CollectionParams {
             sharding_method: self.sharding_method,
             sparse_vectors: self.sparse_vectors.clone(),
             vectors: self.vectors.clone(),
-            encryption: encryption.clone().or_else(|| self.encryption.clone()),
-            ckks: ckks.clone().or_else(|| self.ckks.clone()),
+            encryption: self.encryption.clone(),
+            ckks: self.ckks.clone(),
         }
     }
 }
@@ -617,12 +617,12 @@ mod tests {
     }
 
     #[test]
-    fn test_ckks_collection_params_update_preserves_or_disables_encryption() {
+    fn test_ckks_collection_params_update_ignores_crypto_sections() {
         let enabled_ckks = CkksCollectionConfig {
             enabled: true,
             key_id: Some("tenant-a:docs".to_string()),
             payload_text_fields: vec!["body".to_string()],
-            vector_names: vec!["embedding".to_string()],
+            vector_names: Vec::new(),
         };
         let params = CollectionParams {
             ckks: Some(enabled_ckks.clone()),
@@ -638,7 +638,7 @@ mod tests {
             encryption: None,
             ckks: None,
         });
-        assert_eq!(unchanged.ckks, Some(enabled_ckks));
+        assert_eq!(unchanged.ckks, Some(enabled_ckks.clone()));
 
         let disabled = CkksCollectionConfig {
             enabled: false,
@@ -656,7 +656,7 @@ mod tests {
             ckks: Some(disabled.clone()),
         });
 
-        assert_eq!(updated.ckks, Some(disabled));
+        assert_eq!(updated.ckks, Some(enabled_ckks));
     }
 
     #[test]
@@ -690,6 +690,23 @@ mod tests {
             ckks: None,
         };
         assert_eq!(params.update(&diff).encryption, params.encryption);
+
+        let ignored = params.update(&CollectionParamsDiff {
+            replication_factor: None,
+            write_consistency_factor: None,
+            read_fan_out_factor: None,
+            read_fan_out_delay_ms: None,
+            on_disk_payload: None,
+            encryption: None,
+            ckks: Some(CkksCollectionConfig {
+                enabled: true,
+                key_id: Some("tenant-a:docs".to_string()),
+                payload_text_fields: vec!["body".to_string()],
+                vector_names: Vec::new(),
+            }),
+        });
+        assert_eq!(ignored.encryption, params.encryption);
+        assert!(ignored.ckks.is_none());
 
         let conflicting = CollectionParamsDiff {
             ckks: Some(CkksCollectionConfig {

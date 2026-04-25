@@ -389,7 +389,7 @@ mod ckks_grpc_tests {
                 enabled: true,
                 key_id: Some("tenant-a:docs".to_string()),
                 payload_text_fields: vec!["body".to_string()],
-                vector_names: vec!["embedding".to_string()],
+                vector_names: Vec::new(),
             }),
             ..Default::default()
         })
@@ -403,6 +403,23 @@ mod ckks_grpc_tests {
         assert!(ckks.enabled);
         assert_eq!(ckks.key_id.as_deref(), Some("tenant-a:docs"));
         assert_eq!(ckks.payload_text_fields, vec!["body".to_string()]);
-        assert_eq!(ckks.vector_names, vec!["embedding".to_string()]);
+        assert!(ckks.vector_names.is_empty());
+    }
+
+    #[test]
+    fn create_collection_rejects_ckks_vector_names_from_grpc() {
+        let err = CollectionMetaOperations::try_from(grpc::CreateCollection {
+            collection_name: "docs".to_string(),
+            ckks: Some(grpc::CkksCollectionConfig {
+                enabled: true,
+                key_id: Some("tenant-a:docs".to_string()),
+                payload_text_fields: vec!["body".to_string()],
+                vector_names: vec!["embedding".to_string()],
+            }),
+            ..Default::default()
+        })
+        .unwrap_err();
+
+        assert!(err.message().contains("unsupported_ckks_vector_selector"));
     }
 }

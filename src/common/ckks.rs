@@ -342,7 +342,7 @@ mod tests {
             enabled: true,
             key_id: Some("tenant-a:payload".to_string()),
             payload_text_fields: vec!["body".to_string()],
-            vector_names: vec!["embedding".to_string()],
+            vector_names: Vec::new(),
         }
     }
 
@@ -664,6 +664,10 @@ mod tests {
             openfhe_bridge_path: Some("/usr/local/bin/openfhe-default".to_string()),
             ..CkksConfig::default()
         };
+        let mut vector_collection_config = enabled_collection_config();
+        vector_collection_config
+            .vector_names
+            .push("embedding".to_string());
         config.collections.insert(
             "docs".to_string(),
             CkksCollectionKeyConfig {
@@ -675,11 +679,11 @@ mod tests {
         );
 
         assert_eq!(
-            openfhe_bridge_for_collection(&config, "docs", Some(&enabled_collection_config())),
+            openfhe_bridge_for_collection(&config, "docs", Some(&vector_collection_config)),
             Some("/usr/local/bin/openfhe-docs"),
         );
         assert_eq!(
-            openfhe_bridge_for_collection(&config, "other", Some(&enabled_collection_config()),),
+            openfhe_bridge_for_collection(&config, "other", Some(&vector_collection_config),),
             Some("/usr/local/bin/openfhe-default"),
         );
 

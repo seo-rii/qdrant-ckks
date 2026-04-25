@@ -77,7 +77,7 @@ mod ckks_tests {
                 enabled: true,
                 key_id: Some("tenant-a:docs".to_string()),
                 payload_text_fields: vec!["body".to_string(), "document.summary".to_string()],
-                vector_names: vec!["embedding".to_string()],
+                vector_names: Vec::new(),
             }),
             ..CollectionParams::empty()
         };
@@ -118,6 +118,14 @@ mod ckks_tests {
         };
         assert!(marker_field.validate().is_err());
 
+        let vector_field = CkksCollectionConfig {
+            enabled: true,
+            key_id: Some("tenant-a:docs".to_string()),
+            payload_text_fields: vec!["body".to_string()],
+            vector_names: vec!["embedding".to_string()],
+        };
+        assert!(vector_field.validate().is_err());
+
         let empty_enabled = CkksCollectionConfig {
             enabled: true,
             key_id: Some("tenant-a:docs".to_string()),
@@ -136,24 +144,14 @@ mod ckks_tests {
                 crypto_schema_version: 1,
                 encryption_epoch: 0,
                 migration_state: CryptoMigrationState::Active,
-                rules: vec![
-                    EncryptionRuleRef {
-                        id: "body_conf".to_string(),
-                        selector: EncryptionSelector::PayloadPaths {
-                            paths: vec!["body".to_string()],
-                        },
-                        instance: "docs_payload_v1".to_string(),
-                        binding: Some("payload-field/v1".to_string()),
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
                     },
-                    EncryptionRuleRef {
-                        id: "embedding_conf".to_string(),
-                        selector: EncryptionSelector::VectorNames {
-                            names: vec!["embedding".to_string()],
-                        },
-                        instance: "docs_vector_v1".to_string(),
-                        binding: Some("vector-envelope/v1".to_string()),
-                    },
-                ],
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
             }),
             ..CollectionParams::empty()
         };
@@ -211,7 +209,7 @@ mod ckks_tests {
     }
 
     #[test]
-    fn encryption_config_rejects_duplicate_vector_names_across_rules() {
+    fn encryption_config_rejects_vector_names_until_storage_support_exists() {
         let params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
@@ -219,24 +217,14 @@ mod ckks_tests {
                 crypto_schema_version: 1,
                 encryption_epoch: 0,
                 migration_state: CryptoMigrationState::Active,
-                rules: vec![
-                    EncryptionRuleRef {
-                        id: "embedding_primary".to_string(),
-                        selector: EncryptionSelector::VectorNames {
-                            names: vec!["embedding".to_string()],
-                        },
-                        instance: "docs_vector_v1".to_string(),
-                        binding: Some("vector-envelope/v1".to_string()),
+                rules: vec![EncryptionRuleRef {
+                    id: "embedding_conf".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["embedding".to_string()],
                     },
-                    EncryptionRuleRef {
-                        id: "embedding_secondary".to_string(),
-                        selector: EncryptionSelector::VectorNames {
-                            names: vec!["embedding".to_string()],
-                        },
-                        instance: "docs_vector_v2".to_string(),
-                        binding: Some("vector-envelope/v1".to_string()),
-                    },
-                ],
+                    instance: "docs_vector_v1".to_string(),
+                    binding: Some("vector-envelope/v1".to_string()),
+                }],
             }),
             ..CollectionParams::empty()
         };
@@ -274,7 +262,7 @@ mod ckks_tests {
             enabled: true,
             key_id: Some("tenant-a:docs".to_string()),
             payload_text_fields: vec!["body".to_string()],
-            vector_names: vec!["embedding".to_string()],
+            vector_names: Vec::new(),
         };
         let ckks_params = CollectionParams {
             ckks: Some(ckks.clone()),
@@ -353,21 +341,21 @@ mod ckks_tests {
             enabled: true,
             key_id: Some("tenant-a:docs".to_string()),
             payload_text_fields: vec!["body".to_string()],
-            vector_names: vec!["embedding".to_string()],
+            vector_names: Vec::new(),
         };
 
         let encryption = CollectionEncryptionConfig::from_legacy_ckks(&ckks).unwrap();
         assert_eq!(encryption.crypto_schema_version, 1);
         assert_eq!(encryption.encryption_epoch, 0);
         assert_eq!(encryption.migration_state, CryptoMigrationState::Active);
-        assert_eq!(encryption.rules.len(), 2);
+        assert_eq!(encryption.rules.len(), 1);
         assert_eq!(
             encryption.legacy_ckks_projection(),
             Some(CkksCollectionConfig {
                 enabled: true,
                 key_id: Some("tenant-a:docs".to_string()),
                 payload_text_fields: vec!["body".to_string()],
-                vector_names: vec!["embedding".to_string()],
+                vector_names: Vec::new(),
             }),
         );
     }
@@ -501,6 +489,12 @@ fn validate_ckks_payload_fields(fields: &[String]) -> Result<(), validator::Vali
 fn validate_ckks_collection_config(
     config: &CkksCollectionConfig,
 ) -> Result<(), validator::ValidationError> {
+    if config.enabled && !config.vector_names.is_empty() {
+        return Err(validator::ValidationError::new(
+            "unsupported_ckks_vector_selector",
+        ));
+    }
+
     if config.enabled && config.payload_text_fields.is_empty() && config.vector_names.is_empty() {
         return Err(validator::ValidationError::new("empty_ckks_selectors"));
     }
@@ -827,7 +821,10 @@ fn validate_encryption_rules(
                 "duplicate_encryption_rule_id",
             ));
         }
-        if matches!(rule.selector, EncryptionSelector::MetadataKeys { .. }) {
+        if matches!(
+            rule.selector,
+            EncryptionSelector::MetadataKeys { .. } | EncryptionSelector::VectorNames { .. }
+        ) {
             return Err(validator::ValidationError::new(
                 "unsupported_encryption_selector",
             ));

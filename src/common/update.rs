@@ -24,7 +24,7 @@ use storage::content_manager::collection_verification::check_strict_mode;
 use storage::content_manager::errors::StorageError;
 use storage::content_manager::toc::TableOfContent;
 use storage::dispatcher::Dispatcher;
-use storage::rbac::{Access, AccessRequirements, Auth};
+use storage::rbac::{Access, AccessRequirements, Auth, CollectionMultipass};
 use validator::Validate;
 
 use crate::common::crypto::payload_write_plan_for_collection;
@@ -946,6 +946,9 @@ pub async fn do_create_index(
 
     let toc = dispatcher.toc(&auth, &pass).clone();
 
+    ensure_payload_index_allowed_by_encryption(&toc, &collection_name, &operation.field_name)
+        .await?;
+
     // TODO: Is `submit_collection_meta_op` cancel-safe!? Should be, I think?.. 🤔
     dispatcher
         .submit_collection_meta_op(consensus_op, auth, params.timeout)
@@ -976,6 +979,8 @@ pub async fn do_create_index_internal(
     params: UpdateParams,
     hw_measurement_acc: HwMeasurementAcc,
 ) -> Result<UpdateResult, StorageError> {
+    ensure_payload_index_allowed_by_encryption(&toc, &collection_name, &field_name).await?;
+
     let operation = CollectionUpdateOperations::FieldIndexOperation(
         FieldIndexOperations::CreateIndex(CreateIndex {
             field_name,
@@ -1061,6 +1066,40 @@ pub async fn do_delete_index_internal(
         hw_measurement_acc,
     )
     .await
+}
+
+async fn ensure_payload_index_allowed_by_encryption(
+    toc: &TableOfContent,
+    collection_name: &str,
+    field_name: &JsonPath,
+) -> Result<(), StorageError> {
+    let multipass = CollectionMultipass;
+    let collection_pass = multipass.issue_pass(collection_name);
+    let collection = toc.get_collection(&collection_pass).await?;
+    let collection_config = collection.config_snapshot().await;
+    let Some(encryption) = collection_config.params.effective_encryption() else {
+        return Ok(());
+    };
+
+    for rule in &encryption.rules {
+        let collection::config::EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
+            continue;
+        };
+        for encrypted_path in paths {
+            let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
+                StorageError::bad_input(format!(
+                    "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                ))
+            })?;
+            if field_name.compatible(&encrypted_json_path) {
+                return Err(StorageError::bad_input(format!(
+                    "cannot create payload index on encrypted payload field '{field_name}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                )));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[expect(clippy::too_many_arguments)]
