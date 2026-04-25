@@ -7,7 +7,9 @@ use common::types::DeferredBehavior;
 use futures::stream::FuturesUnordered;
 use futures::{StreamExt as _, TryFutureExt, TryStreamExt as _, future};
 use itertools::Itertools;
-use qdrant_ckks::is_encrypted_payload_value;
+use qdrant_ckks::{
+    CLIENT_PAYLOAD_ENVELOPE_BINDING, is_client_encrypted_payload_value, is_encrypted_payload_value,
+};
 use segment::data_types::order_by::{Direction, OrderBy};
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
 use segment::json_path::JsonPath;
@@ -166,7 +168,10 @@ impl Collection {
             .effective_encryption()
         {
             let payload_write_touches_encrypted_path =
-                |payload: &Payload, key: Option<&JsonPath>, encrypted_path: &JsonPath| {
+                |payload: &Payload,
+                 key: Option<&JsonPath>,
+                 encrypted_path: &JsonPath,
+                 allow_client_envelope: bool| {
                     if let Some(key) = key {
                         return key.compatible(encrypted_path);
                     }
@@ -174,7 +179,11 @@ impl Collection {
                     encrypted_path
                         .value_get(&payload.0)
                         .into_iter()
-                        .any(|value| !is_encrypted_payload_value(value))
+                        .any(|value| {
+                            !is_encrypted_payload_value(value)
+                                && !(allow_client_envelope
+                                    && is_client_encrypted_payload_value(value))
+                        })
                 };
             let vector_write_touches_encrypted_name =
                 |vector: &VectorStructPersisted, encrypted_name: &str| match vector {
@@ -187,6 +196,8 @@ impl Collection {
             for rule in &encryption.rules {
                 match &rule.selector {
                     EncryptionSelector::PayloadPaths { paths } => {
+                        let allow_client_envelope =
+                            rule.binding.as_deref() == Some(CLIENT_PAYLOAD_ENVELOPE_BINDING);
                         for encrypted_path in paths {
                             let encrypted_json_path =
                                 encrypted_path.parse::<JsonPath>().map_err(|err| {
@@ -213,6 +224,7 @@ impl Collection {
                                                             payload,
                                                             None,
                                                             &encrypted_json_path,
+                                                            allow_client_envelope,
                                                         )
                                                     })
                                                 })
@@ -226,6 +238,7 @@ impl Collection {
                                                             payload,
                                                             None,
                                                             &encrypted_json_path,
+                                                            allow_client_envelope,
                                                         )
                                                     })
                                             }
@@ -240,6 +253,7 @@ impl Collection {
                                                         payload,
                                                         None,
                                                         &encrypted_json_path,
+                                                        allow_client_envelope,
                                                     )
                                                 })
                                         }
@@ -254,6 +268,7 @@ impl Collection {
                                     &operation.payload,
                                     operation.key.as_ref(),
                                     &encrypted_json_path,
+                                    allow_client_envelope,
                                 ),
                                 CollectionUpdateOperations::VectorOperation(_)
                                 | CollectionUpdateOperations::PayloadOperation(

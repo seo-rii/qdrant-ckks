@@ -1,3 +1,4 @@
+use data_encoding::BASE64URL_NOPAD;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -5,7 +6,10 @@ use thiserror::Error;
 use crate::aead::{AeadCipher, AeadKeyring, EncryptedEnvelope, EncryptionContext, EncryptionError};
 
 pub const ENCRYPTED_PAYLOAD_MARKER: &str = "$qdrant_ckks";
+pub const CLIENT_ENCRYPTED_PAYLOAD_MARKER: &str = "$qdrant_client_aead";
 const PAYLOAD_TEXT_KIND: &str = "payload_text";
+const CLIENT_PAYLOAD_ALGORITHM: &str = "AES-256-GCM";
+const CLIENT_PAYLOAD_KDF_DOMAIN: &str = "qdrant/client-payload-text/v1";
 const CRYPTO_SCHEMA_VERSION: u16 = 1;
 const DEFAULT_ENCRYPTION_EPOCH: u64 = 0;
 
@@ -29,6 +33,14 @@ pub enum PayloadEncryptionError {
     MalformedEnvelope(String),
     #[error("payload field contains unsupported qdrant-ckks envelope kind: {0}")]
     UnsupportedEnvelopeKind(String),
+    #[error("payload field contains unsupported client envelope algorithm: {0}")]
+    UnsupportedClientAlgorithm(String),
+    #[error("payload field client envelope AAD does not match expected {0}")]
+    ClientEnvelopeAadMismatch(String),
+    #[error("payload field client envelope key id is missing")]
+    MissingClientKeyId,
+    #[error("payload field client envelope key id does not match policy")]
+    ClientKeyIdMismatch,
     #[error("payload field contains unsupported qdrant-ckks schema version: {0}")]
     UnsupportedSchemaVersion(u16),
     #[error("payload field encryption epoch does not match active policy")]
@@ -108,6 +120,15 @@ pub struct PayloadTextEncryptor {
     keyring: AeadKeyring,
     crypto_schema_version: u16,
     encryption_epoch: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClientPayloadValidationContext<'a> {
+    pub collection_id: &'a str,
+    pub point_id: &'a str,
+    pub field_path: &'a str,
+    pub expected_key_id: Option<&'a str>,
+    pub key_id_required: bool,
 }
 
 impl PayloadTextEncryptor {
@@ -309,6 +330,111 @@ pub fn is_encrypted_payload_value(value: &Value) -> bool {
         .unwrap_or(false)
 }
 
+pub fn is_client_encrypted_payload_value(value: &Value) -> bool {
+    extract_client_envelope(value, CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .map(|envelope| envelope.is_some())
+        .unwrap_or(false)
+}
+
+pub fn validate_client_payload_value(
+    value: &Value,
+    context: ClientPayloadValidationContext<'_>,
+) -> Result<(), PayloadEncryptionError> {
+    let envelope = extract_client_envelope(value, context.field_path)?.ok_or_else(|| {
+        PayloadEncryptionError::ExpectedEncryptedEnvelope {
+            field: context.field_path.to_string(),
+            found: json_type_name(value),
+        }
+    })?;
+
+    if envelope.version != CRYPTO_SCHEMA_VERSION {
+        return Err(PayloadEncryptionError::UnsupportedSchemaVersion(
+            envelope.version,
+        ));
+    }
+    if envelope.kind != PAYLOAD_TEXT_KIND {
+        return Err(PayloadEncryptionError::UnsupportedEnvelopeKind(
+            envelope.kind,
+        ));
+    }
+    if envelope.algorithm != CLIENT_PAYLOAD_ALGORITHM {
+        return Err(PayloadEncryptionError::UnsupportedClientAlgorithm(
+            envelope.algorithm,
+        ));
+    }
+    if context.key_id_required && envelope.key_id.as_deref().is_none_or(str::is_empty) {
+        return Err(PayloadEncryptionError::MissingClientKeyId);
+    }
+    if let Some(expected_key_id) = context.expected_key_id {
+        if envelope.key_id.as_deref() != Some(expected_key_id) {
+            return Err(PayloadEncryptionError::ClientKeyIdMismatch);
+        }
+    }
+    if envelope.rk_id.as_deref().is_some_and(str::is_empty) {
+        return Err(PayloadEncryptionError::MalformedEnvelope(
+            context.field_path.to_string(),
+        ));
+    }
+    if envelope
+        .kdf_domain
+        .as_deref()
+        .is_some_and(|domain| domain != CLIENT_PAYLOAD_KDF_DOMAIN)
+    {
+        return Err(PayloadEncryptionError::MalformedEnvelope(
+            context.field_path.to_string(),
+        ));
+    }
+    if envelope.aad.collection_id != context.collection_id {
+        return Err(PayloadEncryptionError::ClientEnvelopeAadMismatch(
+            "collection_id".to_string(),
+        ));
+    }
+    if envelope.aad.point_id != context.point_id {
+        return Err(PayloadEncryptionError::ClientEnvelopeAadMismatch(
+            "point_id".to_string(),
+        ));
+    }
+    if envelope.aad.field_path != context.field_path {
+        return Err(PayloadEncryptionError::ClientEnvelopeAadMismatch(
+            "field_path".to_string(),
+        ));
+    }
+    if envelope.aad.schema_version != CRYPTO_SCHEMA_VERSION {
+        return Err(PayloadEncryptionError::UnsupportedSchemaVersion(
+            envelope.aad.schema_version,
+        ));
+    }
+    let nonce = BASE64URL_NOPAD
+        .decode(envelope.nonce.as_bytes())
+        .map_err(|_| PayloadEncryptionError::MalformedEnvelope(context.field_path.to_string()))?;
+    if nonce.len() != 12 {
+        return Err(PayloadEncryptionError::MalformedEnvelope(
+            context.field_path.to_string(),
+        ));
+    }
+    if BASE64URL_NOPAD
+        .decode(envelope.ciphertext.as_bytes())
+        .map_err(|_| PayloadEncryptionError::MalformedEnvelope(context.field_path.to_string()))?
+        .is_empty()
+    {
+        return Err(PayloadEncryptionError::MalformedEnvelope(
+            context.field_path.to_string(),
+        ));
+    }
+    if let Some(signature) = &envelope.signature {
+        if signature.alg.is_empty()
+            || signature.key_id.is_empty()
+            || BASE64URL_NOPAD.decode(signature.sig.as_bytes()).is_err()
+        {
+            return Err(PayloadEncryptionError::MalformedEnvelope(
+                context.field_path.to_string(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct StoredPayloadEnvelope {
     kind: String,
@@ -317,6 +443,42 @@ struct StoredPayloadEnvelope {
     #[serde(default)]
     encryption_epoch: u64,
     envelope: EncryptedEnvelope,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct ClientPayloadEnvelope {
+    version: u16,
+    kind: String,
+    algorithm: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    key_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rk_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rk_epoch: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kdf_domain: Option<String>,
+    aad: ClientPayloadAad,
+    nonce: String,
+    ciphertext: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    signature: Option<ClientPayloadSignature>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct ClientPayloadAad {
+    collection_id: String,
+    point_id: String,
+    field_path: String,
+    #[serde(default = "default_crypto_schema_version")]
+    schema_version: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct ClientPayloadSignature {
+    alg: String,
+    key_id: String,
+    sig: String,
 }
 
 const fn default_crypto_schema_version() -> u16 {
@@ -406,6 +568,26 @@ fn extract_envelope(
             envelope.kind,
         ));
     }
+
+    Ok(Some(envelope))
+}
+
+fn extract_client_envelope(
+    value: &Value,
+    field: &str,
+) -> Result<Option<ClientPayloadEnvelope>, PayloadEncryptionError> {
+    let Value::Object(object) = value else {
+        return Ok(None);
+    };
+    let Some(envelope) = object.get(CLIENT_ENCRYPTED_PAYLOAD_MARKER) else {
+        return Ok(None);
+    };
+    if object.len() != 1 {
+        return Err(PayloadEncryptionError::MalformedEnvelope(field.to_string()));
+    }
+
+    let envelope: ClientPayloadEnvelope = serde_json::from_value(envelope.clone())
+        .map_err(|_| PayloadEncryptionError::MalformedEnvelope(field.to_string()))?;
 
     Ok(Some(envelope))
 }

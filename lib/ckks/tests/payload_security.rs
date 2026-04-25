@@ -1,8 +1,9 @@
 use proptest::prelude::*;
 use qdrant_ckks::{
-    AeadCipher, AeadKeyring, ENCRYPTED_PAYLOAD_MARKER, EncryptionError, ExistingPayloadMode,
-    PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
-    is_encrypted_payload_value,
+    AeadCipher, AeadKeyring, CLIENT_ENCRYPTED_PAYLOAD_MARKER, ClientPayloadValidationContext,
+    ENCRYPTED_PAYLOAD_MARKER, EncryptionError, ExistingPayloadMode, PayloadEncryptionError,
+    PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey, is_client_encrypted_payload_value,
+    is_encrypted_payload_value, validate_client_payload_value,
 };
 use serde_json::{Map, Value, json};
 
@@ -16,6 +17,82 @@ fn object(value: Value) -> Map<String, Value> {
         Value::Object(object) => object,
         _ => unreachable!("test fixture must be a JSON object"),
     }
+}
+
+fn client_envelope(point_id: &str, field_path: &str) -> Value {
+    json!({
+        CLIENT_ENCRYPTED_PAYLOAD_MARKER: {
+            "version": 1,
+            "kind": "payload_text",
+            "algorithm": "AES-256-GCM",
+            "key_id": "tenant-a/client-rk-2026-04",
+            "rk_id": "tenant-a/client-rk-2026-04",
+            "rk_epoch": 3,
+            "kdf_domain": "qdrant/client-payload-text/v1",
+            "aad": {
+                "collection_id": "docs",
+                "point_id": point_id,
+                "field_path": field_path,
+                "schema_version": 1
+            },
+            "nonce": "AAAAAAAAAAAAAAAA",
+            "ciphertext": "AQID",
+            "signature": {
+                "alg": "ed25519",
+                "key_id": "tenant-a/client-signing-v1",
+                "sig": "AQIDBA"
+            }
+        }
+    })
+}
+
+#[test]
+fn client_payload_envelope_validates_expected_aad_and_key_policy() {
+    let envelope = client_envelope("point-1", "body");
+    let context = ClientPayloadValidationContext {
+        collection_id: "docs",
+        point_id: "point-1",
+        field_path: "body",
+        expected_key_id: Some("tenant-a/client-rk-2026-04"),
+        key_id_required: true,
+    };
+
+    validate_client_payload_value(&envelope, context).unwrap();
+    assert!(is_client_encrypted_payload_value(&envelope));
+    assert!(!is_encrypted_payload_value(&envelope));
+}
+
+#[test]
+fn client_payload_envelope_rejects_aad_and_key_mismatch() {
+    let envelope = client_envelope("point-1", "body");
+    assert_eq!(
+        validate_client_payload_value(
+            &envelope,
+            ClientPayloadValidationContext {
+                collection_id: "docs",
+                point_id: "point-2",
+                field_path: "body",
+                expected_key_id: Some("tenant-a/client-rk-2026-04"),
+                key_id_required: true,
+            },
+        ),
+        Err(PayloadEncryptionError::ClientEnvelopeAadMismatch(
+            "point_id".to_string()
+        )),
+    );
+    assert_eq!(
+        validate_client_payload_value(
+            &envelope,
+            ClientPayloadValidationContext {
+                collection_id: "docs",
+                point_id: "point-1",
+                field_path: "body",
+                expected_key_id: Some("tenant-a/other-rk"),
+                key_id_required: true,
+            },
+        ),
+        Err(PayloadEncryptionError::ClientKeyIdMismatch),
+    );
 }
 
 #[test]

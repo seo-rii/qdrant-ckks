@@ -6,9 +6,11 @@ use thiserror::Error;
 
 pub const GENERIC_CIPHERTEXT_MARKER: &str = "$qdrant_ciphertext";
 pub const PAYLOAD_AES_GCM_PROVIDER: &str = "payload/aes-256-gcm@v1";
+pub const PAYLOAD_CLIENT_AEAD_PROVIDER: &str = "payload/client-aead@v1";
 pub const VECTOR_OPENFHE_CKKS_PROVIDER: &str = "vector/openfhe-ckks@v1";
 pub const METADATA_BLIND_INDEX_PROVIDER: &str = "metadata/blind-index-hmac@v1";
 pub const PAYLOAD_FIELD_BINDING: &str = "payload-field/v1";
+pub const CLIENT_PAYLOAD_ENVELOPE_BINDING: &str = "client-payload-envelope/v1";
 pub const VECTOR_ENVELOPE_BINDING: &str = "vector-envelope/v1";
 pub const METADATA_VALUE_BINDING: &str = "metadata-value/v1";
 
@@ -258,6 +260,7 @@ mod tests {
     impl CryptoSuite for BasicSuite {
         fn register(&self, registry: &mut CryptoRegistry) {
             registry.register_payload_provider(PAYLOAD_AES_GCM_PROVIDER);
+            registry.register_payload_provider(PAYLOAD_CLIENT_AEAD_PROVIDER);
             registry.register_vector_provider(VECTOR_OPENFHE_CKKS_PROVIDER);
             registry.register_metadata_provider(METADATA_BLIND_INDEX_PROVIDER);
         }
@@ -306,7 +309,7 @@ mod tests {
 
         assert_eq!(
             registry.payload_provider_ids().collect::<Vec<_>>(),
-            vec![PAYLOAD_AES_GCM_PROVIDER],
+            vec![PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER],
         );
         assert_eq!(
             registry.vector_provider_ids().collect::<Vec<_>>(),

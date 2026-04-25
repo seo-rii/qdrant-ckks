@@ -16,17 +16,19 @@ pub use aead::{
     PAYLOAD_TEXT_KEY_DOMAIN, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, WrappedKeyBlob,
 };
 pub use control_plane::{
-    CiphertextEnvelope, CompiledCollectionCryptoPlan, CompiledMetadataRule, CompiledPayloadRule,
-    CompiledVectorRule, ControlPlaneError, CryptoCapability, CryptoRegistry, CryptoSuite,
-    GENERIC_CIPHERTEXT_MARKER, METADATA_BLIND_INDEX_PROVIDER, METADATA_VALUE_BINDING,
-    MetadataProviderFactory, PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_FIELD_BINDING,
+    CLIENT_PAYLOAD_ENVELOPE_BINDING, CiphertextEnvelope, CompiledCollectionCryptoPlan,
+    CompiledMetadataRule, CompiledPayloadRule, CompiledVectorRule, ControlPlaneError,
+    CryptoCapability, CryptoRegistry, CryptoSuite, GENERIC_CIPHERTEXT_MARKER,
+    METADATA_BLIND_INDEX_PROVIDER, METADATA_VALUE_BINDING, MetadataProviderFactory,
+    PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER, PAYLOAD_FIELD_BINDING,
     PayloadProviderFactory, VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER,
     VectorProviderFactory,
 };
 pub use openfhe::CommandOpenFheBackend;
 pub use payload::{
-    ENCRYPTED_PAYLOAD_MARKER, ExistingPayloadMode, PayloadEncryptionError, PayloadEncryptionPolicy,
-    PayloadTextEncryptor, is_encrypted_payload_value,
+    CLIENT_ENCRYPTED_PAYLOAD_MARKER, ClientPayloadValidationContext, ENCRYPTED_PAYLOAD_MARKER,
+    ExistingPayloadMode, PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
+    is_client_encrypted_payload_value, is_encrypted_payload_value, validate_client_payload_value,
 };
 pub use vector::{
     CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_SCHEME, CkksEncryptionInput, CkksError,

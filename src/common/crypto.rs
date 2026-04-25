@@ -6,9 +6,11 @@ use collection::config::{
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_ckks::{
     AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_VECTOR_KEY_DOMAIN,
-    ExistingPayloadMode, LocalMasterKeyProvider, MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER,
-    PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
-    RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, VECTOR_OPENFHE_CKKS_PROVIDER, WrappedKeyBlob,
+    CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadValidationContext, ExistingPayloadMode,
+    LocalMasterKeyProvider, MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER,
+    PAYLOAD_CLIENT_AEAD_PROVIDER, PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionError,
+    PayloadEncryptionPolicy, PayloadTextEncryptor, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey,
+    VECTOR_OPENFHE_CKKS_PROVIDER, WrappedKeyBlob, validate_client_payload_value,
 };
 use segment::json_path::JsonPath;
 use segment::types::Payload;
@@ -78,6 +80,7 @@ const SYMMETRIC_KEY_32_KIND: &str = "symmetric_key_32";
 const WRAPPING_KEY_32_KIND: &str = "wrapping_key_32";
 const WRAPPED_SYMMETRIC_KEY_32_KIND: &str = "wrapped_symmetric_key_32";
 const MATERIAL_FINGERPRINT_ID_OPTION: &str = "material_fingerprint_id";
+const KEY_ID_REQUIRED_OPTION: &str = "key_id_required";
 const CKKS_PROFILE_OPTION: &str = "profile";
 
 #[derive(Error, Debug, PartialEq, Eq)]
@@ -94,6 +97,12 @@ pub enum PayloadWriteSetupError {
         collection: String,
         rule_id: String,
         provider: String,
+    },
+    #[error("collection {collection} client payload rule {rule_id} must use binding {binding}")]
+    InvalidClientEnvelopeBinding {
+        collection: String,
+        rule_id: String,
+        binding: String,
     },
     #[error("payload crypto instance {instance} must bind role {role} to a symmetric key material")]
     MissingMaterialBinding { instance: String, role: String },
@@ -149,12 +158,20 @@ pub enum PayloadWriteSetupError {
     Payload(#[from] PayloadEncryptionError),
 }
 
-struct PayloadWriteRule {
-    encryptor: PayloadTextEncryptor,
-    policy: PayloadEncryptionPolicy,
+enum PayloadWriteRule {
+    ServerEncrypt {
+        encryptor: PayloadTextEncryptor,
+        policy: PayloadEncryptionPolicy,
+    },
+    ClientEnvelope {
+        policy: PayloadEncryptionPolicy,
+        expected_key_id: Option<String>,
+        key_id_required: bool,
+    },
 }
 
 pub struct PayloadWritePlan {
+    collection_name: String,
     rules: Vec<PayloadWriteRule>,
 }
 
@@ -167,12 +184,42 @@ impl PayloadWritePlan {
         let mut encrypted = 0;
 
         for rule in &self.rules {
-            encrypted += rule.encryptor.encrypt_selected_fields_with_mode(
-                point_id,
-                &mut payload.0,
-                &rule.policy,
-                ExistingPayloadMode::FailIfExisting,
-            )?;
+            match rule {
+                PayloadWriteRule::ServerEncrypt { encryptor, policy } => {
+                    encrypted += encryptor.encrypt_selected_fields_with_mode(
+                        point_id,
+                        &mut payload.0,
+                        policy,
+                        ExistingPayloadMode::FailIfExisting,
+                    )?;
+                }
+                PayloadWriteRule::ClientEnvelope {
+                    policy,
+                    expected_key_id,
+                    key_id_required,
+                } => {
+                    for field in policy.fields() {
+                        let encrypted_path = field.parse::<JsonPath>().map_err(|_| {
+                            PayloadWriteSetupError::Payload(
+                                PayloadEncryptionError::InvalidFieldPath(field.clone()),
+                            )
+                        })?;
+                        for value in encrypted_path.value_get(&payload.0) {
+                            validate_client_payload_value(
+                                value,
+                                ClientPayloadValidationContext {
+                                    collection_id: &self.collection_name,
+                                    point_id,
+                                    field_path: field,
+                                    expected_key_id: expected_key_id.as_deref(),
+                                    key_id_required: *key_id_required,
+                                },
+                            )?;
+                            encrypted += 1;
+                        }
+                    }
+                }
+            }
         }
 
         Ok(encrypted)
@@ -180,7 +227,7 @@ impl PayloadWritePlan {
 
     pub fn touches_selected_fields(&self, payload: &Payload, key: Option<&JsonPath>) -> bool {
         self.rules.iter().any(|rule| {
-            rule.policy.fields().iter().any(|field| {
+            rule.policy().fields().iter().any(|field| {
                 let Ok(encrypted_path) = field.parse::<JsonPath>() else {
                     return true;
                 };
@@ -196,6 +243,14 @@ impl PayloadWritePlan {
                 }
             })
         })
+    }
+}
+
+impl PayloadWriteRule {
+    fn policy(&self) -> &PayloadEncryptionPolicy {
+        match self {
+            Self::ServerEncrypt { policy, .. } | Self::ClientEnvelope { policy, .. } => policy,
+        }
     }
 }
 
@@ -227,7 +282,8 @@ pub fn payload_write_plan_for_collection(
         };
 
         return Ok(Some(PayloadWritePlan {
-            rules: vec![PayloadWriteRule { encryptor, policy }],
+            collection_name: collection_name.to_string(),
+            rules: vec![PayloadWriteRule::ServerEncrypt { encryptor, policy }],
         }));
     }
 
@@ -534,58 +590,104 @@ fn generic_payload_write_plan(
                 collection: collection_name.to_string(),
                 instance: rule.instance.clone(),
             })?;
-        if instance.provider != PAYLOAD_AES_GCM_PROVIDER {
-            return Err(PayloadWriteSetupError::UnsupportedProvider {
-                collection: collection_name.to_string(),
-                rule_id: rule.id.clone(),
-                provider: instance.provider.clone(),
-            });
-        }
-
-        let material_ref = instance
-            .materials
-            .get(PAYLOAD_SYM_KEY_ROLE)
-            .ok_or_else(|| PayloadWriteSetupError::MissingMaterialBinding {
-                instance: rule.instance.clone(),
-                role: PAYLOAD_SYM_KEY_ROLE.to_string(),
-            })?;
-        let material = runtime_settings
-            .materials
-            .get(material_ref)
-            .ok_or_else(|| PayloadWriteSetupError::MissingMaterialBinding {
-                instance: rule.instance.clone(),
-                role: PAYLOAD_SYM_KEY_ROLE.to_string(),
-            })?;
-
-        let key_id = resolve_payload_key_id(collection_name, encryption, &rule.instance, instance)?;
-        let resource_key = decode_resource_key(runtime_settings, material_ref, material)?;
-        let payload_key = resource_key
-            .derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)
-            .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
-        let cipher = if let Some(material_fingerprint_id) =
-            instance.options.get(MATERIAL_FINGERPRINT_ID_OPTION)
-        {
-            let material_fingerprint_id = material_fingerprint_id.as_str().ok_or_else(|| {
-                PayloadWriteSetupError::InvalidInstanceMaterialFingerprintId {
-                    instance: rule.instance.clone(),
-                }
-            })?;
-            AeadCipher::new_with_material_fingerprint(key_id, payload_key, material_fingerprint_id)
-        } else {
-            AeadCipher::new(key_id, payload_key)
-        }
-        .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
         let policy = PayloadEncryptionPolicy::new(paths.clone())?;
-        let encryptor = PayloadTextEncryptor::new(collection_name, cipher)?
-            .with_encryption_epoch(encryption.encryption_epoch);
+        match instance.provider.as_str() {
+            PAYLOAD_AES_GCM_PROVIDER => {
+                let material_ref =
+                    instance
+                        .materials
+                        .get(PAYLOAD_SYM_KEY_ROLE)
+                        .ok_or_else(|| PayloadWriteSetupError::MissingMaterialBinding {
+                            instance: rule.instance.clone(),
+                            role: PAYLOAD_SYM_KEY_ROLE.to_string(),
+                        })?;
+                let material = runtime_settings
+                    .materials
+                    .get(material_ref)
+                    .ok_or_else(|| PayloadWriteSetupError::MissingMaterialBinding {
+                        instance: rule.instance.clone(),
+                        role: PAYLOAD_SYM_KEY_ROLE.to_string(),
+                    })?;
 
-        rules.push(PayloadWriteRule { encryptor, policy });
+                let key_id =
+                    resolve_payload_key_id(collection_name, encryption, &rule.instance, instance)?;
+                let resource_key = decode_resource_key(runtime_settings, material_ref, material)?;
+                let payload_key = resource_key
+                    .derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)
+                    .map_err(|err| {
+                        PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err))
+                    })?;
+                let cipher = if let Some(material_fingerprint_id) =
+                    instance.options.get(MATERIAL_FINGERPRINT_ID_OPTION)
+                {
+                    let material_fingerprint_id =
+                        material_fingerprint_id.as_str().ok_or_else(|| {
+                            PayloadWriteSetupError::InvalidInstanceMaterialFingerprintId {
+                                instance: rule.instance.clone(),
+                            }
+                        })?;
+                    AeadCipher::new_with_material_fingerprint(
+                        key_id,
+                        payload_key,
+                        material_fingerprint_id,
+                    )
+                } else {
+                    AeadCipher::new(key_id, payload_key)
+                }
+                .map_err(|err| {
+                    PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err))
+                })?;
+                let encryptor = PayloadTextEncryptor::new(collection_name, cipher)?
+                    .with_encryption_epoch(encryption.encryption_epoch);
+
+                rules.push(PayloadWriteRule::ServerEncrypt { encryptor, policy });
+            }
+            PAYLOAD_CLIENT_AEAD_PROVIDER => {
+                if rule.binding.as_deref() != Some(CLIENT_PAYLOAD_ENVELOPE_BINDING) {
+                    return Err(PayloadWriteSetupError::InvalidClientEnvelopeBinding {
+                        collection: collection_name.to_string(),
+                        rule_id: rule.id.clone(),
+                        binding: CLIENT_PAYLOAD_ENVELOPE_BINDING.to_string(),
+                    });
+                }
+                let expected_key_id = resolve_optional_payload_key_id(
+                    collection_name,
+                    encryption,
+                    &rule.instance,
+                    instance,
+                )?;
+                let key_id_required = match instance.options.get(KEY_ID_REQUIRED_OPTION) {
+                    None | Some(Value::Null) => true,
+                    Some(Value::Bool(value)) => *value,
+                    Some(_) => {
+                        return Err(PayloadWriteSetupError::InvalidInstanceKeyId {
+                            instance: rule.instance.clone(),
+                        });
+                    }
+                };
+                rules.push(PayloadWriteRule::ClientEnvelope {
+                    policy,
+                    expected_key_id: expected_key_id.map(ToOwned::to_owned),
+                    key_id_required,
+                });
+            }
+            _ => {
+                return Err(PayloadWriteSetupError::UnsupportedProvider {
+                    collection: collection_name.to_string(),
+                    rule_id: rule.id.clone(),
+                    provider: instance.provider.clone(),
+                });
+            }
+        }
     }
 
     if rules.is_empty() {
         Ok(None)
     } else {
-        Ok(Some(PayloadWritePlan { rules }))
+        Ok(Some(PayloadWritePlan {
+            collection_name: collection_name.to_string(),
+            rules,
+        }))
     }
 }
 
@@ -765,6 +867,35 @@ fn resolve_payload_key_id<'a>(
         (None, None) => Err(PayloadWriteSetupError::MissingKeyId {
             collection: collection_name.to_string(),
         }),
+    }
+}
+
+fn resolve_optional_payload_key_id<'a>(
+    collection_name: &str,
+    encryption: &'a CollectionEncryptionConfig,
+    instance_name: &str,
+    instance: &'a CryptoInstanceConfig,
+) -> Result<Option<&'a str>, PayloadWriteSetupError> {
+    let instance_key_id = match instance.options.get("key_id") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(key_id)) => Some(key_id.as_str()),
+        Some(_) => {
+            return Err(PayloadWriteSetupError::InvalidInstanceKeyId {
+                instance: instance_name.to_string(),
+            });
+        }
+    };
+
+    match (encryption.key_id.as_deref(), instance_key_id) {
+        (Some(collection_key_id), Some(runtime_key_id)) if collection_key_id != runtime_key_id => {
+            Err(PayloadWriteSetupError::CollectionKeyMismatch {
+                collection: collection_name.to_string(),
+                instance: instance_name.to_string(),
+            })
+        }
+        (Some(collection_key_id), _) => Ok(Some(collection_key_id)),
+        (None, Some(runtime_key_id)) => Ok(Some(runtime_key_id)),
+        (None, None) => Ok(None),
     }
 }
 
@@ -1021,7 +1152,8 @@ mod tests {
     };
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_ckks::{
-        LocalMasterKeyProvider, MasterKeyProvider, RESOURCE_KEY_WRAP_ALGORITHM,
+        CLIENT_ENCRYPTED_PAYLOAD_MARKER, CLIENT_PAYLOAD_ENVELOPE_BINDING, LocalMasterKeyProvider,
+        MasterKeyProvider, RESOURCE_KEY_WRAP_ALGORITHM, is_client_encrypted_payload_value,
         is_encrypted_payload_value,
     };
     use serde_json::json;
@@ -1348,6 +1480,199 @@ mod tests {
                 .and_then(|fingerprint| fingerprint.as_str()),
             Some("tenant-a/payload@v5"),
         );
+    }
+
+    #[test]
+    fn payload_write_plan_accepts_valid_client_envelopes_without_server_key_material() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                instances: HashMap::from([(
+                    "docs_payload_client_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a/client-rk-2026-04",
+                            "key_id_required": true,
+                        }),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/client-rk-2026-04".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_client_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_client_v1".to_string(),
+                    binding: Some(CLIENT_PAYLOAD_ENVELOPE_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let mut payload = segment::types::Payload(
+            json!({
+                "body": {
+                    CLIENT_ENCRYPTED_PAYLOAD_MARKER: {
+                        "version": 1,
+                        "kind": "payload_text",
+                        "algorithm": "AES-256-GCM",
+                        "key_id": "tenant-a/client-rk-2026-04",
+                        "rk_id": "tenant-a/client-rk-2026-04",
+                        "rk_epoch": 3,
+                        "kdf_domain": "qdrant/client-payload-text/v1",
+                        "aad": {
+                            "collection_id": "docs",
+                            "point_id": "point-1",
+                            "field_path": "body",
+                            "schema_version": 1
+                        },
+                        "nonce": "AAAAAAAAAAAAAAAA",
+                        "ciphertext": "AQID",
+                    }
+                }
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+
+        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
+            .unwrap()
+            .unwrap();
+        assert_eq!(plan.encrypt_payload("point-1", &mut payload).unwrap(), 1);
+        assert!(is_client_encrypted_payload_value(
+            payload.0.get("body").unwrap()
+        ));
+        assert!(!is_encrypted_payload_value(payload.0.get("body").unwrap()));
+    }
+
+    #[test]
+    fn payload_write_plan_rejects_client_envelope_aad_mismatch() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                instances: HashMap::from([(
+                    "docs_payload_client_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: json!({ "key_id": "tenant-a/client-rk-2026-04" }),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/client-rk-2026-04".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_client_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_client_v1".to_string(),
+                    binding: Some(CLIENT_PAYLOAD_ENVELOPE_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let mut payload = segment::types::Payload(
+            json!({
+                "body": {
+                    CLIENT_ENCRYPTED_PAYLOAD_MARKER: {
+                        "version": 1,
+                        "kind": "payload_text",
+                        "algorithm": "AES-256-GCM",
+                        "key_id": "tenant-a/client-rk-2026-04",
+                        "aad": {
+                            "collection_id": "docs",
+                            "point_id": "point-2",
+                            "field_path": "body",
+                            "schema_version": 1
+                        },
+                        "nonce": "AAAAAAAAAAAAAAAA",
+                        "ciphertext": "AQID"
+                    }
+                }
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
+            .unwrap()
+            .unwrap();
+
+        assert!(matches!(
+            plan.encrypt_payload("point-1", &mut payload),
+            Err(PayloadWriteSetupError::Payload(
+                PayloadEncryptionError::ClientEnvelopeAadMismatch(field)
+            )) if field == "point_id"
+        ));
+    }
+
+    #[test]
+    fn payload_write_plan_requires_client_envelope_binding_for_client_provider() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                instances: HashMap::from([(
+                    "docs_payload_client_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: json!({ "key_id": "tenant-a/client-rk-2026-04" }),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/client-rk-2026-04".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_client_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_client_v1".to_string(),
+                    binding: None,
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        assert!(matches!(
+            payload_write_plan_for_collection(&settings, "docs", &params),
+            Err(PayloadWriteSetupError::InvalidClientEnvelopeBinding {
+                collection,
+                rule_id,
+                binding,
+            }) if collection == "docs"
+                && rule_id == "body_client_conf"
+                && binding == CLIENT_PAYLOAD_ENVELOPE_BINDING
+        ));
     }
 
     #[test]
