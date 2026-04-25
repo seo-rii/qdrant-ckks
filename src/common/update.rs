@@ -1277,18 +1277,6 @@ async fn maybe_encrypt_point_payload_update(
         return Ok(operation);
     };
 
-    if operation.key.is_some() || operation.filter.is_some() {
-        return Ok(operation);
-    }
-
-    let Some(point_id) = operation
-        .points
-        .as_ref()
-        .and_then(|points| (points.len() == 1).then(|| &points[0]))
-    else {
-        return Ok(operation);
-    };
-
     let collection_pass =
         auth.check_collection_access(collection_name, AccessRequirements::new(), operation_name)?;
     let collection = toc.get_collection(&collection_pass).await?;
@@ -1304,6 +1292,40 @@ async fn maybe_encrypt_point_payload_update(
         ))
     })?
     else {
+        return Ok(operation);
+    };
+
+    let touches_encrypted_payload =
+        plan.touches_selected_fields(&operation.payload, operation.key.as_ref());
+
+    if operation.filter.is_some() {
+        if touches_encrypted_payload {
+            return Err(StorageError::bad_input(format!(
+                "{operation_name} with a filter cannot update encrypted payload fields in collection {collection_name}; use point-specific upsert/set_payload so encryption can bind AAD to each point id",
+            )));
+        }
+        return Ok(operation);
+    }
+
+    if operation.key.is_some() {
+        if touches_encrypted_payload {
+            return Err(StorageError::bad_input(format!(
+                "{operation_name} with a key path cannot update encrypted payload fields in collection {collection_name}; use a full point-specific payload update so the selected encrypted fields can be sealed with their canonical field paths",
+            )));
+        }
+        return Ok(operation);
+    }
+
+    let Some(point_id) = operation
+        .points
+        .as_ref()
+        .and_then(|points| (points.len() == 1).then(|| &points[0]))
+    else {
+        if touches_encrypted_payload {
+            return Err(StorageError::bad_input(format!(
+                "{operation_name} cannot update encrypted payload fields for multiple or missing point ids in collection {collection_name}; send one point-specific update per point",
+            )));
+        }
         return Ok(operation);
     };
 

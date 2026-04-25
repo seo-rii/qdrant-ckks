@@ -10,6 +10,7 @@ use qdrant_ckks::{
     PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
     RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, VECTOR_OPENFHE_CKKS_PROVIDER, WrappedKeyBlob,
 };
+use segment::json_path::JsonPath;
 use segment::types::Payload;
 use serde_json::Value;
 use storage::content_manager::collection_meta_ops::CreateCollection;
@@ -175,6 +176,26 @@ impl PayloadWritePlan {
         }
 
         Ok(encrypted)
+    }
+
+    pub fn touches_selected_fields(&self, payload: &Payload, key: Option<&JsonPath>) -> bool {
+        self.rules.iter().any(|rule| {
+            rule.policy.fields().iter().any(|field| {
+                let Ok(encrypted_path) = field.parse::<JsonPath>() else {
+                    return true;
+                };
+
+                if let Some(key) = key {
+                    key.compatible(&encrypted_path)
+                } else {
+                    encrypted_path
+                        .value_get(&payload.0)
+                        .into_iter()
+                        .next()
+                        .is_some()
+                }
+            })
+        })
     }
 }
 
@@ -1310,7 +1331,13 @@ mod tests {
                 .unwrap()
                 .clone(),
         );
+        let public_payload =
+            segment::types::Payload(json!({ "title": "public" }).as_object().unwrap().clone());
+        let body_path = "body".parse::<JsonPath>().unwrap();
 
+        assert!(plan.touches_selected_fields(&payload, None));
+        assert!(plan.touches_selected_fields(&public_payload, Some(&body_path)));
+        assert!(!plan.touches_selected_fields(&public_payload, None));
         assert_eq!(plan.encrypt_payload("point-1", &mut payload).unwrap(), 1);
         let body = payload.0.get("body").unwrap();
         assert!(is_encrypted_payload_value(body));
