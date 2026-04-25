@@ -444,6 +444,18 @@ fn validate_wrapped_resource_key_material(
             reason: "missing wrapped_key_b64".to_string(),
         });
     }
+    if material.rk_epoch.is_none() {
+        return Err(CryptoSetupError::InvalidWrappedMaterial {
+            material: material_name.to_string(),
+            reason: "missing rk_epoch".to_string(),
+        });
+    }
+    if material.scope.as_deref().is_none_or(str::is_empty) {
+        return Err(CryptoSetupError::InvalidWrappedMaterial {
+            material: material_name.to_string(),
+            reason: "missing scope".to_string(),
+        });
+    }
 
     let algorithm = material
         .wrap_algorithm
@@ -1136,6 +1148,64 @@ mod tests {
             Err(CryptoSetupError::UnknownWrappingMaterial {
                 material: "tenant-a/payload-rk-v1".to_string(),
                 wrapped_by: "tenant-a/mk-v1".to_string(),
+            }),
+        );
+    }
+
+    #[test]
+    fn validate_crypto_settings_requires_wrapped_resource_key_identity() {
+        let base_material = CryptoMaterialConfig {
+            kind: WRAPPED_SYMMETRIC_KEY_32_KIND.to_string(),
+            wrapped_by: Some("tenant-a/mk-v1".to_string()),
+            wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
+            nonce: Some("nonce".to_string()),
+            wrapped_key_b64: Some("wrapped".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        let wrapping_material = CryptoMaterialConfig {
+            kind: WRAPPING_KEY_32_KIND.to_string(),
+            source: Some("inline".to_string()),
+            env: None,
+            path: None,
+            value_b64: Some(BASE64URL_NOPAD.encode(&[91u8; 32])),
+            ..CryptoMaterialConfig::default()
+        };
+
+        let missing_epoch = CryptoSettings {
+            allow_inline_key_material: true,
+            materials: HashMap::from([
+                ("tenant-a/mk-v1".to_string(), wrapping_material.clone()),
+                ("tenant-a/payload-rk-v1".to_string(), base_material.clone()),
+            ]),
+            ..CryptoSettings::default()
+        };
+        assert_eq!(
+            validate_crypto_settings(&missing_epoch),
+            Err(CryptoSetupError::InvalidWrappedMaterial {
+                material: "tenant-a/payload-rk-v1".to_string(),
+                reason: "missing rk_epoch".to_string(),
+            }),
+        );
+
+        let missing_scope = CryptoSettings {
+            allow_inline_key_material: true,
+            materials: HashMap::from([
+                ("tenant-a/mk-v1".to_string(), wrapping_material),
+                (
+                    "tenant-a/payload-rk-v1".to_string(),
+                    CryptoMaterialConfig {
+                        rk_epoch: Some(3),
+                        ..base_material
+                    },
+                ),
+            ]),
+            ..CryptoSettings::default()
+        };
+        assert_eq!(
+            validate_crypto_settings(&missing_scope),
+            Err(CryptoSetupError::InvalidWrappedMaterial {
+                material: "tenant-a/payload-rk-v1".to_string(),
+                reason: "missing scope".to_string(),
             }),
         );
     }
