@@ -12,6 +12,38 @@ fn encryptor() -> PayloadTextEncryptor {
     PayloadTextEncryptor::new("docs", cipher).unwrap()
 }
 
+#[test]
+fn resource_key_constructor_derives_payload_text_subkey() {
+    let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
+    let encryptor = PayloadTextEncryptor::new_from_resource_key_with_material_fingerprint(
+        "docs",
+        "tenant-a:payload",
+        &SecretKey::from_bytes([71u8; 32]),
+        "tenant-a/payload@v1",
+    )
+    .unwrap();
+    let mut payload = object(json!({ "body": "domain separated" }));
+
+    encryptor
+        .encrypt_selected_fields("point-1", &mut payload, &policy)
+        .unwrap();
+
+    let wrong_raw_resource_key = PayloadTextEncryptor::new(
+        "docs",
+        AeadCipher::new_with_material_fingerprint(
+            "tenant-a:payload",
+            SecretKey::from_bytes([71u8; 32]),
+            "tenant-a/payload@v1",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        wrong_raw_resource_key.decrypt_selected_fields("point-1", &mut payload, &policy),
+        Err(PayloadEncryptionError::Crypto(EncryptionError::OpenFailed)),
+    );
+}
+
 fn object(value: Value) -> Map<String, Value> {
     match value {
         Value::Object(object) => object,

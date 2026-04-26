@@ -3,7 +3,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
-use crate::aead::{AeadCipher, AeadKeyring, EncryptedEnvelope, EncryptionContext, EncryptionError};
+use crate::aead::{
+    AeadCipher, AeadKeyring, EncryptedEnvelope, EncryptionContext, EncryptionError,
+    PAYLOAD_TEXT_KEY_DOMAIN, SecretKey,
+};
 
 pub const ENCRYPTED_PAYLOAD_MARKER: &str = "$qdrant_ckks";
 pub const CLIENT_ENCRYPTED_PAYLOAD_MARKER: &str = "$qdrant_client_aead";
@@ -134,6 +137,55 @@ pub struct ClientPayloadValidationContext<'a> {
 }
 
 impl PayloadTextEncryptor {
+    pub fn new_from_resource_key(
+        collection: impl Into<String>,
+        key_id: impl Into<String>,
+        resource_key: &SecretKey,
+    ) -> Result<Self, PayloadEncryptionError> {
+        let payload_key = resource_key.derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)?;
+        Self::new(collection, AeadCipher::new(key_id, payload_key)?)
+    }
+
+    pub fn new_from_resource_key_with_material_fingerprint(
+        collection: impl Into<String>,
+        key_id: impl Into<String>,
+        resource_key: &SecretKey,
+        material_fingerprint_id: impl Into<String>,
+    ) -> Result<Self, PayloadEncryptionError> {
+        let payload_key = resource_key.derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)?;
+        Self::new(
+            collection,
+            AeadCipher::new_with_material_fingerprint(
+                key_id,
+                payload_key,
+                material_fingerprint_id,
+            )?,
+        )
+    }
+
+    pub fn new_from_resource_key_with_metadata(
+        collection: impl Into<String>,
+        key_id: impl Into<String>,
+        resource_key: &SecretKey,
+        material_fingerprint_id: impl Into<String>,
+        rk_id: impl Into<String>,
+        rk_epoch: u64,
+    ) -> Result<Self, PayloadEncryptionError> {
+        let payload_key = resource_key.derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)?;
+        let cipher = AeadCipher::new_with_material_fingerprint(
+            key_id,
+            payload_key,
+            material_fingerprint_id,
+        )?
+        .with_resource_key_metadata(rk_id, rk_epoch)?;
+        Self::new(collection, cipher)
+    }
+
+    /// Builds an encryptor from an already domain-separated AEAD cipher.
+    ///
+    /// Runtime code that starts from a collection/rule resource key should use
+    /// `new_from_resource_key*` so the payload-text HKDF domain is applied in
+    /// one place.
     pub fn new(
         collection: impl Into<String>,
         cipher: AeadCipher,

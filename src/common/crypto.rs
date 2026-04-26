@@ -8,9 +8,9 @@ use qdrant_ckks::{
     AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_VECTOR_KEY_DOMAIN,
     CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadValidationContext, ExistingPayloadMode,
     LocalMasterKeyProvider, MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER,
-    PAYLOAD_CLIENT_AEAD_PROVIDER, PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionError,
-    PayloadEncryptionPolicy, PayloadTextEncryptor, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey,
-    VECTOR_OPENFHE_CKKS_PROVIDER, WrappedKeyBlob, validate_client_payload_value,
+    PAYLOAD_CLIENT_AEAD_PROVIDER, PayloadEncryptionError, PayloadEncryptionPolicy,
+    PayloadTextEncryptor, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, VECTOR_OPENFHE_CKKS_PROVIDER,
+    WrappedKeyBlob, validate_client_payload_value,
 };
 use segment::json_path::JsonPath;
 use segment::types::Payload;
@@ -614,43 +614,39 @@ fn generic_payload_write_plan(
                 let key_id =
                     resolve_payload_key_id(collection_name, encryption, &rule.instance, instance)?;
                 let resource_key = decode_resource_key(runtime_settings, material_ref, material)?;
-                let payload_key = resource_key
-                    .derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)
-                    .map_err(|err| {
-                        PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err))
-                    })?;
-                let mut cipher = match instance.options.get(MATERIAL_FINGERPRINT_ID_OPTION) {
-                    Some(material_fingerprint_id) => {
-                        let material_fingerprint_id =
+                let material_fingerprint_id =
+                    match instance.options.get(MATERIAL_FINGERPRINT_ID_OPTION) {
+                        Some(material_fingerprint_id) => {
                             material_fingerprint_id.as_str().ok_or_else(|| {
                                 PayloadWriteSetupError::InvalidInstanceMaterialFingerprintId {
                                     instance: rule.instance.clone(),
                                 }
-                            })?;
-                        AeadCipher::new_with_material_fingerprint(
-                            key_id,
-                            payload_key,
-                            material_fingerprint_id,
-                        )
-                    }
-                    None => {
-                        return Err(PayloadWriteSetupError::MissingMaterialFingerprintId {
-                            instance: rule.instance.clone(),
-                        });
-                    }
-                }
-                .map_err(|err| {
-                    PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err))
-                })?;
-                if let Some(rk_epoch) = material.rk_epoch {
-                    cipher = cipher
-                        .with_resource_key_metadata(material_ref.clone(), rk_epoch)
-                        .map_err(|err| {
-                            PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err))
-                        })?;
-                }
-                let encryptor = PayloadTextEncryptor::new(collection_name, cipher)?
-                    .with_encryption_epoch(encryption.encryption_epoch);
+                            })?
+                        }
+                        None => {
+                            return Err(PayloadWriteSetupError::MissingMaterialFingerprintId {
+                                instance: rule.instance.clone(),
+                            });
+                        }
+                    };
+                let encryptor = if let Some(rk_epoch) = material.rk_epoch {
+                    PayloadTextEncryptor::new_from_resource_key_with_metadata(
+                        collection_name,
+                        key_id,
+                        &resource_key,
+                        material_fingerprint_id,
+                        material_ref.clone(),
+                        rk_epoch,
+                    )
+                } else {
+                    PayloadTextEncryptor::new_from_resource_key_with_material_fingerprint(
+                        collection_name,
+                        key_id,
+                        &resource_key,
+                        material_fingerprint_id,
+                    )
+                }?
+                .with_encryption_epoch(encryption.encryption_epoch);
 
                 rules.push(PayloadWriteRule::ServerEncrypt { encryptor, policy });
             }

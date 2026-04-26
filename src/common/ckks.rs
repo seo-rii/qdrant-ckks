@@ -4,8 +4,7 @@ use std::path::Path;
 use collection::config::CkksCollectionConfig;
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_ckks::{
-    AeadCipher, PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionError, PayloadEncryptionPolicy,
-    PayloadTextEncryptor, SecretKey,
+    PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -94,13 +93,8 @@ pub fn payload_text_encryptor_for_collection(
         });
     }
     let master_key = decode_master_key(master_key_b64)?;
-    let payload_key = master_key
-        .derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)
-        .map_err(|err| CkksSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
-    let cipher = AeadCipher::new(key_id, payload_key)
-        .map_err(|err| CkksSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
     let policy = PayloadEncryptionPolicy::new(collection_config.payload_text_fields.clone())?;
-    let encryptor = PayloadTextEncryptor::new(collection, cipher)?;
+    let encryptor = PayloadTextEncryptor::new_from_resource_key(collection, key_id, &master_key)?;
 
     Ok(Some((encryptor, policy)))
 }
