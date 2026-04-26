@@ -110,6 +110,10 @@ pub enum PayloadWriteSetupError {
     InvalidInstanceKeyId { instance: String },
     #[error("payload crypto instance {instance} material_fingerprint_id option must be a string")]
     InvalidInstanceMaterialFingerprintId { instance: String },
+    #[error(
+        "payload crypto instance {instance} must set material_fingerprint_id when using wrapped resource key material"
+    )]
+    MissingWrappedMaterialFingerprintId { instance: String },
     #[error("collection {collection} payload encryption is missing a key id")]
     MissingKeyId { collection: String },
     #[error(
@@ -617,6 +621,18 @@ fn generic_payload_write_plan(
                     .map_err(|err| {
                         PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err))
                     })?;
+                if material.kind == WRAPPED_SYMMETRIC_KEY_32_KIND
+                    && instance
+                        .options
+                        .get(MATERIAL_FINGERPRINT_ID_OPTION)
+                        .is_none()
+                {
+                    return Err(
+                        PayloadWriteSetupError::MissingWrappedMaterialFingerprintId {
+                            instance: rule.instance.clone(),
+                        },
+                    );
+                }
                 let mut cipher = if let Some(material_fingerprint_id) =
                     instance.options.get(MATERIAL_FINGERPRINT_ID_OPTION)
                 {
@@ -817,6 +833,17 @@ fn validate_generic_collection_crypto_runtime(
                 "collection {collection_name} vector crypto metadata key validation failed: {err}"
             ))
         })?;
+        if material.kind == WRAPPED_SYMMETRIC_KEY_32_KIND
+            && instance
+                .options
+                .get(MATERIAL_FINGERPRINT_ID_OPTION)
+                .is_none()
+        {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} vector crypto instance {} must set material_fingerprint_id when using wrapped resource key material",
+                rule.instance
+            )));
+        }
         if let Some(material_fingerprint_id) = instance.options.get(MATERIAL_FINGERPRINT_ID_OPTION)
         {
             let Some(material_fingerprint_id) = material_fingerprint_id.as_str() else {
@@ -1767,6 +1794,22 @@ mod tests {
                 .unwrap()
                 .clone(),
         );
+
+        let mut missing_fingerprint_settings = settings.clone();
+        missing_fingerprint_settings
+            .crypto
+            .instances
+            .get_mut("docs_payload_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .remove(MATERIAL_FINGERPRINT_ID_OPTION);
+        assert!(matches!(
+            payload_write_plan_for_collection(&missing_fingerprint_settings, "docs", &params),
+            Err(PayloadWriteSetupError::MissingWrappedMaterialFingerprintId { instance })
+                if instance == "docs_payload_v1"
+        ));
 
         let plan = payload_write_plan_for_collection(&settings, "docs", &params)
             .unwrap()

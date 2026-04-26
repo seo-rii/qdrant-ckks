@@ -243,9 +243,12 @@ Rotation/backfill code must use the explicit `ReencryptIfStale` mode so old
 schema/epoch/key envelopes are opened and sealed again under the current active
 key.
 For generic crypto instances, set `options.material_fingerprint_id` to an
-opaque deployment-local key version id. If omitted, Qdrant falls back to a
-legacy deterministic fingerprint derived from the key material; that fallback is
-not secret, but it can reveal key reuse across collections or deployments.
+opaque deployment-local key version id. Wrapped RK material requires this option
+so envelopes do not fall back to a key-derived fingerprint. Direct legacy
+symmetric material can still fall back to a deterministic fingerprint derived
+from the key material; that fallback is not secret, but it can reveal key reuse
+across collections or deployments and should be limited to migration or local
+development fixtures.
 When `ckks.enabled` is true, startup validates any configured key ids, master
 keys, and OpenFHE bridge paths so bad runtime key material fails before the
 first encrypted write.
