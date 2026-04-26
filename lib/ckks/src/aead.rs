@@ -29,6 +29,8 @@ pub enum EncryptionError {
     InvalidKeyId,
     #[error("material fingerprint id must be 1..=128 ASCII characters from [A-Za-z0-9._:/@-]")]
     InvalidMaterialFingerprintId,
+    #[error("resource key id must be 1..=128 ASCII characters from [A-Za-z0-9._:/@-]")]
+    InvalidResourceKeyId,
     #[error("failed to obtain cryptographically secure random bytes")]
     RandomFailure,
     #[error("failed to derive encryption subkey")]
@@ -169,9 +171,15 @@ impl<'a> EncryptionContext<'a> {
         envelope_header: &EnvelopeHeader<'_>,
         aad_suffix: &[u8],
     ) -> Vec<u8> {
+        let aad_version = if envelope_header.rk_id.is_empty() && envelope_header.rk_epoch.is_none()
+        {
+            "v1"
+        } else {
+            "v2"
+        };
         let values = [
             "qdrant-ckks",
-            "v1",
+            aad_version,
             self.purpose.as_str(),
             self.collection,
             self.point_id.unwrap_or_default(),
@@ -189,6 +197,17 @@ impl<'a> EncryptionContext<'a> {
             aad.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
             aad.extend_from_slice(bytes);
         }
+        if aad_version == "v2" {
+            let rk_epoch = envelope_header
+                .rk_epoch
+                .map(|epoch| epoch.to_string())
+                .unwrap_or_default();
+            for value in [envelope_header.rk_id, rk_epoch.as_str()] {
+                let bytes = value.as_bytes();
+                aad.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+                aad.extend_from_slice(bytes);
+            }
+        }
         aad.extend_from_slice(&envelope_header.version.to_be_bytes());
         aad.extend_from_slice(&(aad_suffix.len() as u32).to_be_bytes());
         aad.extend_from_slice(aad_suffix);
@@ -201,6 +220,8 @@ struct EnvelopeHeader<'a> {
     algorithm: &'a str,
     key_id: &'a str,
     material_fingerprint: &'a str,
+    rk_id: &'a str,
+    rk_epoch: Option<u64>,
     nonce: &'a str,
 }
 
@@ -211,6 +232,10 @@ pub struct EncryptedEnvelope {
     pub key_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub material_fingerprint: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub rk_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rk_epoch: Option<u64>,
     pub nonce: String,
     pub ciphertext: String,
 }
@@ -222,6 +247,8 @@ impl Debug for EncryptedEnvelope {
             .field("algorithm", &self.algorithm)
             .field("key_id", &self.key_id)
             .field("material_fingerprint", &self.material_fingerprint)
+            .field("rk_id", &self.rk_id)
+            .field("rk_epoch", &self.rk_epoch)
             .field("nonce", &"[redacted]")
             .field("ciphertext_len", &self.ciphertext.len())
             .finish()
@@ -231,6 +258,8 @@ impl Debug for EncryptedEnvelope {
 pub struct AeadCipher {
     key_id: String,
     material_fingerprint: String,
+    rk_id: String,
+    rk_epoch: Option<u64>,
     key: SecretKey,
 }
 
@@ -381,6 +410,8 @@ impl AeadCipher {
         Ok(Self {
             key_id,
             material_fingerprint,
+            rk_id: String::new(),
+            rk_epoch: None,
             key,
         })
     }
@@ -397,8 +428,22 @@ impl AeadCipher {
         Ok(Self {
             key_id,
             material_fingerprint,
+            rk_id: String::new(),
+            rk_epoch: None,
             key,
         })
+    }
+
+    pub fn with_resource_key_metadata(
+        mut self,
+        rk_id: impl Into<String>,
+        rk_epoch: u64,
+    ) -> Result<Self, EncryptionError> {
+        let rk_id = rk_id.into();
+        validate_resource_key_id(&rk_id)?;
+        self.rk_id = rk_id;
+        self.rk_epoch = Some(rk_epoch);
+        Ok(self)
     }
 
     pub fn key_id(&self) -> &str {
@@ -407,6 +452,40 @@ impl AeadCipher {
 
     pub fn material_fingerprint(&self) -> &str {
         &self.material_fingerprint
+    }
+
+    pub fn resource_key_id(&self) -> Option<&str> {
+        (!self.rk_id.is_empty()).then_some(self.rk_id.as_str())
+    }
+
+    pub fn resource_key_epoch(&self) -> Option<u64> {
+        self.rk_epoch
+    }
+
+    fn matches_envelope_metadata(
+        &self,
+        envelope: &EncryptedEnvelope,
+    ) -> Result<bool, EncryptionError> {
+        if self.key_id != envelope.key_id {
+            return Ok(false);
+        }
+        if !envelope.material_fingerprint.is_empty()
+            && self.material_fingerprint != envelope.material_fingerprint
+        {
+            return Ok(false);
+        }
+        if !envelope.rk_id.is_empty() {
+            validate_resource_key_id(&envelope.rk_id)?;
+            if self.rk_id != envelope.rk_id {
+                return Ok(false);
+            }
+        }
+        if let Some(rk_epoch) = envelope.rk_epoch {
+            if self.rk_epoch != Some(rk_epoch) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     pub fn encrypt(
@@ -439,6 +518,8 @@ impl AeadCipher {
                 algorithm: ALGORITHM,
                 key_id: &self.key_id,
                 material_fingerprint: &self.material_fingerprint,
+                rk_id: &self.rk_id,
+                rk_epoch: self.rk_epoch,
                 nonce: &nonce_b64,
             },
             aad_suffix,
@@ -455,6 +536,8 @@ impl AeadCipher {
             algorithm: ALGORITHM.to_string(),
             key_id: self.key_id.clone(),
             material_fingerprint: self.material_fingerprint.clone(),
+            rk_id: self.rk_id.clone(),
+            rk_epoch: self.rk_epoch,
             nonce: nonce_b64,
             ciphertext: BASE64URL_NOPAD.encode(&in_out),
         })
@@ -490,6 +573,17 @@ impl AeadCipher {
         {
             return Err(EncryptionError::MaterialFingerprintMismatch);
         }
+        if !envelope.rk_id.is_empty() {
+            validate_resource_key_id(&envelope.rk_id)?;
+            if envelope.rk_id != self.rk_id {
+                return Err(EncryptionError::KeyMismatch);
+            }
+        }
+        if let Some(rk_epoch) = envelope.rk_epoch {
+            if self.rk_epoch != Some(rk_epoch) {
+                return Err(EncryptionError::KeyMismatch);
+            }
+        }
         validate_key_id(&envelope.key_id)?;
 
         let nonce_bytes = BASE64URL_NOPAD
@@ -516,6 +610,8 @@ impl AeadCipher {
                 algorithm: &envelope.algorithm,
                 key_id: &envelope.key_id,
                 material_fingerprint: &envelope.material_fingerprint,
+                rk_id: &envelope.rk_id,
+                rk_epoch: envelope.rk_epoch,
                 nonce: &envelope.nonce,
             },
             aad_suffix,
@@ -596,18 +692,14 @@ impl AeadKeyring {
         validate_key_id(&envelope.key_id)?;
 
         if !envelope.material_fingerprint.is_empty() {
-            if self.active.key_id == envelope.key_id
-                && self.active.material_fingerprint == envelope.material_fingerprint
-            {
+            if self.active.matches_envelope_metadata(envelope)? {
                 return self
                     .active
                     .decrypt_with_aad_suffix(envelope, context, aad_suffix);
             }
 
             for retired in &self.retired {
-                if retired.key_id == envelope.key_id
-                    && retired.material_fingerprint == envelope.material_fingerprint
-                {
+                if retired.matches_envelope_metadata(envelope)? {
                     return retired.decrypt_with_aad_suffix(envelope, context, aad_suffix);
                 }
             }
@@ -616,17 +708,22 @@ impl AeadKeyring {
         }
 
         let mut found_key_id = false;
+        let mut metadata_mismatch = false;
         let mut open_failed = false;
 
         if self.active.key_id == envelope.key_id {
             found_key_id = true;
-            match self
-                .active
-                .decrypt_with_aad_suffix(envelope, context, aad_suffix)
-            {
-                Ok(plaintext) => return Ok(plaintext),
-                Err(EncryptionError::OpenFailed) => open_failed = true,
-                Err(error) => return Err(error),
+            if !self.active.matches_envelope_metadata(envelope)? {
+                metadata_mismatch = true;
+            } else {
+                match self
+                    .active
+                    .decrypt_with_aad_suffix(envelope, context, aad_suffix)
+                {
+                    Ok(plaintext) => return Ok(plaintext),
+                    Err(EncryptionError::OpenFailed) => open_failed = true,
+                    Err(error) => return Err(error),
+                }
             }
         }
 
@@ -636,6 +733,10 @@ impl AeadKeyring {
             }
 
             found_key_id = true;
+            if !retired.matches_envelope_metadata(envelope)? {
+                metadata_mismatch = true;
+                continue;
+            }
             match retired.decrypt_with_aad_suffix(envelope, context, aad_suffix) {
                 Ok(plaintext) => return Ok(plaintext),
                 Err(EncryptionError::OpenFailed) => open_failed = true,
@@ -645,6 +746,8 @@ impl AeadKeyring {
 
         if open_failed {
             Err(EncryptionError::OpenFailed)
+        } else if metadata_mismatch {
+            Err(EncryptionError::KeyMismatch)
         } else if found_key_id {
             Err(EncryptionError::MaterialFingerprintMismatch)
         } else {
@@ -688,5 +791,19 @@ fn validate_material_fingerprint_id(material_fingerprint: &str) -> Result<(), En
         Ok(())
     } else {
         Err(EncryptionError::InvalidMaterialFingerprintId)
+    }
+}
+
+fn validate_resource_key_id(rk_id: &str) -> Result<(), EncryptionError> {
+    if rk_id.is_empty() || rk_id.len() > MAX_KEY_ID_LEN {
+        return Err(EncryptionError::InvalidResourceKeyId);
+    }
+
+    if rk_id.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'/' | b'@' | b'-')
+    }) {
+        Ok(())
+    } else {
+        Err(EncryptionError::InvalidResourceKeyId)
     }
 }

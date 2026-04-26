@@ -617,7 +617,7 @@ fn generic_payload_write_plan(
                     .map_err(|err| {
                         PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err))
                     })?;
-                let cipher = if let Some(material_fingerprint_id) =
+                let mut cipher = if let Some(material_fingerprint_id) =
                     instance.options.get(MATERIAL_FINGERPRINT_ID_OPTION)
                 {
                     let material_fingerprint_id =
@@ -637,6 +637,13 @@ fn generic_payload_write_plan(
                 .map_err(|err| {
                     PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err))
                 })?;
+                if let Some(rk_epoch) = material.rk_epoch {
+                    cipher = cipher
+                        .with_resource_key_metadata(material_ref.clone(), rk_epoch)
+                        .map_err(|err| {
+                            PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err))
+                        })?;
+                }
                 let encryptor = PayloadTextEncryptor::new(collection_name, cipher)?
                     .with_encryption_epoch(encryption.encryption_epoch);
 
@@ -1773,6 +1780,20 @@ mod tests {
                 .and_then(|envelope| envelope.get("material_fingerprint"))
                 .and_then(|fingerprint| fingerprint.as_str()),
             Some("tenant-a/payload-rk@v3"),
+        );
+        assert_eq!(
+            body.get("$qdrant_ckks")
+                .and_then(|marker| marker.get("envelope"))
+                .and_then(|envelope| envelope.get("rk_id"))
+                .and_then(|rk_id| rk_id.as_str()),
+            Some(rk_material),
+        );
+        assert_eq!(
+            body.get("$qdrant_ckks")
+                .and_then(|marker| marker.get("envelope"))
+                .and_then(|envelope| envelope.get("rk_epoch"))
+                .and_then(|rk_epoch| rk_epoch.as_u64()),
+            Some(3),
         );
     }
 

@@ -296,6 +296,87 @@ fn keyring_returns_open_failed_for_matching_retired_tamper() {
 }
 
 #[test]
+fn envelope_records_and_authenticates_resource_key_metadata() {
+    let context = payload_context("42");
+    let secret = SecretKey::from_bytes([36u8; 32]);
+    let cipher = AeadCipher::new_with_material_fingerprint(
+        "tenant-a:payload",
+        secret,
+        "tenant-a/payload-rk@v3",
+    )
+    .unwrap()
+    .with_resource_key_metadata("tenant-a/payload-rk-v3", 3)
+    .unwrap();
+
+    let envelope = cipher.encrypt(b"resource scoped", context).unwrap();
+
+    assert_eq!(envelope.rk_id, "tenant-a/payload-rk-v3");
+    assert_eq!(envelope.rk_epoch, Some(3));
+    assert_eq!(
+        cipher.decrypt(&envelope, context).unwrap(),
+        b"resource scoped"
+    );
+
+    let mut tampered_epoch = envelope.clone();
+    tampered_epoch.rk_epoch = Some(4);
+    let epoch_4_cipher = AeadCipher::new_with_material_fingerprint(
+        "tenant-a:payload",
+        SecretKey::from_bytes([36u8; 32]),
+        "tenant-a/payload-rk@v3",
+    )
+    .unwrap()
+    .with_resource_key_metadata("tenant-a/payload-rk-v3", 4)
+    .unwrap();
+    assert_eq!(
+        epoch_4_cipher.decrypt(&tampered_epoch, context),
+        Err(EncryptionError::OpenFailed),
+    );
+
+    let mut tampered_rk = envelope.clone();
+    tampered_rk.rk_id = "tenant-a/payload-rk-v4".to_string();
+    let rk_v4_cipher = AeadCipher::new_with_material_fingerprint(
+        "tenant-a:payload",
+        SecretKey::from_bytes([36u8; 32]),
+        "tenant-a/payload-rk@v3",
+    )
+    .unwrap()
+    .with_resource_key_metadata("tenant-a/payload-rk-v4", 3)
+    .unwrap();
+    assert_eq!(
+        rk_v4_cipher.decrypt(&tampered_rk, context),
+        Err(EncryptionError::OpenFailed),
+    );
+}
+
+#[test]
+fn resource_key_metadata_preserves_legacy_envelope_decrypt() {
+    let context = payload_context("42");
+    let legacy_cipher = AeadCipher::new_with_material_fingerprint(
+        "tenant-a:payload",
+        SecretKey::from_bytes([37u8; 32]),
+        "tenant-a/payload-rk@v3",
+    )
+    .unwrap();
+    let envelope = legacy_cipher.encrypt(b"legacy envelope", context).unwrap();
+    assert!(envelope.rk_id.is_empty());
+    assert_eq!(envelope.rk_epoch, None);
+
+    let tagged_cipher = AeadCipher::new_with_material_fingerprint(
+        "tenant-a:payload",
+        SecretKey::from_bytes([37u8; 32]),
+        "tenant-a/payload-rk@v3",
+    )
+    .unwrap()
+    .with_resource_key_metadata("tenant-a/payload-rk-v3", 3)
+    .unwrap();
+
+    assert_eq!(
+        tagged_cipher.decrypt(&envelope, context).unwrap(),
+        b"legacy envelope",
+    );
+}
+
+#[test]
 fn key_ids_are_strict_ascii_capability_names() {
     assert!(AeadCipher::new("valid._:-09AZaz", SecretKey::from_bytes([1u8; 32])).is_ok());
     assert_eq!(

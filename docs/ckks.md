@@ -33,6 +33,8 @@ Selected JSON string fields are replaced with a single marker object:
       "algorithm": "AES-256-GCM",
       "key_id": "tenant-a:payload",
       "material_fingerprint": "...",
+      "rk_id": "tenant-a/payload-v1",
+      "rk_epoch": 3,
       "nonce": "...",
       "ciphertext": "..."
     },
@@ -161,11 +163,14 @@ The generic `crypto` control plane supports a safer MK/RK hierarchy:
 - Payload text and CKKS vector envelope AEAD keys are still purpose-specific
   HKDF subkeys derived from the unwrapped RK.
 
-Data envelopes record the runtime `key_id` and material fingerprint used for
-the RK-derived subkey. They do not reference the MK directly, so MK rotation can
-rewrap the stored RK manifest without rewriting payload/vector envelopes. RK
-rotation still requires a data re-encryption job and should use the explicit
-re-encryption mode rather than normal write-path idempotency.
+Data envelopes record the runtime `key_id`, material fingerprint, and, for
+wrapped RK material, the `rk_id` plus `rk_epoch` used for the RK-derived subkey.
+They do not reference the MK directly, so MK rotation can rewrap the stored RK
+manifest without rewriting payload/vector envelopes. RK rotation still requires
+a data re-encryption job and should use the explicit re-encryption mode rather
+than normal write-path idempotency. The `rk_id`/`rk_epoch` fields are included
+in AEAD AAD when present, so storage-side edits to resource-key identity fail
+closed.
 
 The wrapped RK AES-GCM AAD is a length-prefixed tuple of `qdrant-sec`, `v1`,
 `resource-key-wrap`, the material reference, `rk_epoch`, `scope`, `wrapped_by`,
@@ -281,6 +286,8 @@ public material still encrypts the embedding itself:
     "algorithm": "AES-256-GCM",
     "key_id": "tenant-a:ckks",
     "material_fingerprint": "...",
+    "rk_id": "tenant-a/vector-v1",
+    "rk_epoch": 3,
     "nonce": "...",
     "ciphertext": "..."
   }
