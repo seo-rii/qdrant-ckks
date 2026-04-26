@@ -242,6 +242,11 @@ Server-side public writes reject fields that already contain a
 Rotation/backfill code must use the explicit `ReencryptIfStale` mode so old
 schema/epoch/key envelopes are opened and sealed again under the current active
 key.
+Read paths currently return stored encrypted markers as raw payload values.
+There is no `decrypt_payload` response option, RBAC capability, or automatic
+server-side payload decryption policy yet; adding decrypted responses requires
+a dedicated authorization model across retrieve, scroll, search, export, logs,
+and telemetry.
 Generic server-side crypto instances require
 `options.material_fingerprint_id` to be an opaque deployment-local key version
 id. Payload and vector runtime validation rejects missing values so envelopes

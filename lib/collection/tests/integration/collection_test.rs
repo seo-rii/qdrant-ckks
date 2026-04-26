@@ -28,6 +28,7 @@ use fs_err::{self as fs, File};
 use itertools::Itertools;
 use qdrant_ckks::{
     AeadCipher, PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
+    is_encrypted_payload_value,
 };
 use segment::data_types::order_by::{Direction, OrderBy, OrderByInterface};
 use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, VectorStructInternal};
@@ -1050,6 +1051,30 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
         )
         .await
         .unwrap();
+
+    let retrieved = collection
+        .retrieve(
+            PointRequestInternal {
+                ids: vec![1.into()],
+                with_payload: Some(WithPayloadInterface::Bool(true)),
+                with_vector: false.into(),
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+    let retrieved_payload = retrieved[0].payload.as_ref().unwrap();
+    let retrieved_body = retrieved_payload
+        .0
+        .get("document")
+        .and_then(|document| document.get("body"))
+        .unwrap();
+    assert!(is_encrypted_payload_value(retrieved_body));
+    assert_ne!(retrieved_body, &serde_json::json!(sentinel));
+
     collection.stop_gracefully().await;
 
     let sentinel = sentinel.as_bytes();
