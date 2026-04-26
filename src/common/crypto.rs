@@ -227,6 +227,54 @@ impl PayloadWritePlan {
         Ok(encrypted)
     }
 
+    pub fn reencrypt_payload_if_stale(
+        &self,
+        point_id: &str,
+        payload: &mut Payload,
+    ) -> Result<usize, PayloadWriteSetupError> {
+        let mut encrypted = 0;
+
+        for rule in &self.rules {
+            match rule {
+                PayloadWriteRule::ServerEncrypt { encryptor, policy } => {
+                    encrypted += encryptor.encrypt_selected_fields_with_mode(
+                        point_id,
+                        &mut payload.0,
+                        policy,
+                        ExistingPayloadMode::ReencryptIfStale,
+                    )?;
+                }
+                PayloadWriteRule::ClientEnvelope {
+                    policy,
+                    expected_key_id,
+                    key_id_required,
+                } => {
+                    for field in policy.fields() {
+                        let encrypted_path = field.parse::<JsonPath>().map_err(|_| {
+                            PayloadWriteSetupError::Payload(
+                                PayloadEncryptionError::InvalidFieldPath(field.clone()),
+                            )
+                        })?;
+                        for value in encrypted_path.value_get(&payload.0) {
+                            validate_client_payload_value(
+                                value,
+                                ClientPayloadValidationContext {
+                                    collection_id: &self.collection_name,
+                                    point_id,
+                                    field_path: field,
+                                    expected_key_id: expected_key_id.as_deref(),
+                                    key_id_required: *key_id_required,
+                                },
+                            )?;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(encrypted)
+    }
+
     pub fn touches_selected_fields(&self, payload: &Payload, key: Option<&JsonPath>) -> bool {
         self.rules.iter().any(|rule| {
             rule.policy().fields().iter().any(|field| {
@@ -1497,6 +1545,104 @@ mod tests {
                 .and_then(|envelope| envelope.get("material_fingerprint"))
                 .and_then(|fingerprint| fingerprint.as_str()),
             Some("tenant-a/payload@v5"),
+        );
+    }
+
+    #[test]
+    fn payload_write_plan_reencrypts_stale_envelopes_only_in_migration_mode() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_payload_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_AES_GCM_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            "tenant-a/payload-v1".to_string(),
+                        )]),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a:docs",
+                            "material_fingerprint_id": "tenant-a/payload@v5",
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([(
+                    "tenant-a/payload-v1".to_string(),
+                    CryptoMaterialConfig {
+                        kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        env: None,
+                        path: None,
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[7u8; 32])),
+                        ..CryptoMaterialConfig::default()
+                    },
+                )]),
+                backends: HashMap::new(),
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let mut params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 5,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
+            .unwrap()
+            .unwrap();
+        let mut payload = segment::types::Payload(
+            json!({ "body": "rotate this" })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        assert_eq!(plan.encrypt_payload("point-1", &mut payload).unwrap(), 1);
+
+        params.encryption.as_mut().unwrap().encryption_epoch = 6;
+        let rotated_plan = payload_write_plan_for_collection(&settings, "docs", &params)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            rotated_plan.encrypt_payload("point-1", &mut payload),
+            Err(PayloadWriteSetupError::Payload(
+                PayloadEncryptionError::AlreadyEncrypted(field)
+            )) if field == "body"
+        ));
+
+        assert_eq!(
+            rotated_plan
+                .reencrypt_payload_if_stale("point-1", &mut payload)
+                .unwrap(),
+            1,
+        );
+        assert_eq!(
+            payload
+                .0
+                .get("body")
+                .and_then(|body| body.get("$qdrant_ckks"))
+                .and_then(|marker| marker.get("encryption_epoch"))
+                .and_then(|epoch| epoch.as_u64()),
+            Some(6),
+        );
+        assert_eq!(
+            rotated_plan
+                .reencrypt_payload_if_stale("point-1", &mut payload)
+                .unwrap(),
+            0,
         );
     }
 
