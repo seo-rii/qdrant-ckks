@@ -1366,7 +1366,10 @@ mod tests {
                     "tenant-a/payload-v1".to_string(),
                 )]),
                 backend_ref: None,
-                options: json!({ "key_id": "tenant-a:docs" }),
+                options: json!({
+                    "key_id": "tenant-a:docs",
+                    "material_fingerprint_id": "tenant-a/payload@v1",
+                }),
             },
         )]);
         settings.crypto.materials = HashMap::from([(
@@ -1523,5 +1526,22 @@ mod tests {
                 qdrant_ckks::PayloadEncryptionError::AlreadyEncrypted(field)
             )) if field == "body"
         ));
+    }
+
+    #[test]
+    fn payload_write_plan_detects_key_path_overlap_with_encrypted_fields() {
+        let settings = payload_runtime_settings();
+        let plan = payload_write_plan_for_collection(&settings, "docs", &encrypted_params())
+            .unwrap()
+            .unwrap();
+        let payload =
+            segment::types::Payload(json!({ "title": "public" }).as_object().unwrap().clone());
+        let encrypted_key = "body".parse::<JsonPath>().unwrap();
+        let encrypted_child_key = "body.text".parse::<JsonPath>().unwrap();
+        let public_key = "title".parse::<JsonPath>().unwrap();
+
+        assert!(plan.touches_selected_fields(&payload, Some(&encrypted_key)));
+        assert!(plan.touches_selected_fields(&payload, Some(&encrypted_child_key)));
+        assert!(!plan.touches_selected_fields(&payload, Some(&public_key)));
     }
 }
