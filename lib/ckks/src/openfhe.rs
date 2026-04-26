@@ -252,6 +252,13 @@ impl CkksVectorBackend for CommandOpenFheBackend {
                     (bytes, truncated)
                 }
                 Ok(BridgeStdoutEvent::Eof) => {
+                    if worker_process.stderr_truncated.load(Ordering::Relaxed) {
+                        self.discard_worker(&worker_process, false)?;
+                        return Err(CkksError::Backend(format!(
+                            "OpenFHE bridge stderr exceeded {} bytes",
+                            self.max_output_bytes,
+                        )));
+                    }
                     let retry = attempt == 0;
                     self.discard_worker(&worker_process, false)?;
                     if retry {
@@ -301,6 +308,13 @@ impl CkksVectorBackend for CommandOpenFheBackend {
                 )));
             }
             if response_bytes.is_empty() {
+                if worker_process.stderr_truncated.load(Ordering::Relaxed) {
+                    self.discard_worker(&worker_process, false)?;
+                    return Err(CkksError::Backend(format!(
+                        "OpenFHE bridge stderr exceeded {} bytes",
+                        self.max_output_bytes,
+                    )));
+                }
                 let retry = attempt == 0;
                 self.discard_worker(&worker_process, false)?;
                 if retry {

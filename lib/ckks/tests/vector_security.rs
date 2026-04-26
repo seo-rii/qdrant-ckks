@@ -439,6 +439,52 @@ done
 
 #[cfg(unix)]
 #[test]
+fn command_openfhe_backend_rejects_oversized_bridge_stderr() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("stderr-noisy-openfhe-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -uo pipefail
+IFS= read -r _request
+for _ in {1..128}; do
+  printf x >&2 || true
+done
+sleep 0.1
+printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new("bash")
+        .with_args([script_path.display().to_string()])
+        .with_max_output_bytes(64);
+    let encryptor = CkksVectorEncryptor::new(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+
+    let err = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0])
+        .unwrap_err();
+
+    assert!(
+        matches!(err, CkksError::Backend(ref message) if message.contains("stderr exceeded")),
+        "unexpected bridge error: {err:?}",
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn command_openfhe_backend_reuses_worker_process_when_bridge_supports_streaming() {
     use std::os::unix::fs::PermissionsExt;
 
