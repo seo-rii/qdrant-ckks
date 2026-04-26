@@ -306,6 +306,37 @@ mod ckks_tests {
     }
 
     #[test]
+    fn crypto_migration_state_allows_only_job_state_machine_edges() {
+        use CryptoMigrationState::{Active, Decrypting, Disabled, Encrypting, Rotating};
+
+        for state in [Disabled, Encrypting, Active, Rotating, Decrypting] {
+            assert!(state.can_transition_to(state));
+        }
+
+        for (from, to) in [
+            (Disabled, Encrypting),
+            (Encrypting, Active),
+            (Active, Rotating),
+            (Rotating, Active),
+            (Active, Decrypting),
+            (Decrypting, Disabled),
+        ] {
+            assert!(from.can_transition_to(to), "{from:?} -> {to:?}");
+        }
+
+        for (from, to) in [
+            (Disabled, Active),
+            (Disabled, Rotating),
+            (Encrypting, Rotating),
+            (Rotating, Decrypting),
+            (Decrypting, Active),
+            (Active, Disabled),
+        ] {
+            assert!(!from.can_transition_to(to), "{from:?} -> {to:?}");
+        }
+    }
+
+    #[test]
     fn collection_params_reject_encryption_changes_without_migration() {
         let ckks = CkksCollectionConfig {
             enabled: true,
@@ -465,6 +496,21 @@ pub enum CryptoMigrationState {
     Active,
     Rotating,
     Decrypting,
+}
+
+impl CryptoMigrationState {
+    pub fn can_transition_to(self, next: Self) -> bool {
+        self == next
+            || matches!(
+                (self, next),
+                (Self::Disabled, Self::Encrypting)
+                    | (Self::Encrypting, Self::Active)
+                    | (Self::Active, Self::Rotating)
+                    | (Self::Rotating, Self::Active)
+                    | (Self::Active, Self::Decrypting)
+                    | (Self::Decrypting, Self::Disabled)
+            )
+    }
 }
 
 #[derive(
