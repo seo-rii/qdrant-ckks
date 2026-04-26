@@ -242,12 +242,13 @@ Server-side public writes reject fields that already contain a
 Rotation/backfill code must use the explicit `ReencryptIfStale` mode so old
 schema/epoch/key envelopes are opened and sealed again under the current active
 key.
-For generic crypto instances, set `options.material_fingerprint_id` to an
-opaque deployment-local key version id. Wrapped RK material requires this option
-so envelopes do not fall back to a key-derived fingerprint. Direct legacy
-symmetric material can still fall back to a deterministic fingerprint derived
-from the key material; that fallback is not secret, but it can reveal key reuse
-across collections or deployments and should be limited to migration or local
+Generic server-side crypto instances require
+`options.material_fingerprint_id` to be an opaque deployment-local key version
+id. Payload and vector runtime validation rejects missing values so envelopes
+do not fall back to key-derived fingerprints. Direct legacy CKKS settings and
+low-level test helpers can still fall back to a deterministic fingerprint
+derived from the key material; that fallback is not secret, can reveal key reuse
+across collections or deployments, and should be limited to migration or local
 development fixtures.
 When `ckks.enabled` is true, startup validates any configured key ids, master
 keys, and OpenFHE bridge paths so bad runtime key material fails before the

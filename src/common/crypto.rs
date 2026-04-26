@@ -110,10 +110,8 @@ pub enum PayloadWriteSetupError {
     InvalidInstanceKeyId { instance: String },
     #[error("payload crypto instance {instance} material_fingerprint_id option must be a string")]
     InvalidInstanceMaterialFingerprintId { instance: String },
-    #[error(
-        "payload crypto instance {instance} must set material_fingerprint_id when using wrapped resource key material"
-    )]
-    MissingWrappedMaterialFingerprintId { instance: String },
+    #[error("payload crypto instance {instance} must set material_fingerprint_id")]
+    MissingMaterialFingerprintId { instance: String },
     #[error("collection {collection} payload encryption is missing a key id")]
     MissingKeyId { collection: String },
     #[error(
@@ -621,34 +619,25 @@ fn generic_payload_write_plan(
                     .map_err(|err| {
                         PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err))
                     })?;
-                if material.kind == WRAPPED_SYMMETRIC_KEY_32_KIND
-                    && instance
-                        .options
-                        .get(MATERIAL_FINGERPRINT_ID_OPTION)
-                        .is_none()
-                {
-                    return Err(
-                        PayloadWriteSetupError::MissingWrappedMaterialFingerprintId {
+                let mut cipher = match instance.options.get(MATERIAL_FINGERPRINT_ID_OPTION) {
+                    Some(material_fingerprint_id) => {
+                        let material_fingerprint_id =
+                            material_fingerprint_id.as_str().ok_or_else(|| {
+                                PayloadWriteSetupError::InvalidInstanceMaterialFingerprintId {
+                                    instance: rule.instance.clone(),
+                                }
+                            })?;
+                        AeadCipher::new_with_material_fingerprint(
+                            key_id,
+                            payload_key,
+                            material_fingerprint_id,
+                        )
+                    }
+                    None => {
+                        return Err(PayloadWriteSetupError::MissingMaterialFingerprintId {
                             instance: rule.instance.clone(),
-                        },
-                    );
-                }
-                let mut cipher = if let Some(material_fingerprint_id) =
-                    instance.options.get(MATERIAL_FINGERPRINT_ID_OPTION)
-                {
-                    let material_fingerprint_id =
-                        material_fingerprint_id.as_str().ok_or_else(|| {
-                            PayloadWriteSetupError::InvalidInstanceMaterialFingerprintId {
-                                instance: rule.instance.clone(),
-                            }
-                        })?;
-                    AeadCipher::new_with_material_fingerprint(
-                        key_id,
-                        payload_key,
-                        material_fingerprint_id,
-                    )
-                } else {
-                    AeadCipher::new(key_id, payload_key)
+                        });
+                    }
                 }
                 .map_err(|err| {
                     PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err))
@@ -833,14 +822,13 @@ fn validate_generic_collection_crypto_runtime(
                 "collection {collection_name} vector crypto metadata key validation failed: {err}"
             ))
         })?;
-        if material.kind == WRAPPED_SYMMETRIC_KEY_32_KIND
-            && instance
-                .options
-                .get(MATERIAL_FINGERPRINT_ID_OPTION)
-                .is_none()
+        if instance
+            .options
+            .get(MATERIAL_FINGERPRINT_ID_OPTION)
+            .is_none()
         {
             return Err(StorageError::bad_input(format!(
-                "collection {collection_name} vector crypto instance {} must set material_fingerprint_id when using wrapped resource key material",
+                "collection {collection_name} vector crypto instance {} must set material_fingerprint_id",
                 rule.instance
             )));
         }
@@ -1517,6 +1505,75 @@ mod tests {
     }
 
     #[test]
+    fn payload_write_plan_requires_explicit_material_fingerprint_id() {
+        let mut settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_payload_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_AES_GCM_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            "tenant-a/payload-v1".to_string(),
+                        )]),
+                        backend_ref: None,
+                        options: json!({ "key_id": "tenant-a:docs" }),
+                    },
+                )]),
+                materials: HashMap::from([(
+                    "tenant-a/payload-v1".to_string(),
+                    CryptoMaterialConfig {
+                        kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        env: None,
+                        path: None,
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[7u8; 32])),
+                        ..CryptoMaterialConfig::default()
+                    },
+                )]),
+                backends: HashMap::new(),
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 5,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        assert!(matches!(
+            payload_write_plan_for_collection(&settings, "docs", &params),
+            Err(PayloadWriteSetupError::MissingMaterialFingerprintId { instance })
+                if instance == "docs_payload_v1"
+        ));
+
+        settings
+            .crypto
+            .instances
+            .get_mut("docs_payload_v1")
+            .unwrap()
+            .options = json!({
+            "key_id": "tenant-a:docs",
+            "material_fingerprint_id": "tenant-a/payload@v5",
+        });
+        assert!(payload_write_plan_for_collection(&settings, "docs", &params).is_ok());
+    }
+
+    #[test]
     fn payload_write_plan_accepts_valid_client_envelopes_without_server_key_material() {
         let settings = Settings {
             crypto: CryptoSettings {
@@ -1807,7 +1864,7 @@ mod tests {
             .remove(MATERIAL_FINGERPRINT_ID_OPTION);
         assert!(matches!(
             payload_write_plan_for_collection(&missing_fingerprint_settings, "docs", &params),
-            Err(PayloadWriteSetupError::MissingWrappedMaterialFingerprintId { instance })
+            Err(PayloadWriteSetupError::MissingMaterialFingerprintId { instance })
                 if instance == "docs_payload_v1"
         ));
 
@@ -1929,7 +1986,10 @@ mod tests {
                                 "tenant-a/payload-v1".to_string(),
                             )]),
                             backend_ref: None,
-                            options: json!({ "key_id": "tenant-a:docs" }),
+                            options: json!({
+                                "key_id": "tenant-a:docs",
+                                "material_fingerprint_id": "tenant-a/payload@v2",
+                            }),
                         },
                     ),
                     (
@@ -2091,6 +2151,7 @@ mod tests {
                         backend_ref: Some("openfhe_local".to_string()),
                         options: json!({
                             "key_id": "tenant-a:docs",
+                            "material_fingerprint_id": "tenant-a/vector@v2",
                             "profile": "raw-unsafe",
                         }),
                     },
@@ -2141,6 +2202,75 @@ mod tests {
         let err = validate_collection_crypto_runtime(&settings, "docs", &params).unwrap_err();
         assert!(
             matches!(err, StorageError::BadInput { description } if description.contains("not allowlisted"))
+        );
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_requires_vector_material_fingerprint_id() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_vector_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: VECTOR_OPENFHE_CKKS_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            "tenant-a/vector-v1".to_string(),
+                        )]),
+                        backend_ref: Some("openfhe_local".to_string()),
+                        options: json!({
+                            "key_id": "tenant-a:docs",
+                            "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([(
+                    "tenant-a/vector-v1".to_string(),
+                    CryptoMaterialConfig {
+                        kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        env: None,
+                        path: None,
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[8u8; 32])),
+                        ..CryptoMaterialConfig::default()
+                    },
+                )]),
+                backends: HashMap::from([(
+                    "openfhe_local".to_string(),
+                    CryptoBackendConfig {
+                        kind: "process_pool".to_string(),
+                        program: Some("/usr/local/bin/openfhe-bridge".to_string()),
+                        sha256_b64: None,
+                        size: Some(1),
+                        timeout_ms: Some(5_000),
+                    },
+                )]),
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "embedding_conf".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["embedding".to_string()],
+                    },
+                    instance: "docs_vector_v1".to_string(),
+                    binding: Some("vector-envelope/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = validate_collection_crypto_runtime(&settings, "docs", &params).unwrap_err();
+        assert!(
+            matches!(err, StorageError::BadInput { description } if description.contains("must set material_fingerprint_id"))
         );
     }
 
