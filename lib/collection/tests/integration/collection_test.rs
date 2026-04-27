@@ -863,7 +863,7 @@ async fn encrypted_payload_field_rejects_payload_index() {
     let collection =
         encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
 
-    for indexed_field in ["document.body", "document"] {
+    for indexed_field in ["document.body", "document", "document.body.keyword"] {
         let err = collection
             .create_payload_index_with_wait(
                 indexed_field.parse().unwrap(),
