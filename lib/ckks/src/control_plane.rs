@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
+use crate::aead::validate_key_id;
+
 pub const GENERIC_CIPHERTEXT_MARKER: &str = "$qdrant_ciphertext";
 pub const PAYLOAD_AES_GCM_PROVIDER: &str = "payload/aes-256-gcm@v1";
 pub const PAYLOAD_CLIENT_AEAD_PROVIDER: &str = "payload/client-aead@v1";
@@ -18,6 +20,8 @@ pub const METADATA_VALUE_BINDING: &str = "metadata-value/v1";
 pub enum ControlPlaneError {
     #[error("crypto identifier is invalid: {0}")]
     InvalidIdentifier(String),
+    #[error("envelope key id is invalid: {0}")]
+    InvalidEnvelopeKeyId(String),
     #[error("ciphertext envelope version must be at least 1")]
     InvalidEnvelopeVersion,
     #[error("stored ciphertext envelope is malformed")]
@@ -81,7 +85,8 @@ impl CiphertextEnvelope {
         }
         validate_identifier(&provider)?;
         validate_identifier(&instance_fingerprint)?;
-        validate_identifier(&key_id)?;
+        validate_key_id(&key_id)
+            .map_err(|_| ControlPlaneError::InvalidEnvelopeKeyId(key_id.clone()))?;
         if let Some(binding) = &binding {
             validate_identifier(binding)?;
         }
@@ -299,6 +304,37 @@ mod tests {
         assert_eq!(
             CiphertextEnvelope::from_stored_value(&bypass),
             Err(ControlPlaneError::MalformedEnvelope),
+        );
+    }
+
+    #[test]
+    fn ciphertext_envelope_distinguishes_provider_ids_from_key_ids() {
+        assert!(
+            CiphertextEnvelope::new(
+                1,
+                CryptoCapability::PayloadValue,
+                PAYLOAD_AES_GCM_PROVIDER,
+                "sha256:test",
+                "tenant-a/payload@v1",
+                Some(PAYLOAD_FIELD_BINDING.to_string()),
+                Map::new(),
+                "AQID",
+            )
+            .is_err_and(|err| matches!(err, ControlPlaneError::InvalidEnvelopeKeyId(_)))
+        );
+
+        assert!(
+            CiphertextEnvelope::new(
+                1,
+                CryptoCapability::PayloadValue,
+                PAYLOAD_AES_GCM_PROVIDER,
+                "sha256:test",
+                "tenant-a:payload-v1",
+                Some(PAYLOAD_FIELD_BINDING.to_string()),
+                Map::new(),
+                "AQID",
+            )
+            .is_ok()
         );
     }
 
