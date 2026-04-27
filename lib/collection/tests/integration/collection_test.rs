@@ -1075,6 +1075,14 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     assert!(is_encrypted_payload_value(retrieved_body));
     assert_ne!(retrieved_body, &serde_json::json!(sentinel));
 
+    let snapshot_temp_dir = Builder::new().prefix("snapshot-temp").tempdir().unwrap();
+    let snapshot = collection
+        .create_snapshot(snapshot_temp_dir.path(), 0)
+        .await
+        .unwrap();
+    let snapshot_path = collection_path.join("snapshots").join(&snapshot.name);
+    assert!(snapshot_path.exists());
+
     collection.stop_gracefully().await;
 
     let sentinel = sentinel.as_bytes();
