@@ -7,10 +7,8 @@ use qdrant_ckks::{
     client_payload_signature_message, is_client_encrypted_payload_value,
     is_encrypted_payload_value, validate_client_payload_value,
 };
-use ring::{
-    rand::SystemRandom,
-    signature::{Ed25519KeyPair, KeyPair},
-};
+use ring::rand::SystemRandom;
+use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::{Map, Value, json};
 
 fn encryptor() -> PayloadTextEncryptor {
