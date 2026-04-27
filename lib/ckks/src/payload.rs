@@ -1,4 +1,5 @@
 use data_encoding::BASE64URL_NOPAD;
+use ring::signature::{ED25519, UnparsedPublicKey};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -13,6 +14,8 @@ pub const CLIENT_ENCRYPTED_PAYLOAD_MARKER: &str = "$qdrant_client_aead";
 const PAYLOAD_TEXT_KIND: &str = "payload_text";
 const CLIENT_PAYLOAD_ALGORITHM: &str = "AES-256-GCM";
 const CLIENT_PAYLOAD_KDF_DOMAIN: &str = "qdrant/client-payload-text/v1";
+const CLIENT_PAYLOAD_SIGNATURE_DOMAIN: &str = "qdrant/client-payload-signature/v1";
+const CLIENT_PAYLOAD_SIGNATURE_ALGORITHM: &str = "ed25519";
 const CRYPTO_SCHEMA_VERSION: u16 = 1;
 const DEFAULT_ENCRYPTION_EPOCH: u64 = 0;
 
@@ -44,6 +47,14 @@ pub enum PayloadEncryptionError {
     MissingClientKeyId,
     #[error("payload field client envelope key id does not match policy")]
     ClientKeyIdMismatch,
+    #[error("payload field client envelope signature is missing")]
+    MissingClientSignature,
+    #[error("payload field client envelope signature key id does not match policy")]
+    ClientSignatureKeyIdMismatch,
+    #[error("payload field contains unsupported client envelope signature algorithm: {0}")]
+    UnsupportedClientSignatureAlgorithm(String),
+    #[error("payload field client envelope signature verification failed")]
+    InvalidClientSignature,
     #[error("payload field contains unsupported qdrant-ckks schema version: {0}")]
     UnsupportedSchemaVersion(u16),
     #[error("payload field encryption epoch does not match active policy")]
@@ -134,6 +145,13 @@ pub struct ClientPayloadValidationContext<'a> {
     pub field_path: &'a str,
     pub expected_key_id: Option<&'a str>,
     pub key_id_required: bool,
+    pub signature_verification: Option<ClientPayloadSignatureVerification<'a>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClientPayloadSignatureVerification<'a> {
+    pub expected_key_id: &'a str,
+    pub public_key: &'a [u8],
 }
 
 impl PayloadTextEncryptor {
@@ -475,18 +493,25 @@ pub fn validate_client_payload_value(
             context.field_path.to_string(),
         ));
     }
-    if let Some(signature) = &envelope.signature {
-        if signature.alg.is_empty()
-            || signature.key_id.is_empty()
-            || BASE64URL_NOPAD.decode(signature.sig.as_bytes()).is_err()
-        {
-            return Err(PayloadEncryptionError::MalformedEnvelope(
-                context.field_path.to_string(),
-            ));
-        }
-    }
+    validate_client_payload_signature(&envelope, context.signature_verification)?;
 
     Ok(())
+}
+
+pub fn client_payload_signature_message(
+    value: &Value,
+    field_path: &str,
+) -> Result<Vec<u8>, PayloadEncryptionError> {
+    let envelope = extract_client_envelope(value, field_path)?.ok_or_else(|| {
+        PayloadEncryptionError::ExpectedEncryptedEnvelope {
+            field: field_path.to_string(),
+            found: json_type_name(value),
+        }
+    })?;
+    if envelope.signature.is_none() {
+        return Err(PayloadEncryptionError::MissingClientSignature);
+    }
+    Ok(client_payload_signature_message_for_envelope(&envelope))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -533,6 +558,108 @@ struct ClientPayloadSignature {
     alg: String,
     key_id: String,
     sig: String,
+}
+
+fn validate_client_payload_signature(
+    envelope: &ClientPayloadEnvelope,
+    signature_verification: Option<ClientPayloadSignatureVerification<'_>>,
+) -> Result<(), PayloadEncryptionError> {
+    let Some(signature) = &envelope.signature else {
+        return if signature_verification.is_some() {
+            Err(PayloadEncryptionError::MissingClientSignature)
+        } else {
+            Ok(())
+        };
+    };
+
+    if signature.alg != CLIENT_PAYLOAD_SIGNATURE_ALGORITHM {
+        return Err(PayloadEncryptionError::UnsupportedClientSignatureAlgorithm(
+            signature.alg.clone(),
+        ));
+    }
+    if signature.key_id.is_empty() {
+        return Err(PayloadEncryptionError::MalformedEnvelope(
+            envelope.aad.field_path.clone(),
+        ));
+    }
+    let signature_bytes = BASE64URL_NOPAD
+        .decode(signature.sig.as_bytes())
+        .map_err(|_| PayloadEncryptionError::MalformedEnvelope(envelope.aad.field_path.clone()))?;
+    if signature_bytes.len() != 64 {
+        return Err(PayloadEncryptionError::MalformedEnvelope(
+            envelope.aad.field_path.clone(),
+        ));
+    }
+
+    if let Some(verification) = signature_verification {
+        if signature.key_id != verification.expected_key_id {
+            return Err(PayloadEncryptionError::ClientSignatureKeyIdMismatch);
+        }
+        if verification.public_key.len() != 32 {
+            return Err(PayloadEncryptionError::InvalidClientSignature);
+        }
+        let message = client_payload_signature_message_for_envelope(envelope);
+        UnparsedPublicKey::new(&ED25519, verification.public_key)
+            .verify(&message, &signature_bytes)
+            .map_err(|_| PayloadEncryptionError::InvalidClientSignature)?;
+    }
+
+    Ok(())
+}
+
+fn client_payload_signature_message_for_envelope(envelope: &ClientPayloadEnvelope) -> Vec<u8> {
+    let mut message = Vec::new();
+    push_len_prefixed(&mut message, CLIENT_PAYLOAD_SIGNATURE_DOMAIN.as_bytes());
+    push_u16(&mut message, envelope.version);
+    push_len_prefixed(&mut message, envelope.kind.as_bytes());
+    push_len_prefixed(&mut message, envelope.algorithm.as_bytes());
+    push_optional_string(&mut message, envelope.key_id.as_deref());
+    push_optional_string(&mut message, envelope.rk_id.as_deref());
+    push_optional_u64(&mut message, envelope.rk_epoch);
+    push_optional_string(&mut message, envelope.kdf_domain.as_deref());
+    push_len_prefixed(&mut message, envelope.aad.collection_id.as_bytes());
+    push_len_prefixed(&mut message, envelope.aad.point_id.as_bytes());
+    push_len_prefixed(&mut message, envelope.aad.field_path.as_bytes());
+    push_u16(&mut message, envelope.aad.schema_version);
+    push_len_prefixed(&mut message, envelope.nonce.as_bytes());
+    push_len_prefixed(&mut message, envelope.ciphertext.as_bytes());
+    if let Some(signature) = &envelope.signature {
+        push_len_prefixed(&mut message, signature.alg.as_bytes());
+        push_len_prefixed(&mut message, signature.key_id.as_bytes());
+    } else {
+        push_len_prefixed(&mut message, &[]);
+        push_len_prefixed(&mut message, &[]);
+    }
+    message
+}
+
+fn push_len_prefixed(message: &mut Vec<u8>, value: &[u8]) {
+    message.extend_from_slice(&(value.len() as u32).to_be_bytes());
+    message.extend_from_slice(value);
+}
+
+fn push_optional_string(message: &mut Vec<u8>, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            message.push(1);
+            push_len_prefixed(message, value.as_bytes());
+        }
+        None => message.push(0),
+    }
+}
+
+fn push_optional_u64(message: &mut Vec<u8>, value: Option<u64>) {
+    match value {
+        Some(value) => {
+            message.push(1);
+            message.extend_from_slice(&value.to_be_bytes());
+        }
+        None => message.push(0),
+    }
+}
+
+fn push_u16(message: &mut Vec<u8>, value: u16) {
+    message.extend_from_slice(&value.to_be_bytes());
 }
 
 const fn default_crypto_schema_version() -> u16 {

@@ -1,9 +1,15 @@
+use data_encoding::BASE64URL_NOPAD;
 use proptest::prelude::*;
 use qdrant_ckks::{
-    AeadCipher, AeadKeyring, CLIENT_ENCRYPTED_PAYLOAD_MARKER, ClientPayloadValidationContext,
-    ENCRYPTED_PAYLOAD_MARKER, EncryptionError, ExistingPayloadMode, PayloadEncryptionError,
-    PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey, is_client_encrypted_payload_value,
+    AeadCipher, AeadKeyring, CLIENT_ENCRYPTED_PAYLOAD_MARKER, ClientPayloadSignatureVerification,
+    ClientPayloadValidationContext, ENCRYPTED_PAYLOAD_MARKER, EncryptionError, ExistingPayloadMode,
+    PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
+    client_payload_signature_message, is_client_encrypted_payload_value,
     is_encrypted_payload_value, validate_client_payload_value,
+};
+use ring::{
+    rand::SystemRandom,
+    signature::{Ed25519KeyPair, KeyPair},
 };
 use serde_json::{Map, Value, json};
 
@@ -68,14 +74,45 @@ fn client_envelope(point_id: &str, field_path: &str) -> Value {
                 "schema_version": 1
             },
             "nonce": "AAAAAAAAAAAAAAAA",
-            "ciphertext": "AQID",
-            "signature": {
-                "alg": "ed25519",
-                "key_id": "tenant-a/client-signing-v1",
-                "sig": "AQIDBA"
-            }
+            "ciphertext": "AQID"
         }
     })
+}
+
+fn signed_client_envelope(point_id: &str, field_path: &str) -> (Value, Vec<u8>) {
+    let mut envelope = client_envelope(point_id, field_path);
+    let signature = json!({
+        "alg": "ed25519",
+        "key_id": "tenant-a/client-signing-v1",
+        "sig": ""
+    });
+    envelope
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("signature".to_string(), signature);
+
+    let rng = SystemRandom::new();
+    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+    let message = client_payload_signature_message(&envelope, field_path).unwrap();
+    let signature = key_pair.sign(&message);
+    envelope
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut("signature")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert(
+            "sig".to_string(),
+            Value::String(BASE64URL_NOPAD.encode(signature.as_ref())),
+        );
+
+    (envelope, key_pair.public_key().as_ref().to_vec())
 }
 
 #[test]
@@ -87,6 +124,7 @@ fn client_payload_envelope_validates_expected_aad_and_key_policy() {
         field_path: "body",
         expected_key_id: Some("tenant-a/client-rk-2026-04"),
         key_id_required: true,
+        signature_verification: None,
     };
 
     validate_client_payload_value(&envelope, context).unwrap();
@@ -106,6 +144,7 @@ fn client_payload_envelope_rejects_aad_and_key_mismatch() {
                 field_path: "body",
                 expected_key_id: Some("tenant-a/client-rk-2026-04"),
                 key_id_required: true,
+                signature_verification: None,
             },
         ),
         Err(PayloadEncryptionError::ClientEnvelopeAadMismatch(
@@ -121,9 +160,79 @@ fn client_payload_envelope_rejects_aad_and_key_mismatch() {
                 field_path: "body",
                 expected_key_id: Some("tenant-a/other-rk"),
                 key_id_required: true,
+                signature_verification: None,
             },
         ),
         Err(PayloadEncryptionError::ClientKeyIdMismatch),
+    );
+}
+
+#[test]
+fn client_payload_envelope_verifies_ed25519_signature() {
+    let (envelope, public_key) = signed_client_envelope("point-1", "body");
+    validate_client_payload_value(
+        &envelope,
+        ClientPayloadValidationContext {
+            collection_id: "docs",
+            point_id: "point-1",
+            field_path: "body",
+            expected_key_id: Some("tenant-a/client-rk-2026-04"),
+            key_id_required: true,
+            signature_verification: Some(ClientPayloadSignatureVerification {
+                expected_key_id: "tenant-a/client-signing-v1",
+                public_key: &public_key,
+            }),
+        },
+    )
+    .unwrap();
+
+    let mut tampered = envelope.clone();
+    tampered
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("ciphertext".to_string(), Value::String("BAUG".to_string()));
+    assert_eq!(
+        validate_client_payload_value(
+            &tampered,
+            ClientPayloadValidationContext {
+                collection_id: "docs",
+                point_id: "point-1",
+                field_path: "body",
+                expected_key_id: Some("tenant-a/client-rk-2026-04"),
+                key_id_required: true,
+                signature_verification: Some(ClientPayloadSignatureVerification {
+                    expected_key_id: "tenant-a/client-signing-v1",
+                    public_key: &public_key,
+                }),
+            },
+        ),
+        Err(PayloadEncryptionError::InvalidClientSignature),
+    );
+}
+
+#[test]
+fn client_payload_envelope_requires_signature_when_verifier_is_configured() {
+    let envelope = client_envelope("point-1", "body");
+    let public_key = [7u8; 32];
+
+    assert_eq!(
+        validate_client_payload_value(
+            &envelope,
+            ClientPayloadValidationContext {
+                collection_id: "docs",
+                point_id: "point-1",
+                field_path: "body",
+                expected_key_id: Some("tenant-a/client-rk-2026-04"),
+                key_id_required: true,
+                signature_verification: Some(ClientPayloadSignatureVerification {
+                    expected_key_id: "tenant-a/client-signing-v1",
+                    public_key: &public_key,
+                }),
+            },
+        ),
+        Err(PayloadEncryptionError::MissingClientSignature),
     );
 }
 

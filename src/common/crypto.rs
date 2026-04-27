@@ -6,11 +6,11 @@ use collection::config::{
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_ckks::{
     AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_VECTOR_KEY_DOMAIN,
-    CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadValidationContext, ExistingPayloadMode,
-    LocalMasterKeyProvider, MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER,
-    PAYLOAD_CLIENT_AEAD_PROVIDER, PayloadEncryptionError, PayloadEncryptionPolicy,
-    PayloadTextEncryptor, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, VECTOR_OPENFHE_CKKS_PROVIDER,
-    WrappedKeyBlob, validate_client_payload_value,
+    CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadSignatureVerification,
+    ClientPayloadValidationContext, ExistingPayloadMode, LocalMasterKeyProvider, MasterKeyProvider,
+    PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER, PayloadEncryptionError,
+    PayloadEncryptionPolicy, PayloadTextEncryptor, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey,
+    VECTOR_OPENFHE_CKKS_PROVIDER, WrappedKeyBlob, validate_client_payload_value,
 };
 use segment::json_path::JsonPath;
 use segment::types::Payload;
@@ -81,6 +81,8 @@ const WRAPPING_KEY_32_KIND: &str = "wrapping_key_32";
 const WRAPPED_SYMMETRIC_KEY_32_KIND: &str = "wrapped_symmetric_key_32";
 const MATERIAL_FINGERPRINT_ID_OPTION: &str = "material_fingerprint_id";
 const KEY_ID_REQUIRED_OPTION: &str = "key_id_required";
+const SIGNATURE_PUBLIC_KEY_B64_OPTION: &str = "signature_public_key_b64";
+const SIGNATURE_KEY_ID_OPTION: &str = "signature_key_id";
 const CKKS_PROFILE_OPTION: &str = "profile";
 
 #[derive(Error, Debug, PartialEq, Eq)]
@@ -108,6 +110,20 @@ pub enum PayloadWriteSetupError {
     MissingMaterialBinding { instance: String, role: String },
     #[error("payload crypto instance {instance} key_id option must be a string")]
     InvalidInstanceKeyId { instance: String },
+    #[error("payload crypto instance {instance} signature_key_id option must be a string")]
+    InvalidClientSignatureKeyId { instance: String },
+    #[error(
+        "payload crypto instance {instance} signature_public_key_b64 option must be a base64url Ed25519 public key"
+    )]
+    InvalidClientSignaturePublicKey { instance: String },
+    #[error(
+        "payload crypto instance {instance} must set signature_key_id when signature_public_key_b64 is set"
+    )]
+    MissingClientSignatureKeyId { instance: String },
+    #[error(
+        "payload crypto instance {instance} must set signature_public_key_b64 when signature_key_id is set"
+    )]
+    MissingClientSignaturePublicKey { instance: String },
     #[error("payload crypto instance {instance} material_fingerprint_id option must be a string")]
     InvalidInstanceMaterialFingerprintId { instance: String },
     #[error("payload crypto instance {instance} must set material_fingerprint_id")]
@@ -169,7 +185,13 @@ enum PayloadWriteRule {
         policy: PayloadEncryptionPolicy,
         expected_key_id: Option<String>,
         key_id_required: bool,
+        signature_verifier: Option<ClientPayloadSignatureVerifier>,
     },
+}
+
+struct ClientPayloadSignatureVerifier {
+    key_id: String,
+    public_key: Vec<u8>,
 }
 
 pub struct PayloadWritePlan {
@@ -199,6 +221,7 @@ impl PayloadWritePlan {
                     policy,
                     expected_key_id,
                     key_id_required,
+                    signature_verifier,
                 } => {
                     for field in policy.fields() {
                         let encrypted_path = field.parse::<JsonPath>().map_err(|_| {
@@ -215,6 +238,12 @@ impl PayloadWritePlan {
                                     field_path: field,
                                     expected_key_id: expected_key_id.as_deref(),
                                     key_id_required: *key_id_required,
+                                    signature_verification: signature_verifier.as_ref().map(
+                                        |verifier| ClientPayloadSignatureVerification {
+                                            expected_key_id: &verifier.key_id,
+                                            public_key: &verifier.public_key,
+                                        },
+                                    ),
                                 },
                             )?;
                             encrypted += 1;
@@ -248,6 +277,7 @@ impl PayloadWritePlan {
                     policy,
                     expected_key_id,
                     key_id_required,
+                    signature_verifier,
                 } => {
                     for field in policy.fields() {
                         let encrypted_path = field.parse::<JsonPath>().map_err(|_| {
@@ -264,6 +294,12 @@ impl PayloadWritePlan {
                                     field_path: field,
                                     expected_key_id: expected_key_id.as_deref(),
                                     key_id_required: *key_id_required,
+                                    signature_verification: signature_verifier.as_ref().map(
+                                        |verifier| ClientPayloadSignatureVerification {
+                                            expected_key_id: &verifier.key_id,
+                                            public_key: &verifier.public_key,
+                                        },
+                                    ),
                                 },
                             )?;
                         }
@@ -721,10 +757,13 @@ fn generic_payload_write_plan(
                         });
                     }
                 };
+                let signature_verifier =
+                    client_payload_signature_verifier(instance, &rule.instance)?;
                 rules.push(PayloadWriteRule::ClientEnvelope {
                     policy,
                     expected_key_id: expected_key_id.map(ToOwned::to_owned),
                     key_id_required,
+                    signature_verifier,
                 });
             }
             _ => {
@@ -744,6 +783,58 @@ fn generic_payload_write_plan(
             collection_name: collection_name.to_string(),
             rules,
         }))
+    }
+}
+
+fn client_payload_signature_verifier(
+    instance: &CryptoInstanceConfig,
+    instance_id: &str,
+) -> Result<Option<ClientPayloadSignatureVerifier>, PayloadWriteSetupError> {
+    let signature_key_id = match instance.options.get(SIGNATURE_KEY_ID_OPTION) {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => Some(value.as_str()),
+        Some(_) => {
+            return Err(PayloadWriteSetupError::InvalidClientSignatureKeyId {
+                instance: instance_id.to_string(),
+            });
+        }
+    };
+    let signature_public_key = match instance.options.get(SIGNATURE_PUBLIC_KEY_B64_OPTION) {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => Some(value.as_str()),
+        Some(_) => {
+            return Err(PayloadWriteSetupError::InvalidClientSignaturePublicKey {
+                instance: instance_id.to_string(),
+            });
+        }
+    };
+
+    match (signature_key_id, signature_public_key) {
+        (None, None) => Ok(None),
+        (Some(_), None) => Err(PayloadWriteSetupError::MissingClientSignaturePublicKey {
+            instance: instance_id.to_string(),
+        }),
+        (None, Some(_)) => Err(PayloadWriteSetupError::MissingClientSignatureKeyId {
+            instance: instance_id.to_string(),
+        }),
+        (Some(key_id), Some(public_key_b64)) => {
+            let public_key = BASE64URL_NOPAD
+                .decode(public_key_b64.as_bytes())
+                .map_err(
+                    |_| PayloadWriteSetupError::InvalidClientSignaturePublicKey {
+                        instance: instance_id.to_string(),
+                    },
+                )?;
+            if public_key.len() != 32 {
+                return Err(PayloadWriteSetupError::InvalidClientSignaturePublicKey {
+                    instance: instance_id.to_string(),
+                });
+            }
+            Ok(Some(ClientPayloadSignatureVerifier {
+                key_id: key_id.to_string(),
+                public_key,
+            }))
+        }
     }
 }
 
@@ -1906,6 +1997,93 @@ mod tests {
                 && rule_id == "body_client_conf"
                 && binding == CLIENT_PAYLOAD_ENVELOPE_BINDING
         ));
+    }
+
+    #[test]
+    fn payload_write_plan_validates_client_signature_verifier_options() {
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/client-rk-2026-04".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_client_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_client_v1".to_string(),
+                    binding: Some(CLIENT_PAYLOAD_ENVELOPE_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let settings_with_options = |options: serde_json::Value| Settings {
+            crypto: CryptoSettings {
+                instances: HashMap::from([(
+                    "docs_payload_client_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options,
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+
+        assert!(matches!(
+            payload_write_plan_for_collection(
+                &settings_with_options(json!({
+                    "key_id": "tenant-a/client-rk-2026-04",
+                    "signature_key_id": "tenant-a/client-signing-v1",
+                })),
+                "docs",
+                &params,
+            ),
+            Err(PayloadWriteSetupError::MissingClientSignaturePublicKey { instance })
+                if instance == "docs_payload_client_v1"
+        ));
+        assert!(matches!(
+            payload_write_plan_for_collection(
+                &settings_with_options(json!({
+                    "key_id": "tenant-a/client-rk-2026-04",
+                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                })),
+                "docs",
+                &params,
+            ),
+            Err(PayloadWriteSetupError::MissingClientSignatureKeyId { instance })
+                if instance == "docs_payload_client_v1"
+        ));
+        assert!(matches!(
+            payload_write_plan_for_collection(
+                &settings_with_options(json!({
+                    "key_id": "tenant-a/client-rk-2026-04",
+                    "signature_key_id": "tenant-a/client-signing-v1",
+                    "signature_public_key_b64": "not-base64",
+                })),
+                "docs",
+                &params,
+            ),
+            Err(PayloadWriteSetupError::InvalidClientSignaturePublicKey { instance })
+                if instance == "docs_payload_client_v1"
+        ));
+        assert!(
+            payload_write_plan_for_collection(
+                &settings_with_options(json!({
+                    "key_id": "tenant-a/client-rk-2026-04",
+                    "signature_key_id": "tenant-a/client-signing-v1",
+                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                })),
+                "docs",
+                &params,
+            )
+            .is_ok()
+        );
     }
 
     #[test]

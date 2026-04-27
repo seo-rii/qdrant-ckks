@@ -66,6 +66,8 @@ crypto:
       options:
         key_id: tenant-a/client-rk-2026-04
         key_id_required: true
+        signature_key_id: tenant-a/client-signing-v1
+        signature_public_key_b64: base64url-no-pad-ed25519-public-key
 params:
   encryption:
     version: 1
@@ -84,8 +86,10 @@ params:
 
 This provider does not receive plaintext and does not unwrap a data key. The
 client encrypts before insert and Qdrant only validates the envelope schema,
-AAD metadata, key policy, nonce/ciphertext encoding, and optional signature
-shape before storing the opaque ciphertext:
+AAD metadata, key policy, nonce/ciphertext encoding, and optional Ed25519
+signature before storing the opaque ciphertext. If
+`signature_public_key_b64` is configured, `signature_key_id` is also required
+and every write must carry a valid `signature` object:
 
 ```json
 {
@@ -105,7 +109,12 @@ shape before storing the opaque ciphertext:
         "schema_version": 1
       },
       "nonce": "base64url-no-pad-96-bit-nonce",
-      "ciphertext": "base64url-no-pad-client-ciphertext"
+      "ciphertext": "base64url-no-pad-client-ciphertext",
+      "signature": {
+        "alg": "ed25519",
+        "key_id": "tenant-a/client-signing-v1",
+        "sig": "base64url-no-pad-signature"
+      }
     }
   }
 }
@@ -116,9 +125,11 @@ Client envelopes are not server envelopes. Public writes to a
 `payload/client-aead@v1` rules require `$qdrant_client_aead` markers. Because
 Qdrant does not have the client data key in this mode, it cannot verify the
 AES-GCM tag or decrypt responses; clients or SDKs must decrypt returned
-envelopes. Signature verification and blind-index query integration are not
-implemented yet. Exact-match search requires a future client blind-index field,
-and range, geo, or full-text search over client ciphertext remains unsupported.
+envelopes. The Ed25519 signature covers the client envelope header, AAD,
+nonce, ciphertext, signature algorithm, and signature key id. Blind-index query
+integration is not implemented yet. Exact-match search requires a future client
+blind-index field, and range, geo, or full-text search over client ciphertext
+remains unsupported.
 
 Collection params enable encryption and select fields/vectors per collection:
 
