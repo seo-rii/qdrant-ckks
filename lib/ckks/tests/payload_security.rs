@@ -48,6 +48,35 @@ fn resource_key_constructor_derives_payload_text_subkey() {
     );
 }
 
+#[test]
+fn fingerprinted_keyring_does_not_fallback_after_active_open_failure() {
+    let active = AeadCipher::new_with_material_fingerprint(
+        "tenant-a:payload",
+        SecretKey::from_bytes([11u8; 32]),
+        "tenant-a/payload@active",
+    )
+    .unwrap();
+    let retired = AeadCipher::new_with_material_fingerprint(
+        "tenant-a:payload",
+        SecretKey::from_bytes([12u8; 32]),
+        "tenant-a/payload@retired",
+    )
+    .unwrap();
+    let keyring = AeadKeyring::new(active).with_retired(retired);
+    let context = qdrant_ckks::EncryptionContext::payload_text("docs", "point-1", "body");
+    let mut envelope = keyring.encrypt(b"secret", context).unwrap();
+    let mut raw = BASE64URL_NOPAD
+        .decode(envelope.ciphertext.as_bytes())
+        .unwrap();
+    raw[0] ^= 0x01;
+    envelope.ciphertext = BASE64URL_NOPAD.encode(&raw);
+
+    assert_eq!(
+        keyring.decrypt(&envelope, context),
+        Err(EncryptionError::OpenFailed),
+    );
+}
+
 fn object(value: Value) -> Map<String, Value> {
     match value {
         Value::Object(object) => object,
