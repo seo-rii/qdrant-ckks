@@ -25,11 +25,11 @@ use collection::operations::types::{
     RecommendExample, RecommendRequestInternal, ScrollRequestInternal, UpdateStatus,
 };
 use collection::operations::universal_query::collection_query::{
-    CollectionQueryRequest, Query, VectorInputInternal, VectorQuery,
+    CollectionPrefetch, CollectionQueryRequest, Query, VectorInputInternal, VectorQuery,
 };
 use collection::operations::universal_query::formula::{ExpressionInternal, FormulaInternal};
 use collection::operations::universal_query::shard_query::{
-    SampleInternal, ScoringQuery, ShardQueryRequest,
+    FusionInternal, SampleInternal, ScoringQuery, ShardQueryRequest,
 };
 use collection::operations::vector_ops::{
     PointVectorsPersisted, UpdateVectorsOp, VectorOperations,
@@ -1978,6 +1978,61 @@ async fn encrypted_vector_rejects_search_path() {
                     query: Some(Query::Vector(VectorQuery::Nearest(
                         VectorInputInternal::Vector(VectorInternal::from(vec![1.0, 0.0, 0.0, 0.0])),
                     ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                ShardSelectorInternal::All,
+            )],
+            |_name| async { None },
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot query encrypted vector")
+                && description.contains("CKKS-native vector search is not implemented")
+    ));
+
+    let err = collection
+        .query_batch(
+            vec![(
+                CollectionQueryRequest {
+                    prefetch: vec![CollectionPrefetch {
+                        prefetch: vec![CollectionPrefetch {
+                            prefetch: vec![],
+                            query: Some(Query::Vector(VectorQuery::Nearest(
+                                VectorInputInternal::Vector(VectorInternal::from(vec![
+                                    1.0, 0.0, 0.0, 0.0,
+                                ])),
+                            ))),
+                            using: DEFAULT_VECTOR_NAME.to_string(),
+                            filter: None,
+                            score_threshold: None,
+                            limit: 1,
+                            params: None,
+                            lookup_from: None,
+                        }],
+                        query: Some(Query::Sample(SampleInternal::Random)),
+                        using: DEFAULT_VECTOR_NAME.to_string(),
+                        filter: None,
+                        score_threshold: None,
+                        limit: 1,
+                        params: None,
+                        lookup_from: None,
+                    }],
+                    query: Some(Query::Fusion(FusionInternal::Dbsf)),
                     using: DEFAULT_VECTOR_NAME.to_string(),
                     filter: None,
                     score_threshold: None,
