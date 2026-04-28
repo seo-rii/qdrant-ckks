@@ -4,7 +4,8 @@ use std::io::{BufReader, BufWriter};
 use ahash::AHashSet;
 use api::rest::SearchRequestInternal;
 use collection::config::{
-    CollectionEncryptionConfig, CryptoMigrationState, EncryptionRuleRef, EncryptionSelector,
+    CkksCollectionConfig, CollectionEncryptionConfig, CryptoMigrationState, EncryptionRuleRef,
+    EncryptionSelector,
 };
 use collection::operations::CollectionUpdateOperations;
 use collection::operations::config_diff::CollectionParamsDiff;
@@ -1307,6 +1308,31 @@ async fn collection_params_diff_rejects_crypto_mutation() {
             on_disk_payload: None,
             encryption: Some(payload_encryption_config()),
             ckks: None,
+        })
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("crypto migration")
+                && description.contains("params diff")
+    ));
+
+    let err = collection
+        .update_params_from_diff(CollectionParamsDiff {
+            replication_factor: None,
+            write_consistency_factor: None,
+            read_fan_out_factor: None,
+            read_fan_out_delay_ms: None,
+            on_disk_payload: None,
+            encryption: None,
+            ckks: Some(CkksCollectionConfig {
+                enabled: true,
+                key_id: Some("tenant-a:docs".to_string()),
+                payload_text_fields: vec!["document.body".to_string()],
+                vector_names: Vec::new(),
+            }),
         })
         .await
         .unwrap_err();
