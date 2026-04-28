@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use data_encoding::BASE64URL_NOPAD;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::vector::{
     CKKS_SCHEME, CkksEncryptionInput, CkksError, CkksParameters, CkksVectorBackend,
@@ -142,95 +143,18 @@ impl CommandOpenFheBackend {
 
     pub fn new_checked(program: impl Into<PathBuf>) -> Result<Self, CkksError> {
         let program = program.into();
-        let path = Path::new(&program);
-        if !path.is_absolute() {
-            return Err(CkksError::Backend(format!(
-                "OpenFHE bridge program must be an absolute path: {}",
-                path.display(),
-            )));
-        }
+        validate_checked_bridge_program(&program)?;
 
-        let link_metadata = std::fs::symlink_metadata(path).map_err(|err| {
-            CkksError::Backend(format!(
-                "failed to inspect OpenFHE bridge program {}: {err}",
-                path.display(),
-            ))
-        })?;
-        if link_metadata.file_type().is_symlink() || !link_metadata.is_file() {
-            return Err(CkksError::Backend(format!(
-                "OpenFHE bridge program must be a regular non-symlink file: {}",
-                path.display(),
-            )));
-        }
+        Ok(Self::new(program))
+    }
 
-        let metadata = std::fs::metadata(path).map_err(|err| {
-            CkksError::Backend(format!(
-                "failed to inspect OpenFHE bridge program {}: {err}",
-                path.display(),
-            ))
-        })?;
-        if !metadata.is_file() {
-            return Err(CkksError::Backend(format!(
-                "OpenFHE bridge program must be a regular file: {}",
-                path.display(),
-            )));
-        }
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::{MetadataExt, PermissionsExt};
-
-            unsafe extern "C" {
-                fn geteuid() -> u32;
-            }
-
-            let mode = metadata.permissions().mode();
-            if mode & 0o111 == 0 || mode & 0o022 != 0 {
-                return Err(CkksError::Backend(format!(
-                    "OpenFHE bridge program must be executable and not group/world-writable: {}",
-                    path.display(),
-                )));
-            }
-
-            let effective_uid = unsafe { geteuid() };
-            let owner = metadata.uid();
-            if owner != 0 && owner != effective_uid {
-                return Err(CkksError::Backend(format!(
-                    "OpenFHE bridge program must be owned by root or the qdrant process user: {}",
-                    path.display(),
-                )));
-            }
-
-            let mut parent = path.parent();
-            while let Some(directory) = parent {
-                let directory_metadata = std::fs::symlink_metadata(directory).map_err(|err| {
-                    CkksError::Backend(format!(
-                        "failed to inspect OpenFHE bridge parent directory {}: {err}",
-                        directory.display(),
-                    ))
-                })?;
-                if directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir() {
-                    return Err(CkksError::Backend(format!(
-                        "OpenFHE bridge parent path must be a regular directory: {}",
-                        directory.display(),
-                    )));
-                }
-                if directory_metadata.permissions().mode() & 0o022 != 0 {
-                    return Err(CkksError::Backend(format!(
-                        "OpenFHE bridge parent directory must not be group/world-writable: {}",
-                        directory.display(),
-                    )));
-                }
-                let owner = directory_metadata.uid();
-                if owner != 0 && owner != effective_uid {
-                    return Err(CkksError::Backend(format!(
-                        "OpenFHE bridge parent directory must be owned by root or the qdrant process user: {}",
-                        directory.display(),
-                    )));
-                }
-                parent = directory.parent();
-            }
-        }
+    pub fn new_checked_with_sha256_b64(
+        program: impl Into<PathBuf>,
+        expected_sha256_b64: impl AsRef<str>,
+    ) -> Result<Self, CkksError> {
+        let program = program.into();
+        validate_checked_bridge_program(&program)?;
+        validate_bridge_program_sha256_b64(&program, expected_sha256_b64.as_ref())?;
 
         Ok(Self::new(program))
     }
@@ -256,6 +180,135 @@ impl CommandOpenFheBackend {
         self.worker = Arc::new(Mutex::new(None));
         self
     }
+}
+
+fn validate_checked_bridge_program(path: &Path) -> Result<(), CkksError> {
+    if !path.is_absolute() {
+        return Err(CkksError::Backend(format!(
+            "OpenFHE bridge program must be an absolute path: {}",
+            path.display(),
+        )));
+    }
+
+    let link_metadata = std::fs::symlink_metadata(path).map_err(|err| {
+        CkksError::Backend(format!(
+            "failed to inspect OpenFHE bridge program {}: {err}",
+            path.display(),
+        ))
+    })?;
+    if link_metadata.file_type().is_symlink() || !link_metadata.is_file() {
+        return Err(CkksError::Backend(format!(
+            "OpenFHE bridge program must be a regular non-symlink file: {}",
+            path.display(),
+        )));
+    }
+
+    let metadata = std::fs::metadata(path).map_err(|err| {
+        CkksError::Backend(format!(
+            "failed to inspect OpenFHE bridge program {}: {err}",
+            path.display(),
+        ))
+    })?;
+    if !metadata.is_file() {
+        return Err(CkksError::Backend(format!(
+            "OpenFHE bridge program must be a regular file: {}",
+            path.display(),
+        )));
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        unsafe extern "C" {
+            fn geteuid() -> u32;
+        }
+
+        let mode = metadata.permissions().mode();
+        if mode & 0o111 == 0 || mode & 0o022 != 0 {
+            return Err(CkksError::Backend(format!(
+                "OpenFHE bridge program must be executable and not group/world-writable: {}",
+                path.display(),
+            )));
+        }
+
+        let effective_uid = unsafe { geteuid() };
+        let owner = metadata.uid();
+        if owner != 0 && owner != effective_uid {
+            return Err(CkksError::Backend(format!(
+                "OpenFHE bridge program must be owned by root or the qdrant process user: {}",
+                path.display(),
+            )));
+        }
+
+        let mut parent = path.parent();
+        while let Some(directory) = parent {
+            let directory_metadata = std::fs::symlink_metadata(directory).map_err(|err| {
+                CkksError::Backend(format!(
+                    "failed to inspect OpenFHE bridge parent directory {}: {err}",
+                    directory.display(),
+                ))
+            })?;
+            if directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir() {
+                return Err(CkksError::Backend(format!(
+                    "OpenFHE bridge parent path must be a regular directory: {}",
+                    directory.display(),
+                )));
+            }
+            if directory_metadata.permissions().mode() & 0o022 != 0 {
+                return Err(CkksError::Backend(format!(
+                    "OpenFHE bridge parent directory must not be group/world-writable: {}",
+                    directory.display(),
+                )));
+            }
+            let owner = directory_metadata.uid();
+            if owner != 0 && owner != effective_uid {
+                return Err(CkksError::Backend(format!(
+                    "OpenFHE bridge parent directory must be owned by root or the qdrant process user: {}",
+                    directory.display(),
+                )));
+            }
+            parent = directory.parent();
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_bridge_program_sha256_b64(
+    path: &Path,
+    expected_sha256_b64: &str,
+) -> Result<(), CkksError> {
+    let expected = BASE64URL_NOPAD
+        .decode(expected_sha256_b64.as_bytes())
+        .map_err(|_| {
+            CkksError::Backend(format!(
+                "OpenFHE bridge sha256 pin must be base64url-no-padding: {}",
+                path.display(),
+            ))
+        })?;
+    if expected.len() != 32 {
+        return Err(CkksError::Backend(format!(
+            "OpenFHE bridge sha256 pin must decode to 32 bytes: {}",
+            path.display(),
+        )));
+    }
+
+    let bytes = std::fs::read(path).map_err(|err| {
+        CkksError::Backend(format!(
+            "failed to read OpenFHE bridge program {} for sha256 pinning: {err}",
+            path.display(),
+        ))
+    })?;
+    let actual = Sha256::digest(&bytes);
+    if actual[..] != expected[..] {
+        return Err(CkksError::Backend(format!(
+            "OpenFHE bridge sha256 pin does not match: {}",
+            path.display(),
+        )));
+    }
+
+    Ok(())
 }
 
 impl Drop for CommandOpenFheBackend {

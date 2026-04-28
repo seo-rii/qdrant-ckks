@@ -8,6 +8,7 @@ use qdrant_ckks::{
     CommandOpenFheBackend, EncryptionContext, EncryptionError, SecretKey,
 };
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 #[derive(Clone, Copy, Debug)]
 struct SealedTestBackend;
@@ -280,6 +281,25 @@ fn command_openfhe_backend_checked_constructor_validates_bridge_path() {
     fs::set_permissions(&script_path, permissions).unwrap();
 
     assert!(CommandOpenFheBackend::new_checked(&script_path).is_ok());
+    let bridge_digest = Sha256::digest(fs::read(&script_path).unwrap());
+    assert!(
+        CommandOpenFheBackend::new_checked_with_sha256_b64(
+            &script_path,
+            BASE64URL_NOPAD.encode(&bridge_digest),
+        )
+        .is_ok()
+    );
+    assert!(matches!(
+        CommandOpenFheBackend::new_checked_with_sha256_b64(
+            &script_path,
+            BASE64URL_NOPAD.encode(&[0u8; 32]),
+        ),
+        Err(CkksError::Backend(message)) if message.contains("sha256 pin does not match")
+    ));
+    assert!(matches!(
+        CommandOpenFheBackend::new_checked_with_sha256_b64(&script_path, "not base64!"),
+        Err(CkksError::Backend(message)) if message.contains("base64url-no-padding")
+    ));
 
     let mut permissions = fs::metadata(dir.path()).unwrap().permissions();
     permissions.set_mode(0o777);
