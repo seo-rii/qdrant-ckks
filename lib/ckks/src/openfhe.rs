@@ -131,7 +131,7 @@ impl WorkerProcess {
 }
 
 impl CommandOpenFheBackend {
-    pub fn new(program: impl Into<PathBuf>) -> Self {
+    fn new_unchecked(program: impl Into<PathBuf>) -> Self {
         Self {
             program: program.into(),
             args: Vec::new(),
@@ -141,11 +141,21 @@ impl CommandOpenFheBackend {
         }
     }
 
+    /// Builds a backend without validating the bridge program path.
+    ///
+    /// This is only intended for tests that deliberately execute a helper
+    /// through a shell such as `bash script.sh`. Production/runtime code should
+    /// use `new_checked` or `new_checked_with_sha256_b64`.
+    #[doc(hidden)]
+    pub fn new_unchecked_for_tests(program: impl Into<PathBuf>) -> Self {
+        Self::new_unchecked(program)
+    }
+
     pub fn new_checked(program: impl Into<PathBuf>) -> Result<Self, CkksError> {
         let program = program.into();
         validate_checked_bridge_program(&program)?;
 
-        Ok(Self::new(program))
+        Ok(Self::new_unchecked(program))
     }
 
     pub fn new_checked_with_sha256_b64(
@@ -156,7 +166,7 @@ impl CommandOpenFheBackend {
         validate_checked_bridge_program(&program)?;
         validate_bridge_program_sha256_b64(&program, expected_sha256_b64.as_ref())?;
 
-        Ok(Self::new(program))
+        Ok(Self::new_unchecked(program))
     }
 
     pub fn with_args<I, S>(mut self, args: I) -> Self

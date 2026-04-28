@@ -344,7 +344,8 @@ printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new("bash").with_args([script_path.display().to_string()]);
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+        .with_args([script_path.display().to_string()]);
     let encryptor = CkksVectorEncryptor::new(
         "tenant-a:ckks",
         "embedding",
@@ -396,7 +397,7 @@ sleep 10
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new("bash")
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
         .with_args([script_path.display().to_string()])
         .with_timeout(Duration::from_millis(50));
     let encryptor = CkksVectorEncryptor::new(
@@ -436,7 +437,7 @@ sleep 10
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new("bash")
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
         .with_args([script_path.display().to_string()])
         .with_timeout(Duration::from_millis(50));
     let encryptor = CkksVectorEncryptor::new(
@@ -479,7 +480,7 @@ done
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new("bash")
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
         .with_args([script_path.display().to_string()])
         .with_max_output_bytes(32);
     let encryptor = CkksVectorEncryptor::new(
@@ -522,7 +523,7 @@ printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new("bash")
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
         .with_args([script_path.display().to_string()])
         .with_max_output_bytes(64);
     let encryptor = CkksVectorEncryptor::new(
@@ -576,7 +577,8 @@ done
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new("bash").with_args([script_path.display().to_string()]);
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+        .with_args([script_path.display().to_string()]);
     let encryptor = CkksVectorEncryptor::new(
         "tenant-a:ckks",
         "embedding",
