@@ -2077,6 +2077,75 @@ mod tests {
     }
 
     #[test]
+    fn payload_write_plan_rejects_non_client_values_for_client_provider() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                instances: HashMap::from([(
+                    "docs_payload_client_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a/client-rk-2026-04",
+                            "key_id_required": true,
+                        }),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/client-rk-2026-04".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_client_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_client_v1".to_string(),
+                    binding: Some(CLIENT_PAYLOAD_ENVELOPE_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
+            .unwrap()
+            .unwrap();
+
+        let mut plaintext_payload = segment::types::Payload(
+            json!({ "body": "client plaintext must not enter store-only provider" })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        assert!(matches!(
+            plan.encrypt_payload("point-1", &mut plaintext_payload),
+            Err(PayloadWriteSetupError::Payload(
+                PayloadEncryptionError::ExpectedEncryptedEnvelope { field, .. }
+            )) if field == "body"
+        ));
+
+        let mut server_marker_payload = segment::types::Payload(
+            json!({ "body": { "$qdrant_ckks": { "kind": "payload_text" } } })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        assert!(matches!(
+            plan.encrypt_payload("point-1", &mut server_marker_payload),
+            Err(PayloadWriteSetupError::Payload(
+                PayloadEncryptionError::ExpectedEncryptedEnvelope { field, .. }
+            )) if field == "body"
+        ));
+    }
+
+    #[test]
     fn payload_write_plan_uses_explicit_crypto_collection_id_for_client_envelopes() {
         let settings = Settings {
             crypto: CryptoSettings {
