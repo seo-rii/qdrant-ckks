@@ -883,17 +883,9 @@ fn command_openfhe_backend_uses_pool_size_for_concurrent_requests() {
 set -euo pipefail
 	count_file={}
 	printf 'start\n' >> "$count_file"
-	for _ in $(seq 1 250); do
-	  if [ "$(grep -c '^start$' "$count_file")" -ge 2 ]; then
-	    break
-	  fi
-	  sleep 0.02
-	done
-	if [ "$(grep -c '^start$' "$count_file")" -lt 2 ]; then
-	  exit 8
-	fi
 	while IFS= read -r _request; do
 	  printf 'request\n' >> "$count_file"
+	  sleep 0.5
 	  printf '{{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}}\n'
 	done
 "#,
@@ -921,12 +913,17 @@ set -euo pipefail
 
     let first_encryptor = Arc::clone(&encryptor);
     let second_encryptor = Arc::clone(&encryptor);
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let first_barrier = Arc::clone(&barrier);
+    let second_barrier = Arc::clone(&barrier);
     let first = std::thread::spawn(move || {
+        first_barrier.wait();
         first_encryptor
             .encrypt("docs", "point-1", &public_material(), &[1.0])
             .unwrap();
     });
     let second = std::thread::spawn(move || {
+        second_barrier.wait();
         second_encryptor
             .encrypt("docs", "point-2", &public_material(), &[2.0])
             .unwrap();
