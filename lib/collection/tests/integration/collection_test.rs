@@ -1347,13 +1347,59 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
         .await
         .unwrap();
     let retrieved_payload = retrieved[0].payload.as_ref().unwrap();
-    let retrieved_body = retrieved_payload
-        .0
-        .get("document")
-        .and_then(|document| document.get("body"))
+    let assert_raw_encrypted_body = |payload: &Payload| {
+        let body = payload
+            .0
+            .get("document")
+            .and_then(|document| document.get("body"))
+            .unwrap();
+        assert!(is_encrypted_payload_value(body));
+        assert_ne!(body, &serde_json::json!(sentinel));
+    };
+    assert_raw_encrypted_body(retrieved_payload);
+
+    let scrolled = collection
+        .scroll_by(
+            ScrollRequestInternal {
+                offset: None,
+                limit: Some(10),
+                filter: None,
+                with_payload: Some(WithPayloadInterface::Bool(true)),
+                with_vector: false.into(),
+                order_by: None,
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
         .unwrap();
-    assert!(is_encrypted_payload_value(retrieved_body));
-    assert_ne!(retrieved_body, &serde_json::json!(sentinel));
+    assert_eq!(scrolled.points.len(), 1);
+    assert_raw_encrypted_body(scrolled.points[0].payload.as_ref().unwrap());
+
+    let searched = collection
+        .search(
+            SearchRequestInternal {
+                vector: vec![1.0, 0.0, 0.0, 0.0].into(),
+                with_payload: Some(WithPayloadInterface::Bool(true)),
+                with_vector: None,
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: None,
+                score_threshold: None,
+            }
+            .into(),
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(searched.len(), 1);
+    assert_raw_encrypted_body(searched[0].payload.as_ref().unwrap());
 
     let snapshot_temp_dir = Builder::new().prefix("snapshot-temp").tempdir().unwrap();
     let snapshot = collection
