@@ -62,6 +62,10 @@ impl Collection {
         if request.searches.iter().all(|s| s.limit == 0) {
             return Ok(vec![]);
         }
+        for search in &request.searches {
+            self.ensure_filter_does_not_touch_encrypted_payload(search.filter.as_ref())
+                .await?;
+        }
         if let Some(encryption) = self
             .collection_config
             .read()

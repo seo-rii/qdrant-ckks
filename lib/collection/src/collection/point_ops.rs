@@ -13,7 +13,7 @@ use qdrant_ckks::{
 use segment::data_types::order_by::{Direction, OrderBy};
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
 use segment::json_path::JsonPath;
-use segment::types::{Payload, ShardKey, WithPayload, WithPayloadInterface};
+use segment::types::{Condition, Filter, Payload, ShardKey, WithPayload, WithPayloadInterface};
 use shard::count::CountRequestInternal;
 use shard::retrieve::record_internal::RecordInternal;
 use shard::scroll::ScrollRequestInternal;
@@ -538,6 +538,8 @@ impl Collection {
                 description: "Limit cannot be 0".to_string(),
             });
         }
+        self.ensure_filter_does_not_touch_encrypted_payload(request.filter.as_ref())
+            .await?;
 
         let local_only = shard_selection.is_shard_id();
 
@@ -627,6 +629,9 @@ impl Collection {
         timeout: Option<Duration>,
         hw_measurement_acc: HwMeasurementAcc,
     ) -> CollectionResult<CountResult> {
+        self.ensure_filter_does_not_touch_encrypted_payload(request.filter.as_ref())
+            .await?;
+
         let shards_holder = self.shards_holder.read().await;
         let shards = shards_holder.select_shards(shard_selection)?;
 
@@ -729,5 +734,72 @@ impl Collection {
             .collect();
 
         Ok(points)
+    }
+
+    pub(crate) async fn ensure_filter_does_not_touch_encrypted_payload(
+        &self,
+        filter: Option<&Filter>,
+    ) -> CollectionResult<()> {
+        let Some(filter) = filter else {
+            return Ok(());
+        };
+        let Some(encryption) = self
+            .collection_config
+            .read()
+            .await
+            .params
+            .effective_encryption()
+        else {
+            return Ok(());
+        };
+
+        for rule in &encryption.rules {
+            let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
+                continue;
+            };
+
+            for encrypted_path in paths {
+                let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
+                    CollectionError::bad_input(format!(
+                        "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                    ))
+                })?;
+                if let Some(filter_path) =
+                    filter_touches_encrypted_payload(filter, &encrypted_json_path)
+                {
+                    return Err(CollectionError::bad_input(format!(
+                        "cannot filter on encrypted payload field '{filter_path}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn filter_touches_encrypted_payload<'a>(
+    filter: &'a Filter,
+    encrypted_path: &JsonPath,
+) -> Option<&'a JsonPath> {
+    filter
+        .iter_conditions()
+        .find_map(|condition| condition_touches_encrypted_payload(condition, encrypted_path))
+}
+
+fn condition_touches_encrypted_payload<'a>(
+    condition: &'a Condition,
+    encrypted_path: &JsonPath,
+) -> Option<&'a JsonPath> {
+    let touches = |key: &'a JsonPath| key.compatible(encrypted_path).then_some(key);
+
+    match condition {
+        Condition::Field(field_condition) => touches(&field_condition.key),
+        Condition::IsEmpty(is_empty) => touches(&is_empty.is_empty.key),
+        Condition::IsNull(is_null) => touches(&is_null.is_null.key),
+        Condition::Nested(nested) => touches(nested.raw_key())
+            .or_else(|| filter_touches_encrypted_payload(nested.filter(), encrypted_path)),
+        Condition::Filter(filter) => filter_touches_encrypted_payload(filter, encrypted_path),
+        Condition::HasId(_) | Condition::HasVector(_) | Condition::CustomIdChecker(_) => None,
     }
 }

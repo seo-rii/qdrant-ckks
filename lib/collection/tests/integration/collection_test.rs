@@ -79,6 +79,13 @@ fn vector_encryption_config() -> CollectionEncryptionConfig {
     }
 }
 
+fn encrypted_payload_filter() -> Filter {
+    Filter::new_must(Condition::Field(FieldCondition::new_match(
+        "document.body".parse().unwrap(),
+        serde_json::from_str(r#"{ "value": "secret body" }"#).unwrap(),
+    )))
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_collection_updater() {
     test_collection_updater_with_shards(1).await;
@@ -892,6 +899,87 @@ async fn encrypted_payload_field_rejects_payload_index() {
         )
         .await
         .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn encrypted_payload_field_rejects_plaintext_filters() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
+
+    let err = collection
+        .scroll_by(
+            ScrollRequestInternal {
+                offset: None,
+                limit: Some(10),
+                filter: Some(encrypted_payload_filter()),
+                with_payload: Some(WithPayloadInterface::Bool(true)),
+                with_vector: false.into(),
+                order_by: None,
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot filter on encrypted payload field")
+                && description.contains("document.body")
+                && description.contains("blind index")
+    ));
+
+    let err = collection
+        .count(
+            CountRequestInternal {
+                filter: Some(encrypted_payload_filter()),
+                exact: true,
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot filter on encrypted payload field")
+                && description.contains("document.body")
+                && description.contains("blind index")
+    ));
+
+    let err = collection
+        .search(
+            SearchRequestInternal {
+                vector: vec![1.0, 0.0, 0.0, 0.0].into(),
+                with_payload: Some(WithPayloadInterface::Bool(true)),
+                with_vector: None,
+                filter: Some(encrypted_payload_filter()),
+                params: None,
+                limit: 1,
+                offset: None,
+                score_threshold: None,
+            }
+            .into(),
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot filter on encrypted payload field")
+                && description.contains("document.body")
+                && description.contains("blind index")
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread")]
