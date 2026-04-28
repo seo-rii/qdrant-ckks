@@ -5849,6 +5849,7 @@ dependencies = [
  "raft-proto",
  "rand 0.10.0",
  "reqwest 0.13.2",
+ "ring",
  "rstack-self",
  "rustls 0.23.37",
  "rustls-pemfile",
