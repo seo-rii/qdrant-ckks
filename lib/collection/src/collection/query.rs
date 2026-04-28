@@ -22,12 +22,14 @@ use crate::common::fetch_vectors::{
 };
 use crate::common::retrieve_request_trait::RetrieveRequest;
 use crate::common::transpose_iterator::transposed_iter;
+use crate::config::EncryptionSelector;
 use crate::operations::consistency_params::ReadConsistency;
 use crate::operations::shard_selector_internal::ShardSelectorInternal;
 use crate::operations::types::{CollectionError, CollectionResult};
 use crate::operations::universal_query::collection_query::CollectionQueryRequest;
 use crate::operations::universal_query::shard_query::{
-    self, FusionInternal, MmrInternal, ScoringQuery, ShardQueryRequest, ShardQueryResponse,
+    self, FusionInternal, MmrInternal, ScoringQuery, ShardPrefetch, ShardQueryRequest,
+    ShardQueryResponse,
 };
 
 /// A factor which determines if we need to use the 2-step search or not.
@@ -212,6 +214,55 @@ impl Collection {
         // shortcuts batch if all requests with limit=0
         if requests_batch.iter().all(|s| s.limit == 0) {
             return Ok(vec![]);
+        }
+
+        for request in &requests_batch {
+            for filter in request.filter_refs() {
+                self.ensure_filter_does_not_touch_encrypted_payload(filter)
+                    .await?;
+            }
+        }
+
+        if let Some(encryption) = self
+            .collection_config
+            .read()
+            .await
+            .params
+            .effective_encryption()
+        {
+            for rule in &encryption.rules {
+                let EncryptionSelector::VectorNames { names } = &rule.selector else {
+                    continue;
+                };
+
+                for request in &requests_batch {
+                    if let Some(vector_name) = request
+                        .query
+                        .as_ref()
+                        .and_then(ScoringQuery::get_vector_name)
+                        && names.iter().any(|name| name == vector_name)
+                    {
+                        return Err(CollectionError::bad_input(format!(
+                            "cannot query encrypted vector '{vector_name}'; CKKS-native vector search is not implemented in this branch",
+                        )));
+                    }
+
+                    let mut prefetches: Vec<&ShardPrefetch> = request.prefetches.iter().collect();
+                    while let Some(prefetch) = prefetches.pop() {
+                        if let Some(vector_name) = prefetch
+                            .query
+                            .as_ref()
+                            .and_then(ScoringQuery::get_vector_name)
+                            && names.iter().any(|name| name == vector_name)
+                        {
+                            return Err(CollectionError::bad_input(format!(
+                                "cannot query encrypted vector '{vector_name}'; CKKS-native vector search is not implemented in this branch",
+                            )));
+                        }
+                        prefetches.extend(prefetch.prefetches.iter());
+                    }
+                }
+            }
         }
 
         let is_payload_required = requests_batch.iter().all(|s| s.with_payload.is_required());

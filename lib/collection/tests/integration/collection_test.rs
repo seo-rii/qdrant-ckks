@@ -19,6 +19,12 @@ use collection::operations::types::{
     CollectionError, CountRequestInternal, PointRequestInternal, RecommendRequestInternal,
     ScrollRequestInternal, UpdateStatus,
 };
+use collection::operations::universal_query::collection_query::{
+    CollectionQueryRequest, Query, VectorInputInternal, VectorQuery,
+};
+use collection::operations::universal_query::shard_query::{
+    SampleInternal, ScoringQuery, ShardQueryRequest,
+};
 use collection::operations::vector_ops::{
     PointVectorsPersisted, UpdateVectorsOp, VectorOperations,
 };
@@ -32,10 +38,10 @@ use qdrant_ckks::{
     is_encrypted_payload_value,
 };
 use segment::data_types::order_by::{Direction, OrderBy, OrderByInterface};
-use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, VectorStructInternal};
+use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, VectorInternal, VectorStructInternal};
 use segment::types::{
     Condition, ExtendedPointId, FieldCondition, Filter, HasIdCondition, Payload,
-    PayloadFieldSchema, PayloadSchemaType, PointIdType, WithPayloadInterface,
+    PayloadFieldSchema, PayloadSchemaType, PointIdType, WithPayloadInterface, WithVector,
 };
 use serde_json::Map;
 use tempfile::Builder;
@@ -981,6 +987,34 @@ async fn encrypted_payload_field_rejects_plaintext_filters() {
                 && description.contains("document.body")
                 && description.contains("blind index")
     ));
+
+    let err = collection
+        .query(
+            ShardQueryRequest {
+                prefetches: vec![],
+                query: Some(ScoringQuery::Sample(SampleInternal::Random)),
+                filter: Some(encrypted_payload_filter()),
+                score_threshold: None,
+                limit: 1,
+                offset: 0,
+                params: None,
+                with_vector: WithVector::Bool(false),
+                with_payload: WithPayloadInterface::Bool(false),
+            },
+            None,
+            ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot filter on encrypted payload field")
+                && description.contains("document.body")
+                && description.contains("blind index")
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1331,6 +1365,41 @@ async fn encrypted_vector_rejects_search_path() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot search encrypted vector")
+                && description.contains("CKKS-native vector search is not implemented")
+    ));
+
+    let err = collection
+        .query_batch(
+            vec![(
+                CollectionQueryRequest {
+                    prefetch: vec![],
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::Vector(VectorInternal::from(vec![1.0, 0.0, 0.0, 0.0])),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                ShardSelectorInternal::All,
+            )],
+            |_name| async { None },
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot query encrypted vector")
                 && description.contains("CKKS-native vector search is not implemented")
     ));
 }
