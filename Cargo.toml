@@ -46,6 +46,7 @@ sealed_test = "1.1.0"
 mockito = { workspace = true }
 tempfile = { workspace = true }
 rusty-hook = "^0.11.2"
+ring = { workspace = true }
 fs-err = { workspace = true, features = ["debug", "debug_tokio", "tokio"] } # for nicer error messages
 
 

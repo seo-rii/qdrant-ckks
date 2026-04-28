@@ -1343,9 +1343,11 @@ mod tests {
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_ckks::{
         CLIENT_ENCRYPTED_PAYLOAD_MARKER, CLIENT_PAYLOAD_ENVELOPE_BINDING, LocalMasterKeyProvider,
-        MasterKeyProvider, RESOURCE_KEY_WRAP_ALGORITHM, is_client_encrypted_payload_value,
-        is_encrypted_payload_value,
+        MasterKeyProvider, RESOURCE_KEY_WRAP_ALGORITHM, client_payload_signature_message,
+        is_client_encrypted_payload_value, is_encrypted_payload_value,
     };
+    use ring::rand::SystemRandom;
+    use ring::signature::{Ed25519KeyPair, KeyPair};
     use serde_json::json;
 
     use super::*;
@@ -2188,6 +2190,124 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn payload_write_plan_verifies_client_envelope_signature() {
+        let rng = SystemRandom::new();
+        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+        let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+
+        let mut signed_envelope = {
+            let mut marker = serde_json::Map::new();
+            marker.insert(
+                CLIENT_ENCRYPTED_PAYLOAD_MARKER.to_string(),
+                json!({
+                    "version": 1,
+                    "kind": "payload_text",
+                    "algorithm": "AES-256-GCM",
+                    "key_id": "tenant-a/client-rk-2026-04",
+                    "rk_id": "tenant-a/client-rk-2026-04",
+                    "rk_epoch": 3,
+                    "kdf_domain": "qdrant/client-payload-text/v1",
+                    "aad": {
+                        "collection_id": "docs",
+                        "point_id": "point-1",
+                        "field_path": "body",
+                        "schema_version": 1
+                    },
+                    "nonce": "AAAAAAAAAAAAAAAA",
+                    "ciphertext": "AQID",
+                    "signature": {
+                        "alg": "ed25519",
+                        "key_id": "tenant-a/client-signing-v1",
+                        "sig": ""
+                    }
+                }),
+            );
+            Value::Object(marker)
+        };
+        let message = client_payload_signature_message(&signed_envelope, "body").unwrap();
+        let signature = key_pair.sign(&message);
+        signed_envelope
+            .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .get_mut("signature")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                "sig".to_string(),
+                Value::String(BASE64URL_NOPAD.encode(signature.as_ref())),
+            );
+
+        let settings = Settings {
+            crypto: CryptoSettings {
+                instances: HashMap::from([(
+                    "docs_payload_client_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a/client-rk-2026-04",
+                            "signature_key_id": "tenant-a/client-signing-v1",
+                            "signature_public_key_b64": BASE64URL_NOPAD
+                                .encode(key_pair.public_key().as_ref()),
+                        }),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/client-rk-2026-04".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_client_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_client_v1".to_string(),
+                    binding: Some(CLIENT_PAYLOAD_ENVELOPE_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
+            .unwrap()
+            .unwrap();
+        let payload_from_envelope =
+            |envelope: Value| Payload(json!({ "body": envelope }).as_object().unwrap().clone());
+
+        let mut valid_payload = payload_from_envelope(signed_envelope.clone());
+        assert_eq!(
+            plan.encrypt_payload("point-1", &mut valid_payload).unwrap(),
+            1
+        );
+
+        let mut tampered_envelope = signed_envelope;
+        tampered_envelope
+            .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("ciphertext".to_string(), Value::String("BAUG".to_string()));
+        let mut tampered_payload = payload_from_envelope(tampered_envelope);
+
+        assert!(matches!(
+            plan.encrypt_payload("point-1", &mut tampered_payload),
+            Err(PayloadWriteSetupError::Payload(
+                PayloadEncryptionError::InvalidClientSignature
+            ))
+        ));
     }
 
     #[test]
