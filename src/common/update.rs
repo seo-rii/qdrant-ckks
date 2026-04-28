@@ -1376,7 +1376,7 @@ mod tests {
     use common::mmap;
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_ckks::is_encrypted_payload_value;
-    use segment::types::{Distance, WithPayloadInterface};
+    use segment::types::{Condition, Distance, FieldCondition, WithPayloadInterface};
     use serde_json::json;
     use storage::content_manager::collection_meta_ops::{
         CollectionMetaOperations, CreateCollectionOperation,
@@ -1985,6 +1985,64 @@ mod tests {
                         if description.contains(expected_error)
                 ));
             }
+
+            let encrypted_filter = || {
+                Filter::new_must(Condition::Field(FieldCondition::new_match(
+                    "body".parse().unwrap(),
+                    serde_json::from_str(r#"{ "value": "secret body" }"#).unwrap(),
+                )))
+            };
+            let err = do_delete_payload(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "docs".to_string(),
+                DeletePayload {
+                    keys: vec!["tag".parse().unwrap()],
+                    points: None,
+                    filter: Some(encrypted_filter()),
+                    shard_key: None,
+                },
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cannot filter on encrypted payload field")
+                        && description.contains("body")
+            ));
+
+            let err = do_clear_payload(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "docs".to_string(),
+                PointsSelector::FilterSelector(FilterSelector {
+                    filter: encrypted_filter(),
+                    shard_key: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cannot filter on encrypted payload field")
+                        && description.contains("body")
+            ));
 
             for indexed_field in ["body", "body.keyword"] {
                 let err = do_create_index(
