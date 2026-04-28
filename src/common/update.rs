@@ -1831,6 +1831,77 @@ mod tests {
             assert!(is_encrypted_payload_value(body));
             assert_ne!(body, &json!("public overwrite payload secret"));
 
+            let unsupported_updates = [
+                (
+                    SetPayload {
+                        points: Some(vec![1.into(), 2.into()]),
+                        payload: segment::types::Payload(
+                            json!({ "body": "multi point secret" })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        ),
+                        filter: None,
+                        shard_key: None,
+                        key: None,
+                    },
+                    "multiple or missing point ids",
+                ),
+                (
+                    SetPayload {
+                        points: Some(vec![1.into()]),
+                        payload: segment::types::Payload(
+                            json!({ "body": "filter secret" })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        ),
+                        filter: Some(Filter::default()),
+                        shard_key: None,
+                        key: None,
+                    },
+                    "with a filter cannot update encrypted payload fields",
+                ),
+                (
+                    SetPayload {
+                        points: Some(vec![1.into()]),
+                        payload: segment::types::Payload(
+                            json!({ "value": "key path secret" })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        ),
+                        filter: None,
+                        shard_key: None,
+                        key: Some("body".parse().unwrap()),
+                    },
+                    "with a key path cannot update encrypted payload fields",
+                ),
+            ];
+            for (operation, expected_error) in unsupported_updates {
+                let err = do_set_payload(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "docs".to_string(),
+                    operation,
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                    Some(&payload_runtime_settings()),
+                )
+                .await
+                .unwrap_err();
+                assert!(matches!(
+                    err,
+                    StorageError::BadInput { description }
+                        if description.contains(expected_error)
+                ));
+            }
+
             collection.stop_gracefully().await;
         });
     }
