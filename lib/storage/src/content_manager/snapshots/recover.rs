@@ -237,6 +237,10 @@ async fn _do_recover_from_snapshot(
             state.config.params.shard_number, snapshot_config.params.shard_number
         )));
     }
+    state
+        .config
+        .params
+        .check_compatible(&snapshot_config.params)?;
 
     let is_manual_recovery_state_supported = toc
         .get_channel_service()
