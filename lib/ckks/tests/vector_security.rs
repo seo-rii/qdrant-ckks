@@ -626,6 +626,53 @@ printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
 
 #[cfg(unix)]
 #[test]
+fn command_openfhe_backend_stderr_cap_fails_before_timeout() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("stderr-infinite-openfhe-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -uo pipefail
+IFS= read -r _request
+while true; do
+  printf x >&2 || exit 0
+done
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+        .with_args([script_path.display().to_string()])
+        .with_timeout(Duration::from_secs(5))
+        .with_max_output_bytes(64);
+    let encryptor = CkksVectorEncryptor::new(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+
+    let started = Instant::now();
+    let err = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0])
+        .unwrap_err();
+
+    assert!(
+        matches!(err, CkksError::Backend(ref message) if message.contains("stderr exceeded")),
+        "unexpected bridge error: {err:?}",
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[cfg(unix)]
+#[test]
 fn command_openfhe_backend_reuses_worker_process_when_bridge_supports_streaming() {
     use std::os::unix::fs::PermissionsExt;
 

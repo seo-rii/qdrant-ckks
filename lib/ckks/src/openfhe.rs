@@ -68,6 +68,7 @@ enum BridgeStdoutEvent {
     Response { bytes: Vec<u8>, truncated: bool },
     Eof,
     Error(io::Error),
+    StderrExceeded,
 }
 
 impl WorkerProcess {
@@ -457,6 +458,13 @@ impl CkksVectorBackend for CommandOpenFheBackend {
                         "failed to read OpenFHE bridge response: {err}",
                     )));
                 }
+                Ok(BridgeStdoutEvent::StderrExceeded) => {
+                    self.discard_worker(&worker_process, false)?;
+                    return Err(CkksError::Backend(format!(
+                        "OpenFHE bridge stderr exceeded {} bytes",
+                        self.max_output_bytes,
+                    )));
+                }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     self.discard_worker(&worker_process, false)?;
                     return Err(CkksError::Backend(format!(
@@ -610,6 +618,7 @@ impl CommandOpenFheBackend {
             .ok_or_else(|| CkksError::Backend("failed to open bridge stderr".to_string()))?;
 
         let (stdout_tx, stdout_rx) = mpsc::channel();
+        let stderr_tx = stdout_tx.clone();
         let max_output_bytes = self.max_output_bytes;
         let stdout_thread = thread::spawn(move || {
             let mut stdout = BufReader::new(stdout);
@@ -665,6 +674,7 @@ impl CommandOpenFheBackend {
                 total = total.saturating_add(read);
                 if total > max_output_bytes {
                     stderr_truncated_thread.store(true, Ordering::Relaxed);
+                    let _ = stderr_tx.send(BridgeStdoutEvent::StderrExceeded);
                     return Ok(());
                 }
             }
