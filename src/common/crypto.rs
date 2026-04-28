@@ -11,7 +11,7 @@ use qdrant_ckks::{
     PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER, PayloadEncryptionError,
     PayloadEncryptionPolicy, PayloadTextEncryptor, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey,
     VECTOR_OPENFHE_CKKS_PROVIDER, WrappedKeyBlob, client_payload_signature_key_id,
-    validate_client_payload_value,
+    rewrap_resource_key, validate_client_payload_value,
 };
 use segment::json_path::JsonPath;
 use segment::types::Payload;
@@ -1293,6 +1293,130 @@ fn decode_wrapped_resource_key(
     provider
         .unwrap_resource_key(&wrapped, &aad)
         .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))
+}
+
+pub fn rewrap_runtime_resource_key_material(
+    runtime_settings: &CryptoSettings,
+    material_name: &str,
+    new_wrapped_by: &str,
+) -> Result<CryptoMaterialConfig, PayloadWriteSetupError> {
+    let material = runtime_settings
+        .materials
+        .get(material_name)
+        .ok_or_else(|| PayloadWriteSetupError::InvalidWrappedMaterial {
+            material: material_name.to_string(),
+            reason: "unknown material".to_string(),
+        })?;
+    if material.kind != WRAPPED_SYMMETRIC_KEY_32_KIND {
+        return Err(PayloadWriteSetupError::UnsupportedMaterialKind {
+            material: material_name.to_string(),
+            kind: material.kind.clone(),
+        });
+    }
+
+    let old_wrapped_by = material.wrapped_by.as_deref().ok_or_else(|| {
+        PayloadWriteSetupError::InvalidWrappedMaterial {
+            material: material_name.to_string(),
+            reason: "missing wrapped_by".to_string(),
+        }
+    })?;
+    let algorithm = material
+        .wrap_algorithm
+        .as_deref()
+        .unwrap_or(RESOURCE_KEY_WRAP_ALGORITHM);
+    if algorithm != RESOURCE_KEY_WRAP_ALGORITHM {
+        return Err(PayloadWriteSetupError::UnsupportedWrapAlgorithm {
+            material: material_name.to_string(),
+            algorithm: algorithm.to_string(),
+        });
+    }
+
+    let old_wrapping_material =
+        runtime_settings
+            .materials
+            .get(old_wrapped_by)
+            .ok_or_else(|| PayloadWriteSetupError::UnknownWrappingMaterial {
+                material: material_name.to_string(),
+                wrapped_by: old_wrapped_by.to_string(),
+            })?;
+    if old_wrapping_material.kind != WRAPPING_KEY_32_KIND {
+        return Err(PayloadWriteSetupError::UnsupportedWrappingMaterialKind {
+            material: material_name.to_string(),
+            wrapped_by: old_wrapped_by.to_string(),
+            kind: old_wrapping_material.kind.clone(),
+        });
+    }
+    let new_wrapping_material =
+        runtime_settings
+            .materials
+            .get(new_wrapped_by)
+            .ok_or_else(|| PayloadWriteSetupError::UnknownWrappingMaterial {
+                material: material_name.to_string(),
+                wrapped_by: new_wrapped_by.to_string(),
+            })?;
+    if new_wrapping_material.kind != WRAPPING_KEY_32_KIND {
+        return Err(PayloadWriteSetupError::UnsupportedWrappingMaterialKind {
+            material: material_name.to_string(),
+            wrapped_by: new_wrapped_by.to_string(),
+            kind: new_wrapping_material.kind.clone(),
+        });
+    }
+
+    let old_nonce =
+        material
+            .nonce
+            .as_ref()
+            .ok_or_else(|| PayloadWriteSetupError::InvalidWrappedMaterial {
+                material: material_name.to_string(),
+                reason: "missing nonce".to_string(),
+            })?;
+    let old_wrapped_key = material.wrapped_key_b64.as_ref().ok_or_else(|| {
+        PayloadWriteSetupError::InvalidWrappedMaterial {
+            material: material_name.to_string(),
+            reason: "missing wrapped_key_b64".to_string(),
+        }
+    })?;
+
+    let old_provider = LocalMasterKeyProvider::new(
+        old_wrapped_by,
+        decode_direct_material_key(old_wrapped_by, old_wrapping_material)?,
+    )
+    .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
+    let new_provider = LocalMasterKeyProvider::new(
+        new_wrapped_by,
+        decode_direct_material_key(new_wrapped_by, new_wrapping_material)?,
+    )
+    .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
+
+    let old_wrapped = WrappedKeyBlob {
+        version: 1,
+        algorithm: algorithm.to_string(),
+        mk_id: old_wrapped_by.to_string(),
+        nonce: old_nonce.clone(),
+        wrapped_key: old_wrapped_key.clone(),
+    };
+    let mut rewrapped_material = material.clone();
+    rewrapped_material.wrapped_by = Some(new_wrapped_by.to_string());
+    rewrapped_material.wrap_algorithm = Some(algorithm.to_string());
+    let old_aad = resource_key_wrap_aad(material_name, material, old_wrapped_by, algorithm);
+    let new_aad = resource_key_wrap_aad(
+        material_name,
+        &rewrapped_material,
+        new_wrapped_by,
+        algorithm,
+    );
+    let rewrapped = rewrap_resource_key(
+        &old_provider,
+        &new_provider,
+        &old_wrapped,
+        &old_aad,
+        &new_aad,
+    )
+    .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
+    rewrapped_material.nonce = Some(rewrapped.nonce);
+    rewrapped_material.wrapped_key_b64 = Some(rewrapped.wrapped_key);
+
+    Ok(rewrapped_material)
 }
 
 fn resource_key_wrap_aad(
@@ -2871,6 +2995,124 @@ mod tests {
                 .and_then(|envelope| envelope.get("rk_epoch"))
                 .and_then(|rk_epoch| rk_epoch.as_u64()),
             Some(3),
+        );
+    }
+
+    #[test]
+    fn runtime_resource_key_rewrap_preserves_data_key_for_mk_rotation() {
+        let old_mk_material = "tenant-a/mk-v1";
+        let new_mk_material = "tenant-a/mk-v2";
+        let rk_material = "tenant-a/payload-rk-v3";
+        let mut wrapped_rk_config = CryptoMaterialConfig {
+            kind: WRAPPED_SYMMETRIC_KEY_32_KIND.to_string(),
+            wrapped_by: Some(old_mk_material.to_string()),
+            wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
+            rk_epoch: Some(3),
+            scope: Some("collection:docs".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        let aad = resource_key_wrap_aad(
+            rk_material,
+            &wrapped_rk_config,
+            old_mk_material,
+            RESOURCE_KEY_WRAP_ALGORITHM,
+        );
+        let wrapped =
+            LocalMasterKeyProvider::new(old_mk_material, SecretKey::from_bytes([91u8; 32]))
+                .unwrap()
+                .wrap_resource_key(&SecretKey::from_bytes([92u8; 32]), &aad)
+                .unwrap();
+        wrapped_rk_config.nonce = Some(wrapped.nonce);
+        wrapped_rk_config.wrapped_key_b64 = Some(wrapped.wrapped_key);
+
+        let runtime_settings = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::new(),
+            materials: HashMap::from([
+                (
+                    old_mk_material.to_string(),
+                    CryptoMaterialConfig {
+                        kind: WRAPPING_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[91u8; 32])),
+                        ..CryptoMaterialConfig::default()
+                    },
+                ),
+                (
+                    new_mk_material.to_string(),
+                    CryptoMaterialConfig {
+                        kind: WRAPPING_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[93u8; 32])),
+                        ..CryptoMaterialConfig::default()
+                    },
+                ),
+                (rk_material.to_string(), wrapped_rk_config),
+            ]),
+            backends: HashMap::new(),
+        };
+        let old_resource_key = decode_wrapped_resource_key(
+            &runtime_settings,
+            rk_material,
+            runtime_settings.materials.get(rk_material).unwrap(),
+        )
+        .unwrap();
+        let old_encryptor = PayloadTextEncryptor::new_from_resource_key_with_metadata(
+            "docs",
+            "tenant-a:docs",
+            &old_resource_key,
+            "tenant-a/payload-rk@v3",
+            rk_material,
+            3,
+        )
+        .unwrap();
+        let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
+        let mut payload = segment::types::Payload(
+            json!({ "body": "mk rotation keeps data key" })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        old_encryptor
+            .encrypt_selected_fields("point-1", &mut payload.0, &policy)
+            .unwrap();
+
+        let rewrapped =
+            rewrap_runtime_resource_key_material(&runtime_settings, rk_material, new_mk_material)
+                .unwrap();
+        assert_eq!(rewrapped.wrapped_by.as_deref(), Some(new_mk_material));
+        assert_eq!(rewrapped.rk_epoch, Some(3));
+        assert_eq!(rewrapped.scope.as_deref(), Some("collection:docs"));
+
+        let mut rewrapped_settings = runtime_settings.clone();
+        rewrapped_settings
+            .materials
+            .insert(rk_material.to_string(), rewrapped);
+        let new_resource_key = decode_wrapped_resource_key(
+            &rewrapped_settings,
+            rk_material,
+            rewrapped_settings.materials.get(rk_material).unwrap(),
+        )
+        .unwrap();
+        let new_encryptor = PayloadTextEncryptor::new_from_resource_key_with_metadata(
+            "docs",
+            "tenant-a:docs",
+            &new_resource_key,
+            "tenant-a/payload-rk@v3",
+            rk_material,
+            3,
+        )
+        .unwrap();
+
+        assert_eq!(
+            new_encryptor
+                .decrypt_selected_fields("point-1", &mut payload.0, &policy)
+                .unwrap(),
+            1,
+        );
+        assert_eq!(
+            payload.0.get("body").and_then(Value::as_str),
+            Some("mk rotation keeps data key"),
         );
     }
 
