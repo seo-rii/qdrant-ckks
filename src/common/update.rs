@@ -1676,6 +1676,44 @@ mod tests {
                 .await
                 .unwrap();
 
+            let err = do_upsert_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "docs".to_string(),
+                PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                    points: vec![api::rest::PointStruct {
+                        id: 99.into(),
+                        vector: api::rest::VectorStruct::Single(vec![0.9, 0.9]),
+                        payload: Some(segment::types::Payload(
+                            json!({ "body": "missing runtime secret" })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        )),
+                    }],
+                    shard_key: None,
+                    update_filter: None,
+                    update_mode: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("plaintext payload")
+                        && description.contains("body")
+            ));
+
             let operation = PointInsertOperations::PointsList(api::rest::schema::PointsList {
                 points: vec![api::rest::PointStruct {
                     id: 1.into(),
