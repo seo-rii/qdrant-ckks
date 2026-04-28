@@ -15,6 +15,41 @@ use crate::operations::{CollectionUpdateOperations, CreateIndex, FieldIndexOpera
 use crate::problems::unindexed_field;
 use crate::shards::shard_trait::WaitUntil;
 
+pub fn validate_payload_index_paths_for_encrypted_paths<'a>(
+    field_names: impl IntoIterator<Item = &'a JsonPath>,
+    collection_params: &CollectionParams,
+    action: &str,
+) -> CollectionResult<()> {
+    let field_names: Vec<_> = field_names.into_iter().collect();
+    let Some(encryption) = collection_params.effective_encryption() else {
+        return Ok(());
+    };
+
+    for rule in &encryption.rules {
+        let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
+            continue;
+        };
+
+        for encrypted_path in paths {
+            let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
+                CollectionError::bad_input(format!(
+                    "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                ))
+            })?;
+
+            for field_name in &field_names {
+                if field_name.compatible(&encrypted_json_path) {
+                    return Err(CollectionError::bad_input(format!(
+                        "cannot {action} payload index schema on encrypted payload field '{field_name}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                    )));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 impl Collection {
     pub(crate) fn payload_index_file(collection_path: &Path) -> PathBuf {
         collection_path.join(PAYLOAD_INDEX_CONFIG_FILE)
@@ -27,29 +62,13 @@ impl Collection {
         let payload_index_file = Self::payload_index_file(collection_path);
         let schema: SaveOnDisk<PayloadIndexSchema> =
             SaveOnDisk::load_or_init_default(payload_index_file)?;
-        if let Some(encryption) = collection_params.effective_encryption() {
-            let stored_schema = schema.read();
-            for rule in &encryption.rules {
-                let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
-                    continue;
-                };
-
-                for encrypted_path in paths {
-                    let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
-                        CollectionError::bad_input(format!(
-                            "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                        ))
-                    })?;
-                    for field_name in stored_schema.schema.keys() {
-                        if field_name.compatible(&encrypted_json_path) {
-                            return Err(CollectionError::bad_input(format!(
-                                "cannot load payload index schema on encrypted payload field '{field_name}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
-                            )));
-                        }
-                    }
-                }
-            }
-        }
+        let stored_schema = schema.read();
+        validate_payload_index_paths_for_encrypted_paths(
+            stored_schema.schema.keys(),
+            collection_params,
+            "load",
+        )?;
+        drop(stored_schema);
         Ok(schema)
     }
 

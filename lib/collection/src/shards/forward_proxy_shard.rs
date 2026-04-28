@@ -23,8 +23,8 @@ use tokio::runtime::Handle;
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use super::shard::ShardId;
-use super::shard_holder::validate_payload_index_paths_for_encrypted_paths;
 use super::update_tracker::UpdateTracker;
+use crate::collection::payload_index_schema::validate_payload_index_paths_for_encrypted_paths;
 use crate::collection_manager::optimizers::TrackerLog;
 use crate::hash_ring::HashRingRouter;
 use crate::operations::point_ops::{

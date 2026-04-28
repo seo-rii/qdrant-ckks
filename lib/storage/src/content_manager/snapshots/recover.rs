@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use collection::collection::Collection;
-use collection::collection::payload_index_schema::PayloadIndexSchema;
+use collection::collection::payload_index_schema::{
+    PayloadIndexSchema, validate_payload_index_paths_for_encrypted_paths,
+};
 use collection::common::sha_256::hashes_equal;
 use collection::config::CollectionConfigInternal;
 use collection::operations::snapshot_ops::{SnapshotPriority, SnapshotRecover};
@@ -179,6 +181,11 @@ async fn _do_recover_from_snapshot(
         })?;
 
     let schema = payload_schema.read().schema.clone();
+    validate_payload_index_paths_for_encrypted_paths(
+        schema.keys(),
+        &snapshot_config.params,
+        "recover snapshot",
+    )?;
 
     let collection = match toc.get_collection(&collection_pass).await.ok() {
         Some(collection) => collection,

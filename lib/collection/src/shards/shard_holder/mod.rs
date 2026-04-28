@@ -36,12 +36,12 @@ use super::replica_set::{AbortShardTransfer, ChangePeerFromState};
 use super::resharding::{ReshardState, ReshardingStage};
 use super::transfer::RecoveryStage;
 use super::transfer::transfer_tasks_pool::{RecoveryProgress, TransferTasksPool};
-use crate::collection::payload_index_schema::PayloadIndexSchema;
+use crate::collection::payload_index_schema::{
+    PayloadIndexSchema, validate_payload_index_paths_for_encrypted_paths,
+};
 use crate::common::collection_size_stats::CollectionSizeStats;
 use crate::common::snapshot_stream::SnapshotStream;
-use crate::config::{
-    CollectionConfigInternal, CollectionParams, EncryptionSelector, ShardingMethod,
-};
+use crate::config::{CollectionConfigInternal, CollectionParams, ShardingMethod};
 use crate::hash_ring::HashRingRouter;
 use crate::operations::cluster_ops::ReshardingDirection;
 use crate::operations::shard_selector_internal::ShardSelectorInternal;
@@ -1568,41 +1568,6 @@ impl ShardHolder {
     }
 }
 
-pub(crate) fn validate_payload_index_paths_for_encrypted_paths<'a>(
-    field_names: impl IntoIterator<Item = &'a JsonPath>,
-    collection_params: &CollectionParams,
-    action: &str,
-) -> CollectionResult<()> {
-    let field_names: Vec<_> = field_names.into_iter().collect();
-    let Some(encryption) = collection_params.effective_encryption() else {
-        return Ok(());
-    };
-
-    for rule in &encryption.rules {
-        let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
-            continue;
-        };
-
-        for encrypted_path in paths {
-            let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
-                CollectionError::bad_input(format!(
-                    "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                ))
-            })?;
-
-            for field_name in &field_names {
-                if field_name.compatible(&encrypted_json_path) {
-                    return Err(CollectionError::bad_input(format!(
-                        "cannot {action} payload index schema on encrypted payload field '{field_name}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
-                    )));
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
 fn validate_payload_index_schema_for_encrypted_paths(
     schema: &HashMap<JsonPath, PayloadFieldSchema>,
     collection_params: &CollectionParams,
@@ -1628,7 +1593,9 @@ mod tests {
     use segment::types::PayloadSchemaType;
 
     use super::*;
-    use crate::config::{CollectionEncryptionConfig, CryptoMigrationState, EncryptionRuleRef};
+    use crate::config::{
+        CollectionEncryptionConfig, CryptoMigrationState, EncryptionRuleRef, EncryptionSelector,
+    };
 
     fn params_with_encrypted_payload_path(path: &str) -> CollectionParams {
         CollectionParams {
