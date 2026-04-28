@@ -582,7 +582,7 @@ pub async fn do_set_payload(
         )
         .await?;
 
-    let operation = maybe_encrypt_point_payload_update(
+    let operations = maybe_encrypt_point_payload_update(
         toc,
         &collection_name,
         operation,
@@ -592,33 +592,40 @@ pub async fn do_set_payload(
     )
     .await?;
 
-    let SetPayload {
-        points,
-        payload,
-        filter,
-        shard_key,
-        key,
-    } = operation;
-
-    let operation =
-        CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
-            payload,
+    let mut last_result = None;
+    for operation in operations.into_operations() {
+        let SetPayload {
             points,
+            payload,
             filter,
+            shard_key,
             key,
-        }));
+        } = operation;
 
-    update(
-        toc,
-        &collection_name,
-        operation,
-        internal_params,
-        params,
-        shard_key,
-        auth,
-        hw_measurement_acc,
-    )
-    .await
+        let operation =
+            CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
+                payload,
+                points,
+                filter,
+                key,
+            }));
+
+        last_result = Some(
+            update(
+                toc,
+                &collection_name,
+                operation,
+                internal_params,
+                params,
+                shard_key,
+                auth.clone(),
+                hw_measurement_acc.clone(),
+            )
+            .await?,
+        );
+    }
+
+    last_result.ok_or_else(|| StorageError::bad_request("No points provided"))
 }
 
 pub async fn do_overwrite_payload(
@@ -640,7 +647,7 @@ pub async fn do_overwrite_payload(
         )
         .await?;
 
-    let operation = maybe_encrypt_point_payload_update(
+    let operations = maybe_encrypt_point_payload_update(
         toc,
         &collection_name,
         operation,
@@ -650,34 +657,42 @@ pub async fn do_overwrite_payload(
     )
     .await?;
 
-    let SetPayload {
-        points,
-        payload,
-        filter,
-        shard_key,
-        key: _,
-    } = operation;
-
-    let operation =
-        CollectionUpdateOperations::PayloadOperation(PayloadOps::OverwritePayload(SetPayloadOp {
-            payload,
+    let mut last_result = None;
+    for operation in operations.into_operations() {
+        let SetPayload {
             points,
+            payload,
             filter,
-            // overwrite operation doesn't support payload selector
-            key: None,
-        }));
+            shard_key,
+            key: _,
+        } = operation;
 
-    update(
-        toc,
-        &collection_name,
-        operation,
-        internal_params,
-        params,
-        shard_key,
-        auth,
-        hw_measurement_acc,
-    )
-    .await
+        let operation = CollectionUpdateOperations::PayloadOperation(PayloadOps::OverwritePayload(
+            SetPayloadOp {
+                payload,
+                points,
+                filter,
+                // overwrite operation doesn't support payload selector
+                key: None,
+            },
+        ));
+
+        last_result = Some(
+            update(
+                toc,
+                &collection_name,
+                operation,
+                internal_params,
+                params,
+                shard_key,
+                auth.clone(),
+                hw_measurement_acc.clone(),
+            )
+            .await?,
+        );
+    }
+
+    last_result.ok_or_else(|| StorageError::bad_request("No points provided"))
 }
 
 pub async fn do_delete_payload(
@@ -1268,6 +1283,20 @@ async fn maybe_encrypt_upsert_payloads(
     Ok(operation)
 }
 
+enum PayloadUpdatePlan {
+    Single(SetPayload),
+    Fanout(Vec<SetPayload>),
+}
+
+impl PayloadUpdatePlan {
+    fn into_operations(self) -> Vec<SetPayload> {
+        match self {
+            Self::Single(operation) => vec![operation],
+            Self::Fanout(operations) => operations,
+        }
+    }
+}
+
 async fn maybe_encrypt_point_payload_update(
     toc: &Arc<TableOfContent>,
     collection_name: &str,
@@ -1275,9 +1304,9 @@ async fn maybe_encrypt_point_payload_update(
     auth: &Auth,
     runtime_settings: Option<&Settings>,
     operation_name: &str,
-) -> Result<SetPayload, StorageError> {
+) -> Result<PayloadUpdatePlan, StorageError> {
     let Some(runtime_settings) = runtime_settings else {
-        return Ok(operation);
+        return Ok(PayloadUpdatePlan::Single(operation));
     };
 
     let collection_pass =
@@ -1300,7 +1329,7 @@ async fn maybe_encrypt_point_payload_update(
         ))
     })?
     else {
-        return Ok(operation);
+        return Ok(PayloadUpdatePlan::Single(operation));
     };
 
     let touches_encrypted_payload =
@@ -1312,7 +1341,7 @@ async fn maybe_encrypt_point_payload_update(
                 "{operation_name} with a filter cannot update encrypted payload fields in collection {collection_name}; use point-specific upsert/set_payload so encryption can bind AAD to each point id",
             )));
         }
-        return Ok(operation);
+        return Ok(PayloadUpdatePlan::Single(operation));
     }
 
     if operation.key.is_some() {
@@ -1321,26 +1350,52 @@ async fn maybe_encrypt_point_payload_update(
                 "{operation_name} with a key path cannot update encrypted payload fields in collection {collection_name}; use a full point-specific payload update so the selected encrypted fields can be sealed with their canonical field paths",
             )));
         }
-        return Ok(operation);
+        return Ok(PayloadUpdatePlan::Single(operation));
     }
 
-    let Some(point_id) = operation
-        .points
-        .as_ref()
-        .and_then(|points| (points.len() == 1).then(|| &points[0]))
-    else {
+    let Some(points) = operation.points.as_ref() else {
         if touches_encrypted_payload {
             return Err(StorageError::bad_input(format!(
-                "{operation_name} cannot update encrypted payload fields for multiple or missing point ids in collection {collection_name}; send one point-specific update per point",
+                "{operation_name} cannot update encrypted payload fields without point ids in collection {collection_name}; send point-specific updates so encryption can bind AAD to each point id",
             )));
         }
-        return Ok(operation);
+        return Ok(PayloadUpdatePlan::Single(operation));
+    };
+
+    if points.is_empty() {
+        if touches_encrypted_payload {
+            return Err(StorageError::bad_input(format!(
+                "{operation_name} cannot update encrypted payload fields without point ids in collection {collection_name}; send point-specific updates so encryption can bind AAD to each point id",
+            )));
+        }
+        return Ok(PayloadUpdatePlan::Single(operation));
+    }
+
+    if points.len() > 1 && touches_encrypted_payload {
+        let mut encrypted_operations = Vec::with_capacity(points.len());
+        for point_id in points {
+            let mut payload = operation.payload.clone();
+            plan.encrypt_payload(&point_id.to_string(), &mut payload)
+                .map_err(|err| payload_write_error_to_storage_error(collection_name, err))?;
+            encrypted_operations.push(SetPayload {
+                points: Some(vec![point_id.clone()]),
+                payload,
+                filter: None,
+                shard_key: operation.shard_key.clone(),
+                key: None,
+            });
+        }
+        return Ok(PayloadUpdatePlan::Fanout(encrypted_operations));
+    }
+
+    let Some(point_id) = points.first() else {
+        return Ok(PayloadUpdatePlan::Single(operation));
     };
 
     plan.encrypt_payload(&point_id.to_string(), &mut operation.payload)
         .map_err(|err| payload_write_error_to_storage_error(collection_name, err))?;
 
-    Ok(operation)
+    Ok(PayloadUpdatePlan::Single(operation))
 }
 
 fn payload_write_error_to_storage_error(
@@ -1915,12 +1970,178 @@ mod tests {
             assert!(is_encrypted_payload_value(body));
             assert_ne!(body, &json!("public overwrite payload secret"));
 
+            do_upsert_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "docs".to_string(),
+                PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                    points: vec![api::rest::PointStruct {
+                        id: 2.into(),
+                        vector: api::rest::VectorStruct::Single(vec![0.5, 0.6]),
+                        payload: Some(segment::types::Payload(
+                            json!({ "title": "point 2 public" })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        )),
+                    }],
+                    shard_key: None,
+                    update_filter: None,
+                    update_mode: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                Some(&payload_runtime_settings()),
+            )
+            .await
+            .unwrap();
+
+            do_set_payload(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "docs".to_string(),
+                SetPayload {
+                    points: Some(vec![1.into(), 2.into()]),
+                    payload: segment::types::Payload(
+                        json!({ "body": "multi point secret" })
+                            .as_object()
+                            .unwrap()
+                            .clone(),
+                    ),
+                    filter: None,
+                    shard_key: None,
+                    key: None,
+                },
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+                Some(&payload_runtime_settings()),
+            )
+            .await
+            .unwrap();
+
+            let retrieved = collection
+                .retrieve(
+                    PointRequestInternal {
+                        ids: vec![1.into(), 2.into()],
+                        with_payload: Some(WithPayloadInterface::Bool(true)),
+                        with_vector: false.into(),
+                    },
+                    None,
+                    &ShardSelectorInternal::All,
+                    None,
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .unwrap();
+            let multi_point_body_1 = retrieved[0]
+                .payload
+                .as_ref()
+                .unwrap()
+                .0
+                .get("body")
+                .unwrap()
+                .clone();
+            let multi_point_body_2 = retrieved[1]
+                .payload
+                .as_ref()
+                .unwrap()
+                .0
+                .get("body")
+                .unwrap()
+                .clone();
+            assert!(is_encrypted_payload_value(&multi_point_body_1));
+            assert!(is_encrypted_payload_value(&multi_point_body_2));
+            assert_ne!(multi_point_body_1, json!("multi point secret"));
+            assert_ne!(multi_point_body_2, json!("multi point secret"));
+            assert_ne!(multi_point_body_1, multi_point_body_2);
+
+            do_overwrite_payload(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "docs".to_string(),
+                SetPayload {
+                    points: Some(vec![1.into(), 2.into()]),
+                    payload: segment::types::Payload(
+                        json!({ "body": "multi point overwrite secret" })
+                            .as_object()
+                            .unwrap()
+                            .clone(),
+                    ),
+                    filter: None,
+                    shard_key: None,
+                    key: None,
+                },
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+                Some(&payload_runtime_settings()),
+            )
+            .await
+            .unwrap();
+
+            let retrieved = collection
+                .retrieve(
+                    PointRequestInternal {
+                        ids: vec![1.into(), 2.into()],
+                        with_payload: Some(WithPayloadInterface::Bool(true)),
+                        with_vector: false.into(),
+                    },
+                    None,
+                    &ShardSelectorInternal::All,
+                    None,
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .unwrap();
+            let multi_point_overwrite_body_1 = retrieved[0]
+                .payload
+                .as_ref()
+                .unwrap()
+                .0
+                .get("body")
+                .unwrap()
+                .clone();
+            let multi_point_overwrite_body_2 = retrieved[1]
+                .payload
+                .as_ref()
+                .unwrap()
+                .0
+                .get("body")
+                .unwrap()
+                .clone();
+            assert!(is_encrypted_payload_value(&multi_point_overwrite_body_1));
+            assert!(is_encrypted_payload_value(&multi_point_overwrite_body_2));
+            assert_ne!(
+                multi_point_overwrite_body_1,
+                json!("multi point overwrite secret")
+            );
+            assert_ne!(
+                multi_point_overwrite_body_2,
+                json!("multi point overwrite secret")
+            );
+            assert_ne!(multi_point_overwrite_body_1, multi_point_overwrite_body_2);
+
             let unsupported_updates = [
                 (
                     SetPayload {
-                        points: Some(vec![1.into(), 2.into()]),
+                        points: None,
                         payload: segment::types::Payload(
-                            json!({ "body": "multi point secret" })
+                            json!({ "body": "missing point id secret" })
                                 .as_object()
                                 .unwrap()
                                 .clone(),
@@ -1929,7 +2150,7 @@ mod tests {
                         shard_key: None,
                         key: None,
                     },
-                    "multiple or missing point ids",
+                    "without point ids",
                 ),
                 (
                     SetPayload {
