@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use collection::collection::Collection;
 use collection::collection::payload_index_schema::{
@@ -26,6 +27,9 @@ use crate::content_manager::snapshots::download_result::DownloadResult;
 use crate::dispatcher::Dispatcher;
 use crate::rbac::{AccessRequirements, Auth, CollectionPass};
 use crate::{StorageError, TableOfContent};
+
+pub type SnapshotConfigValidator =
+    Arc<dyn Fn(&str, &CollectionConfigInternal) -> Result<(), StorageError> + Send + Sync>;
 
 pub async fn activate_shard(
     toc: &TableOfContent,
@@ -68,6 +72,7 @@ pub async fn do_recover_from_snapshot(
     source: SnapshotRecover,
     auth: Auth,
     client: reqwest::Client,
+    snapshot_config_validator: Option<SnapshotConfigValidator>,
 ) -> Result<bool, StorageError> {
     let multipass =
         auth.check_global_access(AccessRequirements::new().manage(), "recover_from_snapshot")?;
@@ -82,7 +87,15 @@ pub async fn do_recover_from_snapshot(
     let res = toc
         .general_runtime_handle()
         .spawn(async move {
-            _do_recover_from_snapshot(dispatcher, auth, collection_pass, source, &client).await
+            _do_recover_from_snapshot(
+                dispatcher,
+                auth,
+                collection_pass,
+                source,
+                &client,
+                snapshot_config_validator,
+            )
+            .await
         })
         .await??;
 
@@ -98,6 +111,7 @@ async fn _do_recover_from_snapshot(
     collection_pass: CollectionPass<'static>,
     source: SnapshotRecover,
     client: &reqwest::Client,
+    snapshot_config_validator: Option<SnapshotConfigValidator>,
 ) -> Result<bool, StorageError> {
     let SnapshotRecover {
         location,
@@ -170,6 +184,9 @@ async fn _do_recover_from_snapshot(
 
     let snapshot_config = CollectionConfigInternal::load(tmp_collection_dir.path())?;
     snapshot_config.validate_and_warn();
+    if let Some(validate_snapshot_config) = &snapshot_config_validator {
+        validate_snapshot_config(collection_pass.name(), &snapshot_config)?;
+    }
 
     let payload_index_file = tmp_collection_dir.path().join(PAYLOAD_INDEX_CONFIG_FILE);
 

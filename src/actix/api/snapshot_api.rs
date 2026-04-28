@@ -9,6 +9,7 @@ use actix_web_validator as valid;
 use collection::common::file_utils::move_file;
 use collection::common::sha_256;
 use collection::common::snapshot_stream::SnapshotStream;
+use collection::config::CollectionConfigInternal;
 use collection::operations::snapshot_ops::{
     ShardSnapshotRecover, SnapshotPriority, SnapshotRecover,
 };
@@ -46,8 +47,10 @@ use crate::actix::helpers::{self, HttpError};
 use crate::common;
 use crate::common::auth::Auth;
 use crate::common::collections::*;
+use crate::common::crypto::validate_collection_crypto_runtime;
 use crate::common::http_client::HttpClient;
 use crate::common::snapshots::try_take_partial_snapshot_recovery_lock;
+use crate::settings::Settings;
 
 #[derive(Deserialize, Serialize, JsonSchema, Validate)]
 pub struct SnapshotUploadingParam {
@@ -193,6 +196,7 @@ async fn create_snapshot(
 async fn upload_snapshot(
     dispatcher: web::Data<Dispatcher>,
     http_client: web::Data<HttpClient>,
+    settings: web::Data<Settings>,
     collection: valid::Path<StrictCollectionPath>,
     MultipartForm(form): MultipartForm<SnapshottingForm>,
     params: valid::Query<SnapshotUploadingParam>,
@@ -204,6 +208,7 @@ async fn upload_snapshot(
     let pass = new_unchecked_verification_pass();
 
     let future = async move {
+        let settings = settings.get_ref().clone();
         let snapshot = form.snapshot;
 
         auth.check_global_access(AccessRequirements::new().manage(), "upload_snapshot")?;
@@ -238,6 +243,15 @@ async fn upload_snapshot(
             snapshot_recover,
             auth,
             http_client,
+            Some(Arc::new(
+                move |collection_name: &str, snapshot_config: &CollectionConfigInternal| {
+                    validate_collection_crypto_runtime(
+                        &settings,
+                        collection_name,
+                        &snapshot_config.params,
+                    )
+                },
+            )),
         )
         .await
     };
@@ -249,12 +263,14 @@ async fn upload_snapshot(
 async fn recover_from_snapshot(
     dispatcher: web::Data<Dispatcher>,
     http_client: web::Data<HttpClient>,
+    settings: web::Data<Settings>,
     collection: valid::Path<CollectionPath>,
     request: valid::Json<SnapshotRecover>,
     params: valid::Query<SnapshottingParam>,
     ActixAuth(auth): ActixAuth,
 ) -> impl Responder {
     let future = async move {
+        let settings = settings.get_ref().clone();
         let snapshot_recover = request.into_inner();
         let http_client = http_client.client(snapshot_recover.api_key.as_deref())?;
 
@@ -264,6 +280,15 @@ async fn recover_from_snapshot(
             snapshot_recover,
             auth,
             http_client,
+            Some(Arc::new(
+                move |collection_name: &str, snapshot_config: &CollectionConfigInternal| {
+                    validate_collection_crypto_runtime(
+                        &settings,
+                        collection_name,
+                        &snapshot_config.params,
+                    )
+                },
+            )),
         )
         .await
     };

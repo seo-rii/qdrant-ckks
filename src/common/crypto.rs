@@ -3298,6 +3298,35 @@ mod tests {
     }
 
     #[test]
+    fn validate_collection_crypto_runtime_rejects_snapshot_payload_rule_without_runtime_material() {
+        let settings = Settings::new(None).unwrap();
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = validate_collection_crypto_runtime(&settings, "docs", &params).unwrap_err();
+        assert!(
+            matches!(err, StorageError::BadInput { ref description } if description.contains("unknown payload crypto instance docs_payload_v1")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
     fn validate_collection_crypto_runtime_accepts_wrapped_vector_resource_key_metadata() {
         let mk_material = "tenant-a/mk-v1";
         let rk_material = "tenant-a/vector-rk-v3";
