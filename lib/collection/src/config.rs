@@ -256,7 +256,7 @@ mod ckks_tests {
         };
 
         let err = params.validate().unwrap_err();
-        assert!(format!("{err:?}").contains("unsupported_encryption_selector"));
+        assert!(format!("{err:?}").contains("overlapping_encryption_selector"));
     }
 
     #[test]
@@ -280,7 +280,8 @@ mod ckks_tests {
             ..CollectionParams::empty()
         };
 
-        assert!(params.validate().is_err());
+        let err = params.validate().unwrap_err();
+        assert!(format!("{err:?}").contains("unsupported_encryption_selector"));
     }
 
     #[test]
