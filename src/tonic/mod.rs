@@ -232,10 +232,14 @@ pub fn init_internal(
             let qdrant_service = QdrantService::default();
             let points_internal_service =
                 PointsInternalService::new(toc.clone(), settings.service.clone());
-            let qdrant_internal_service =
-                QdrantInternalService::new(telemetry_collector, settings, consensus_state.clone());
+            let qdrant_internal_service = QdrantInternalService::new(
+                telemetry_collector,
+                settings.clone(),
+                consensus_state.clone(),
+            );
             let collections_internal_service = CollectionsInternalService::new(toc.clone());
-            let shard_snapshots_service = ShardSnapshotsService::new(toc.clone(), http_client);
+            let shard_snapshots_service =
+                ShardSnapshotsService::new(toc.clone(), http_client, settings);
             let raft_service =
                 RaftService::new(to_consensus, consensus_state, tls_config.is_some());
 

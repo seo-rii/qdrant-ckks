@@ -21,7 +21,9 @@ use storage::rbac::AccessRequirements;
 use tokio::sync::OwnedRwLockWriteGuard;
 
 use super::auth::Auth;
+use super::crypto::validate_collection_crypto_runtime;
 use super::http_client::HttpClient;
+use crate::settings::Settings;
 
 /// # Cancel safety
 ///
@@ -165,6 +167,7 @@ pub async fn recover_shard_snapshot(
     checksum: Option<String>,
     client: HttpClient,
     api_key: Option<String>,
+    runtime_settings: Option<Settings>,
 ) -> Result<(), StorageError> {
     let collection_pass = auth
         .check_global_access(AccessRequirements::new().manage(), "recover_shard_snapshot")?
@@ -283,6 +286,7 @@ pub async fn recover_shard_snapshot(
             snapshot_priority,
             RecoveryType::Full,
             cancel,
+            runtime_settings.as_ref(),
         )
         .await;
 
@@ -311,11 +315,17 @@ pub async fn recover_shard_snapshot_impl(
     priority: SnapshotPriority,
     recovery_type: RecoveryType,
     cancel: cancel::CancellationToken,
+    runtime_settings: Option<&Settings>,
 ) -> Result<(), StorageError> {
     let _recover_tracker_guard = toc
         .snapshot_telemetry_collector(collection.name())
         .running_snapshot_recovery
         .measure_scope();
+
+    if let Some(settings) = runtime_settings {
+        let config = collection.config_snapshot().await;
+        validate_collection_crypto_runtime(settings, collection.name(), &config.params)?;
+    }
 
     // `Collection::restore_shard_snapshot` and `activate_shard` calls *have to* be executed as a
     // single transaction

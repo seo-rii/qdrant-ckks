@@ -467,6 +467,7 @@ async fn stream_shard_snapshot(
 async fn recover_shard_snapshot(
     dispatcher: web::Data<Dispatcher>,
     http_client: web::Data<HttpClient>,
+    settings: web::Data<Settings>,
     path: valid::Path<CollectionShardPath>,
     query: web::Query<SnapshottingParam>,
     web::Json(request): web::Json<ShardSnapshotRecover>,
@@ -491,6 +492,7 @@ async fn recover_shard_snapshot(
             request.checksum,
             http_client.as_ref().clone(),
             request.api_key,
+            Some(settings.get_ref().clone()),
         )
         .await?;
 
@@ -504,6 +506,7 @@ async fn recover_shard_snapshot(
 #[post("/collections/{collection_name}/shards/{shard}/snapshots/upload")]
 async fn upload_shard_snapshot(
     dispatcher: web::Data<Dispatcher>,
+    settings: web::Data<Settings>,
     path: valid::Path<CollectionShardPath>,
     query: web::Query<SnapshotUploadingParam>,
     MultipartForm(form): MultipartForm<SnapshottingForm>,
@@ -521,6 +524,7 @@ async fn upload_shard_snapshot(
         priority,
         checksum,
     } = query.into_inner();
+    let settings = settings.get_ref().clone();
 
     // - `recover_shard_snapshot_impl` is *not* cancel safe
     //   - but the task is *spawned* on the runtime and won't be cancelled, if request is cancelled
@@ -562,6 +566,7 @@ async fn upload_shard_snapshot(
             priority.unwrap_or_default(),
             RecoveryType::Full,
             cancel,
+            Some(&settings),
         )
         .await?;
 
@@ -669,6 +674,7 @@ async fn create_partial_snapshot(
 #[post("/collections/{collection_name}/shards/{shard}/snapshot/partial/recover")]
 async fn recover_partial_snapshot(
     dispatcher: web::Data<Dispatcher>,
+    settings: web::Data<Settings>,
     path: valid::Path<CollectionShardPath>,
     query: web::Query<SnapshotUploadingParam>,
     MultipartForm(form): MultipartForm<SnapshottingForm>,
@@ -684,6 +690,7 @@ async fn recover_partial_snapshot(
         priority,
         checksum,
     } = query.into_inner();
+    let settings = settings.get_ref().clone();
 
     // nothing to verify.
     let pass = new_unchecked_verification_pass();
@@ -745,6 +752,7 @@ async fn recover_partial_snapshot(
             priority.unwrap_or_default(),
             RecoveryType::Partial,
             cancel,
+            Some(&settings),
         )
         .await?;
 
@@ -765,6 +773,7 @@ pub struct PartialSnapshotRecoverFrom {
 async fn recover_partial_snapshot_from(
     dispatcher: web::Data<Dispatcher>,
     http_client: web::Data<HttpClient>,
+    settings: web::Data<Settings>,
     path: valid::Path<CollectionShardPath>,
     query: web::Query<SnapshottingParam>,
     web::Json(request): web::Json<PartialSnapshotRecoverFrom>,
@@ -776,6 +785,7 @@ async fn recover_partial_snapshot_from(
     } = path.into_inner();
     let PartialSnapshotRecoverFrom { peer_url, api_key } = request;
     let SnapshottingParam { wait } = query.into_inner();
+    let settings = settings.get_ref().clone();
 
     // nothing to verify
     let pass = new_unchecked_verification_pass();
@@ -911,6 +921,7 @@ async fn recover_partial_snapshot_from(
             SnapshotPriority::NoSync,
             RecoveryType::Partial,
             cancel,
+            Some(&settings),
         )
         .await?;
 

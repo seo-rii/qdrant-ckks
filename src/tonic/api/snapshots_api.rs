@@ -23,6 +23,7 @@ use super::{validate, validate_and_log};
 use crate::common;
 use crate::common::collections::{do_create_snapshot, do_list_snapshots};
 use crate::common::http_client::HttpClient;
+use crate::settings::Settings;
 use crate::tonic::auth::extract_auth;
 
 pub struct SnapshotsService {
@@ -163,11 +164,16 @@ impl Snapshots for SnapshotsService {
 pub struct ShardSnapshotsService {
     toc: Arc<TableOfContent>,
     http_client: HttpClient,
+    settings: Settings,
 }
 
 impl ShardSnapshotsService {
-    pub fn new(toc: Arc<TableOfContent>, http_client: HttpClient) -> Self {
-        Self { toc, http_client }
+    pub fn new(toc: Arc<TableOfContent>, http_client: HttpClient, settings: Settings) -> Self {
+        Self {
+            toc,
+            http_client,
+            settings,
+        }
     }
 }
 
@@ -275,6 +281,7 @@ impl ShardSnapshots for ShardSnapshotsService {
             checksum,
             self.http_client.clone(),
             api_key,
+            Some(self.settings.clone()),
         )
         .await?;
 
