@@ -150,7 +150,10 @@ Client envelopes are not server envelopes. Public writes to a
 `payload/client-aead@v1` rules require `$qdrant_client_aead` markers. Because
 Qdrant does not have the client data key in this mode, it cannot verify the
 AES-GCM tag or decrypt responses; clients or SDKs must decrypt returned
-envelopes. The Ed25519 signature covers the client envelope header, AAD,
+envelopes. Client envelopes must include `rk_id`, `rk_epoch`, and
+`kdf_domain: qdrant/client-payload-text/v1` so resource-key identity is explicit
+even though Qdrant cannot unwrap the client key. The Ed25519 signature covers the
+client envelope header, AAD,
 nonce, ciphertext, signature algorithm, and signature key id. Blind-index query
 integration is not implemented yet. Exact-match search requires a future client
 blind-index field, and range, geo, or full-text search over client ciphertext
@@ -207,8 +210,8 @@ manifest without rewriting payload/vector envelopes. The low-level
 the old MK/AAD and immediately wrapping the same RK with the new MK/AAD. RK
 rotation still requires a data re-encryption job and should use the explicit
 re-encryption mode rather than normal write-path idempotency. The
-`rk_id`/`rk_epoch` fields are included in AEAD AAD when present, so storage-side
-edits to resource-key identity fail closed.
+`rk_id`/`rk_epoch` fields are included in AEAD AAD for server-generated payload
+and vector envelopes, so storage-side edits to resource-key identity fail closed.
 
 Payload AEAD AAD also binds the stable collection crypto identity, point id, and
 canonical field path. On public writes Qdrant uses the collection UUID when the

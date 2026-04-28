@@ -2188,6 +2188,9 @@ mod tests {
                         "kind": "payload_text",
                         "algorithm": "AES-256-GCM",
                         "key_id": "tenant-a/client-rk-2026-04",
+                        "rk_id": "tenant-a/client-rk-2026-04",
+                        "rk_epoch": 3,
+                        "kdf_domain": "qdrant/client-payload-text/v1",
                         "aad": {
                             "collection_id": "crypto-docs-uuid",
                             "point_id": "point-1",
@@ -2259,6 +2262,9 @@ mod tests {
                         "kind": "payload_text",
                         "algorithm": "AES-256-GCM",
                         "key_id": "tenant-a/client-rk-2026-04",
+                        "rk_id": "tenant-a/client-rk-2026-04",
+                        "rk_epoch": 3,
+                        "kdf_domain": "qdrant/client-payload-text/v1",
                         "aad": {
                             "collection_id": "docs",
                             "point_id": "point-2",

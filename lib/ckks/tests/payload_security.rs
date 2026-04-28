@@ -196,6 +196,63 @@ fn client_payload_envelope_rejects_aad_and_key_mismatch() {
 }
 
 #[test]
+fn client_payload_envelope_requires_resource_key_metadata_and_kdf_domain() {
+    for field in ["rk_id", "rk_epoch", "kdf_domain"] {
+        let mut envelope = client_envelope("point-1", "body");
+        envelope
+            .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
+
+        assert_eq!(
+            validate_client_payload_value(
+                &envelope,
+                ClientPayloadValidationContext {
+                    collection_id: "docs",
+                    point_id: "point-1",
+                    field_path: "body",
+                    expected_key_id: Some("tenant-a/client-rk-2026-04"),
+                    key_id_required: true,
+                    signature_verification: None,
+                },
+            ),
+            Err(PayloadEncryptionError::MalformedEnvelope(
+                "body".to_string()
+            )),
+        );
+    }
+
+    let mut wrong_domain = client_envelope("point-1", "body");
+    wrong_domain
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert(
+            "kdf_domain".to_string(),
+            Value::String("qdrant/client-payload-text/v0".to_string()),
+        );
+    assert_eq!(
+        validate_client_payload_value(
+            &wrong_domain,
+            ClientPayloadValidationContext {
+                collection_id: "docs",
+                point_id: "point-1",
+                field_path: "body",
+                expected_key_id: Some("tenant-a/client-rk-2026-04"),
+                key_id_required: true,
+                signature_verification: None,
+            },
+        ),
+        Err(PayloadEncryptionError::MalformedEnvelope(
+            "body".to_string()
+        )),
+    );
+}
+
+#[test]
 fn client_payload_envelope_verifies_ed25519_signature() {
     let (envelope, public_key) = signed_client_envelope("point-1", "body");
     validate_client_payload_value(

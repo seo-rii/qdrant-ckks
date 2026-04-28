@@ -478,16 +478,17 @@ pub fn validate_client_payload_value(
             return Err(PayloadEncryptionError::ClientKeyIdMismatch);
         }
     }
-    if envelope.rk_id.as_deref().is_some_and(str::is_empty) {
+    if envelope.rk_id.as_deref().is_none_or(str::is_empty) {
         return Err(PayloadEncryptionError::MalformedEnvelope(
             context.field_path.to_string(),
         ));
     }
-    if envelope
-        .kdf_domain
-        .as_deref()
-        .is_some_and(|domain| domain != CLIENT_PAYLOAD_KDF_DOMAIN)
-    {
+    if envelope.rk_epoch.is_none() {
+        return Err(PayloadEncryptionError::MalformedEnvelope(
+            context.field_path.to_string(),
+        ));
+    }
+    if envelope.kdf_domain.as_deref() != Some(CLIENT_PAYLOAD_KDF_DOMAIN) {
         return Err(PayloadEncryptionError::MalformedEnvelope(
             context.field_path.to_string(),
         ));
