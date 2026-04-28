@@ -27,7 +27,9 @@ use storage::dispatcher::Dispatcher;
 use storage::rbac::{Access, AccessRequirements, Auth, CollectionMultipass};
 use validator::Validate;
 
-use crate::common::crypto::payload_write_plan_for_collection_with_crypto_id;
+use crate::common::crypto::{
+    PayloadWriteSetupError, payload_write_plan_for_collection_with_crypto_id,
+};
 use crate::common::inference::params::InferenceParams;
 use crate::common::inference::service::InferenceType;
 use crate::common::inference::update_requests::*;
@@ -1244,9 +1246,7 @@ async fn maybe_encrypt_upsert_payloads(
                 if let Some(payload) = &mut point.payload {
                     plan.encrypt_payload(&point.id.to_string(), payload)
                         .map_err(|err| {
-                            StorageError::service_error(format!(
-                                "failed to encrypt payload for collection {collection_name}: {err}"
-                            ))
+                            payload_write_error_to_storage_error(collection_name, err)
                         })?;
                 }
             }
@@ -1257,9 +1257,7 @@ async fn maybe_encrypt_upsert_payloads(
                     if let Some(payload) = payload {
                         plan.encrypt_payload(&point_id.to_string(), payload)
                             .map_err(|err| {
-                                StorageError::service_error(format!(
-                                    "failed to encrypt payload for collection {collection_name}: {err}"
-                                ))
+                                payload_write_error_to_storage_error(collection_name, err)
                             })?;
                     }
                 }
@@ -1340,13 +1338,23 @@ async fn maybe_encrypt_point_payload_update(
     };
 
     plan.encrypt_payload(&point_id.to_string(), &mut operation.payload)
-        .map_err(|err| {
-            StorageError::service_error(format!(
-                "failed to encrypt payload for collection {collection_name}: {err}"
-            ))
-        })?;
+        .map_err(|err| payload_write_error_to_storage_error(collection_name, err))?;
 
     Ok(operation)
+}
+
+fn payload_write_error_to_storage_error(
+    collection_name: &str,
+    err: PayloadWriteSetupError,
+) -> StorageError {
+    match err {
+        PayloadWriteSetupError::Payload(payload_err) => StorageError::bad_input(format!(
+            "failed to encrypt payload for collection {collection_name}: {payload_err}",
+        )),
+        err => StorageError::service_error(format!(
+            "payload encryption runtime for collection {collection_name} is invalid: {err}",
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -1725,6 +1733,44 @@ mod tests {
             assert!(is_encrypted_payload_value(body));
             assert_ne!(body, &json!("public ingress secret"));
             let upsert_body = body.clone();
+
+            let err = do_upsert_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "docs".to_string(),
+                PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                    points: vec![api::rest::PointStruct {
+                        id: 2.into(),
+                        vector: api::rest::VectorStruct::Single(vec![0.3, 0.4]),
+                        payload: Some(segment::types::Payload(
+                            json!({ "body": upsert_body.clone() })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        )),
+                    }],
+                    shard_key: None,
+                    update_filter: None,
+                    update_mode: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                Some(&payload_runtime_settings()),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("failed to encrypt payload")
+                        && description.contains("already encrypted")
+            ));
 
             do_set_payload(
                 UncheckedTocProvider::new_unchecked(&toc),
