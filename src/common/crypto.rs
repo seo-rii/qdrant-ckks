@@ -195,7 +195,7 @@ struct ClientPayloadSignatureVerifier {
 }
 
 pub struct PayloadWritePlan {
-    collection_name: String,
+    collection_crypto_id: String,
     rules: Vec<PayloadWriteRule>,
 }
 
@@ -233,7 +233,7 @@ impl PayloadWritePlan {
                             validate_client_payload_value(
                                 value,
                                 ClientPayloadValidationContext {
-                                    collection_id: &self.collection_name,
+                                    collection_id: &self.collection_crypto_id,
                                     point_id,
                                     field_path: field,
                                     expected_key_id: expected_key_id.as_deref(),
@@ -289,7 +289,7 @@ impl PayloadWritePlan {
                             validate_client_payload_value(
                                 value,
                                 ClientPayloadValidationContext {
-                                    collection_id: &self.collection_name,
+                                    collection_id: &self.collection_crypto_id,
                                     point_id,
                                     field_path: field,
                                     expected_key_id: expected_key_id.as_deref(),
@@ -345,10 +345,25 @@ pub fn payload_write_plan_for_collection(
     collection_name: &str,
     params: &CollectionParams,
 ) -> Result<Option<PayloadWritePlan>, PayloadWriteSetupError> {
+    payload_write_plan_for_collection_with_crypto_id(
+        settings,
+        collection_name,
+        collection_name,
+        params,
+    )
+}
+
+pub fn payload_write_plan_for_collection_with_crypto_id(
+    settings: &Settings,
+    collection_name: &str,
+    collection_crypto_id: &str,
+    params: &CollectionParams,
+) -> Result<Option<PayloadWritePlan>, PayloadWriteSetupError> {
     if let Some(encryption) = &params.encryption {
         return generic_payload_write_plan(
             &effective_settings(settings),
             collection_name,
+            collection_crypto_id,
             encryption,
         );
     }
@@ -368,7 +383,7 @@ pub fn payload_write_plan_for_collection(
         };
 
         return Ok(Some(PayloadWritePlan {
-            collection_name: collection_name.to_string(),
+            collection_crypto_id: collection_name.to_string(),
             rules: vec![PayloadWriteRule::ServerEncrypt { encryptor, policy }],
         }));
     }
@@ -376,7 +391,12 @@ pub fn payload_write_plan_for_collection(
     let Some(encryption) = CollectionEncryptionConfig::from_legacy_ckks(ckks) else {
         return Ok(None);
     };
-    generic_payload_write_plan(&effective_settings(settings), collection_name, &encryption)
+    generic_payload_write_plan(
+        &effective_settings(settings),
+        collection_name,
+        collection_crypto_id,
+        &encryption,
+    )
 }
 
 pub fn validate_create_collection_crypto_runtime(
@@ -661,6 +681,7 @@ fn validate_backend(
 fn generic_payload_write_plan(
     runtime_settings: &CryptoSettings,
     collection_name: &str,
+    collection_crypto_id: &str,
     encryption: &CollectionEncryptionConfig,
 ) -> Result<Option<PayloadWritePlan>, PayloadWriteSetupError> {
     let mut rules = Vec::new();
@@ -715,7 +736,7 @@ fn generic_payload_write_plan(
                     };
                 let encryptor = if let Some(rk_epoch) = material.rk_epoch {
                     PayloadTextEncryptor::new_from_resource_key_with_metadata(
-                        collection_name,
+                        collection_crypto_id,
                         key_id,
                         &resource_key,
                         material_fingerprint_id,
@@ -724,7 +745,7 @@ fn generic_payload_write_plan(
                     )
                 } else {
                     PayloadTextEncryptor::new_from_resource_key_with_material_fingerprint(
-                        collection_name,
+                        collection_crypto_id,
                         key_id,
                         &resource_key,
                         material_fingerprint_id,
@@ -780,7 +801,7 @@ fn generic_payload_write_plan(
         Ok(None)
     } else {
         Ok(Some(PayloadWritePlan {
-            collection_name: collection_name.to_string(),
+            collection_crypto_id: collection_crypto_id.to_string(),
             rules,
         }))
     }
@@ -858,12 +879,17 @@ fn validate_generic_collection_crypto_runtime(
             migration_state: encryption.migration_state.clone(),
             rules: payload_rules,
         };
-        generic_payload_write_plan(runtime_settings, collection_name, &payload_only_encryption)
-            .map_err(|err| {
-                StorageError::bad_input(format!(
-                    "collection {collection_name} payload crypto runtime validation failed: {err}"
-                ))
-            })?;
+        generic_payload_write_plan(
+            runtime_settings,
+            collection_name,
+            collection_name,
+            &payload_only_encryption,
+        )
+        .map_err(|err| {
+            StorageError::bad_input(format!(
+                "collection {collection_name} payload crypto runtime validation failed: {err}"
+            ))
+        })?;
     }
 
     for rule in &encryption.rules {
@@ -1886,6 +1912,77 @@ mod tests {
             payload.0.get("body").unwrap()
         ));
         assert!(!is_encrypted_payload_value(payload.0.get("body").unwrap()));
+    }
+
+    #[test]
+    fn payload_write_plan_uses_explicit_crypto_collection_id_for_client_envelopes() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                instances: HashMap::from([(
+                    "docs_payload_client_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: json!({ "key_id": "tenant-a/client-rk-2026-04" }),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/client-rk-2026-04".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_client_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_client_v1".to_string(),
+                    binding: Some(CLIENT_PAYLOAD_ENVELOPE_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let mut payload = segment::types::Payload(
+            json!({
+                "body": {
+                    CLIENT_ENCRYPTED_PAYLOAD_MARKER: {
+                        "version": 1,
+                        "kind": "payload_text",
+                        "algorithm": "AES-256-GCM",
+                        "key_id": "tenant-a/client-rk-2026-04",
+                        "aad": {
+                            "collection_id": "crypto-docs-uuid",
+                            "point_id": "point-1",
+                            "field_path": "body",
+                            "schema_version": 1
+                        },
+                        "nonce": "AAAAAAAAAAAAAAAA",
+                        "ciphertext": "AQID"
+                    }
+                }
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+
+        let plan = payload_write_plan_for_collection_with_crypto_id(
+            &settings,
+            "docs",
+            "crypto-docs-uuid",
+            &params,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(plan.encrypt_payload("point-1", &mut payload).unwrap(), 1);
     }
 
     #[test]

@@ -27,7 +27,7 @@ use storage::dispatcher::Dispatcher;
 use storage::rbac::{Access, AccessRequirements, Auth, CollectionMultipass};
 use validator::Validate;
 
-use crate::common::crypto::payload_write_plan_for_collection;
+use crate::common::crypto::payload_write_plan_for_collection_with_crypto_id;
 use crate::common::inference::params::InferenceParams;
 use crate::common::inference::service::InferenceType;
 use crate::common::inference::update_requests::*;
@@ -1219,9 +1219,14 @@ async fn maybe_encrypt_upsert_payloads(
         auth.check_collection_access(collection_name, AccessRequirements::new(), "upsert_points")?;
     let collection = toc.get_collection(&collection_pass).await?;
     let collection_config = collection.config_snapshot().await;
-    let Some(plan) = payload_write_plan_for_collection(
+    let collection_crypto_id = collection_config
+        .uuid
+        .map(|uuid| uuid.to_string())
+        .unwrap_or_else(|| collection_name.to_string());
+    let Some(plan) = payload_write_plan_for_collection_with_crypto_id(
         runtime_settings,
         collection_name,
+        &collection_crypto_id,
         &collection_config.params,
     )
     .map_err(|err| {
@@ -1281,9 +1286,14 @@ async fn maybe_encrypt_point_payload_update(
         auth.check_collection_access(collection_name, AccessRequirements::new(), operation_name)?;
     let collection = toc.get_collection(&collection_pass).await?;
     let collection_config = collection.config_snapshot().await;
-    let Some(plan) = payload_write_plan_for_collection(
+    let collection_crypto_id = collection_config
+        .uuid
+        .map(|uuid| uuid.to_string())
+        .unwrap_or_else(|| collection_name.to_string());
+    let Some(plan) = payload_write_plan_for_collection_with_crypto_id(
         runtime_settings,
         collection_name,
+        &collection_crypto_id,
         &collection_config.params,
     )
     .map_err(|err| {
@@ -1352,7 +1362,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::common::crypto::PayloadWriteSetupError;
+    use crate::common::crypto::{PayloadWriteSetupError, payload_write_plan_for_collection};
     use crate::settings::{CryptoInstanceConfig, Settings};
 
     fn payload_runtime_settings() -> Settings {
