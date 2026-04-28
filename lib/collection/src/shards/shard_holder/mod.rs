@@ -39,7 +39,9 @@ use super::transfer::transfer_tasks_pool::{RecoveryProgress, TransferTasksPool};
 use crate::collection::payload_index_schema::PayloadIndexSchema;
 use crate::common::collection_size_stats::CollectionSizeStats;
 use crate::common::snapshot_stream::SnapshotStream;
-use crate::config::{CollectionConfigInternal, ShardingMethod};
+use crate::config::{
+    CollectionConfigInternal, CollectionParams, EncryptionSelector, ShardingMethod,
+};
 use crate::hash_ring::HashRingRouter;
 use crate::operations::cluster_ops::ReshardingDirection;
 use crate::operations::shard_selector_internal::ShardSelectorInternal;
@@ -1277,6 +1279,7 @@ impl ShardHolder {
         snapshot_data: SnapshotData,
         recovery_type: RecoveryType,
         collection_path: &Path,
+        collection_params: CollectionParams,
         collection_name: &str,
         shard_id: ShardId,
         this_peer_id: PeerId,
@@ -1360,11 +1363,7 @@ impl ShardHolder {
         }
 
         if recovery_type.is_partial() {
-            self.update_payload_index_schema().await.map_err(|err| {
-                CollectionError::service_error(format!(
-                    "failed to update payload index schema after recovering partial snapshot: {err}"
-                ))
-            })?;
+            self.update_payload_index_schema(&collection_params).await?;
         }
 
         Ok(())
@@ -1397,7 +1396,10 @@ impl ShardHolder {
         Ok(res)
     }
 
-    pub async fn update_payload_index_schema(&self) -> CollectionResult<()> {
+    pub async fn update_payload_index_schema(
+        &self,
+        collection_params: &CollectionParams,
+    ) -> CollectionResult<()> {
         let payload_index_schema = self
             .all_shards()
             .next()
@@ -1409,6 +1411,7 @@ impl ShardHolder {
         };
 
         let schema = self.common_payload_index_schema().await?;
+        validate_payload_index_schema_for_encrypted_paths(&schema, collection_params)?;
 
         payload_index_schema.write(|payload_index_schema| {
             *payload_index_schema = PayloadIndexSchema { schema };
@@ -1565,6 +1568,39 @@ impl ShardHolder {
     }
 }
 
+fn validate_payload_index_schema_for_encrypted_paths(
+    schema: &HashMap<JsonPath, PayloadFieldSchema>,
+    collection_params: &CollectionParams,
+) -> CollectionResult<()> {
+    let Some(encryption) = collection_params.effective_encryption() else {
+        return Ok(());
+    };
+
+    for rule in &encryption.rules {
+        let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
+            continue;
+        };
+
+        for encrypted_path in paths {
+            let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
+                CollectionError::bad_input(format!(
+                    "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                ))
+            })?;
+
+            for field_name in schema.keys() {
+                if field_name.compatible(&encrypted_json_path) {
+                    return Err(CollectionError::bad_input(format!(
+                        "cannot recover payload index schema on encrypted payload field '{field_name}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                    )));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ShardTransferChange {
     Start(ShardTransfer),
@@ -1575,5 +1611,55 @@ pub(crate) enum ShardTransferChange {
 pub fn shard_not_found_error(shard_id: ShardId) -> CollectionError {
     CollectionError::NotFound {
         what: format!("shard {shard_id}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use segment::types::PayloadSchemaType;
+
+    use super::*;
+    use crate::config::{CollectionEncryptionConfig, CryptoMigrationState, EncryptionRuleRef};
+
+    fn params_with_encrypted_payload_path(path: &str) -> CollectionParams {
+        CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:payload".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "payload".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec![path.to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: None,
+                }],
+            }),
+            ..CollectionParams::empty()
+        }
+    }
+
+    #[test]
+    fn recovered_payload_index_schema_rejects_encrypted_path_overlap() {
+        let collection_params = params_with_encrypted_payload_path("document.body");
+        let mut schema = HashMap::new();
+        schema.insert(
+            "document".parse().unwrap(),
+            PayloadFieldSchema::FieldType(PayloadSchemaType::Keyword),
+        );
+
+        let err = validate_payload_index_schema_for_encrypted_paths(&schema, &collection_params)
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            CollectionError::BadInput { description }
+                if description.contains("recover payload index schema")
+                    && description.contains("document.body")
+                    && description.contains("blind index")
+        ));
     }
 }

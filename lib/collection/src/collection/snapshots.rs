@@ -335,6 +335,7 @@ impl Collection {
 
         let collection_path = self.path.clone();
         let collection_name = self.name().to_string();
+        let collection_params = self.collection_config.read().await.params.clone();
 
         let temp_dir = temp_dir.to_path_buf();
 
@@ -346,6 +347,7 @@ impl Collection {
                     snapshot_data,
                     recovery_type,
                     &collection_path,
+                    collection_params,
                     &collection_name,
                     shard_id,
                     this_peer_id,
