@@ -1385,6 +1385,16 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         .await
         .unwrap();
 
+    let assert_raw_client_body = |payload: &Payload| {
+        let body = payload
+            .0
+            .get("document")
+            .and_then(|document| document.get("body"))
+            .unwrap();
+        assert!(is_client_encrypted_payload_value(body));
+        assert!(!is_encrypted_payload_value(body));
+    };
+
     let retrieved = collection
         .retrieve(
             PointRequestInternal {
@@ -1399,16 +1409,50 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         )
         .await
         .unwrap();
-    let body = retrieved[0]
-        .payload
-        .as_ref()
-        .unwrap()
-        .0
-        .get("document")
-        .and_then(|document| document.get("body"))
+    assert_raw_client_body(retrieved[0].payload.as_ref().unwrap());
+
+    let scrolled = collection
+        .scroll_by(
+            ScrollRequestInternal {
+                offset: None,
+                limit: Some(10),
+                filter: None,
+                with_payload: Some(WithPayloadInterface::Bool(true)),
+                with_vector: false.into(),
+                order_by: None,
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
         .unwrap();
-    assert!(is_client_encrypted_payload_value(body));
-    assert!(!is_encrypted_payload_value(body));
+    assert_eq!(scrolled.points.len(), 1);
+    assert_raw_client_body(scrolled.points[0].payload.as_ref().unwrap());
+
+    let searched = collection
+        .search(
+            SearchRequestInternal {
+                vector: vec![1.0, 0.0, 0.0, 0.0].into(),
+                with_payload: Some(WithPayloadInterface::Bool(true)),
+                with_vector: None,
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: None,
+                score_threshold: None,
+            }
+            .into(),
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(searched.len(), 1);
+    assert_raw_client_body(searched[0].payload.as_ref().unwrap());
 }
 
 #[tokio::test(flavor = "multi_thread")]
