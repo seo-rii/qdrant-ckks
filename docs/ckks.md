@@ -285,6 +285,9 @@ active plus retired AEAD keys; new writes always use the active key, and
 envelopes record the active key id plus material fingerprint.
 Server-side public writes reject fields that already contain a
 `$qdrant_ckks` marker so clients cannot smuggle stale or wrong-key envelopes.
+If the matching runtime crypto settings or key material are absent, selected
+plaintext fields are not stored as a fallback; the collection write guard rejects
+the operation instead.
 Rotation/backfill code must use the explicit `ReencryptIfStale` mode so old
 schema/epoch/key envelopes are opened and sealed again under the current active
 key.
