@@ -8,7 +8,7 @@ use shard::files::PAYLOAD_INDEX_CONFIG_FILE;
 pub use shard::payload_index_schema::PayloadIndexSchema;
 
 use crate::collection::Collection;
-use crate::config::EncryptionSelector;
+use crate::config::{CollectionParams, EncryptionSelector};
 use crate::operations::types::{CollectionError, CollectionResult, UpdateResult};
 use crate::operations::universal_query::formula::ExpressionInternal;
 use crate::operations::{CollectionUpdateOperations, CreateIndex, FieldIndexOperations};
@@ -22,10 +22,34 @@ impl Collection {
 
     pub(crate) fn load_payload_index_schema(
         collection_path: &Path,
+        collection_params: &CollectionParams,
     ) -> CollectionResult<SaveOnDisk<PayloadIndexSchema>> {
         let payload_index_file = Self::payload_index_file(collection_path);
         let schema: SaveOnDisk<PayloadIndexSchema> =
             SaveOnDisk::load_or_init_default(payload_index_file)?;
+        if let Some(encryption) = collection_params.effective_encryption() {
+            let stored_schema = schema.read();
+            for rule in &encryption.rules {
+                let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
+                    continue;
+                };
+
+                for encrypted_path in paths {
+                    let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
+                        CollectionError::bad_input(format!(
+                            "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                        ))
+                    })?;
+                    for field_name in stored_schema.schema.keys() {
+                        if field_name.compatible(&encrypted_json_path) {
+                            return Err(CollectionError::bad_input(format!(
+                                "cannot load payload index schema on encrypted payload field '{field_name}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                            )));
+                        }
+                    }
+                }
+            }
+        }
         Ok(schema)
     }
 

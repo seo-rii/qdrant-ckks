@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{BufReader, BufWriter};
+use std::num::NonZeroU32;
 
 use ahash::AHashSet;
 use api::rest::SearchRequestInternal;
 use collection::config::{
-    CkksCollectionConfig, CollectionEncryptionConfig, CryptoMigrationState, EncryptionRuleRef,
-    EncryptionSelector,
+    CkksCollectionConfig, CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams,
+    CryptoMigrationState, EncryptionRuleRef, EncryptionSelector, WalConfig,
 };
 use collection::operations::CollectionUpdateOperations;
 use collection::operations::config_diff::CollectionParamsDiff;
@@ -28,6 +29,7 @@ use collection::operations::universal_query::shard_query::{
 use collection::operations::vector_ops::{
     PointVectorsPersisted, UpdateVectorsOp, VectorOperations,
 };
+use collection::operations::vector_params_builder::VectorParamsBuilder;
 use collection::recommendations::recommend_by;
 use collection::shards::replica_set::replica_set_state::{ReplicaSetState, ReplicaState};
 use common::counter::hardware_accumulator::HwMeasurementAcc;
@@ -40,14 +42,17 @@ use qdrant_ckks::{
 use segment::data_types::order_by::{Direction, OrderBy, OrderByInterface};
 use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, VectorInternal, VectorStructInternal};
 use segment::types::{
-    Condition, ExtendedPointId, FieldCondition, Filter, HasIdCondition, Payload,
+    Condition, Distance, ExtendedPointId, FieldCondition, Filter, HasIdCondition, Payload,
     PayloadFieldSchema, PayloadSchemaType, PointIdType, WithPayloadInterface, WithVector,
 };
 use serde_json::Map;
+use shard::files::PAYLOAD_INDEX_CONFIG_FILE;
+use shard::payload_index_schema::PayloadIndexSchema;
 use tempfile::Builder;
 
 use crate::common::{
-    N_SHARDS, encrypted_collection_fixture, load_local_collection, simple_collection_fixture,
+    N_SHARDS, TEST_OPTIMIZERS_CONFIG, encrypted_collection_fixture, load_local_collection,
+    new_local_collection, simple_collection_fixture,
 };
 
 fn payload_encryption_config() -> CollectionEncryptionConfig {
@@ -906,6 +911,63 @@ async fn encrypted_payload_field_rejects_payload_index() {
         )
         .await
         .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn encrypted_payload_field_rejects_recovered_payload_index_schema() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let snapshot_dir = collection_dir.path().join("snapshots");
+
+    let mut payload_schema = PayloadIndexSchema::default();
+    payload_schema.schema.insert(
+        "document.body".parse().unwrap(),
+        PayloadFieldSchema::FieldType(PayloadSchemaType::Keyword),
+    );
+    fs::write(
+        collection_dir.path().join(PAYLOAD_INDEX_CONFIG_FILE),
+        serde_json::to_vec(&payload_schema).unwrap(),
+    )
+    .unwrap();
+
+    let collection_config = CollectionConfigInternal {
+        params: CollectionParams {
+            vectors: VectorParamsBuilder::new(4, Distance::Dot).build().into(),
+            shard_number: NonZeroU32::new(1).unwrap(),
+            encryption: Some(payload_encryption_config()),
+            ..CollectionParams::empty()
+        },
+        optimizer_config: TEST_OPTIMIZERS_CONFIG.clone(),
+        wal_config: WalConfig {
+            wal_capacity_mb: 1,
+            wal_segments_ahead: 0,
+            wal_retain_closed: 1,
+        },
+        hnsw_config: Default::default(),
+        quantization_config: Default::default(),
+        strict_mode_config: Default::default(),
+        uuid: None,
+        metadata: None,
+    };
+
+    let err = match new_local_collection(
+        "test".to_string(),
+        collection_dir.path(),
+        &snapshot_dir,
+        &collection_config,
+    )
+    .await
+    {
+        Ok(_) => panic!("expected encrypted payload index schema recovery to fail"),
+        Err(err) => err,
+    };
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("payload index schema")
+                && description.contains("document.body")
+                && description.contains("blind index")
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread")]

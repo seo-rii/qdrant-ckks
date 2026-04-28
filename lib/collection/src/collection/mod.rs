@@ -122,7 +122,10 @@ impl Collection {
         let mut shard_holder = ShardHolder::new(path, sharding_method)?;
         shard_holder.set_shard_key_mappings(shard_key_mapping.clone().unwrap_or_default())?;
 
-        let payload_index_schema = Arc::new(Self::load_payload_index_schema(path)?);
+        let payload_index_schema = Arc::new(Self::load_payload_index_schema(
+            path,
+            &collection_config.params,
+        )?);
 
         let shared_collection_config = Arc::new(RwLock::new(collection_config.clone()));
         for (shard_id, mut peers) in shard_distribution.shards {
@@ -261,7 +264,7 @@ impl Collection {
         let shared_collection_config = Arc::new(RwLock::new(collection_config.clone()));
 
         let payload_index_schema = Arc::new(
-            Self::load_payload_index_schema(path)
+            Self::load_payload_index_schema(path, &collection_config.params)
                 .expect("Can't load or initialize payload index schema"),
         );
 
