@@ -1105,7 +1105,7 @@ fn validate_generic_collection_crypto_runtime(
                     "collection {collection_name} vector crypto metadata key validation failed: {err}"
                 ))
             })?;
-            AeadCipher::new_with_material_fingerprint(
+            let metadata_cipher = AeadCipher::new_with_material_fingerprint(
                 key_id,
                 metadata_key,
                 material_fingerprint_id,
@@ -1115,6 +1115,15 @@ fn validate_generic_collection_crypto_runtime(
                     "collection {collection_name} vector crypto metadata key validation failed: {err}"
                 ))
             })?;
+            if let Some(rk_epoch) = material.rk_epoch {
+                metadata_cipher
+                    .with_resource_key_metadata(material_ref, rk_epoch)
+                    .map_err(|err| {
+                        StorageError::bad_input(format!(
+                            "collection {collection_name} vector crypto metadata key validation failed: {err}"
+                        ))
+                    })?;
+            }
         }
     }
 
@@ -2905,6 +2914,99 @@ mod tests {
                         binding: Some("vector-envelope/v1".to_string()),
                     },
                 ],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        validate_collection_crypto_runtime(&settings, "docs", &params).unwrap();
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_accepts_wrapped_vector_resource_key_metadata() {
+        let mk_material = "tenant-a/mk-v1";
+        let rk_material = "tenant-a/vector-rk-v3";
+        let mut wrapped_rk_config = CryptoMaterialConfig {
+            kind: WRAPPED_SYMMETRIC_KEY_32_KIND.to_string(),
+            wrapped_by: Some(mk_material.to_string()),
+            wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
+            rk_epoch: Some(3),
+            scope: Some("collection:docs/vector:embedding".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        let aad = resource_key_wrap_aad(
+            rk_material,
+            &wrapped_rk_config,
+            mk_material,
+            RESOURCE_KEY_WRAP_ALGORITHM,
+        );
+        let wrapped = LocalMasterKeyProvider::new(mk_material, SecretKey::from_bytes([91u8; 32]))
+            .unwrap()
+            .wrap_resource_key(&SecretKey::from_bytes([92u8; 32]), &aad)
+            .unwrap();
+        wrapped_rk_config.nonce = Some(wrapped.nonce);
+        wrapped_rk_config.wrapped_key_b64 = Some(wrapped.wrapped_key);
+
+        let settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_vector_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: VECTOR_OPENFHE_CKKS_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            rk_material.to_string(),
+                        )]),
+                        backend_ref: Some("openfhe_local".to_string()),
+                        options: json!({
+                            "key_id": "tenant-a:docs",
+                            "material_fingerprint_id": "tenant-a/vector-rk@v3",
+                            "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([
+                    (
+                        mk_material.to_string(),
+                        CryptoMaterialConfig {
+                            kind: WRAPPING_KEY_32_KIND.to_string(),
+                            source: Some("inline".to_string()),
+                            env: None,
+                            path: None,
+                            value_b64: Some(BASE64URL_NOPAD.encode(&[91u8; 32])),
+                            ..CryptoMaterialConfig::default()
+                        },
+                    ),
+                    (rk_material.to_string(), wrapped_rk_config),
+                ]),
+                backends: HashMap::from([(
+                    "openfhe_local".to_string(),
+                    CryptoBackendConfig {
+                        kind: "process_pool".to_string(),
+                        program: Some("/usr/local/bin/openfhe-bridge".to_string()),
+                        sha256_b64: None,
+                        size: Some(1),
+                        timeout_ms: Some(5_000),
+                    },
+                )]),
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "embedding_conf".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["embedding".to_string()],
+                    },
+                    instance: "docs_vector_v1".to_string(),
+                    binding: Some("vector-envelope/v1".to_string()),
+                }],
             }),
             ..CollectionParams::empty()
         };

@@ -144,6 +144,83 @@ fn vector_open_accepts_retired_metadata_key_but_new_writes_use_active_key() {
 }
 
 #[test]
+fn ckks_vector_envelope_records_resource_key_metadata() {
+    let material = public_material();
+    let resource_key = SecretKey::from_bytes([29u8; 32]);
+    let encryptor = CkksVectorEncryptor::new_from_resource_key_with_metadata(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        &resource_key,
+        "tenant-a/vector-rk@v3",
+        "tenant-a/vector-rk-v3",
+        3,
+        SealedTestBackend,
+    )
+    .unwrap();
+    let encrypted = encryptor
+        .encrypt("docs", "point-1", &material, &[1.0, 2.0])
+        .unwrap();
+
+    assert_eq!(
+        encrypted.envelope.material_fingerprint,
+        "tenant-a/vector-rk@v3"
+    );
+    assert_eq!(encrypted.envelope.rk_id, "tenant-a/vector-rk-v3");
+    assert_eq!(encrypted.envelope.rk_epoch, Some(3));
+    assert_eq!(
+        encryptor
+            .open("docs", "point-1", &material, &encrypted)
+            .unwrap()
+            .key_id,
+        "tenant-a:ckks",
+    );
+
+    let wrong_epoch = CkksVectorEncryptor::new_from_resource_key_with_metadata(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        &resource_key,
+        "tenant-a/vector-rk@v3",
+        "tenant-a/vector-rk-v3",
+        4,
+        SealedTestBackend,
+    )
+    .unwrap();
+    assert!(matches!(
+        wrong_epoch.open("docs", "point-1", &material, &encrypted),
+        Err(CkksError::Envelope(EncryptionError::KeyMismatch)),
+    ));
+
+    let rotated = CkksVectorEncryptor::new_from_resource_key_with_metadata(
+        "tenant-a:ckks-v4",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        &SecretKey::from_bytes([30u8; 32]),
+        "tenant-a/vector-rk@v4",
+        "tenant-a/vector-rk-v4",
+        4,
+        SealedTestBackend,
+    )
+    .unwrap()
+    .with_retired_metadata_resource_key(
+        "tenant-a:ckks",
+        &resource_key,
+        "tenant-a/vector-rk@v3",
+        "tenant-a/vector-rk-v3",
+        3,
+    )
+    .unwrap();
+    assert_eq!(
+        rotated
+            .open("docs", "point-1", &material, &encrypted)
+            .unwrap()
+            .key_id,
+        "tenant-a:ckks",
+    );
+}
+
+#[test]
 fn open_rejects_context_digest_mismatch() {
     let material = public_material();
     let encrypted = encryptor()

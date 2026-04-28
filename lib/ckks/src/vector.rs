@@ -233,7 +233,70 @@ where
         backend: B,
     ) -> Result<Self, CkksError> {
         let key_id = key_id.into();
-        validate_key_id(&key_id).map_err(|_| CkksError::InvalidKeyId)?;
+        let vector_name = Self::validate_constructor_inputs(&key_id, vector_name, &parameters)?;
+        let metadata_key = metadata_key.derive_subkey(CKKS_VECTOR_KEY_DOMAIN)?;
+
+        Self::new_with_metadata_cipher(
+            vector_name,
+            parameters,
+            AeadCipher::new(key_id, metadata_key)?,
+            backend,
+        )
+    }
+
+    pub fn new_from_resource_key_with_material_fingerprint(
+        key_id: impl Into<String>,
+        vector_name: impl Into<String>,
+        parameters: CkksParameters,
+        resource_key: &SecretKey,
+        material_fingerprint_id: impl Into<String>,
+        backend: B,
+    ) -> Result<Self, CkksError> {
+        let key_id = key_id.into();
+        let vector_name = Self::validate_constructor_inputs(&key_id, vector_name, &parameters)?;
+        let metadata_key = resource_key.derive_subkey(CKKS_VECTOR_KEY_DOMAIN)?;
+
+        Self::new_with_metadata_cipher(
+            vector_name,
+            parameters,
+            AeadCipher::new_with_material_fingerprint(
+                key_id,
+                metadata_key,
+                material_fingerprint_id,
+            )?,
+            backend,
+        )
+    }
+
+    pub fn new_from_resource_key_with_metadata(
+        key_id: impl Into<String>,
+        vector_name: impl Into<String>,
+        parameters: CkksParameters,
+        resource_key: &SecretKey,
+        material_fingerprint_id: impl Into<String>,
+        rk_id: impl Into<String>,
+        rk_epoch: u64,
+        backend: B,
+    ) -> Result<Self, CkksError> {
+        let key_id = key_id.into();
+        let vector_name = Self::validate_constructor_inputs(&key_id, vector_name, &parameters)?;
+        let metadata_key = resource_key.derive_subkey(CKKS_VECTOR_KEY_DOMAIN)?;
+        let metadata_cipher = AeadCipher::new_with_material_fingerprint(
+            key_id,
+            metadata_key,
+            material_fingerprint_id,
+        )?
+        .with_resource_key_metadata(rk_id, rk_epoch)?;
+
+        Self::new_with_metadata_cipher(vector_name, parameters, metadata_cipher, backend)
+    }
+
+    fn validate_constructor_inputs(
+        key_id: &str,
+        vector_name: impl Into<String>,
+        parameters: &CkksParameters,
+    ) -> Result<String, CkksError> {
+        validate_key_id(key_id).map_err(|_| CkksError::InvalidKeyId)?;
 
         let vector_name = vector_name.into();
         if vector_name.len() > MAX_VECTOR_NAME_LEN || vector_name.contains('\0') {
@@ -241,10 +304,17 @@ where
         }
 
         parameters.validate()?;
-        let metadata_key = metadata_key.derive_subkey(CKKS_VECTOR_KEY_DOMAIN)?;
+        Ok(vector_name)
+    }
 
+    fn new_with_metadata_cipher(
+        vector_name: String,
+        parameters: CkksParameters,
+        metadata_cipher: AeadCipher,
+        backend: B,
+    ) -> Result<Self, CkksError> {
         Ok(Self {
-            metadata_keyring: AeadKeyring::new(AeadCipher::new(key_id, metadata_key)?),
+            metadata_keyring: AeadKeyring::new(metadata_cipher),
             vector_name,
             parameters,
             crypto_schema_version: CRYPTO_SCHEMA_VERSION,
@@ -269,6 +339,27 @@ where
         self.metadata_keyring = self
             .metadata_keyring
             .with_retired(AeadCipher::new(key_id, metadata_key)?);
+        Ok(self)
+    }
+
+    pub fn with_retired_metadata_resource_key(
+        mut self,
+        key_id: impl Into<String>,
+        resource_key: &SecretKey,
+        material_fingerprint_id: impl Into<String>,
+        rk_id: impl Into<String>,
+        rk_epoch: u64,
+    ) -> Result<Self, CkksError> {
+        let key_id = key_id.into();
+        validate_key_id(&key_id).map_err(|_| CkksError::InvalidKeyId)?;
+        let metadata_key = resource_key.derive_subkey(CKKS_VECTOR_KEY_DOMAIN)?;
+        let retired = AeadCipher::new_with_material_fingerprint(
+            key_id,
+            metadata_key,
+            material_fingerprint_id,
+        )?
+        .with_resource_key_metadata(rk_id, rk_epoch)?;
+        self.metadata_keyring = self.metadata_keyring.with_retired(retired);
         Ok(self)
     }
 
