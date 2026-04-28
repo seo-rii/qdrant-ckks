@@ -108,6 +108,11 @@ signature before storing the opaque ciphertext. If
 `signature_public_key_b64` is configured, `signature_key_id` is also required
 and every write must carry a valid `signature` object:
 
+For payload writes, the `aad.collection_id` value is the collection's stable
+crypto identity. New collection configs should use the persisted collection UUID
+when available; legacy/test collections without a UUID fall back to the
+collection name.
+
 ```json
 {
   "body": {
@@ -120,7 +125,7 @@ and every write must carry a valid `signature` object:
       "rk_epoch": 3,
       "kdf_domain": "qdrant/client-payload-text/v1",
       "aad": {
-        "collection_id": "docs",
+        "collection_id": "collection-uuid-or-legacy-name",
         "point_id": "1",
         "field_path": "body",
         "schema_version": 1
@@ -201,6 +206,11 @@ rotation still requires a data re-encryption job and should use the explicit
 re-encryption mode rather than normal write-path idempotency. The
 `rk_id`/`rk_epoch` fields are included in AEAD AAD when present, so storage-side
 edits to resource-key identity fail closed.
+
+Payload AEAD AAD also binds the stable collection crypto identity, point id, and
+canonical field path. On public writes Qdrant uses the collection UUID when the
+collection config has one and falls back to the collection name only for legacy
+configs without a UUID.
 
 The wrapped RK AES-GCM AAD is a length-prefixed tuple of `qdrant-sec`, `v1`,
 `resource-key-wrap`, the material reference, `rk_epoch`, `scope`, `wrapped_by`,
