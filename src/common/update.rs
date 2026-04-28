@@ -1724,6 +1724,112 @@ mod tests {
             let body = payload.0.get("body").unwrap();
             assert!(is_encrypted_payload_value(body));
             assert_ne!(body, &json!("public ingress secret"));
+            let upsert_body = body.clone();
+
+            do_set_payload(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "docs".to_string(),
+                SetPayload {
+                    points: Some(vec![1.into()]),
+                    payload: segment::types::Payload(
+                        json!({ "body": "public set payload secret" })
+                            .as_object()
+                            .unwrap()
+                            .clone(),
+                    ),
+                    filter: None,
+                    shard_key: None,
+                    key: None,
+                },
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+                Some(&payload_runtime_settings()),
+            )
+            .await
+            .unwrap();
+
+            let retrieved = collection
+                .retrieve(
+                    PointRequestInternal {
+                        ids: vec![1.into()],
+                        with_payload: Some(WithPayloadInterface::Bool(true)),
+                        with_vector: false.into(),
+                    },
+                    None,
+                    &ShardSelectorInternal::All,
+                    None,
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .unwrap();
+            let body = retrieved[0]
+                .payload
+                .as_ref()
+                .unwrap()
+                .0
+                .get("body")
+                .unwrap();
+            assert!(is_encrypted_payload_value(body));
+            assert_ne!(body, &json!("public set payload secret"));
+            assert_ne!(body, &upsert_body);
+
+            do_overwrite_payload(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "docs".to_string(),
+                SetPayload {
+                    points: Some(vec![1.into()]),
+                    payload: segment::types::Payload(
+                        json!({ "body": "public overwrite payload secret" })
+                            .as_object()
+                            .unwrap()
+                            .clone(),
+                    ),
+                    filter: None,
+                    shard_key: None,
+                    key: None,
+                },
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+                Some(&payload_runtime_settings()),
+            )
+            .await
+            .unwrap();
+
+            let retrieved = collection
+                .retrieve(
+                    PointRequestInternal {
+                        ids: vec![1.into()],
+                        with_payload: Some(WithPayloadInterface::Bool(true)),
+                        with_vector: false.into(),
+                    },
+                    None,
+                    &ShardSelectorInternal::All,
+                    None,
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .unwrap();
+            let body = retrieved[0]
+                .payload
+                .as_ref()
+                .unwrap()
+                .0
+                .get("body")
+                .unwrap();
+            assert!(is_encrypted_payload_value(body));
+            assert_ne!(body, &json!("public overwrite payload secret"));
 
             collection.stop_gracefully().await;
         });
