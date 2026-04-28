@@ -30,8 +30,9 @@ pub use payload::{
     CLIENT_ENCRYPTED_PAYLOAD_MARKER, ClientPayloadSignatureVerification,
     ClientPayloadValidationContext, ENCRYPTED_PAYLOAD_MARKER, ExistingPayloadMode,
     PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
-    client_payload_signature_message, is_client_encrypted_payload_value,
-    is_encrypted_payload_value, validate_client_payload_value,
+    ServerPayloadValidationContext, client_payload_signature_message,
+    is_client_encrypted_payload_value, is_encrypted_payload_value, validate_client_payload_value,
+    validate_server_payload_value_metadata,
 };
 pub use vector::{
     CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_SCHEME, CkksEncryptionInput, CkksError,

@@ -408,6 +408,42 @@ pub fn is_client_encrypted_payload_value(value: &Value) -> bool {
         .unwrap_or(false)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ServerPayloadValidationContext<'a> {
+    pub field_path: &'a str,
+    pub key_id: Option<&'a str>,
+    pub crypto_schema_version: u16,
+    pub encryption_epoch: u64,
+}
+
+pub fn validate_server_payload_value_metadata(
+    value: &Value,
+    context: ServerPayloadValidationContext<'_>,
+) -> Result<(), PayloadEncryptionError> {
+    let envelope = extract_envelope(value, context.field_path)?.ok_or_else(|| {
+        PayloadEncryptionError::ExpectedEncryptedEnvelope {
+            field: context.field_path.to_string(),
+            found: json_type_name(value),
+        }
+    })?;
+
+    if envelope.schema_version != context.crypto_schema_version {
+        return Err(PayloadEncryptionError::UnsupportedSchemaVersion(
+            envelope.schema_version,
+        ));
+    }
+    if envelope.encryption_epoch != context.encryption_epoch {
+        return Err(PayloadEncryptionError::EncryptionEpochMismatch);
+    }
+    if let Some(key_id) = context.key_id
+        && envelope.envelope.key_id != key_id
+    {
+        return Err(PayloadEncryptionError::Crypto(EncryptionError::KeyMismatch));
+    }
+
+    Ok(())
+}
+
 pub fn validate_client_payload_value(
     value: &Value,
     context: ClientPayloadValidationContext<'_>,

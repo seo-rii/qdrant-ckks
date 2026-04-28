@@ -1073,6 +1073,47 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
                 && description.contains("document.body")
     ));
 
+    let wrong_key_encryptor = PayloadTextEncryptor::new(
+        "docs",
+        AeadCipher::new("tenant-a:other", SecretKey::from_bytes([7u8; 32])).unwrap(),
+    )
+    .unwrap();
+    let mut wrong_key_payload: Payload =
+        serde_json::from_str(r#"{"document":{"body":"wrong key marker"}}"#).unwrap();
+    wrong_key_encryptor
+        .encrypt_selected_fields(
+            "4",
+            &mut wrong_key_payload.0,
+            &PayloadEncryptionPolicy::new(["document.body"]).unwrap(),
+        )
+        .unwrap();
+    let wrong_key_marker_upsert =
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                id: 4.into(),
+                vector: VectorStructPersisted::from(vec![0.0, 0.0, 0.0, 1.0]),
+                payload: Some(wrong_key_payload),
+            }]),
+        ));
+    let err = collection
+        .update_from_client_simple(
+            wrong_key_marker_upsert,
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("encrypted payload marker")
+                && description.contains("document.body")
+                && description.contains("key id does not match")
+    ));
+
     let public_payload = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
         PointInsertOperationsInternal::from(vec![PointStructPersisted {
             id: 2.into(),

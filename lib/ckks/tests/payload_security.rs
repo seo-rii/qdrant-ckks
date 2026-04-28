@@ -4,8 +4,9 @@ use qdrant_ckks::{
     AeadCipher, AeadKeyring, CLIENT_ENCRYPTED_PAYLOAD_MARKER, ClientPayloadSignatureVerification,
     ClientPayloadValidationContext, ENCRYPTED_PAYLOAD_MARKER, EncryptionError, ExistingPayloadMode,
     PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
-    client_payload_signature_message, is_client_encrypted_payload_value,
-    is_encrypted_payload_value, validate_client_payload_value,
+    ServerPayloadValidationContext, client_payload_signature_message,
+    is_client_encrypted_payload_value, is_encrypted_payload_value, validate_client_payload_value,
+    validate_server_payload_value_metadata,
 };
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -312,6 +313,53 @@ fn payload_decrypt_rejects_wrong_encryption_epoch() {
 
     assert_eq!(
         next_epoch_encryptor.decrypt_selected_fields("point-1", &mut payload, &policy),
+        Err(PayloadEncryptionError::EncryptionEpochMismatch),
+    );
+}
+
+#[test]
+fn server_payload_metadata_validation_rejects_stale_or_wrong_key_markers() {
+    let encryptor = encryptor();
+    let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
+    let mut payload = object(json!({ "body": "metadata checked" }));
+
+    encryptor
+        .encrypt_selected_fields("point-1", &mut payload, &policy)
+        .unwrap();
+    let body = payload.get("body").unwrap();
+    validate_server_payload_value_metadata(
+        body,
+        ServerPayloadValidationContext {
+            field_path: "body",
+            key_id: Some("tenant-a:payload"),
+            crypto_schema_version: 1,
+            encryption_epoch: 0,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        validate_server_payload_value_metadata(
+            body,
+            ServerPayloadValidationContext {
+                field_path: "body",
+                key_id: Some("tenant-a:other"),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+            },
+        ),
+        Err(PayloadEncryptionError::Crypto(EncryptionError::KeyMismatch)),
+    );
+    assert_eq!(
+        validate_server_payload_value_metadata(
+            body,
+            ServerPayloadValidationContext {
+                field_path: "body",
+                key_id: Some("tenant-a:payload"),
+                crypto_schema_version: 1,
+                encryption_epoch: 1,
+            },
+        ),
         Err(PayloadEncryptionError::EncryptionEpochMismatch),
     );
 }
