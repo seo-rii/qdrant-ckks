@@ -580,6 +580,86 @@ done
 
 #[cfg(unix)]
 #[test]
+fn command_openfhe_backend_rejects_invalid_json_response() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("invalid-json-openfhe-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+IFS= read -r _request
+printf '{not-json}\n'
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+        .with_args([script_path.display().to_string()]);
+    let encryptor = CkksVectorEncryptor::new(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+
+    let err = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0])
+        .unwrap_err();
+
+    assert!(
+        matches!(err, CkksError::Backend(message) if message.contains("failed to parse OpenFHE bridge response"))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn command_openfhe_backend_rejects_response_without_newline() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("no-newline-openfhe-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+IFS= read -r _request
+printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}'
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+        .with_args([script_path.display().to_string()]);
+    let encryptor = CkksVectorEncryptor::new(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+
+    let err = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0])
+        .unwrap_err();
+
+    assert!(
+        matches!(err, CkksError::Backend(message) if message.contains("empty response") || message.contains("disconnected"))
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn command_openfhe_backend_rejects_oversized_bridge_stderr() {
     use std::os::unix::fs::PermissionsExt;
 
