@@ -634,9 +634,11 @@ impl Collection {
         self.ensure_filter_does_not_touch_encrypted_payload(request.filter.as_ref())
             .await?;
 
-        let local_only = shard_selection.is_shard_id();
-
         let order_by = request.order_by.clone().map(OrderBy::from);
+        self.ensure_order_by_does_not_touch_encrypted_payload(order_by.as_ref())
+            .await?;
+
+        let local_only = shard_selection.is_shard_id();
 
         // `order_by` does not support offset
         if order_by.is_none() {
@@ -862,6 +864,46 @@ impl Collection {
                 {
                     return Err(CollectionError::bad_input(format!(
                         "cannot filter on encrypted payload field '{filter_path}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(crate) async fn ensure_order_by_does_not_touch_encrypted_payload(
+        &self,
+        order_by: Option<&OrderBy>,
+    ) -> CollectionResult<()> {
+        let Some(order_by) = order_by else {
+            return Ok(());
+        };
+        let Some(encryption) = self
+            .collection_config
+            .read()
+            .await
+            .params
+            .effective_encryption()
+        else {
+            return Ok(());
+        };
+
+        for rule in &encryption.rules {
+            let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
+                continue;
+            };
+
+            for encrypted_path in paths {
+                let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
+                    CollectionError::bad_input(format!(
+                        "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                    ))
+                })?;
+                if order_by.key.compatible(&encrypted_json_path) {
+                    return Err(CollectionError::bad_input(format!(
+                        "cannot order by encrypted payload field '{}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                        order_by.key,
                     )));
                 }
             }

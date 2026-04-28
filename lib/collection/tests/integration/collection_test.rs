@@ -1124,6 +1124,76 @@ async fn encrypted_payload_field_rejects_plaintext_filters() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn encrypted_payload_field_rejects_plaintext_order_by() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
+
+    let encrypted_order_by = OrderBy {
+        key: "document.body".parse().unwrap(),
+        direction: Some(Direction::Asc),
+        start_from: None,
+    };
+    let err = collection
+        .scroll_by(
+            ScrollRequestInternal {
+                offset: None,
+                limit: Some(10),
+                filter: None,
+                with_payload: Some(WithPayloadInterface::Bool(true)),
+                with_vector: false.into(),
+                order_by: Some(OrderByInterface::Struct(encrypted_order_by.clone())),
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot order by encrypted payload field")
+                && description.contains("document.body")
+                && description.contains("blind index")
+    ));
+
+    let err = collection
+        .query_batch(
+            vec![(
+                CollectionQueryRequest {
+                    prefetch: vec![],
+                    query: Some(Query::OrderBy(encrypted_order_by)),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                ShardSelectorInternal::All,
+            )],
+            |_name| async { None },
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot order by encrypted payload field")
+                && description.contains("document.body")
+                && description.contains("blind index")
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn encrypted_payload_field_rejects_plaintext_facet_key() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection =

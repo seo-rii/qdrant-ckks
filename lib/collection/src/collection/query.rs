@@ -221,6 +221,18 @@ impl Collection {
                 self.ensure_filter_does_not_touch_encrypted_payload(filter)
                     .await?;
             }
+            if let Some(ScoringQuery::OrderBy(order_by)) = request.query.as_ref() {
+                self.ensure_order_by_does_not_touch_encrypted_payload(Some(order_by))
+                    .await?;
+            }
+            let mut prefetches: Vec<&ShardPrefetch> = request.prefetches.iter().collect();
+            while let Some(prefetch) = prefetches.pop() {
+                if let Some(ScoringQuery::OrderBy(order_by)) = prefetch.query.as_ref() {
+                    self.ensure_order_by_does_not_touch_encrypted_payload(Some(order_by))
+                        .await?;
+                }
+                prefetches.extend(prefetch.prefetches.iter());
+            }
         }
 
         if let Some(encryption) = self
