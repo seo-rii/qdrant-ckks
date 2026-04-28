@@ -20,6 +20,23 @@ Unsupported search/index features for CKKS ciphertext vectors in this branch:
 - shard transfer or snapshot restore without matching runtime keys and OpenFHE
   context material
 
+## Feature support matrix
+
+This branch is intentionally fail-closed for encrypted data paths that are not
+fully wired. The table below is the user-facing contract for the current
+implementation.
+
+| API/path | Server-side payload AEAD | Client-side payload envelope | CKKS vector envelope |
+| --- | --- | --- | --- |
+| `upsert` payload | Supported for selected JSON string fields. Values are encrypted before storage and client-supplied `$qdrant_ckks` markers are rejected. | Supported for selected fields that already contain a valid `$qdrant_client_aead` marker. Qdrant validates schema, AAD metadata, key policy, and optional Ed25519 signature, but does not decrypt. | Unsupported. CKKS vector selectors are rejected until ciphertext storage/search semantics are implemented. |
+| `set_payload` / `overwrite_payload` | Supported for a single explicit point when Qdrant can bind AAD to the point id. Filter-based, key-path, and multi-point encrypted-field updates fail closed. | Same point-id limitation as server-side payload writes. Clients must provide one envelope per point/field. | Not applicable. |
+| `update_vectors` | Not applicable. | Not applicable. | Unsupported. Plaintext writes to encrypted vector names fail closed. |
+| Payload indexes and filters | Plaintext indexes over encrypted paths, parent paths, or child paths are rejected. Filtering encrypted content requires a future blind-index provider. | Same policy. The opaque ciphertext field is not searchable as plaintext. | Payload filtering over encrypted metadata is unsupported. |
+| `retrieve`, `scroll`, and `search` result payloads | Stored `$qdrant_ckks` markers are returned raw. There is no `decrypt_payload` option or RBAC capability yet. | Stored `$qdrant_client_aead` markers are returned raw for SDK/client decryption. | Search over CKKS ciphertext vectors is unsupported; separate plaintext or surrogate vectors must be modeled explicitly outside this branch. |
+| Snapshots | Snapshot archives are expected to contain envelopes only; payload sentinel snapshot leakage is covered by integration tests. Restore key preflight is still missing. | Same stored-value behavior as server-side payloads. Qdrant cannot validate client AEAD tags without client keys. | Restore requires matching OpenFHE context/runtime material, but fail-closed restore preflight is not implemented yet. |
+| Shard transfer / replication | Requires matching crypto runtime material on all nodes. Cluster parity checks are not implemented yet. | Requires matching client-envelope verifier policy on all nodes. | Requires matching OpenFHE context and metadata AEAD material on all nodes; cluster parity checks are not implemented yet. |
+| Metadata encryption | Not implemented. `metadata_keys` selectors are reserved and rejected. | Not implemented. | Not implemented. |
+
 ## Payload text
 
 Selected JSON string fields are replaced with a single marker object:
