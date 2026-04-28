@@ -23,6 +23,7 @@ use tokio::runtime::Handle;
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use super::shard::ShardId;
+use super::shard_holder::validate_payload_index_paths_for_encrypted_paths;
 use super::update_tracker::UpdateTracker;
 use crate::collection_manager::optimizers::TrackerLog;
 use crate::hash_ring::HashRingRouter;
@@ -163,7 +164,21 @@ impl ForwardProxyShard {
     /// This method is cancel safe.
     pub async fn transfer_indexes(&self) -> CollectionResult<()> {
         let _update_lock = self.update_lock.lock().await;
-        for (index_key, index_type) in self.wrapped_shard.info().await?.payload_schema {
+        let payload_schema = self.wrapped_shard.info().await?.payload_schema;
+        let collection_params = self
+            .wrapped_shard
+            .collection_config
+            .read()
+            .await
+            .params
+            .clone();
+        validate_payload_index_paths_for_encrypted_paths(
+            payload_schema.keys(),
+            &collection_params,
+            "transfer",
+        )?;
+
+        for (index_key, index_type) in payload_schema {
             // TODO: Is cancelling `RemoteShard::update` safe for *receiver*?
             self.remote_shard
                 .update(

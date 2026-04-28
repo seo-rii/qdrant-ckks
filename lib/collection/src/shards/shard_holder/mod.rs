@@ -1568,10 +1568,12 @@ impl ShardHolder {
     }
 }
 
-fn validate_payload_index_schema_for_encrypted_paths(
-    schema: &HashMap<JsonPath, PayloadFieldSchema>,
+pub(crate) fn validate_payload_index_paths_for_encrypted_paths<'a>(
+    field_names: impl IntoIterator<Item = &'a JsonPath>,
     collection_params: &CollectionParams,
+    action: &str,
 ) -> CollectionResult<()> {
+    let field_names: Vec<_> = field_names.into_iter().collect();
     let Some(encryption) = collection_params.effective_encryption() else {
         return Ok(());
     };
@@ -1588,10 +1590,10 @@ fn validate_payload_index_schema_for_encrypted_paths(
                 ))
             })?;
 
-            for field_name in schema.keys() {
+            for field_name in &field_names {
                 if field_name.compatible(&encrypted_json_path) {
                     return Err(CollectionError::bad_input(format!(
-                        "cannot recover payload index schema on encrypted payload field '{field_name}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                        "cannot {action} payload index schema on encrypted payload field '{field_name}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
                     )));
                 }
             }
@@ -1599,6 +1601,13 @@ fn validate_payload_index_schema_for_encrypted_paths(
     }
 
     Ok(())
+}
+
+fn validate_payload_index_schema_for_encrypted_paths(
+    schema: &HashMap<JsonPath, PayloadFieldSchema>,
+    collection_params: &CollectionParams,
+) -> CollectionResult<()> {
+    validate_payload_index_paths_for_encrypted_paths(schema.keys(), collection_params, "recover")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1658,6 +1667,27 @@ mod tests {
             err,
             CollectionError::BadInput { description }
                 if description.contains("recover payload index schema")
+                    && description.contains("document.body")
+                    && description.contains("blind index")
+        ));
+    }
+
+    #[test]
+    fn transferred_payload_index_schema_rejects_encrypted_path_overlap() {
+        let collection_params = params_with_encrypted_payload_path("document.body");
+        let field_names = ["document.body.keyword".parse::<JsonPath>().unwrap()];
+
+        let err = validate_payload_index_paths_for_encrypted_paths(
+            field_names.iter(),
+            &collection_params,
+            "transfer",
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            CollectionError::BadInput { description }
+                if description.contains("transfer payload index schema")
                     && description.contains("document.body")
                     && description.contains("blind index")
         ));
