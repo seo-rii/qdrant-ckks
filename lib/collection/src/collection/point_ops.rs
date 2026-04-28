@@ -8,9 +8,9 @@ use futures::stream::FuturesUnordered;
 use futures::{StreamExt as _, TryFutureExt, TryStreamExt as _, future};
 use itertools::Itertools;
 use qdrant_ckks::{
-    CLIENT_PAYLOAD_ENVELOPE_BINDING, ServerPayloadValidationContext,
-    is_client_encrypted_payload_value, is_encrypted_payload_value,
-    validate_server_payload_value_metadata,
+    CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadValidationContext,
+    ServerPayloadValidationContext, is_client_encrypted_payload_value, is_encrypted_payload_value,
+    validate_client_payload_value, validate_server_payload_value_metadata,
 };
 use segment::data_types::order_by::{Direction, OrderBy};
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
@@ -162,15 +162,20 @@ impl Collection {
         shard_keys_selection: Option<ShardKey>,
         hw_measurement_acc: HwMeasurementAcc,
     ) -> CollectionResult<UpdateResult> {
-        if let Some(encryption) = self
-            .collection_config
-            .read()
-            .await
-            .params
-            .effective_encryption()
-        {
+        let (encryption, collection_crypto_id) = {
+            let collection_config = self.collection_config.read().await;
+            (
+                collection_config.params.effective_encryption(),
+                collection_config
+                    .uuid
+                    .map(|uuid| uuid.to_string())
+                    .unwrap_or_else(|| self.name().to_string()),
+            )
+        };
+        if let Some(encryption) = encryption {
             let payload_write_touches_encrypted_path = |payload: &Payload,
                                                         key: Option<&JsonPath>,
+                                                        point_id: Option<&str>,
                                                         encrypted_path: &JsonPath,
                                                         encrypted_path_str: &str,
                                                         allow_client_envelope: bool|
@@ -198,6 +203,25 @@ impl Collection {
                         continue;
                     }
                     if allow_client_envelope && is_client_encrypted_payload_value(value) {
+                        let Some(point_id) = point_id else {
+                            return Ok(true);
+                        };
+                        validate_client_payload_value(
+                                value,
+                                ClientPayloadValidationContext {
+                                    collection_id: &collection_crypto_id,
+                                    point_id,
+                                    field_path: encrypted_path_str,
+                                    expected_key_id: encryption.key_id.as_deref(),
+                                    key_id_required: true,
+                                    signature_verification: None,
+                                },
+                            )
+                            .map_err(|err| {
+                                CollectionError::bad_input(format!(
+                                    "client encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: {err}",
+                                ))
+                            })?;
                         continue;
                     }
                     return Ok(true);
@@ -240,10 +264,20 @@ impl Collection {
                                             PointInsertOperationsInternal::PointsBatch(batch) => {
                                                 let mut touches = false;
                                                 if let Some(payloads) = batch.payloads.as_ref() {
-                                                    for payload in payloads.iter().flatten() {
+                                                    for (id, payload) in batch
+                                                        .ids
+                                                        .iter()
+                                                        .zip(payloads)
+                                                        .filter_map(|(id, payload)| {
+                                                            payload.as_ref().map(|payload| {
+                                                                (id.to_string(), payload)
+                                                            })
+                                                        })
+                                                    {
                                                         if payload_write_touches_encrypted_path(
                                                             payload,
                                                             None,
+                                                            Some(id.as_str()),
                                                             &encrypted_json_path,
                                                             encrypted_path,
                                                             allow_client_envelope,
@@ -257,17 +291,24 @@ impl Collection {
                                             }
                                             PointInsertOperationsInternal::PointsList(points) => {
                                                 let mut touches = false;
-                                                for payload in
-                                                    points.iter().filter_map(|point| {
-                                                        point.payload.as_ref()
+                                                for (id, payload) in points
+                                                    .iter()
+                                                    .filter_map(|point| {
+                                                        point
+                                                            .payload
+                                                            .as_ref()
+                                                            .map(|payload| {
+                                                                (point.id.to_string(), payload)
+                                                            })
                                                     })
                                                 {
                                                     if payload_write_touches_encrypted_path(
-                                                            payload,
-                                                            None,
-                                                            &encrypted_json_path,
+                                                        payload,
+                                                        None,
+                                                        Some(id.as_str()),
+                                                        &encrypted_json_path,
                                                         encrypted_path,
-                                                            allow_client_envelope,
+                                                        allow_client_envelope,
                                                     )? {
                                                         touches = true;
                                                         break;
@@ -278,18 +319,23 @@ impl Collection {
                                         },
                                         PointOperations::SyncPoints(sync_operation) => {
                                             let mut touches = false;
-                                            for payload in
-                                                sync_operation
-                                                    .points
-                                                    .iter()
-                                                    .filter_map(|point| point.payload.as_ref())
+                                            for (id, payload) in sync_operation
+                                                .points
+                                                .iter()
+                                                .filter_map(|point| {
+                                                    point
+                                                        .payload
+                                                        .as_ref()
+                                                        .map(|payload| (point.id.to_string(), payload))
+                                                })
                                             {
                                                 if payload_write_touches_encrypted_path(
-                                                        payload,
-                                                        None,
-                                                        &encrypted_json_path,
+                                                    payload,
+                                                    None,
+                                                    Some(id.as_str()),
+                                                    &encrypted_json_path,
                                                     encrypted_path,
-                                                        allow_client_envelope,
+                                                    allow_client_envelope,
                                                 )? {
                                                     touches = true;
                                                     break;
@@ -304,13 +350,19 @@ impl Collection {
                                 CollectionUpdateOperations::PayloadOperation(
                                     PayloadOps::SetPayload(operation)
                                     | PayloadOps::OverwritePayload(operation),
-                                ) => payload_write_touches_encrypted_path(
-                                    &operation.payload,
-                                    operation.key.as_ref(),
-                                    &encrypted_json_path,
-                                    encrypted_path,
-                                    allow_client_envelope,
-                                )?,
+                                ) => {
+                                    let point_id = operation.points.as_ref().and_then(|points| {
+                                        (points.len() == 1).then(|| points[0].to_string())
+                                    });
+                                    payload_write_touches_encrypted_path(
+                                        &operation.payload,
+                                        operation.key.as_ref(),
+                                        point_id.as_deref(),
+                                        &encrypted_json_path,
+                                        encrypted_path,
+                                        allow_client_envelope,
+                                    )?
+                                }
                                 CollectionUpdateOperations::VectorOperation(_)
                                 | CollectionUpdateOperations::PayloadOperation(
                                     PayloadOps::DeletePayload(_)

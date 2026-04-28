@@ -37,8 +37,9 @@ use common::counter::hardware_accumulator::HwMeasurementAcc;
 use fs_err::{self as fs, File};
 use itertools::Itertools;
 use qdrant_ckks::{
-    AeadCipher, PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
-    is_encrypted_payload_value,
+    AeadCipher, CLIENT_ENCRYPTED_PAYLOAD_MARKER, CLIENT_PAYLOAD_ENVELOPE_BINDING,
+    PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
+    is_client_encrypted_payload_value, is_encrypted_payload_value,
 };
 use segment::data_types::facets::FacetParams;
 use segment::data_types::order_by::{Direction, OrderBy, OrderByInterface};
@@ -71,6 +72,24 @@ fn payload_encryption_config() -> CollectionEncryptionConfig {
             },
             instance: "docs_payload_v1".to_string(),
             binding: Some("payload-field/v1".to_string()),
+        }],
+    }
+}
+
+fn client_payload_encryption_config() -> CollectionEncryptionConfig {
+    CollectionEncryptionConfig {
+        version: 1,
+        key_id: Some("tenant-a/client-rk-2026-04".to_string()),
+        crypto_schema_version: 1,
+        encryption_epoch: 0,
+        migration_state: CryptoMigrationState::Active,
+        rules: vec![EncryptionRuleRef {
+            id: "document_body_client".to_string(),
+            selector: EncryptionSelector::PayloadPaths {
+                paths: vec!["document.body".to_string()],
+            },
+            instance: "docs_payload_client_v1".to_string(),
+            binding: Some(CLIENT_PAYLOAD_ENVELOPE_BINDING.to_string()),
         }],
     }
 }
@@ -1283,6 +1302,113 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
         )
         .await
         .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn client_encrypted_payload_marker_must_match_collection_guard() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, client_payload_encryption_config())
+            .await;
+
+    let client_payload = |collection_id: &str, point_id: &str| {
+        Payload(
+            serde_json::json!({
+                "document": {
+                    "body": {
+                        CLIENT_ENCRYPTED_PAYLOAD_MARKER: {
+                            "version": 1,
+                            "kind": "payload_text",
+                            "algorithm": "AES-256-GCM",
+                            "key_id": "tenant-a/client-rk-2026-04",
+                            "rk_id": "tenant-a/client-rk-2026-04",
+                            "rk_epoch": 3,
+                            "kdf_domain": "qdrant/client-payload-text/v1",
+                            "aad": {
+                                "collection_id": collection_id,
+                                "point_id": point_id,
+                                "field_path": "document.body",
+                                "schema_version": 1
+                            },
+                            "nonce": "AAAAAAAAAAAAAAAA",
+                            "ciphertext": "AQID"
+                        }
+                    }
+                }
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        )
+    };
+
+    let wrong_collection_marker =
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                id: 1.into(),
+                vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                payload: Some(client_payload("wrong-collection", "1")),
+            }]),
+        ));
+    let err = collection
+        .update_from_client_simple(
+            wrong_collection_marker,
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("client encrypted payload marker")
+                && description.contains("collection_id")
+    ));
+
+    let valid_marker = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+        PointInsertOperationsInternal::from(vec![PointStructPersisted {
+            id: 1.into(),
+            vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+            payload: Some(client_payload("test", "1")),
+        }]),
+    ));
+    collection
+        .update_from_client_simple(
+            valid_marker,
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+
+    let retrieved = collection
+        .retrieve(
+            PointRequestInternal {
+                ids: vec![1.into()],
+                with_payload: Some(WithPayloadInterface::Bool(true)),
+                with_vector: false.into(),
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+    let body = retrieved[0]
+        .payload
+        .as_ref()
+        .unwrap()
+        .0
+        .get("document")
+        .and_then(|document| document.get("body"))
+        .unwrap();
+    assert!(is_client_encrypted_payload_value(body));
+    assert!(!is_encrypted_payload_value(body));
 }
 
 #[tokio::test(flavor = "multi_thread")]
