@@ -885,7 +885,7 @@ set -euo pipefail
 	printf 'start\n' >> "$count_file"
 	while IFS= read -r _request; do
 	  printf 'request\n' >> "$count_file"
-	  sleep 0.5
+	  sleep 2
 	  printf '{{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}}\n'
 	done
 "#,
@@ -912,18 +912,26 @@ set -euo pipefail
     );
 
     let first_encryptor = Arc::clone(&encryptor);
-    let second_encryptor = Arc::clone(&encryptor);
-    let barrier = Arc::new(std::sync::Barrier::new(2));
-    let first_barrier = Arc::clone(&barrier);
-    let second_barrier = Arc::clone(&barrier);
     let first = std::thread::spawn(move || {
-        first_barrier.wait();
         first_encryptor
             .encrypt("docs", "point-1", &public_material(), &[1.0])
             .unwrap();
     });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let counts = fs::read_to_string(&count_path).unwrap_or_default();
+        if counts.lines().filter(|line| *line == "request").count() == 1 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "first OpenFHE bridge request did not become busy before timeout"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let second_encryptor = Arc::clone(&encryptor);
     let second = std::thread::spawn(move || {
-        second_barrier.wait();
         second_encryptor
             .encrypt("docs", "point-2", &public_material(), &[2.0])
             .unwrap();
