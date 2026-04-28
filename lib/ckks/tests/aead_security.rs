@@ -3,7 +3,7 @@ use proptest::prelude::*;
 use qdrant_ckks::{
     AeadCipher, AeadKeyring, CKKS_VECTOR_KEY_DOMAIN, EncryptionContext, EncryptionError,
     LocalMasterKeyProvider, MasterKeyProvider, PAYLOAD_TEXT_KEY_DOMAIN,
-    RESOURCE_KEY_WRAP_ALGORITHM, SecretKey,
+    RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, rewrap_resource_key,
 };
 
 fn fixed_cipher() -> AeadCipher {
@@ -178,6 +178,65 @@ fn local_master_key_provider_wraps_resource_key_with_aad() {
     assert_eq!(
         provider.unwrap_resource_key(&wrapped, b"wrong aad").err(),
         Some(EncryptionError::OpenFailed),
+    );
+}
+
+#[test]
+fn rewrap_resource_key_rotates_master_key_without_reencrypting_data() {
+    let old_provider =
+        LocalMasterKeyProvider::new("tenant-a/mk@v1", SecretKey::from_bytes([55u8; 32])).unwrap();
+    let new_provider =
+        LocalMasterKeyProvider::new("tenant-a/mk@v2", SecretKey::from_bytes([56u8; 32])).unwrap();
+    let old_aad = b"qdrant-sec\x00resource-key-wrap\x00docs-rk-v1\x00mk-v1";
+    let new_aad = b"qdrant-sec\x00resource-key-wrap\x00docs-rk-v1\x00mk-v2";
+    let resource_key = SecretKey::from_bytes([77u8; 32]);
+    let payload_cipher = AeadCipher::new(
+        "tenant-a:payload",
+        resource_key.derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN).unwrap(),
+    )
+    .unwrap();
+    let context = payload_context("42");
+    let envelope = payload_cipher
+        .encrypt(b"data does not need re-encryption for MK rotation", context)
+        .unwrap();
+    let old_wrapped = old_provider
+        .wrap_resource_key(&resource_key, old_aad)
+        .unwrap();
+
+    let new_wrapped =
+        rewrap_resource_key(&old_provider, &new_provider, &old_wrapped, old_aad, new_aad).unwrap();
+    assert_eq!(new_wrapped.mk_id, "tenant-a/mk@v2");
+    assert_ne!(new_wrapped.wrapped_key, old_wrapped.wrapped_key);
+
+    assert_eq!(
+        old_provider
+            .unwrap_resource_key(&new_wrapped, new_aad)
+            .err(),
+        Some(EncryptionError::MasterKeyMismatch),
+    );
+    assert_eq!(
+        new_provider
+            .unwrap_resource_key(&new_wrapped, old_aad)
+            .err(),
+        Some(EncryptionError::OpenFailed),
+    );
+
+    let rewrapped_resource_key = new_provider
+        .unwrap_resource_key(&new_wrapped, new_aad)
+        .unwrap();
+    let rewrapped_payload_cipher = AeadCipher::new(
+        "tenant-a:payload",
+        rewrapped_resource_key
+            .derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        rewrapped_payload_cipher
+            .decrypt(&envelope, context)
+            .unwrap()
+            .as_slice(),
+        b"data does not need re-encryption for MK rotation",
     );
 }
 

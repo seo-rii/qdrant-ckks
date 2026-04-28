@@ -194,11 +194,13 @@ The generic `crypto` control plane supports a safer MK/RK hierarchy:
 Data envelopes record the runtime `key_id`, material fingerprint, and, for
 wrapped RK material, the `rk_id` plus `rk_epoch` used for the RK-derived subkey.
 They do not reference the MK directly, so MK rotation can rewrap the stored RK
-manifest without rewriting payload/vector envelopes. RK rotation still requires
-a data re-encryption job and should use the explicit re-encryption mode rather
-than normal write-path idempotency. The `rk_id`/`rk_epoch` fields are included
-in AEAD AAD when present, so storage-side edits to resource-key identity fail
-closed.
+manifest without rewriting payload/vector envelopes. The low-level
+`rewrap_resource_key` helper implements that primitive by unwrapping the RK with
+the old MK/AAD and immediately wrapping the same RK with the new MK/AAD. RK
+rotation still requires a data re-encryption job and should use the explicit
+re-encryption mode rather than normal write-path idempotency. The
+`rk_id`/`rk_epoch` fields are included in AEAD AAD when present, so storage-side
+edits to resource-key identity fail closed.
 
 The wrapped RK AES-GCM AAD is a length-prefixed tuple of `qdrant-sec`, `v1`,
 `resource-key-wrap`, the material reference, `rk_epoch`, `scope`, `wrapped_by`,

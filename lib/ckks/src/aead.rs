@@ -300,6 +300,17 @@ pub trait MasterKeyProvider: Send + Sync {
     ) -> Result<SecretKey, EncryptionError>;
 }
 
+pub fn rewrap_resource_key(
+    old_provider: &dyn MasterKeyProvider,
+    new_provider: &dyn MasterKeyProvider,
+    wrapped: &WrappedKeyBlob,
+    old_aad: &[u8],
+    new_aad: &[u8],
+) -> Result<WrappedKeyBlob, EncryptionError> {
+    let resource_key = old_provider.unwrap_resource_key(wrapped, old_aad)?;
+    new_provider.wrap_resource_key(&resource_key, new_aad)
+}
+
 pub struct LocalMasterKeyProvider {
     mk_id: String,
     key: SecretKey,

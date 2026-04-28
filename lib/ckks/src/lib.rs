@@ -14,6 +14,7 @@ pub use aead::{
     AeadCipher, AeadKeyring, CKKS_VECTOR_KEY_DOMAIN, EncryptedEnvelope, EncryptionContext,
     EncryptionError, EncryptionPurpose, LocalMasterKeyProvider, MasterKeyProvider,
     PAYLOAD_TEXT_KEY_DOMAIN, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, WrappedKeyBlob,
+    rewrap_resource_key,
 };
 pub use control_plane::{
     CLIENT_PAYLOAD_ENVELOPE_BINDING, CiphertextEnvelope, CompiledCollectionCryptoPlan,
