@@ -39,6 +39,7 @@ use qdrant_ckks::{
     AeadCipher, PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
     is_encrypted_payload_value,
 };
+use segment::data_types::facets::FacetParams;
 use segment::data_types::order_by::{Direction, OrderBy, OrderByInterface};
 use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, VectorInternal, VectorStructInternal};
 use segment::types::{
@@ -1074,6 +1075,59 @@ async fn encrypted_payload_field_rejects_plaintext_filters() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot filter on encrypted payload field")
+                && description.contains("document.body")
+                && description.contains("blind index")
+    ));
+
+    let err = collection
+        .facet(
+            FacetParams {
+                key: "document.title".parse().unwrap(),
+                limit: 10,
+                filter: Some(encrypted_payload_filter()),
+                exact: true,
+            },
+            ShardSelectorInternal::All,
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot filter on encrypted payload field")
+                && description.contains("document.body")
+                && description.contains("blind index")
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn encrypted_payload_field_rejects_plaintext_facet_key() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
+
+    let err = collection
+        .facet(
+            FacetParams {
+                key: "document.body".parse().unwrap(),
+                limit: 10,
+                filter: None,
+                exact: true,
+            },
+            ShardSelectorInternal::All,
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot facet on encrypted payload field")
                 && description.contains("document.body")
                 && description.contains("blind index")
     ));

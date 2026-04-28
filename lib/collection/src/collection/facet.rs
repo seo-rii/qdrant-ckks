@@ -8,9 +8,10 @@ use futures::stream::FuturesUnordered;
 use segment::data_types::facets::{FacetParams, FacetResponse, FacetValue};
 
 use super::Collection;
+use crate::config::EncryptionSelector;
 use crate::operations::consistency_params::ReadConsistency;
 use crate::operations::shard_selector_internal::ShardSelectorInternal;
-use crate::operations::types::CollectionResult;
+use crate::operations::types::{CollectionError, CollectionResult};
 
 impl Collection {
     pub async fn facet(
@@ -24,6 +25,35 @@ impl Collection {
         if request.limit == 0 {
             return Ok(FacetResponse::default());
         }
+
+        if let Some(encryption) = self
+            .collection_config
+            .read()
+            .await
+            .params
+            .effective_encryption()
+        {
+            for rule in &encryption.rules {
+                let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
+                    continue;
+                };
+                for encrypted_path in paths {
+                    let encrypted_json_path = encrypted_path.parse().map_err(|err| {
+                        CollectionError::bad_input(format!(
+                            "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                        ))
+                    })?;
+                    if request.key.compatible(&encrypted_json_path) {
+                        return Err(CollectionError::bad_input(format!(
+                            "cannot facet on encrypted payload field '{}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                            request.key,
+                        )));
+                    }
+                }
+            }
+        }
+        self.ensure_filter_does_not_touch_encrypted_payload(request.filter.as_ref())
+            .await?;
 
         let limit = request.limit;
         let request = Arc::new(request);
