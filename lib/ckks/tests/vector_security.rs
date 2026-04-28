@@ -401,6 +401,67 @@ fn command_openfhe_backend_checked_constructor_validates_bridge_path() {
 
 #[cfg(unix)]
 #[test]
+fn command_openfhe_backend_revalidates_bridge_before_spawn() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::Builder::new()
+        .prefix("openfhe-spawn-revalidate")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let script_path = dir.path().join("checked-openfhe-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+IFS= read -r _request
+printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let bridge_digest = Sha256::digest(fs::read(&script_path).unwrap());
+    let backend = CommandOpenFheBackend::new_checked_with_sha256_b64(
+        &script_path,
+        BASE64URL_NOPAD.encode(&bridge_digest),
+    )
+    .unwrap();
+
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+IFS= read -r _request
+printf '{"version":1,"ciphertext":"cmVwbGFjZWQtY2lwaGVy"}\n'
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let encryptor = CkksVectorEncryptor::new(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+
+    let err = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0])
+        .unwrap_err();
+
+    assert!(
+        matches!(err, CkksError::Backend(message) if message.contains("sha256 pin does not match"))
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn command_openfhe_backend_uses_bridge_protocol() {
     use std::os::unix::fs::PermissionsExt;
 

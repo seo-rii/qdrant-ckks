@@ -25,6 +25,8 @@ pub struct CommandOpenFheBackend {
     timeout: Duration,
     max_output_bytes: usize,
     pool_size: NonZeroUsize,
+    checked_program: bool,
+    expected_sha256_b64: Option<String>,
     workers: Arc<Mutex<Vec<Arc<WorkerProcess>>>>,
     next_worker: Arc<AtomicUsize>,
 }
@@ -37,6 +39,11 @@ impl std::fmt::Debug for CommandOpenFheBackend {
             .field("timeout", &self.timeout)
             .field("max_output_bytes", &self.max_output_bytes)
             .field("pool_size", &self.pool_size)
+            .field("checked_program", &self.checked_program)
+            .field(
+                "expected_sha256_b64",
+                &self.expected_sha256_b64.as_ref().map(|_| "<configured>"),
+            )
             .finish()
     }
 }
@@ -48,6 +55,8 @@ impl PartialEq for CommandOpenFheBackend {
             && self.timeout == other.timeout
             && self.max_output_bytes == other.max_output_bytes
             && self.pool_size == other.pool_size
+            && self.checked_program == other.checked_program
+            && self.expected_sha256_b64 == other.expected_sha256_b64
     }
 }
 
@@ -144,6 +153,8 @@ impl CommandOpenFheBackend {
             timeout: DEFAULT_BRIDGE_TIMEOUT,
             max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
             pool_size: NonZeroUsize::new(1).expect("pool size must be non-zero"),
+            checked_program: false,
+            expected_sha256_b64: None,
             workers: Arc::new(Mutex::new(Vec::new())),
             next_worker: Arc::new(AtomicUsize::new(0)),
         }
@@ -163,7 +174,9 @@ impl CommandOpenFheBackend {
         let program = program.into();
         validate_checked_bridge_program(&program)?;
 
-        Ok(Self::new_unchecked(program))
+        let mut backend = Self::new_unchecked(program);
+        backend.checked_program = true;
+        Ok(backend)
     }
 
     pub fn new_checked_with_sha256_b64(
@@ -171,10 +184,14 @@ impl CommandOpenFheBackend {
         expected_sha256_b64: impl AsRef<str>,
     ) -> Result<Self, CkksError> {
         let program = program.into();
+        let expected_sha256_b64 = expected_sha256_b64.as_ref().to_string();
         validate_checked_bridge_program(&program)?;
-        validate_bridge_program_sha256_b64(&program, expected_sha256_b64.as_ref())?;
+        validate_bridge_program_sha256_b64(&program, &expected_sha256_b64)?;
 
-        Ok(Self::new_unchecked(program))
+        let mut backend = Self::new_unchecked(program);
+        backend.checked_program = true;
+        backend.expected_sha256_b64 = Some(expected_sha256_b64);
+        Ok(backend)
     }
 
     pub fn with_args<I, S>(mut self, args: I) -> Self
@@ -595,6 +612,13 @@ impl CommandOpenFheBackend {
                 workers.get(self.next_worker.fetch_add(1, Ordering::Relaxed) % self.pool_size.get())
         {
             return Ok(Arc::clone(worker_process));
+        }
+
+        if self.checked_program {
+            validate_checked_bridge_program(&self.program)?;
+            if let Some(expected_sha256_b64) = self.expected_sha256_b64.as_deref() {
+                validate_bridge_program_sha256_b64(&self.program, expected_sha256_b64)?;
+            }
         }
 
         let mut child = Command::new(&self.program)
