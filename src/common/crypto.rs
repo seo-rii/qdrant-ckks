@@ -59,6 +59,8 @@ pub enum CryptoSetupError {
     MissingBackendProgram { backend: String, kind: String },
     #[error("crypto backend {backend} program path is invalid: {program}")]
     InvalidBackendProgram { backend: String, program: String },
+    #[error("crypto backend {backend} size is invalid: {reason}")]
+    InvalidBackendSize { backend: String, reason: String },
     #[error(
         "crypto instance {instance} references unknown material {material_ref} for role {role}"
     )]
@@ -696,6 +698,26 @@ fn validate_backend(
     backend_name: &str,
     backend: &CryptoBackendConfig,
 ) -> Result<(), CryptoSetupError> {
+    match backend.kind.as_str() {
+        "process_pool" => {
+            if backend.size == Some(0) {
+                return Err(CryptoSetupError::InvalidBackendSize {
+                    backend: backend_name.to_string(),
+                    reason: "process_pool size must be at least 1".to_string(),
+                });
+            }
+        }
+        "process" => {
+            if backend.size.is_some_and(|size| size > 1) {
+                return Err(CryptoSetupError::InvalidBackendSize {
+                    backend: backend_name.to_string(),
+                    reason: "process backend size must be omitted or 1".to_string(),
+                });
+            }
+        }
+        _ => {}
+    }
+
     if matches!(backend.kind.as_str(), "process" | "process_pool") {
         let Some(program) = backend.program.as_deref() else {
             return Err(CryptoSetupError::MissingBackendProgram {
@@ -1689,6 +1711,43 @@ mod tests {
             Err(CryptoSetupError::InvalidBackendProgram {
                 backend: "openfhe_local".to_string(),
                 program: "relative-openfhe-bridge".to_string(),
+            }),
+        );
+    }
+
+    #[test]
+    fn validate_backend_rejects_invalid_pool_size() {
+        assert_eq!(
+            validate_backend(
+                "openfhe_local",
+                &CryptoBackendConfig {
+                    kind: "process_pool".to_string(),
+                    program: Some("/usr/local/bin/openfhe-bridge".to_string()),
+                    sha256_b64: None,
+                    size: Some(0),
+                    timeout_ms: Some(5_000),
+                },
+            ),
+            Err(CryptoSetupError::InvalidBackendSize {
+                backend: "openfhe_local".to_string(),
+                reason: "process_pool size must be at least 1".to_string(),
+            }),
+        );
+
+        assert_eq!(
+            validate_backend(
+                "openfhe_local",
+                &CryptoBackendConfig {
+                    kind: "process".to_string(),
+                    program: Some("/usr/local/bin/openfhe-bridge".to_string()),
+                    sha256_b64: None,
+                    size: Some(2),
+                    timeout_ms: Some(5_000),
+                },
+            ),
+            Err(CryptoSetupError::InvalidBackendSize {
+                backend: "openfhe_local".to_string(),
+                reason: "process backend size must be omitted or 1".to_string(),
             }),
         );
     }
