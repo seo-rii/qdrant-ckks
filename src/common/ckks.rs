@@ -246,7 +246,7 @@ pub(crate) fn validate_bridge_path_with_sha256(
                 path: path.to_string(),
             });
         }
-        if metadata.permissions().mode() & 0o002 != 0 {
+        if metadata.permissions().mode() & 0o022 != 0 {
             return Err(CkksSetupError::InvalidOpenFheBridgePath {
                 path: path.to_string(),
             });
@@ -590,9 +590,19 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
 
             let mut permissions = fs::metadata(&bridge_path).unwrap().permissions();
-            permissions.set_mode(0o777);
+            permissions.set_mode(0o720);
             fs::set_permissions(&bridge_path, permissions).unwrap();
             config.openfhe_bridge_path = Some(bridge_path.display().to_string());
+            assert_eq!(
+                validate_runtime_config(&config),
+                Err(CkksSetupError::InvalidOpenFheBridgePath {
+                    path: bridge_path.display().to_string(),
+                }),
+            );
+
+            let mut permissions = fs::metadata(&bridge_path).unwrap().permissions();
+            permissions.set_mode(0o702);
+            fs::set_permissions(&bridge_path, permissions).unwrap();
             assert_eq!(
                 validate_runtime_config(&config),
                 Err(CkksSetupError::InvalidOpenFheBridgePath {
