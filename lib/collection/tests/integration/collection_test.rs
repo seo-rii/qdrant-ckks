@@ -13,7 +13,7 @@ use collection::grouping::GroupBy;
 use collection::grouping::group_by::{GroupRequest, SourceRequest};
 use collection::operations::CollectionUpdateOperations;
 use collection::operations::config_diff::CollectionParamsDiff;
-use collection::operations::payload_ops::{PayloadOps, SetPayloadOp};
+use collection::operations::payload_ops::{DeletePayloadOp, PayloadOps, SetPayloadOp};
 use collection::operations::point_ops::{
     BatchPersisted, BatchVectorStructPersisted, PointInsertOperationsInternal, PointOperations,
     PointStructPersisted, VectorStructPersisted, WriteOrdering,
@@ -1124,6 +1124,66 @@ async fn encrypted_payload_field_rejects_plaintext_filters() {
                 && description.contains("document.body")
                 && description.contains("blind index")
     ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn encrypted_payload_field_rejects_update_filters() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
+
+    let operations = vec![
+        CollectionUpdateOperations::PointOperation(PointOperations::DeletePointsByFilter(
+            encrypted_payload_filter(),
+        )),
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
+            payload: serde_json::from_str(r#"{"tag":"updated"}"#).unwrap(),
+            points: None,
+            filter: Some(encrypted_payload_filter()),
+            key: None,
+        })),
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(DeletePayloadOp {
+            keys: vec!["tag".parse().unwrap()],
+            points: None,
+            filter: Some(encrypted_payload_filter()),
+        })),
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayloadByFilter(
+            encrypted_payload_filter(),
+        )),
+        CollectionUpdateOperations::VectorOperation(VectorOperations::UpdateVectors(
+            UpdateVectorsOp {
+                points: vec![PointVectorsPersisted {
+                    id: 1.into(),
+                    vector: VectorStructPersisted::from(vec![0.0, 1.0, 0.0, 0.0]),
+                }],
+                update_filter: Some(encrypted_payload_filter()),
+            },
+        )),
+        CollectionUpdateOperations::VectorOperation(VectorOperations::DeleteVectorsByFilter(
+            encrypted_payload_filter(),
+            vec![DEFAULT_VECTOR_NAME.to_string()],
+        )),
+    ];
+
+    for operation in operations {
+        let err = collection
+            .update_from_client_simple(
+                operation,
+                true,
+                None,
+                WriteOrdering::default(),
+                HwMeasurementAcc::new(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            CollectionError::BadInput { description }
+                if description.contains("cannot filter on encrypted payload field")
+                    && description.contains("document.body")
+                    && description.contains("blind index")
+        ));
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

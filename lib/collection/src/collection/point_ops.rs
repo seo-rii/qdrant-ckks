@@ -173,6 +173,49 @@ impl Collection {
                     .unwrap_or_else(|| self.name().to_string()),
             )
         };
+        if encryption.is_some() {
+            match &operation {
+                CollectionUpdateOperations::PointOperation(
+                    PointOperations::DeletePointsByFilter(filter),
+                ) => {
+                    self.ensure_filter_does_not_touch_encrypted_payload(Some(filter))
+                        .await?
+                }
+                CollectionUpdateOperations::PayloadOperation(
+                    PayloadOps::SetPayload(operation) | PayloadOps::OverwritePayload(operation),
+                ) => {
+                    self.ensure_filter_does_not_touch_encrypted_payload(operation.filter.as_ref())
+                        .await?;
+                }
+                CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(
+                    operation,
+                )) => {
+                    self.ensure_filter_does_not_touch_encrypted_payload(operation.filter.as_ref())
+                        .await?;
+                }
+                CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayloadByFilter(
+                    filter,
+                )) => {
+                    self.ensure_filter_does_not_touch_encrypted_payload(Some(filter))
+                        .await?
+                }
+                CollectionUpdateOperations::VectorOperation(VectorOperations::UpdateVectors(
+                    operation,
+                )) => {
+                    self.ensure_filter_does_not_touch_encrypted_payload(
+                        operation.update_filter.as_ref(),
+                    )
+                    .await?;
+                }
+                CollectionUpdateOperations::VectorOperation(
+                    VectorOperations::DeleteVectorsByFilter(filter, _),
+                ) => {
+                    self.ensure_filter_does_not_touch_encrypted_payload(Some(filter))
+                        .await?
+                }
+                _ => {}
+            }
+        }
         if let Some(encryption) = encryption {
             let payload_write_touches_encrypted_path = |payload: &Payload,
                                                         key: Option<&JsonPath>,
