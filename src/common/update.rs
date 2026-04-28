@@ -1902,6 +1902,36 @@ mod tests {
                 ));
             }
 
+            for indexed_field in ["body", "body.keyword"] {
+                let err = do_create_index(
+                    dispatcher.clone().into(),
+                    "docs".to_string(),
+                    CreateFieldIndex {
+                        field_name: indexed_field.parse().unwrap(),
+                        field_schema: Some(PayloadFieldSchema::FieldType(
+                            segment::types::PayloadSchemaType::Keyword,
+                        )),
+                    },
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .unwrap_err();
+                assert!(matches!(
+                    err,
+                    StorageError::BadInput { description }
+                        if description.contains("encrypted payload field")
+                            && description.contains("body")
+                            && description.contains("blind index")
+                ));
+            }
+
             collection.stop_gracefully().await;
         });
     }
