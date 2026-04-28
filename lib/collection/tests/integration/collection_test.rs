@@ -16,8 +16,8 @@ use collection::operations::config_diff::CollectionParamsDiff;
 use collection::operations::payload_ops::{DeletePayloadOp, PayloadOps, SetPayloadOp};
 use collection::operations::point_ops::{
     BatchPersisted, BatchVectorStructPersisted, ConditionalInsertOperationInternal,
-    PointInsertOperationsInternal, PointOperations, PointStructPersisted, VectorStructPersisted,
-    WriteOrdering,
+    PointInsertOperationsInternal, PointOperations, PointStructPersisted, PointSyncOperation,
+    VectorStructPersisted, WriteOrdering,
 };
 use collection::operations::shard_selector_internal::ShardSelectorInternal;
 use collection::operations::types::{
@@ -1553,6 +1553,37 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
                 && description.contains("key id does not match")
     ));
 
+    let plaintext_sync = CollectionUpdateOperations::PointOperation(PointOperations::SyncPoints(
+        PointSyncOperation {
+            from_id: None,
+            to_id: None,
+            points: vec![PointStructPersisted {
+                id: 5.into(),
+                vector: VectorStructPersisted::from(vec![0.0, 0.0, 1.0, 1.0]),
+                payload: Some(
+                    serde_json::from_str(r#"{"document":{"body":"sync plaintext"}}"#).unwrap(),
+                ),
+            }],
+        },
+    ));
+    let err = collection
+        .update_from_client_simple(
+            plaintext_sync,
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("plaintext payload")
+                && description.contains("document.body")
+    ));
+
     let public_payload = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
         PointInsertOperationsInternal::from(vec![PointStructPersisted {
             id: 2.into(),
@@ -1893,6 +1924,35 @@ async fn encrypted_vector_rejects_plaintext_vector_writes() {
     let err = collection
         .update_from_client_simple(
             plaintext_upsert,
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("encrypted vector")
+                && description.contains("ciphertext storage/write path is not implemented")
+    ));
+
+    let plaintext_sync = CollectionUpdateOperations::PointOperation(PointOperations::SyncPoints(
+        PointSyncOperation {
+            from_id: None,
+            to_id: None,
+            points: vec![PointStructPersisted {
+                id: 2.into(),
+                vector: VectorStructPersisted::from(vec![0.0, 0.0, 1.0, 0.0]),
+                payload: None,
+            }],
+        },
+    ));
+    let err = collection
+        .update_from_client_simple(
+            plaintext_sync,
             true,
             None,
             WriteOrdering::default(),
