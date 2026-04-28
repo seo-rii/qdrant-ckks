@@ -261,6 +261,47 @@ fn constructor_rejects_invalid_identifiers_and_public_material() {
 
 #[cfg(unix)]
 #[test]
+fn command_openfhe_backend_checked_constructor_validates_bridge_path() {
+    use std::os::unix::fs::PermissionsExt;
+
+    assert!(matches!(
+        CommandOpenFheBackend::new_checked("bash"),
+        Err(CkksError::Backend(message)) if message.contains("absolute path")
+    ));
+
+    let dir = tempfile::Builder::new()
+        .prefix("openfhe-checked")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let script_path = dir.path().join("checked-openfhe-bridge.sh");
+    fs::write(&script_path, b"#!/bin/sh\n").unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    assert!(CommandOpenFheBackend::new_checked(&script_path).is_ok());
+
+    let mut permissions = fs::metadata(dir.path()).unwrap().permissions();
+    permissions.set_mode(0o777);
+    fs::set_permissions(dir.path(), permissions).unwrap();
+    assert!(matches!(
+        CommandOpenFheBackend::new_checked(&script_path),
+        Err(CkksError::Backend(message)) if message.contains("parent directory")
+    ));
+    let mut permissions = fs::metadata(dir.path()).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(dir.path(), permissions).unwrap();
+
+    let symlink_path = dir.path().join("checked-openfhe-bridge-link.sh");
+    std::os::unix::fs::symlink(&script_path, &symlink_path).unwrap();
+    assert!(matches!(
+        CommandOpenFheBackend::new_checked(&symlink_path),
+        Err(CkksError::Backend(message)) if message.contains("non-symlink")
+    ));
+}
+
+#[cfg(unix)]
+#[test]
 fn command_openfhe_backend_uses_bridge_protocol() {
     use std::os::unix::fs::PermissionsExt;
 

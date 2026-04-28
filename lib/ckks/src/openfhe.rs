@@ -1,5 +1,5 @@
 use std::io::{self, BufReader, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -138,6 +138,101 @@ impl CommandOpenFheBackend {
             max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
             worker: Arc::new(Mutex::new(None)),
         }
+    }
+
+    pub fn new_checked(program: impl Into<PathBuf>) -> Result<Self, CkksError> {
+        let program = program.into();
+        let path = Path::new(&program);
+        if !path.is_absolute() {
+            return Err(CkksError::Backend(format!(
+                "OpenFHE bridge program must be an absolute path: {}",
+                path.display(),
+            )));
+        }
+
+        let link_metadata = std::fs::symlink_metadata(path).map_err(|err| {
+            CkksError::Backend(format!(
+                "failed to inspect OpenFHE bridge program {}: {err}",
+                path.display(),
+            ))
+        })?;
+        if link_metadata.file_type().is_symlink() || !link_metadata.is_file() {
+            return Err(CkksError::Backend(format!(
+                "OpenFHE bridge program must be a regular non-symlink file: {}",
+                path.display(),
+            )));
+        }
+
+        let metadata = std::fs::metadata(path).map_err(|err| {
+            CkksError::Backend(format!(
+                "failed to inspect OpenFHE bridge program {}: {err}",
+                path.display(),
+            ))
+        })?;
+        if !metadata.is_file() {
+            return Err(CkksError::Backend(format!(
+                "OpenFHE bridge program must be a regular file: {}",
+                path.display(),
+            )));
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+            unsafe extern "C" {
+                fn geteuid() -> u32;
+            }
+
+            let mode = metadata.permissions().mode();
+            if mode & 0o111 == 0 || mode & 0o022 != 0 {
+                return Err(CkksError::Backend(format!(
+                    "OpenFHE bridge program must be executable and not group/world-writable: {}",
+                    path.display(),
+                )));
+            }
+
+            let effective_uid = unsafe { geteuid() };
+            let owner = metadata.uid();
+            if owner != 0 && owner != effective_uid {
+                return Err(CkksError::Backend(format!(
+                    "OpenFHE bridge program must be owned by root or the qdrant process user: {}",
+                    path.display(),
+                )));
+            }
+
+            let mut parent = path.parent();
+            while let Some(directory) = parent {
+                let directory_metadata = std::fs::symlink_metadata(directory).map_err(|err| {
+                    CkksError::Backend(format!(
+                        "failed to inspect OpenFHE bridge parent directory {}: {err}",
+                        directory.display(),
+                    ))
+                })?;
+                if directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir() {
+                    return Err(CkksError::Backend(format!(
+                        "OpenFHE bridge parent path must be a regular directory: {}",
+                        directory.display(),
+                    )));
+                }
+                if directory_metadata.permissions().mode() & 0o022 != 0 {
+                    return Err(CkksError::Backend(format!(
+                        "OpenFHE bridge parent directory must not be group/world-writable: {}",
+                        directory.display(),
+                    )));
+                }
+                let owner = directory_metadata.uid();
+                if owner != 0 && owner != effective_uid {
+                    return Err(CkksError::Backend(format!(
+                        "OpenFHE bridge parent directory must be owned by root or the qdrant process user: {}",
+                        directory.display(),
+                    )));
+                }
+                parent = directory.parent();
+            }
+        }
+
+        Ok(Self::new(program))
     }
 
     pub fn with_args<I, S>(mut self, args: I) -> Self
