@@ -176,6 +176,12 @@ impl Collection {
         if encryption.is_some() {
             match &operation {
                 CollectionUpdateOperations::PointOperation(
+                    PointOperations::UpsertPointsConditional(operation),
+                ) => {
+                    self.ensure_filter_does_not_touch_encrypted_payload(Some(&operation.condition))
+                        .await?
+                }
+                CollectionUpdateOperations::PointOperation(
                     PointOperations::DeletePointsByFilter(filter),
                 ) => {
                     self.ensure_filter_does_not_touch_encrypted_payload(Some(filter))

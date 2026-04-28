@@ -15,8 +15,9 @@ use collection::operations::CollectionUpdateOperations;
 use collection::operations::config_diff::CollectionParamsDiff;
 use collection::operations::payload_ops::{DeletePayloadOp, PayloadOps, SetPayloadOp};
 use collection::operations::point_ops::{
-    BatchPersisted, BatchVectorStructPersisted, PointInsertOperationsInternal, PointOperations,
-    PointStructPersisted, VectorStructPersisted, WriteOrdering,
+    BatchPersisted, BatchVectorStructPersisted, ConditionalInsertOperationInternal,
+    PointInsertOperationsInternal, PointOperations, PointStructPersisted, VectorStructPersisted,
+    WriteOrdering,
 };
 use collection::operations::shard_selector_internal::ShardSelectorInternal;
 use collection::operations::types::{
@@ -1133,6 +1134,17 @@ async fn encrypted_payload_field_rejects_update_filters() {
         encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
 
     let operations = vec![
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPointsConditional(
+            ConditionalInsertOperationInternal {
+                points_op: PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                    id: 1.into(),
+                    vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                    payload: Some(serde_json::from_str(r#"{"tag":"updated"}"#).unwrap()),
+                }]),
+                condition: encrypted_payload_filter(),
+                update_mode: None,
+            },
+        )),
         CollectionUpdateOperations::PointOperation(PointOperations::DeletePointsByFilter(
             encrypted_payload_filter(),
         )),
