@@ -1,7 +1,8 @@
 use std::io::{self, BufReader, Read, Write};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -23,7 +24,9 @@ pub struct CommandOpenFheBackend {
     args: Vec<String>,
     timeout: Duration,
     max_output_bytes: usize,
-    worker: Arc<Mutex<Option<Arc<WorkerProcess>>>>,
+    pool_size: NonZeroUsize,
+    workers: Arc<Mutex<Vec<Arc<WorkerProcess>>>>,
+    next_worker: Arc<AtomicUsize>,
 }
 
 impl std::fmt::Debug for CommandOpenFheBackend {
@@ -33,6 +36,7 @@ impl std::fmt::Debug for CommandOpenFheBackend {
             .field("args", &self.args)
             .field("timeout", &self.timeout)
             .field("max_output_bytes", &self.max_output_bytes)
+            .field("pool_size", &self.pool_size)
             .finish()
     }
 }
@@ -43,6 +47,7 @@ impl PartialEq for CommandOpenFheBackend {
             && self.args == other.args
             && self.timeout == other.timeout
             && self.max_output_bytes == other.max_output_bytes
+            && self.pool_size == other.pool_size
     }
 }
 
@@ -137,7 +142,9 @@ impl CommandOpenFheBackend {
             args: Vec::new(),
             timeout: DEFAULT_BRIDGE_TIMEOUT,
             max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
-            worker: Arc::new(Mutex::new(None)),
+            pool_size: NonZeroUsize::new(1).expect("pool size must be non-zero"),
+            workers: Arc::new(Mutex::new(Vec::new())),
+            next_worker: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -175,19 +182,29 @@ impl CommandOpenFheBackend {
         S: Into<String>,
     {
         self.args.extend(args.into_iter().map(Into::into));
-        self.worker = Arc::new(Mutex::new(None));
+        self.workers = Arc::new(Mutex::new(Vec::new()));
+        self.next_worker = Arc::new(AtomicUsize::new(0));
         self
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
-        self.worker = Arc::new(Mutex::new(None));
+        self.workers = Arc::new(Mutex::new(Vec::new()));
+        self.next_worker = Arc::new(AtomicUsize::new(0));
         self
     }
 
     pub fn with_max_output_bytes(mut self, max_output_bytes: usize) -> Self {
         self.max_output_bytes = max_output_bytes;
-        self.worker = Arc::new(Mutex::new(None));
+        self.workers = Arc::new(Mutex::new(Vec::new()));
+        self.next_worker = Arc::new(AtomicUsize::new(0));
+        self
+    }
+
+    pub fn with_pool_size(mut self, pool_size: NonZeroUsize) -> Self {
+        self.pool_size = pool_size;
+        self.workers = Arc::new(Mutex::new(Vec::new()));
+        self.next_worker = Arc::new(AtomicUsize::new(0));
         self
     }
 }
@@ -323,13 +340,13 @@ fn validate_bridge_program_sha256_b64(
 
 impl Drop for CommandOpenFheBackend {
     fn drop(&mut self) {
-        if Arc::strong_count(&self.worker) != 1 {
+        if Arc::strong_count(&self.workers) != 1 {
             return;
         }
-        if let Ok(mut worker) = self.worker.lock()
-            && let Some(worker) = worker.take()
-        {
-            let _ = worker.shutdown(false);
+        if let Ok(mut workers) = self.workers.lock() {
+            for worker in workers.drain(..) {
+                let _ = worker.shutdown(false);
+            }
         }
     }
 }
@@ -539,24 +556,36 @@ impl CkksVectorBackend for CommandOpenFheBackend {
 
 impl CommandOpenFheBackend {
     fn worker_process(&self) -> Result<Arc<WorkerProcess>, CkksError> {
-        let mut worker = self.worker.lock().map_err(|_| {
-            CkksError::Backend("OpenFHE bridge worker mutex was poisoned".to_string())
+        let mut workers = self.workers.lock().map_err(|_| {
+            CkksError::Backend("OpenFHE bridge workers mutex was poisoned".to_string())
         })?;
-        if let Some(worker_process) = worker.as_ref() {
+
+        let mut worker_index = 0;
+        while worker_index < workers.len() {
+            let worker_process = &workers[worker_index];
             if worker_process.stderr_truncated.load(Ordering::Relaxed) {
+                let worker_process = workers.swap_remove(worker_index);
                 worker_process.shutdown(false)?;
-                *worker = None;
-                return Err(CkksError::Backend(format!(
-                    "OpenFHE bridge stderr exceeded {} bytes",
-                    self.max_output_bytes,
-                )));
+                continue;
             }
             if worker_process.try_wait()?.is_some() {
+                let worker_process = workers.swap_remove(worker_index);
                 worker_process.shutdown(false)?;
-                *worker = None;
+                continue;
+            }
+            worker_index += 1;
+        }
+
+        for worker_process in workers.iter() {
+            if worker_process.request_lock.try_lock().is_ok() {
+                return Ok(Arc::clone(worker_process));
             }
         }
-        if let Some(worker_process) = worker.as_ref() {
+
+        if workers.len() == self.pool_size.get()
+            && let Some(worker_process) =
+                workers.get(self.next_worker.fetch_add(1, Ordering::Relaxed) % self.pool_size.get())
+        {
             return Ok(Arc::clone(worker_process));
         }
 
@@ -651,7 +680,7 @@ impl CommandOpenFheBackend {
             stdout_thread: Mutex::new(Some(stdout_thread)),
             stderr_thread: Mutex::new(Some(stderr_thread)),
         });
-        *worker = Some(Arc::clone(&worker_process));
+        workers.push(Arc::clone(&worker_process));
         Ok(worker_process)
     }
 
@@ -661,14 +690,14 @@ impl CommandOpenFheBackend {
         join_readers: bool,
     ) -> Result<(), CkksError> {
         worker_process.shutdown(join_readers)?;
-        let mut worker = self.worker.lock().map_err(|_| {
-            CkksError::Backend("OpenFHE bridge worker mutex was poisoned".to_string())
+        let mut workers = self.workers.lock().map_err(|_| {
+            CkksError::Backend("OpenFHE bridge workers mutex was poisoned".to_string())
         })?;
-        if worker
-            .as_ref()
-            .is_some_and(|current| Arc::ptr_eq(current, worker_process))
+        if let Some(index) = workers
+            .iter()
+            .position(|current| Arc::ptr_eq(current, worker_process))
         {
-            *worker = None;
+            workers.swap_remove(index);
         }
         Ok(())
     }

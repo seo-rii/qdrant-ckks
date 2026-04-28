@@ -1,4 +1,6 @@
 use std::fs;
+use std::num::NonZeroUsize;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use data_encoding::BASE64URL_NOPAD;
@@ -675,6 +677,70 @@ done
 
     let counts = fs::read_to_string(count_path).unwrap();
     assert_eq!(counts.lines().filter(|line| *line == "start").count(), 1);
+    assert_eq!(counts.lines().filter(|line| *line == "request").count(), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn command_openfhe_backend_uses_pool_size_for_concurrent_requests() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("pooled-openfhe-bridge.sh");
+    let count_path = dir.path().join("pool-counts.log");
+    fs::write(
+        &script_path,
+        format!(
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+count_file={}
+printf 'start\n' >> "$count_file"
+while IFS= read -r _request; do
+  sleep 0.2
+  printf 'request\n' >> "$count_file"
+  printf '{{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}}\n'
+done
+"#,
+            count_path.display(),
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+        .with_args([script_path.display().to_string()])
+        .with_pool_size(NonZeroUsize::new(2).unwrap());
+    let encryptor = Arc::new(
+        CkksVectorEncryptor::new(
+            "tenant-a:ckks",
+            "embedding",
+            CkksParameters::openfhe_default_128_bit(),
+            SecretKey::from_bytes([29u8; 32]),
+            backend,
+        )
+        .unwrap(),
+    );
+
+    let first_encryptor = Arc::clone(&encryptor);
+    let second_encryptor = Arc::clone(&encryptor);
+    let first = std::thread::spawn(move || {
+        first_encryptor
+            .encrypt("docs", "point-1", &public_material(), &[1.0])
+            .unwrap();
+    });
+    let second = std::thread::spawn(move || {
+        second_encryptor
+            .encrypt("docs", "point-2", &public_material(), &[2.0])
+            .unwrap();
+    });
+    first.join().unwrap();
+    second.join().unwrap();
+    drop(encryptor);
+
+    let counts = fs::read_to_string(count_path).unwrap();
+    assert_eq!(counts.lines().filter(|line| *line == "start").count(), 2);
     assert_eq!(counts.lines().filter(|line| *line == "request").count(), 2);
 }
 
