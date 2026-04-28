@@ -80,19 +80,14 @@ impl CiphertextEnvelope {
         let key_id = key_id.into();
         let body = body.into();
 
-        if version == 0 {
-            return Err(ControlPlaneError::InvalidEnvelopeVersion);
-        }
-        validate_identifier(&provider)?;
-        validate_identifier(&instance_fingerprint)?;
-        validate_key_id(&key_id)
-            .map_err(|_| ControlPlaneError::InvalidEnvelopeKeyId(key_id.clone()))?;
-        if let Some(binding) = &binding {
-            validate_identifier(binding)?;
-        }
-        if body.is_empty() {
-            return Err(ControlPlaneError::InvalidIdentifier("body".to_string()));
-        }
+        validate_envelope_fields(
+            version,
+            &provider,
+            &instance_fingerprint,
+            &key_id,
+            binding.as_deref(),
+            &body,
+        )?;
 
         Ok(Self {
             version,
@@ -127,12 +122,42 @@ impl CiphertextEnvelope {
 
         let envelope: Self = serde_json::from_value(stored.clone())
             .map_err(|_| ControlPlaneError::MalformedEnvelope)?;
-        if envelope.version == 0 {
-            return Err(ControlPlaneError::InvalidEnvelopeVersion);
-        }
+        validate_envelope_fields(
+            envelope.version,
+            &envelope.provider,
+            &envelope.instance_fingerprint,
+            &envelope.key_id,
+            envelope.binding.as_deref(),
+            &envelope.body,
+        )?;
 
         Ok(Some(envelope))
     }
+}
+
+fn validate_envelope_fields(
+    version: u16,
+    provider: &str,
+    instance_fingerprint: &str,
+    key_id: &str,
+    binding: Option<&str>,
+    body: &str,
+) -> Result<(), ControlPlaneError> {
+    if version == 0 {
+        return Err(ControlPlaneError::InvalidEnvelopeVersion);
+    }
+    validate_identifier(provider)?;
+    validate_identifier(instance_fingerprint)?;
+    validate_key_id(key_id)
+        .map_err(|_| ControlPlaneError::InvalidEnvelopeKeyId(key_id.to_string()))?;
+    if let Some(binding) = binding {
+        validate_identifier(binding)?;
+    }
+    if body.is_empty() {
+        return Err(ControlPlaneError::InvalidIdentifier("body".to_string()));
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Default, Clone)]
@@ -336,6 +361,69 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn ciphertext_envelope_validates_stored_fields_on_parse() {
+        let envelope = CiphertextEnvelope::new(
+            1,
+            CryptoCapability::PayloadValue,
+            PAYLOAD_AES_GCM_PROVIDER,
+            "sha256:test",
+            "tenant-a:payload-v1",
+            Some(PAYLOAD_FIELD_BINDING.to_string()),
+            Map::new(),
+            "AQID",
+        )
+        .unwrap();
+
+        let mut invalid_key_id = envelope.to_stored_value();
+        invalid_key_id
+            .as_object_mut()
+            .unwrap()
+            .get_mut(GENERIC_CIPHERTEXT_MARKER)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                "key_id".to_string(),
+                Value::String("tenant-a/payload@v1".to_string()),
+            );
+        assert!(matches!(
+            CiphertextEnvelope::from_stored_value(&invalid_key_id),
+            Err(ControlPlaneError::InvalidEnvelopeKeyId(_))
+        ));
+
+        let mut invalid_provider = envelope.to_stored_value();
+        invalid_provider
+            .as_object_mut()
+            .unwrap()
+            .get_mut(GENERIC_CIPHERTEXT_MARKER)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                "provider".to_string(),
+                Value::String("payload aes gcm".to_string()),
+            );
+        assert!(matches!(
+            CiphertextEnvelope::from_stored_value(&invalid_provider),
+            Err(ControlPlaneError::InvalidIdentifier(provider)) if provider == "payload aes gcm"
+        ));
+
+        let mut empty_body = envelope.to_stored_value();
+        empty_body
+            .as_object_mut()
+            .unwrap()
+            .get_mut(GENERIC_CIPHERTEXT_MARKER)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("body".to_string(), Value::String(String::new()));
+        assert!(matches!(
+            CiphertextEnvelope::from_stored_value(&empty_body),
+            Err(ControlPlaneError::InvalidIdentifier(body)) if body == "body"
+        ));
     }
 
     #[test]
