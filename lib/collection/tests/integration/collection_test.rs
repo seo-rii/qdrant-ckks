@@ -17,8 +17,8 @@ use collection::operations::point_ops::{
 };
 use collection::operations::shard_selector_internal::ShardSelectorInternal;
 use collection::operations::types::{
-    CollectionError, CountRequestInternal, PointRequestInternal, RecommendRequestInternal,
-    ScrollRequestInternal, UpdateStatus,
+    CollectionError, CountRequestInternal, PointRequestInternal, RecommendExample,
+    RecommendRequestInternal, ScrollRequestInternal, UpdateStatus,
 };
 use collection::operations::universal_query::collection_query::{
     CollectionQueryRequest, Query, VectorInputInternal, VectorQuery,
@@ -1562,6 +1562,29 @@ async fn encrypted_vector_rejects_search_path() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot query encrypted vector")
+                && description.contains("CKKS-native vector search is not implemented")
+    ));
+
+    let err = recommend_by(
+        RecommendRequestInternal {
+            positive: vec![RecommendExample::Dense(vec![1.0, 0.0, 0.0, 0.0])],
+            limit: 1,
+            ..Default::default()
+        },
+        &collection,
+        |_name| async { None },
+        None,
+        ShardSelectorInternal::All,
+        None,
+        HwMeasurementAcc::new(),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot search encrypted vector")
                 && description.contains("CKKS-native vector search is not implemented")
     ));
 }
