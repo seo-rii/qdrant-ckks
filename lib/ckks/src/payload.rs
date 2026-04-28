@@ -550,6 +550,28 @@ pub fn client_payload_signature_message(
     Ok(client_payload_signature_message_for_envelope(&envelope))
 }
 
+pub fn client_payload_signature_key_id(
+    value: &Value,
+    field_path: &str,
+) -> Result<Option<String>, PayloadEncryptionError> {
+    let envelope = extract_client_envelope(value, field_path)?.ok_or_else(|| {
+        PayloadEncryptionError::ExpectedEncryptedEnvelope {
+            field: field_path.to_string(),
+            found: json_type_name(value),
+        }
+    })?;
+    let Some(signature) = envelope.signature else {
+        return Ok(None);
+    };
+    if signature.key_id.is_empty() {
+        return Err(PayloadEncryptionError::MalformedEnvelope(
+            envelope.aad.field_path,
+        ));
+    }
+
+    Ok(Some(signature.key_id))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct StoredPayloadEnvelope {
     kind: String,

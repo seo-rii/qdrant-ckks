@@ -83,8 +83,9 @@ crypto:
       options:
         key_id: tenant-a/client-rk-2026-04
         key_id_required: true
-        signature_key_id: tenant-a/client-signing-v1
-        signature_public_key_b64: base64url-no-pad-ed25519-public-key
+        signature_public_keys:
+          tenant-a/client-signing-v1: base64url-no-pad-ed25519-public-key
+          tenant-a/client-signing-v2: base64url-no-pad-ed25519-public-key
 params:
   encryption:
     version: 1
@@ -105,8 +106,10 @@ This provider does not receive plaintext and does not unwrap a data key. The
 client encrypts before insert and Qdrant only validates the envelope schema,
 AAD metadata, key policy, nonce/ciphertext encoding, and optional Ed25519
 signature before storing the opaque ciphertext. If
-`signature_public_key_b64` is configured, `signature_key_id` is also required
-and every write must carry a valid `signature` object:
+`signature_public_keys` is configured, every write must carry a valid
+`signature` object whose `key_id` selects one configured public key. The legacy
+single-key options `signature_key_id` and `signature_public_key_b64` are still
+accepted, but they cannot be mixed with `signature_public_keys`.
 
 For payload writes, the `aad.collection_id` value is the collection's stable
 crypto identity. New collection configs should use the persisted collection UUID

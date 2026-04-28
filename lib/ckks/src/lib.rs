@@ -30,8 +30,9 @@ pub use payload::{
     CLIENT_ENCRYPTED_PAYLOAD_MARKER, ClientPayloadSignatureVerification,
     ClientPayloadValidationContext, ENCRYPTED_PAYLOAD_MARKER, ExistingPayloadMode,
     PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
-    ServerPayloadValidationContext, client_payload_signature_message,
-    is_client_encrypted_payload_value, is_encrypted_payload_value, validate_client_payload_value,
+    ServerPayloadValidationContext, client_payload_signature_key_id,
+    client_payload_signature_message, is_client_encrypted_payload_value,
+    is_encrypted_payload_value, validate_client_payload_value,
     validate_server_payload_value_metadata,
 };
 pub use vector::{
