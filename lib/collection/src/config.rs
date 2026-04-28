@@ -140,7 +140,8 @@ mod ckks_tests {
             payload_text_fields: vec!["body".to_string()],
             vector_names: vec!["embedding".to_string()],
         };
-        assert!(vector_field.validate().is_err());
+        let err = vector_field.validate().unwrap_err();
+        assert!(format!("{err:?}").contains("unsupported_ckks_vector_selector"));
 
         let empty_enabled = CkksCollectionConfig {
             enabled: true,
@@ -254,7 +255,8 @@ mod ckks_tests {
             ..CollectionParams::empty()
         };
 
-        assert!(params.validate().is_err());
+        let err = params.validate().unwrap_err();
+        assert!(format!("{err:?}").contains("unsupported_encryption_selector"));
     }
 
     #[test]
