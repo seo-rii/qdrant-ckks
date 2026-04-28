@@ -92,6 +92,10 @@ impl GroupRequest {
         F: Fn(String) -> Fut,
         Fut: Future<Output = Option<Arc<Collection>>>,
     {
+        collection
+            .ensure_group_by_does_not_touch_encrypted_payload(&self.group_by)
+            .await?;
+
         let query_search = match self.source {
             SourceRequest::Search(search_req) => ShardQueryRequest::from(search_req),
             SourceRequest::Recommend(recommend_req) => {

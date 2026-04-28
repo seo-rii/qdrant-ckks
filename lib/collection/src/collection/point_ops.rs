@@ -913,6 +913,42 @@ impl Collection {
         Ok(())
     }
 
+    pub(crate) async fn ensure_group_by_does_not_touch_encrypted_payload(
+        &self,
+        group_by: &JsonPath,
+    ) -> CollectionResult<()> {
+        let Some(encryption) = self
+            .collection_config
+            .read()
+            .await
+            .params
+            .effective_encryption()
+        else {
+            return Ok(());
+        };
+
+        for rule in &encryption.rules {
+            let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
+                continue;
+            };
+
+            for encrypted_path in paths {
+                let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
+                    CollectionError::bad_input(format!(
+                        "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                    ))
+                })?;
+                if group_by.compatible(&encrypted_json_path) {
+                    return Err(CollectionError::bad_input(format!(
+                        "cannot group by encrypted payload field '{group_by}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     pub(crate) async fn ensure_formula_does_not_touch_encrypted_payload(
         &self,
         formula: Option<&ParsedFormula>,

@@ -9,6 +9,8 @@ use collection::config::{
     CryptoMigrationState, EncryptionRuleRef, EncryptionSelector, WalConfig,
 };
 use collection::discovery::discover;
+use collection::grouping::GroupBy;
+use collection::grouping::group_by::{GroupRequest, SourceRequest};
 use collection::operations::CollectionUpdateOperations;
 use collection::operations::config_diff::CollectionParamsDiff;
 use collection::operations::payload_ops::{PayloadOps, SetPayloadOp};
@@ -1303,6 +1305,46 @@ async fn encrypted_payload_field_rejects_plaintext_facet_key() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot facet on encrypted payload field")
+                && description.contains("document.body")
+                && description.contains("blind index")
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn encrypted_payload_field_rejects_plaintext_group_by() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
+
+    let group_request = GroupRequest {
+        source: SourceRequest::Search(SearchRequestInternal {
+            vector: vec![0.0, 0.0, 0.0, 0.0].into(),
+            filter: None,
+            params: None,
+            limit: 1,
+            offset: Some(0),
+            with_payload: Some(WithPayloadInterface::Bool(false)),
+            with_vector: Some(WithVector::Bool(false)),
+            score_threshold: None,
+        }),
+        group_by: "document.body".parse().unwrap(),
+        group_size: 1,
+        limit: 1,
+        with_lookup: None,
+    };
+    let err = GroupBy::new(
+        group_request,
+        &collection,
+        |_name| async { None },
+        HwMeasurementAcc::new(),
+    )
+    .execute()
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot group by encrypted payload field")
                 && description.contains("document.body")
                 && description.contains("blind index")
     ));
