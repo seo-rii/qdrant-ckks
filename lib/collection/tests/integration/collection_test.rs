@@ -24,6 +24,7 @@ use collection::operations::types::{
 use collection::operations::universal_query::collection_query::{
     CollectionQueryRequest, Query, VectorInputInternal, VectorQuery,
 };
+use collection::operations::universal_query::formula::{ExpressionInternal, FormulaInternal};
 use collection::operations::universal_query::shard_query::{
     SampleInternal, ScoringQuery, ShardQueryRequest,
 };
@@ -1188,6 +1189,90 @@ async fn encrypted_payload_field_rejects_plaintext_order_by() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot order by encrypted payload field")
+                && description.contains("document.body")
+                && description.contains("blind index")
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn encrypted_payload_field_rejects_plaintext_formula() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
+
+    let encrypted_formula = FormulaInternal {
+        formula: ExpressionInternal::Variable("document.body".to_string()),
+        defaults: HashMap::new(),
+    };
+    let err = collection
+        .query_batch(
+            vec![(
+                CollectionQueryRequest {
+                    prefetch: vec![],
+                    query: Some(Query::Formula(encrypted_formula)),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                ShardSelectorInternal::All,
+            )],
+            |_name| async { None },
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot use encrypted payload field")
+                && description.contains("document.body")
+                && description.contains("formula")
+                && description.contains("blind index")
+    ));
+
+    let condition_formula = FormulaInternal {
+        formula: ExpressionInternal::Condition(Box::new(
+            encrypted_payload_filter().must.unwrap().pop().unwrap(),
+        )),
+        defaults: HashMap::new(),
+    };
+    let err = collection
+        .query_batch(
+            vec![(
+                CollectionQueryRequest {
+                    prefetch: vec![],
+                    query: Some(Query::Formula(condition_formula)),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                ShardSelectorInternal::All,
+            )],
+            |_name| async { None },
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot use formula condition")
                 && description.contains("document.body")
                 && description.contains("blind index")
     ));

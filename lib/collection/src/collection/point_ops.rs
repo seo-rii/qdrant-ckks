@@ -14,6 +14,7 @@ use qdrant_ckks::{
 };
 use segment::data_types::order_by::{Direction, OrderBy};
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
+use segment::index::query_optimization::rescore_formula::parsed_formula::ParsedFormula;
 use segment::json_path::JsonPath;
 use segment::types::{Condition, Filter, Payload, ShardKey, WithPayload, WithPayloadInterface};
 use shard::count::CountRequestInternal;
@@ -904,6 +905,58 @@ impl Collection {
                     return Err(CollectionError::bad_input(format!(
                         "cannot order by encrypted payload field '{}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
                         order_by.key,
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(crate) async fn ensure_formula_does_not_touch_encrypted_payload(
+        &self,
+        formula: Option<&ParsedFormula>,
+    ) -> CollectionResult<()> {
+        let Some(formula) = formula else {
+            return Ok(());
+        };
+        let Some(encryption) = self
+            .collection_config
+            .read()
+            .await
+            .params
+            .effective_encryption()
+        else {
+            return Ok(());
+        };
+
+        for rule in &encryption.rules {
+            let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
+                continue;
+            };
+
+            for encrypted_path in paths {
+                let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
+                    CollectionError::bad_input(format!(
+                        "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                    ))
+                })?;
+
+                if let Some(formula_path) = formula
+                    .payload_vars
+                    .iter()
+                    .find(|payload_var| payload_var.compatible(&encrypted_json_path))
+                {
+                    return Err(CollectionError::bad_input(format!(
+                        "cannot use encrypted payload field '{formula_path}' in formula because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                    )));
+                }
+
+                if let Some(condition_path) = formula.conditions.iter().find_map(|condition| {
+                    condition_touches_encrypted_payload(condition, &encrypted_json_path)
+                }) {
+                    return Err(CollectionError::bad_input(format!(
+                        "cannot use formula condition on encrypted payload field '{condition_path}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
                     )));
                 }
             }

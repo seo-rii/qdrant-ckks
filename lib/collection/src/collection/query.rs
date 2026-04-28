@@ -225,10 +225,18 @@ impl Collection {
                 self.ensure_order_by_does_not_touch_encrypted_payload(Some(order_by))
                     .await?;
             }
+            if let Some(ScoringQuery::Formula(formula)) = request.query.as_ref() {
+                self.ensure_formula_does_not_touch_encrypted_payload(Some(formula))
+                    .await?;
+            }
             let mut prefetches: Vec<&ShardPrefetch> = request.prefetches.iter().collect();
             while let Some(prefetch) = prefetches.pop() {
                 if let Some(ScoringQuery::OrderBy(order_by)) = prefetch.query.as_ref() {
                     self.ensure_order_by_does_not_touch_encrypted_payload(Some(order_by))
+                        .await?;
+                }
+                if let Some(ScoringQuery::Formula(formula)) = prefetch.query.as_ref() {
+                    self.ensure_formula_does_not_touch_encrypted_payload(Some(formula))
                         .await?;
                 }
                 prefetches.extend(prefetch.prefetches.iter());
