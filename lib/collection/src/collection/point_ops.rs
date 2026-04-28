@@ -446,7 +446,7 @@ impl Collection {
 
                             if touches_encrypted_vector {
                                 return Err(CollectionError::bad_input(format!(
-                                    "cannot write plaintext vector for encrypted vector '{encrypted_name}'; configure runtime CKKS vector encryption before writing this vector",
+                                    "cannot write encrypted vector '{encrypted_name}'; CKKS vector ciphertext storage/write path is not implemented",
                                 )));
                             }
                         }

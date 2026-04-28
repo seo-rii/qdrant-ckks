@@ -1591,8 +1591,8 @@ async fn encrypted_vector_rejects_plaintext_vector_writes() {
     assert!(matches!(
         err,
         CollectionError::BadInput { description }
-            if description.contains("plaintext vector")
-                && description.contains("runtime CKKS vector encryption")
+            if description.contains("encrypted vector")
+                && description.contains("ciphertext storage/write path is not implemented")
     ));
 
     let plaintext_vector_update = CollectionUpdateOperations::VectorOperation(
@@ -1618,8 +1618,8 @@ async fn encrypted_vector_rejects_plaintext_vector_writes() {
     assert!(matches!(
         err,
         CollectionError::BadInput { description }
-            if description.contains("plaintext vector")
-                && description.contains("runtime CKKS vector encryption")
+            if description.contains("encrypted vector")
+                && description.contains("ciphertext storage/write path is not implemented")
     ));
 }
 
