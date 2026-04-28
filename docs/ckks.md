@@ -340,10 +340,12 @@ Inside the sealed body, `context_digest` is still the SHA-256 digest over the
 CKKS parameters, serialized OpenFHE crypto context, and public key. It is
 intended to prevent mixing ciphertexts created for incompatible contexts.
 CKKS parameters are restricted to the allowlisted
-`ckks-128-n16384-d4-scale50` profile in this branch. `batch_size` may be lower
-than the profile slot count, but raw modulus/depth/scale combinations are
-rejected until the OpenFHE bridge returns and verifies explicit security-level
-metadata.
+`ckks-128-n16384-d4-scale50` profile in this branch. Generic
+`vector/openfhe-ckks@v1` runtime instances must set this `profile` option; a
+missing profile or raw profile name is rejected before collection creation.
+`batch_size` may be lower than the profile slot count, but raw
+modulus/depth/scale combinations are rejected until the OpenFHE bridge returns
+and verifies explicit security-level metadata.
 
 ## OpenFHE bridge protocol
 

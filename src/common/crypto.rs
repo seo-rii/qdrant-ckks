@@ -883,19 +883,26 @@ fn validate_generic_collection_crypto_runtime(
                 rule.id, instance.provider
             )));
         }
-        if let Some(profile) = instance.options.get(CKKS_PROFILE_OPTION) {
-            let Some(profile) = profile.as_str() else {
+        let profile = match instance.options.get(CKKS_PROFILE_OPTION) {
+            Some(Value::String(profile)) => profile.as_str(),
+            Some(_) => {
                 return Err(StorageError::bad_input(format!(
                     "collection {collection_name} vector crypto instance {} profile option must be a string",
                     rule.instance
                 )));
-            };
-            if profile != CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50 {
+            }
+            None => {
                 return Err(StorageError::bad_input(format!(
-                    "collection {collection_name} vector crypto instance {} profile {profile} is not allowlisted; expected {CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50}",
+                    "collection {collection_name} vector crypto instance {} must set allowlisted profile {CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50}",
                     rule.instance
                 )));
             }
+        };
+        if profile != CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50 {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} vector crypto instance {} profile {profile} is not allowlisted; expected {CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50}",
+                rule.instance
+            )));
         }
 
         let instance_key_id = match instance.options.get("key_id") {
@@ -2522,6 +2529,75 @@ mod tests {
         let err = validate_collection_crypto_runtime(&settings, "docs", &params).unwrap_err();
         assert!(
             matches!(err, StorageError::BadInput { description } if description.contains("not allowlisted"))
+        );
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_requires_vector_profile() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_vector_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: VECTOR_OPENFHE_CKKS_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            "tenant-a/vector-v1".to_string(),
+                        )]),
+                        backend_ref: Some("openfhe_local".to_string()),
+                        options: json!({
+                            "key_id": "tenant-a:docs",
+                            "material_fingerprint_id": "tenant-a/vector@v2",
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([(
+                    "tenant-a/vector-v1".to_string(),
+                    CryptoMaterialConfig {
+                        kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        env: None,
+                        path: None,
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[8u8; 32])),
+                        ..CryptoMaterialConfig::default()
+                    },
+                )]),
+                backends: HashMap::from([(
+                    "openfhe_local".to_string(),
+                    CryptoBackendConfig {
+                        kind: "process_pool".to_string(),
+                        program: Some("/usr/local/bin/openfhe-bridge".to_string()),
+                        sha256_b64: None,
+                        size: Some(1),
+                        timeout_ms: Some(5_000),
+                    },
+                )]),
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "embedding_conf".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["embedding".to_string()],
+                    },
+                    instance: "docs_vector_v1".to_string(),
+                    binding: Some("vector-envelope/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = validate_collection_crypto_runtime(&settings, "docs", &params).unwrap_err();
+        assert!(
+            matches!(err, StorageError::BadInput { description } if description.contains("must set allowlisted profile"))
         );
     }
 
