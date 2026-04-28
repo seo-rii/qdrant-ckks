@@ -881,13 +881,21 @@ fn command_openfhe_backend_uses_pool_size_for_concurrent_requests() {
         format!(
             r#"#!/usr/bin/env bash
 set -euo pipefail
-count_file={}
-printf 'start\n' >> "$count_file"
-while IFS= read -r _request; do
-  sleep 0.2
-  printf 'request\n' >> "$count_file"
-  printf '{{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}}\n'
-done
+	count_file={}
+	printf 'start\n' >> "$count_file"
+	for _ in $(seq 1 250); do
+	  if [ "$(grep -c '^start$' "$count_file")" -ge 2 ]; then
+	    break
+	  fi
+	  sleep 0.02
+	done
+	if [ "$(grep -c '^start$' "$count_file")" -lt 2 ]; then
+	  exit 8
+	fi
+	while IFS= read -r _request; do
+	  printf 'request\n' >> "$count_file"
+	  printf '{{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}}\n'
+	done
 "#,
             count_path.display(),
         ),
