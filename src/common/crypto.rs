@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 
 use collection::config::{
@@ -6,11 +7,12 @@ use collection::config::{
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_ckks::{
     AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_VECTOR_KEY_DOMAIN,
-    CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadSignatureVerification,
-    ClientPayloadValidationContext, ExistingPayloadMode, LocalMasterKeyProvider, MasterKeyProvider,
-    PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER, PayloadEncryptionError,
-    PayloadEncryptionPolicy, PayloadTextEncryptor, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey,
-    VECTOR_OPENFHE_CKKS_PROVIDER, WrappedKeyBlob, client_payload_signature_key_id,
+    CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadNonceReplayKey,
+    ClientPayloadSignatureVerification, ClientPayloadValidationContext, ExistingPayloadMode,
+    LocalMasterKeyProvider, MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER,
+    PAYLOAD_CLIENT_AEAD_PROVIDER, PayloadEncryptionError, PayloadEncryptionPolicy,
+    PayloadTextEncryptor, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, VECTOR_OPENFHE_CKKS_PROVIDER,
+    WrappedKeyBlob, client_payload_nonce_replay_key, client_payload_signature_key_id,
     rewrap_resource_key, validate_client_payload_value,
 };
 use segment::json_path::JsonPath;
@@ -268,6 +270,16 @@ impl PayloadWritePlan {
         point_id: &str,
         payload: &mut Payload,
     ) -> Result<usize, PayloadWriteSetupError> {
+        let mut seen_client_nonces = HashSet::new();
+        self.encrypt_payload_with_replay_cache(point_id, payload, &mut seen_client_nonces)
+    }
+
+    pub(crate) fn encrypt_payload_with_replay_cache(
+        &self,
+        point_id: &str,
+        payload: &mut Payload,
+        seen_client_nonces: &mut HashSet<ClientPayloadNonceReplayKey>,
+    ) -> Result<usize, PayloadWriteSetupError> {
         let mut encrypted = 0;
 
         for rule in &self.rules {
@@ -316,6 +328,21 @@ impl PayloadWritePlan {
                                     signature_verification,
                                 },
                             )?;
+                            let Some(nonce_replay_key) =
+                                client_payload_nonce_replay_key(value, field)?
+                            else {
+                                return Err(PayloadWriteSetupError::Payload(
+                                    PayloadEncryptionError::ExpectedEncryptedEnvelope {
+                                        field: field.clone(),
+                                        found: "object",
+                                    },
+                                ));
+                            };
+                            if !seen_client_nonces.insert(nonce_replay_key) {
+                                return Err(PayloadWriteSetupError::Payload(
+                                    PayloadEncryptionError::ClientNonceReplay,
+                                ));
+                            }
                             encrypted += 1;
                         }
                     }
@@ -1678,7 +1705,7 @@ fn validate_legacy_collection_crypto_runtime(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     use collection::config::{
         CkksCollectionConfig, CollectionEncryptionConfig, CollectionParams, CryptoMigrationState,
@@ -2638,6 +2665,92 @@ mod tests {
                 PayloadEncryptionError::ClientResourceKeyEpochMismatch
             ))
         ));
+    }
+
+    #[test]
+    fn payload_write_plan_rejects_client_nonce_replay_with_shared_cache() {
+        let (first_envelope, first_public_key) =
+            signed_client_envelope("docs", "point-1", "body", "tenant-a/client-signing-v1");
+        let (second_envelope, second_public_key) =
+            signed_client_envelope("docs", "point-2", "body", "tenant-a/client-signing-v2");
+        let settings = Settings {
+            crypto: CryptoSettings {
+                instances: HashMap::from([(
+                    "docs_payload_client_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a/client-rk-2026-04",
+                            "expected_rk_id": "tenant-a/client-rk-2026-04",
+                            "min_rk_epoch": 3,
+                            "max_rk_epoch": 3,
+                            "signature_public_keys": {
+                                "tenant-a/client-signing-v1": BASE64URL_NOPAD.encode(&first_public_key),
+                                "tenant-a/client-signing-v2": BASE64URL_NOPAD.encode(&second_public_key),
+                            },
+                        }),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/client-rk-2026-04".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_client_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_client_v1".to_string(),
+                    binding: Some(CLIENT_PAYLOAD_ENVELOPE_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
+            .unwrap()
+            .unwrap();
+        let mut seen_client_nonces = HashSet::new();
+        let payload_from_envelope =
+            |envelope: Value| Payload(json!({ "body": envelope }).as_object().unwrap().clone());
+
+        let mut first_payload = payload_from_envelope(first_envelope);
+        assert_eq!(
+            plan.encrypt_payload_with_replay_cache(
+                "point-1",
+                &mut first_payload,
+                &mut seen_client_nonces,
+            )
+            .unwrap(),
+            1,
+        );
+
+        let mut second_payload = payload_from_envelope(second_envelope);
+        assert!(matches!(
+            plan.encrypt_payload_with_replay_cache(
+                "point-2",
+                &mut second_payload,
+                &mut seen_client_nonces,
+            ),
+            Err(PayloadWriteSetupError::Payload(
+                PayloadEncryptionError::ClientNonceReplay
+            ))
+        ));
+
+        let mut fresh_request_payload = second_payload;
+        assert_eq!(
+            plan.encrypt_payload("point-2", &mut fresh_request_payload)
+                .unwrap(),
+            1,
+        );
     }
 
     #[test]

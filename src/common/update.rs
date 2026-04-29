@@ -1268,15 +1268,18 @@ async fn maybe_encrypt_upsert_payloads(
         return Ok((operation, false));
     };
     let allow_verified_client_envelopes = plan.has_client_envelope_rules();
+    let mut seen_client_nonces = std::collections::HashSet::new();
 
     match &mut operation {
         PointInsertOperations::PointsList(list) => {
             for point in &mut list.points {
                 if let Some(payload) = &mut point.payload {
-                    plan.encrypt_payload(&point.id.to_string(), payload)
-                        .map_err(|err| {
-                            payload_write_error_to_storage_error(collection_name, err)
-                        })?;
+                    plan.encrypt_payload_with_replay_cache(
+                        &point.id.to_string(),
+                        payload,
+                        &mut seen_client_nonces,
+                    )
+                    .map_err(|err| payload_write_error_to_storage_error(collection_name, err))?;
                 }
             }
         }
@@ -1284,10 +1287,14 @@ async fn maybe_encrypt_upsert_payloads(
             if let Some(payloads) = batch.batch.payloads.as_mut() {
                 for (point_id, payload) in batch.batch.ids.iter().zip(payloads.iter_mut()) {
                     if let Some(payload) = payload {
-                        plan.encrypt_payload(&point_id.to_string(), payload)
-                            .map_err(|err| {
-                                payload_write_error_to_storage_error(collection_name, err)
-                            })?;
+                        plan.encrypt_payload_with_replay_cache(
+                            &point_id.to_string(),
+                            payload,
+                            &mut seen_client_nonces,
+                        )
+                        .map_err(|err| {
+                            payload_write_error_to_storage_error(collection_name, err)
+                        })?;
                     }
                 }
             }
@@ -1346,6 +1353,7 @@ async fn maybe_encrypt_point_payload_update(
         return Ok((PayloadUpdatePlan::Single(operation), false));
     };
     let allow_verified_client_envelopes = plan.has_client_envelope_rules();
+    let mut seen_client_nonces = std::collections::HashSet::new();
 
     let touches_encrypted_payload =
         plan.touches_selected_fields(&operation.payload, operation.key.as_ref());
@@ -1402,8 +1410,12 @@ async fn maybe_encrypt_point_payload_update(
         let mut encrypted_operations = Vec::with_capacity(points.len());
         for point_id in points {
             let mut payload = operation.payload.clone();
-            plan.encrypt_payload(&point_id.to_string(), &mut payload)
-                .map_err(|err| payload_write_error_to_storage_error(collection_name, err))?;
+            plan.encrypt_payload_with_replay_cache(
+                &point_id.to_string(),
+                &mut payload,
+                &mut seen_client_nonces,
+            )
+            .map_err(|err| payload_write_error_to_storage_error(collection_name, err))?;
             encrypted_operations.push(SetPayload {
                 points: Some(vec![point_id.clone()]),
                 payload,
@@ -1425,8 +1437,12 @@ async fn maybe_encrypt_point_payload_update(
         ));
     };
 
-    plan.encrypt_payload(&point_id.to_string(), &mut operation.payload)
-        .map_err(|err| payload_write_error_to_storage_error(collection_name, err))?;
+    plan.encrypt_payload_with_replay_cache(
+        &point_id.to_string(),
+        &mut operation.payload,
+        &mut seen_client_nonces,
+    )
+    .map_err(|err| payload_write_error_to_storage_error(collection_name, err))?;
 
     Ok((
         PayloadUpdatePlan::Single(operation),

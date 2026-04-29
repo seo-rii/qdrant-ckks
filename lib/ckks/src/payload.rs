@@ -51,6 +51,8 @@ pub enum PayloadEncryptionError {
     ClientResourceKeyIdMismatch,
     #[error("payload field client envelope resource key epoch is outside policy")]
     ClientResourceKeyEpochMismatch,
+    #[error("payload field client envelope nonce was already used in this write request")]
+    ClientNonceReplay,
     #[error("payload field client envelope signature is missing")]
     MissingClientSignature,
     #[error("payload field client envelope signature key id does not match policy")]
@@ -160,6 +162,14 @@ pub struct ClientPayloadValidationContext<'a> {
 pub struct ClientPayloadSignatureVerification<'a> {
     pub expected_key_id: &'a str,
     pub public_key: &'a [u8],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ClientPayloadNonceReplayKey {
+    pub key_id: String,
+    pub rk_id: String,
+    pub rk_epoch: u64,
+    pub nonce: String,
 }
 
 impl PayloadTextEncryptor {
@@ -599,6 +609,47 @@ pub fn client_payload_signature_key_id(
     }
 
     Ok(Some(signature.key_id))
+}
+
+pub fn client_payload_nonce_replay_key(
+    value: &Value,
+    field_path: &str,
+) -> Result<Option<ClientPayloadNonceReplayKey>, PayloadEncryptionError> {
+    let Some(envelope) = extract_client_envelope(value, field_path)? else {
+        return Ok(None);
+    };
+    let key_id = envelope
+        .key_id
+        .ok_or(PayloadEncryptionError::MissingClientKeyId)?;
+    if key_id.is_empty() {
+        return Err(PayloadEncryptionError::MissingClientKeyId);
+    }
+    let rk_id = envelope
+        .rk_id
+        .ok_or_else(|| PayloadEncryptionError::MalformedEnvelope(field_path.to_string()))?;
+    if rk_id.is_empty() {
+        return Err(PayloadEncryptionError::MalformedEnvelope(
+            field_path.to_string(),
+        ));
+    }
+    let rk_epoch = envelope
+        .rk_epoch
+        .ok_or_else(|| PayloadEncryptionError::MalformedEnvelope(field_path.to_string()))?;
+    let nonce = BASE64URL_NOPAD
+        .decode(envelope.nonce.as_bytes())
+        .map_err(|_| PayloadEncryptionError::MalformedEnvelope(field_path.to_string()))?;
+    if nonce.len() != 12 {
+        return Err(PayloadEncryptionError::MalformedEnvelope(
+            field_path.to_string(),
+        ));
+    }
+
+    Ok(Some(ClientPayloadNonceReplayKey {
+        key_id,
+        rk_id,
+        rk_epoch,
+        nonce: envelope.nonce,
+    }))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -27,12 +27,12 @@ pub use control_plane::{
 };
 pub use openfhe::CommandOpenFheBackend;
 pub use payload::{
-    CLIENT_ENCRYPTED_PAYLOAD_MARKER, ClientPayloadSignatureVerification,
-    ClientPayloadValidationContext, ENCRYPTED_PAYLOAD_MARKER, ExistingPayloadMode,
-    PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
-    ServerPayloadValidationContext, client_payload_signature_key_id,
-    client_payload_signature_message, is_client_encrypted_payload_value,
-    is_encrypted_payload_value, validate_client_payload_value,
+    CLIENT_ENCRYPTED_PAYLOAD_MARKER, ClientPayloadNonceReplayKey,
+    ClientPayloadSignatureVerification, ClientPayloadValidationContext, ENCRYPTED_PAYLOAD_MARKER,
+    ExistingPayloadMode, PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
+    ServerPayloadValidationContext, client_payload_nonce_replay_key,
+    client_payload_signature_key_id, client_payload_signature_message,
+    is_client_encrypted_payload_value, is_encrypted_payload_value, validate_client_payload_value,
     validate_server_payload_value_metadata,
 };
 pub use vector::{
