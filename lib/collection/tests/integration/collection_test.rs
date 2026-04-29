@@ -43,8 +43,8 @@ use fs_err::{self as fs, File};
 use itertools::Itertools;
 use qdrant_ckks::{
     AeadCipher, CLIENT_ENCRYPTED_PAYLOAD_MARKER, CLIENT_PAYLOAD_ENVELOPE_BINDING,
-    PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
-    is_client_encrypted_payload_value, is_encrypted_payload_value,
+    ENCRYPTED_PAYLOAD_MARKER, PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionPolicy,
+    PayloadTextEncryptor, SecretKey, is_client_encrypted_payload_value, is_encrypted_payload_value,
 };
 use segment::data_types::facets::FacetParams;
 use segment::data_types::order_by::{Direction, OrderBy, OrderByInterface};
@@ -1581,6 +1581,68 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
             if description.contains("encrypted payload marker")
                 && description.contains("document.body")
                 && description.contains("key id does not match")
+    ));
+
+    let valid_key_encryptor = PayloadTextEncryptor::new_with_derived_cipher_unchecked(
+        "docs",
+        AeadCipher::new("tenant-a:docs", SecretKey::from_bytes([8u8; 32])).unwrap(),
+    )
+    .unwrap();
+    let mut malformed_header_payload: Payload =
+        serde_json::from_str(r#"{"document":{"body":"bad nonce marker"}}"#).unwrap();
+    valid_key_encryptor
+        .encrypt_selected_fields(
+            "5",
+            &mut malformed_header_payload.0,
+            &PayloadEncryptionPolicy::new(["document.body"]).unwrap(),
+        )
+        .unwrap();
+    malformed_header_payload
+        .0
+        .get_mut("document")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut("body")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut(ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut("envelope")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("nonce".to_string(), serde_json::json!("AQID"));
+    let malformed_header_marker_upsert =
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                id: 5.into(),
+                vector: VectorStructPersisted::from(vec![1.0, 0.0, 1.0, 0.0]),
+                payload: Some(malformed_header_payload),
+            }]),
+        ));
+    let err = collection
+        .update_from_client(
+            malformed_header_marker_upsert,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::RuntimeEncryptedPayloads,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("encrypted payload marker")
+                && description.contains("document.body")
+                && description.contains("nonce must decode to 96 bits")
     ));
 
     let plaintext_sync = CollectionUpdateOperations::PointOperation(PointOperations::SyncPoints(
