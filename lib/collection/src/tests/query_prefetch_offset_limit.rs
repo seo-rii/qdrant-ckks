@@ -127,6 +127,7 @@ async fn fixture() -> Collection {
             WriteOrdering::Weak,
             None,
             HwMeasurementAcc::new(),
+            false,
         )
         .await
         .expect("failed to insert points");

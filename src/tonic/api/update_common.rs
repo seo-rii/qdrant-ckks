@@ -894,6 +894,7 @@ pub async fn sync(
         None,
         auth,
         HwMeasurementAcc::disposable(), // API unmeasured
+        false,
     )
     .await?;
 

@@ -162,6 +162,7 @@ impl Collection {
         ordering: WriteOrdering,
         shard_keys_selection: Option<ShardKey>,
         hw_measurement_acc: HwMeasurementAcc,
+        allow_verified_client_envelopes: bool,
     ) -> CollectionResult<UpdateResult> {
         let (encryption, collection_crypto_id) = {
             let collection_config = self.collection_config.read().await;
@@ -253,6 +254,11 @@ impl Collection {
                         continue;
                     }
                     if allow_client_envelope && is_client_encrypted_payload_value(value) {
+                        if !allow_verified_client_envelopes {
+                            return Err(CollectionError::bad_input(format!(
+                                "client encrypted payload marker for field '{encrypted_path_str}' requires runtime envelope verification before collection write",
+                            )));
+                        }
                         let Some(point_id) = point_id else {
                             return Ok(true);
                         };
@@ -662,6 +668,7 @@ impl Collection {
             ordering,
             None,
             hw_measurement_acc,
+            false,
         )
         .await
     }

@@ -257,6 +257,12 @@ pub struct PayloadWritePlan {
 }
 
 impl PayloadWritePlan {
+    pub fn has_client_envelope_rules(&self) -> bool {
+        self.rules
+            .iter()
+            .any(|rule| matches!(rule, PayloadWriteRule::ClientEnvelope { .. }))
+    }
+
     pub fn encrypt_payload(
         &self,
         point_id: &str,
