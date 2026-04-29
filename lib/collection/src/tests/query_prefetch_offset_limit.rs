@@ -20,7 +20,7 @@ use crate::operations::point_ops::{
 };
 use crate::operations::shard_selector_internal::ShardSelectorInternal;
 use crate::operations::shared_storage_config::SharedStorageConfig;
-use crate::operations::types::VectorsConfig;
+use crate::operations::types::{CollectionUpdateProvenance, VectorsConfig};
 use crate::operations::universal_query::shard_query::{
     ScoringQuery, ShardPrefetch, ShardQueryRequest,
 };
@@ -127,7 +127,7 @@ async fn fixture() -> Collection {
             WriteOrdering::Weak,
             None,
             HwMeasurementAcc::new(),
-            false,
+            CollectionUpdateProvenance::ClientPlaintext,
         )
         .await
         .expect("failed to insert points");

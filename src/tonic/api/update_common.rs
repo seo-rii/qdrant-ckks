@@ -19,6 +19,7 @@ use collection::operations::CollectionUpdateOperations;
 use collection::operations::conversions::try_points_selector_from_grpc;
 use collection::operations::payload_ops::DeletePayload;
 use collection::operations::point_ops::{self, PointOperations, PointSyncOperation};
+use collection::operations::types::CollectionUpdateProvenance;
 use collection::operations::vector_ops::DeleteVectors;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use itertools::Itertools;
@@ -894,7 +895,7 @@ pub async fn sync(
         None,
         auth,
         HwMeasurementAcc::disposable(), // API unmeasured
-        false,
+        CollectionUpdateProvenance::ClientPlaintext,
     )
     .await?;
 

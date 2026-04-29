@@ -74,6 +74,19 @@ pub enum CollectionStatus {
     Red,
 }
 
+#[derive(Debug, Default, PartialEq, Eq, Copy, Clone)]
+pub enum CollectionUpdateProvenance {
+    #[default]
+    ClientPlaintext,
+    RuntimeVerifiedClientEnvelopes,
+}
+
+impl CollectionUpdateProvenance {
+    pub const fn allows_client_envelopes(self) -> bool {
+        matches!(self, Self::RuntimeVerifiedClientEnvelopes)
+    }
+}
+
 /// Current state of the shard (supports same states as the collection)
 ///
 /// `Green` - all good. `Yellow` - optimization is running, 'Grey' - optimizations are possible but not triggered, `Red` - some operations failed and was not recovered

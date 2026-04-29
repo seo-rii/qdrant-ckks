@@ -457,7 +457,7 @@ impl TableOfContent {
         timeout: Option<Duration>,
         ordering: WriteOrdering,
         hw_measurement_acc: HwMeasurementAcc,
-        allow_verified_client_envelopes: bool,
+        update_provenance: CollectionUpdateProvenance,
     ) -> StorageResult<UpdateResult> {
         // `Collection::update_from_client` is cancel safe, so this method is cancel safe.
 
@@ -471,7 +471,7 @@ impl TableOfContent {
                     ordering,
                     Some(shard_key),
                     hw_measurement_acc.clone(),
-                    allow_verified_client_envelopes,
+                    update_provenance,
                 )
             })
             .collect();
@@ -499,7 +499,7 @@ impl TableOfContent {
         shard_selector: ShardSelectorInternal,
         auth: Auth,
         hw_measurement_acc: HwMeasurementAcc,
-        allow_verified_client_envelopes: bool,
+        update_provenance: CollectionUpdateProvenance,
     ) -> StorageResult<UpdateResult> {
         let collection_pass = auth.check_point_op(
             collection_name,
@@ -564,7 +564,7 @@ impl TableOfContent {
                         ordering,
                         None,
                         hw_measurement_acc.clone(),
-                        allow_verified_client_envelopes,
+                        update_provenance,
                     )
                     .await?
             }
@@ -591,7 +591,7 @@ impl TableOfContent {
                                     ordering,
                                     None,
                                     hw_measurement_acc.clone(),
-                                    allow_verified_client_envelopes,
+                                    update_provenance,
                                 )
                                 .await?
                         }
@@ -605,7 +605,7 @@ impl TableOfContent {
                         timeout,
                         ordering,
                         hw_measurement_acc.clone(),
-                        allow_verified_client_envelopes,
+                        update_provenance,
                     )
                     .await?
                 }
@@ -620,7 +620,7 @@ impl TableOfContent {
                         ordering,
                         Some(shard_key),
                         hw_measurement_acc.clone(),
-                        allow_verified_client_envelopes,
+                        update_provenance,
                     )
                     .await?
             }
@@ -634,7 +634,7 @@ impl TableOfContent {
                     timeout,
                     ordering,
                     hw_measurement_acc.clone(),
-                    allow_verified_client_envelopes,
+                    update_provenance,
                 )
                 .await?
             }
@@ -657,7 +657,7 @@ impl TableOfContent {
                     timeout,
                     ordering,
                     hw_measurement_acc.clone(),
-                    allow_verified_client_envelopes,
+                    update_provenance,
                 )
                 .await?
             }

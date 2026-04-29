@@ -7,7 +7,9 @@ use collection::collection::Collection;
 use collection::operations::conversions::write_ordering_from_proto;
 use collection::operations::point_ops::*;
 use collection::operations::shard_selector_internal::ShardSelectorInternal;
-use collection::operations::types::{CollectionError, CollectionResult, UpdateResult};
+use collection::operations::types::{
+    CollectionError, CollectionResult, CollectionUpdateProvenance, UpdateResult,
+};
 use collection::operations::vector_ops::*;
 use collection::operations::verification::*;
 use collection::shards::shard::ShardId;
@@ -319,7 +321,7 @@ pub async fn do_upsert_points(
         )
         .await?;
 
-    let (operation, allow_verified_client_envelopes) =
+    let (operation, update_provenance) =
         maybe_encrypt_upsert_payloads(toc, &collection_name, operation, &auth, runtime_settings)
             .await?;
 
@@ -386,7 +388,7 @@ pub async fn do_upsert_points(
         shard_key,
         auth,
         hw_measurement_acc,
-        allow_verified_client_envelopes,
+        update_provenance,
     )
     .await?;
 
@@ -435,7 +437,7 @@ pub async fn do_delete_points(
         shard_key,
         auth,
         hw_measurement_acc,
-        false,
+        CollectionUpdateProvenance::ClientPlaintext,
     )
     .await
 }
@@ -485,7 +487,7 @@ pub async fn do_update_vectors(
         shard_key,
         auth,
         hw_measurement_acc,
-        false,
+        CollectionUpdateProvenance::ClientPlaintext,
     )
     .await?;
 
@@ -539,7 +541,7 @@ pub async fn do_delete_vectors(
                 shard_key.clone(),
                 auth.clone(),
                 hw_measurement_acc.clone(),
-                false,
+                CollectionUpdateProvenance::ClientPlaintext,
             )
             .await?,
         );
@@ -559,7 +561,7 @@ pub async fn do_delete_vectors(
                 shard_key,
                 auth,
                 hw_measurement_acc,
-                false,
+                CollectionUpdateProvenance::ClientPlaintext,
             )
             .await?,
         );
@@ -587,7 +589,7 @@ pub async fn do_set_payload(
         )
         .await?;
 
-    let (operations, allow_verified_client_envelopes) = maybe_encrypt_point_payload_update(
+    let (operations, update_provenance) = maybe_encrypt_point_payload_update(
         toc,
         &collection_name,
         operation,
@@ -625,7 +627,7 @@ pub async fn do_set_payload(
                 shard_key,
                 auth.clone(),
                 hw_measurement_acc.clone(),
-                allow_verified_client_envelopes,
+                update_provenance,
             )
             .await?,
         );
@@ -653,7 +655,7 @@ pub async fn do_overwrite_payload(
         )
         .await?;
 
-    let (operations, allow_verified_client_envelopes) = maybe_encrypt_point_payload_update(
+    let (operations, update_provenance) = maybe_encrypt_point_payload_update(
         toc,
         &collection_name,
         operation,
@@ -693,7 +695,7 @@ pub async fn do_overwrite_payload(
                 shard_key,
                 auth.clone(),
                 hw_measurement_acc.clone(),
-                allow_verified_client_envelopes,
+                update_provenance,
             )
             .await?,
         );
@@ -743,7 +745,7 @@ pub async fn do_delete_payload(
         shard_key,
         auth,
         hw_measurement_acc,
-        false,
+        CollectionUpdateProvenance::ClientPlaintext,
     )
     .await
 }
@@ -781,7 +783,7 @@ pub async fn do_clear_payload(
         shard_key,
         auth,
         hw_measurement_acc,
-        false,
+        CollectionUpdateProvenance::ClientPlaintext,
     )
     .await
 }
@@ -1023,7 +1025,7 @@ pub async fn do_create_index_internal(
         None,
         Auth::new_internal(Access::full("Internal API")),
         hw_measurement_acc,
-        false,
+        CollectionUpdateProvenance::ClientPlaintext,
     )
     .await
 }
@@ -1091,7 +1093,7 @@ pub async fn do_delete_index_internal(
         None,
         Auth::new_internal(Access::full("Internal API")),
         hw_measurement_acc,
-        false,
+        CollectionUpdateProvenance::ClientPlaintext,
     )
     .await
 }
@@ -1140,7 +1142,7 @@ pub async fn update(
     shard_key: Option<ShardKeySelector>,
     auth: Auth,
     hw_measurement_acc: HwMeasurementAcc,
-    allow_verified_client_envelopes: bool,
+    update_provenance: CollectionUpdateProvenance,
 ) -> Result<UpdateResult, StorageError> {
     let InternalUpdateParams {
         shard_id,
@@ -1198,7 +1200,7 @@ pub async fn update(
         shard_selector,
         auth,
         hw_measurement_acc,
-        allow_verified_client_envelopes,
+        update_provenance,
     )
     .await
 }
@@ -1240,9 +1242,9 @@ async fn maybe_encrypt_upsert_payloads(
     mut operation: PointInsertOperations,
     auth: &Auth,
     runtime_settings: Option<&Settings>,
-) -> Result<(PointInsertOperations, bool), StorageError> {
+) -> Result<(PointInsertOperations, CollectionUpdateProvenance), StorageError> {
     let Some(runtime_settings) = runtime_settings else {
-        return Ok((operation, false));
+        return Ok((operation, CollectionUpdateProvenance::ClientPlaintext));
     };
 
     let collection_pass =
@@ -1265,9 +1267,13 @@ async fn maybe_encrypt_upsert_payloads(
         ))
     })?
     else {
-        return Ok((operation, false));
+        return Ok((operation, CollectionUpdateProvenance::ClientPlaintext));
     };
-    let allow_verified_client_envelopes = plan.has_client_envelope_rules();
+    let update_provenance = if plan.has_client_envelope_rules() {
+        CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes
+    } else {
+        CollectionUpdateProvenance::ClientPlaintext
+    };
     let mut seen_client_nonces = std::collections::HashSet::new();
 
     match &mut operation {
@@ -1301,7 +1307,7 @@ async fn maybe_encrypt_upsert_payloads(
         }
     }
 
-    Ok((operation, allow_verified_client_envelopes))
+    Ok((operation, update_provenance))
 }
 
 enum PayloadUpdatePlan {
@@ -1325,9 +1331,12 @@ async fn maybe_encrypt_point_payload_update(
     auth: &Auth,
     runtime_settings: Option<&Settings>,
     operation_name: &str,
-) -> Result<(PayloadUpdatePlan, bool), StorageError> {
+) -> Result<(PayloadUpdatePlan, CollectionUpdateProvenance), StorageError> {
     let Some(runtime_settings) = runtime_settings else {
-        return Ok((PayloadUpdatePlan::Single(operation), false));
+        return Ok((
+            PayloadUpdatePlan::Single(operation),
+            CollectionUpdateProvenance::ClientPlaintext,
+        ));
     };
 
     let collection_pass =
@@ -1350,9 +1359,16 @@ async fn maybe_encrypt_point_payload_update(
         ))
     })?
     else {
-        return Ok((PayloadUpdatePlan::Single(operation), false));
+        return Ok((
+            PayloadUpdatePlan::Single(operation),
+            CollectionUpdateProvenance::ClientPlaintext,
+        ));
     };
-    let allow_verified_client_envelopes = plan.has_client_envelope_rules();
+    let update_provenance = if plan.has_client_envelope_rules() {
+        CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes
+    } else {
+        CollectionUpdateProvenance::ClientPlaintext
+    };
     let mut seen_client_nonces = std::collections::HashSet::new();
 
     let touches_encrypted_payload =
@@ -1364,10 +1380,7 @@ async fn maybe_encrypt_point_payload_update(
                 "{operation_name} with a filter cannot update encrypted payload fields in collection {collection_name}; use point-specific upsert/set_payload so encryption can bind AAD to each point id",
             )));
         }
-        return Ok((
-            PayloadUpdatePlan::Single(operation),
-            allow_verified_client_envelopes,
-        ));
+        return Ok((PayloadUpdatePlan::Single(operation), update_provenance));
     }
 
     if operation.key.is_some() {
@@ -1376,10 +1389,7 @@ async fn maybe_encrypt_point_payload_update(
                 "{operation_name} with a key path cannot update encrypted payload fields in collection {collection_name}; use a full point-specific payload update so the selected encrypted fields can be sealed with their canonical field paths",
             )));
         }
-        return Ok((
-            PayloadUpdatePlan::Single(operation),
-            allow_verified_client_envelopes,
-        ));
+        return Ok((PayloadUpdatePlan::Single(operation), update_provenance));
     }
 
     let Some(points) = operation.points.as_ref() else {
@@ -1388,10 +1398,7 @@ async fn maybe_encrypt_point_payload_update(
                 "{operation_name} cannot update encrypted payload fields without point ids in collection {collection_name}; send point-specific updates so encryption can bind AAD to each point id",
             )));
         }
-        return Ok((
-            PayloadUpdatePlan::Single(operation),
-            allow_verified_client_envelopes,
-        ));
+        return Ok((PayloadUpdatePlan::Single(operation), update_provenance));
     };
 
     if points.is_empty() {
@@ -1400,10 +1407,7 @@ async fn maybe_encrypt_point_payload_update(
                 "{operation_name} cannot update encrypted payload fields without point ids in collection {collection_name}; send point-specific updates so encryption can bind AAD to each point id",
             )));
         }
-        return Ok((
-            PayloadUpdatePlan::Single(operation),
-            allow_verified_client_envelopes,
-        ));
+        return Ok((PayloadUpdatePlan::Single(operation), update_provenance));
     }
 
     if points.len() > 1 && touches_encrypted_payload {
@@ -1426,15 +1430,12 @@ async fn maybe_encrypt_point_payload_update(
         }
         return Ok((
             PayloadUpdatePlan::Fanout(encrypted_operations),
-            allow_verified_client_envelopes,
+            update_provenance,
         ));
     }
 
     let Some(point_id) = points.first() else {
-        return Ok((
-            PayloadUpdatePlan::Single(operation),
-            allow_verified_client_envelopes,
-        ));
+        return Ok((PayloadUpdatePlan::Single(operation), update_provenance));
     };
 
     plan.encrypt_payload_with_replay_cache(
@@ -1444,10 +1445,7 @@ async fn maybe_encrypt_point_payload_update(
     )
     .map_err(|err| payload_write_error_to_storage_error(collection_name, err))?;
 
-    Ok((
-        PayloadUpdatePlan::Single(operation),
-        allow_verified_client_envelopes,
-    ))
+    Ok((PayloadUpdatePlan::Single(operation), update_provenance))
 }
 
 fn payload_write_error_to_storage_error(
