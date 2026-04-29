@@ -203,10 +203,12 @@ branch. Payload filtering over encrypted metadata, including range, geo, and
 full-text filtering, is unsupported until a separate blind-index design exists.
 
 Runtime settings provide key material per collection. In the legacy `ckks`
-adapter, `master_key_b64` is a direct 32-byte resource key (RK), not a master
-key-encryption key. Prefer injecting that legacy RK through environment
-variables such as `QDRANT__CKKS__COLLECTIONS__docs__MASTER_KEY_B64` instead of
-committing it to config files:
+adapter, `resource_key_b64` is a direct 32-byte resource key (RK), not a master
+key-encryption key. The old `master_key_b64` name remains as a legacy alias only
+and cannot be configured together with `resource_key_b64`. Prefer injecting that
+legacy RK through environment variables such as
+`QDRANT__CKKS__COLLECTIONS__docs__RESOURCE_KEY_B64` instead of committing it to
+config files:
 
 ```yaml
 ckks:
@@ -215,7 +217,7 @@ ckks:
   collections:
     docs:
       key_id: tenant-a:docs
-      master_key_b64: base64url-no-pad-32-byte-key
+      resource_key_b64: base64url-no-pad-32-byte-key
       openfhe_bridge_path: /usr/local/bin/openfhe-bridge
       openfhe_bridge_sha256_b64: base64url-no-pad-sha256-of-bridge
 ```

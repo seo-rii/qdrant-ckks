@@ -657,6 +657,7 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
             json!({
                 "key_id": collection.key_id,
                 "has_master_key_b64": collection.master_key_b64.is_some(),
+                "has_resource_key_b64": collection.resource_key_b64.is_some(),
                 "openfhe_bridge_path": collection.openfhe_bridge_path,
                 "openfhe_bridge_sha256_b64": collection.openfhe_bridge_sha256_b64,
             }),
@@ -676,6 +677,7 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
             "allow_inline_key_material": settings.ckks.allow_inline_key_material,
             "key_id": settings.ckks.key_id,
             "has_master_key_b64": settings.ckks.master_key_b64.is_some(),
+            "has_resource_key_b64": settings.ckks.resource_key_b64.is_some(),
             "openfhe_bridge_path": settings.ckks.openfhe_bridge_path,
             "openfhe_bridge_sha256_b64": settings.ckks.openfhe_bridge_sha256_b64,
             "collections": legacy_collections,

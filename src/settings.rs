@@ -448,10 +448,9 @@ impl CryptoSettings {
             };
 
         let default_material_ref = ckks
-            .master_key_b64
-            .as_ref()
+            .direct_resource_key_b64()
             .map(|_| "legacy_ckks/default/master_key".to_string());
-        if let Some(master_key_b64) = &ckks.master_key_b64 {
+        if let Some(resource_key_b64) = ckks.direct_resource_key_b64() {
             settings.materials.insert(
                 "legacy_ckks/default/master_key".to_string(),
                 CryptoMaterialConfig {
@@ -459,7 +458,7 @@ impl CryptoSettings {
                     source: Some("inline".to_string()),
                     env: None,
                     path: None,
-                    value_b64: Some(master_key_b64.clone()),
+                    value_b64: Some(resource_key_b64.to_string()),
                     ..CryptoMaterialConfig::default()
                 },
             );
@@ -507,10 +506,9 @@ impl CryptoSettings {
             }
 
             let material_ref = config
-                .master_key_b64
-                .as_ref()
+                .direct_resource_key_b64()
                 .map(|_| format!("legacy_ckks/{collection}/master_key"));
-            if let Some(master_key_b64) = &config.master_key_b64 {
+            if let Some(resource_key_b64) = config.direct_resource_key_b64() {
                 settings.materials.insert(
                     format!("legacy_ckks/{collection}/master_key"),
                     CryptoMaterialConfig {
@@ -518,7 +516,7 @@ impl CryptoSettings {
                         source: Some("inline".to_string()),
                         env: None,
                         path: None,
-                        value_b64: Some(master_key_b64.clone()),
+                        value_b64: Some(resource_key_b64.to_string()),
                         ..CryptoMaterialConfig::default()
                     },
                 );
@@ -570,6 +568,11 @@ pub struct CkksCollectionKeyConfig {
     /// Base64url-no-padding encoded 32-byte AES key for this collection.
     #[serde(default)]
     pub master_key_b64: Option<String>,
+    /// Preferred name for the direct 32-byte collection resource key.
+    ///
+    /// `master_key_b64` is kept as a legacy alias, but it is not an MK/KEK.
+    #[serde(default)]
+    pub resource_key_b64: Option<String>,
     /// External OpenFHE bridge executable for this collection.
     #[serde(default)]
     pub openfhe_bridge_path: Option<String>,
@@ -586,6 +589,10 @@ impl fmt::Debug for CkksCollectionKeyConfig {
                 "master_key_b64",
                 &self.master_key_b64.as_ref().map(|_| "[redacted]"),
             )
+            .field(
+                "resource_key_b64",
+                &self.resource_key_b64.as_ref().map(|_| "[redacted]"),
+            )
             .field("openfhe_bridge_path", &self.openfhe_bridge_path)
             .field("openfhe_bridge_sha256_b64", &self.openfhe_bridge_sha256_b64)
             .finish()
@@ -596,8 +603,15 @@ impl CkksCollectionKeyConfig {
     pub fn is_configured(&self) -> bool {
         self.key_id.is_some()
             || self.master_key_b64.is_some()
+            || self.resource_key_b64.is_some()
             || self.openfhe_bridge_path.is_some()
             || self.openfhe_bridge_sha256_b64.is_some()
+    }
+
+    pub fn direct_resource_key_b64(&self) -> Option<&str> {
+        self.resource_key_b64
+            .as_deref()
+            .or(self.master_key_b64.as_deref())
     }
 }
 
@@ -615,6 +629,11 @@ pub struct CkksConfig {
     /// Default base64url-no-padding encoded 32-byte AES key.
     #[serde(default)]
     pub master_key_b64: Option<String>,
+    /// Preferred name for the direct default resource key.
+    ///
+    /// `master_key_b64` is kept as a legacy alias, but it is not an MK/KEK.
+    #[serde(default)]
+    pub resource_key_b64: Option<String>,
     /// Default external OpenFHE bridge executable for CKKS vector encryption.
     #[serde(default)]
     pub openfhe_bridge_path: Option<String>,
@@ -634,6 +653,7 @@ impl Default for CkksConfig {
             allow_inline_key_material: default_allow_inline_key_material(),
             key_id: None,
             master_key_b64: None,
+            resource_key_b64: None,
             openfhe_bridge_path: None,
             openfhe_bridge_sha256_b64: None,
             collections: HashMap::new(),
@@ -651,6 +671,10 @@ impl fmt::Debug for CkksConfig {
                 "master_key_b64",
                 &self.master_key_b64.as_ref().map(|_| "[redacted]"),
             )
+            .field(
+                "resource_key_b64",
+                &self.resource_key_b64.as_ref().map(|_| "[redacted]"),
+            )
             .field("openfhe_bridge_path", &self.openfhe_bridge_path)
             .field("openfhe_bridge_sha256_b64", &self.openfhe_bridge_sha256_b64)
             .field("collections", &self.collections)
@@ -663,12 +687,19 @@ impl CkksConfig {
         self.enabled
             || self.key_id.is_some()
             || self.master_key_b64.is_some()
+            || self.resource_key_b64.is_some()
             || self.openfhe_bridge_path.is_some()
             || self.openfhe_bridge_sha256_b64.is_some()
             || self
                 .collections
                 .values()
                 .any(CkksCollectionKeyConfig::is_configured)
+    }
+
+    pub fn direct_resource_key_b64(&self) -> Option<&str> {
+        self.resource_key_b64
+            .as_deref()
+            .or(self.master_key_b64.as_deref())
     }
 }
 
@@ -1130,6 +1161,7 @@ ckks:
             allow_inline_key_material: true,
             key_id: Some("tenant-a:docs".to_string()),
             master_key_b64: Some("AQID".to_string()),
+            resource_key_b64: None,
             openfhe_bridge_path: Some("/usr/local/bin/openfhe-bridge".to_string()),
             openfhe_bridge_sha256_b64: None,
             collections: HashMap::from([(
@@ -1137,6 +1169,7 @@ ckks:
                 CkksCollectionKeyConfig {
                     key_id: Some("tenant-a:docs-override".to_string()),
                     master_key_b64: Some("BAUG".to_string()),
+                    resource_key_b64: None,
                     openfhe_bridge_path: Some("/usr/local/bin/openfhe-bridge-docs".to_string()),
                     openfhe_bridge_sha256_b64: None,
                 },

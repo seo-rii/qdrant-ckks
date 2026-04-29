@@ -16,12 +16,14 @@ use crate::settings::CkksConfig;
 pub enum CkksSetupError {
     #[error("ckks payload encryption fields are configured but ckks.key_id is missing")]
     MissingKeyId,
-    #[error("ckks payload encryption fields are configured but ckks.master_key_b64 is missing")]
+    #[error("ckks payload encryption fields are configured but ckks.resource_key_b64 is missing")]
     MissingMasterKey,
-    #[error("ckks.master_key_b64 must be base64url without padding")]
+    #[error("ckks.resource_key_b64 must be base64url without padding")]
     InvalidMasterKeyEncoding,
-    #[error("ckks.master_key_b64 must decode to exactly 32 bytes")]
+    #[error("ckks.resource_key_b64 must decode to exactly 32 bytes")]
     InvalidMasterKeyLength,
+    #[error("{scope} configures both resource_key_b64 and legacy master_key_b64")]
+    ConflictingResourceKeyAliases { scope: String },
     #[error("{scope} uses inline key material but inline key material is disabled")]
     InlineMasterKeyDisabled { scope: String },
     #[error("ckks key id is invalid for {scope}")]
@@ -55,6 +57,18 @@ pub fn payload_text_encryptor_for_collection(
     }
 
     let collection_runtime = runtime_config.collections.get(collection);
+    validate_resource_key_aliases(
+        runtime_config.resource_key_b64.as_deref(),
+        runtime_config.master_key_b64.as_deref(),
+        "ckks",
+    )?;
+    if let Some(collection_runtime) = collection_runtime {
+        validate_resource_key_aliases(
+            collection_runtime.resource_key_b64.as_deref(),
+            collection_runtime.master_key_b64.as_deref(),
+            &format!("ckks.collections.{collection}"),
+        )?;
+    }
     let collection_runtime_key_id =
         collection_runtime.and_then(|runtime| runtime.key_id.as_deref());
     let key_id = match (
@@ -72,19 +86,18 @@ pub fn payload_text_encryptor_for_collection(
     .ok_or(CkksSetupError::MissingKeyId)?;
 
     let (master_key_b64, master_key_scope) = if let Some(master_key_b64) =
-        collection_runtime.and_then(|runtime| runtime.master_key_b64.as_deref())
+        collection_runtime.and_then(|runtime| runtime.direct_resource_key_b64())
     {
         (
             master_key_b64,
-            format!("ckks.collections.{collection}.master_key_b64"),
+            format!("ckks.collections.{collection}.resource_key_b64"),
         )
     } else {
         (
             runtime_config
-                .master_key_b64
-                .as_deref()
+                .direct_resource_key_b64()
                 .ok_or(CkksSetupError::MissingMasterKey)?,
-            "ckks.master_key_b64".to_string(),
+            "ckks.resource_key_b64".to_string(),
         )
     };
     if !runtime_config.allow_inline_key_material {
@@ -107,10 +120,15 @@ pub fn validate_runtime_config(runtime_config: &CkksConfig) -> Result<(), CkksSe
     if let Some(key_id) = runtime_config.key_id.as_deref() {
         validate_runtime_key_id(key_id, "ckks.key_id")?;
     }
-    if let Some(master_key_b64) = runtime_config.master_key_b64.as_deref() {
+    validate_resource_key_aliases(
+        runtime_config.resource_key_b64.as_deref(),
+        runtime_config.master_key_b64.as_deref(),
+        "ckks",
+    )?;
+    if let Some(master_key_b64) = runtime_config.direct_resource_key_b64() {
         if !runtime_config.allow_inline_key_material {
             return Err(CkksSetupError::InlineMasterKeyDisabled {
-                scope: "ckks.master_key_b64".to_string(),
+                scope: "ckks.resource_key_b64".to_string(),
             });
         }
         let _ = decode_master_key(master_key_b64)?;
@@ -129,10 +147,15 @@ pub fn validate_runtime_config(runtime_config: &CkksConfig) -> Result<(), CkksSe
                 &format!("ckks.collections.{collection_name}.key_id"),
             )?;
         }
-        if let Some(master_key_b64) = collection_config.master_key_b64.as_deref() {
+        validate_resource_key_aliases(
+            collection_config.resource_key_b64.as_deref(),
+            collection_config.master_key_b64.as_deref(),
+            &format!("ckks.collections.{collection_name}"),
+        )?;
+        if let Some(master_key_b64) = collection_config.direct_resource_key_b64() {
             if !runtime_config.allow_inline_key_material {
                 return Err(CkksSetupError::InlineMasterKeyDisabled {
-                    scope: format!("ckks.collections.{collection_name}.master_key_b64"),
+                    scope: format!("ckks.collections.{collection_name}.resource_key_b64"),
                 });
             }
             let _ = decode_master_key(master_key_b64)?;
@@ -185,6 +208,20 @@ fn decode_master_key(master_key_b64: &str) -> Result<SecretKey, CkksSetupError> 
     );
     SecretKey::try_from_slice(master_key.as_slice())
         .map_err(|_| CkksSetupError::InvalidMasterKeyLength)
+}
+
+fn validate_resource_key_aliases(
+    resource_key_b64: Option<&str>,
+    legacy_master_key_b64: Option<&str>,
+    scope: &str,
+) -> Result<(), CkksSetupError> {
+    if resource_key_b64.is_some() && legacy_master_key_b64.is_some() {
+        return Err(CkksSetupError::ConflictingResourceKeyAliases {
+            scope: scope.to_string(),
+        });
+    }
+
+    Ok(())
 }
 
 fn validate_runtime_key_id(key_id: &str, scope: &str) -> Result<(), CkksSetupError> {
@@ -402,6 +439,7 @@ mod tests {
             CkksCollectionKeyConfig {
                 key_id: Some("tenant-b:payload".to_string()),
                 master_key_b64: Some(BASE64URL_NOPAD.encode(&[1u8; 32])),
+                resource_key_b64: None,
                 openfhe_bridge_path: None,
                 openfhe_bridge_sha256_b64: None,
             },
@@ -418,6 +456,7 @@ mod tests {
             CkksCollectionKeyConfig {
                 key_id: Some("tenant-a:payload".to_string()),
                 master_key_b64: Some("not base64!".to_string()),
+                resource_key_b64: None,
                 openfhe_bridge_path: None,
                 openfhe_bridge_sha256_b64: None,
             },
@@ -432,6 +471,7 @@ mod tests {
             CkksCollectionKeyConfig {
                 key_id: Some("tenant-a:payload".to_string()),
                 master_key_b64: Some(BASE64URL_NOPAD.encode(b"too short")),
+                resource_key_b64: None,
                 openfhe_bridge_path: None,
                 openfhe_bridge_sha256_b64: None,
             },
@@ -439,6 +479,71 @@ mod tests {
         assert_eq!(
             setup_err(&config, &collection_config),
             CkksSetupError::InvalidMasterKeyLength,
+        );
+    }
+
+    #[test]
+    fn resource_key_b64_alias_is_supported_and_conflicts_are_rejected() {
+        let collection_config = enabled_collection_config();
+        let config = CkksConfig {
+            enabled: true,
+            allow_inline_key_material: true,
+            key_id: Some("tenant-a:payload".to_string()),
+            resource_key_b64: Some(BASE64URL_NOPAD.encode(&[42u8; 32])),
+            ..CkksConfig::default()
+        };
+
+        assert!(
+            payload_text_encryptor_for_collection(&config, "docs", Some(&collection_config))
+                .unwrap()
+                .is_some(),
+        );
+        validate_runtime_config(&config).unwrap();
+
+        let conflicting_default = CkksConfig {
+            master_key_b64: Some(BASE64URL_NOPAD.encode(&[1u8; 32])),
+            ..config.clone()
+        };
+        assert_eq!(
+            validate_runtime_config(&conflicting_default),
+            Err(CkksSetupError::ConflictingResourceKeyAliases {
+                scope: "ckks".to_string(),
+            }),
+        );
+        assert_eq!(
+            setup_err(&conflicting_default, &collection_config),
+            CkksSetupError::ConflictingResourceKeyAliases {
+                scope: "ckks".to_string(),
+            },
+        );
+
+        let mut conflicting_collection = CkksConfig {
+            enabled: true,
+            allow_inline_key_material: true,
+            key_id: Some("tenant-a:payload".to_string()),
+            ..CkksConfig::default()
+        };
+        conflicting_collection.collections.insert(
+            "docs".to_string(),
+            CkksCollectionKeyConfig {
+                key_id: None,
+                master_key_b64: Some(BASE64URL_NOPAD.encode(&[1u8; 32])),
+                resource_key_b64: Some(BASE64URL_NOPAD.encode(&[2u8; 32])),
+                openfhe_bridge_path: None,
+                openfhe_bridge_sha256_b64: None,
+            },
+        );
+        assert_eq!(
+            validate_runtime_config(&conflicting_collection),
+            Err(CkksSetupError::ConflictingResourceKeyAliases {
+                scope: "ckks.collections.docs".to_string(),
+            }),
+        );
+        assert_eq!(
+            setup_err(&conflicting_collection, &collection_config),
+            CkksSetupError::ConflictingResourceKeyAliases {
+                scope: "ckks.collections.docs".to_string(),
+            },
         );
     }
 
@@ -456,13 +561,13 @@ mod tests {
         assert_eq!(
             setup_err(&config, &collection_config),
             CkksSetupError::InlineMasterKeyDisabled {
-                scope: "ckks.master_key_b64".to_string(),
+                scope: "ckks.resource_key_b64".to_string(),
             },
         );
         assert_eq!(
             validate_runtime_config(&config),
             Err(CkksSetupError::InlineMasterKeyDisabled {
-                scope: "ckks.master_key_b64".to_string(),
+                scope: "ckks.resource_key_b64".to_string(),
             }),
         );
 
@@ -477,6 +582,7 @@ mod tests {
             CkksCollectionKeyConfig {
                 key_id: None,
                 master_key_b64: Some(BASE64URL_NOPAD.encode(&[2u8; 32])),
+                resource_key_b64: None,
                 openfhe_bridge_path: None,
                 openfhe_bridge_sha256_b64: None,
             },
@@ -485,7 +591,7 @@ mod tests {
         assert_eq!(
             setup_err(&collection_scoped_config, &collection_config),
             CkksSetupError::InlineMasterKeyDisabled {
-                scope: "ckks.collections.docs.master_key_b64".to_string(),
+                scope: "ckks.collections.docs.resource_key_b64".to_string(),
             },
         );
     }
@@ -506,6 +612,7 @@ mod tests {
             CkksCollectionKeyConfig {
                 key_id: None,
                 master_key_b64: Some(encoded_key.clone()),
+                resource_key_b64: None,
                 openfhe_bridge_path: Some("/usr/local/bin/openfhe-docs".to_string()),
                 openfhe_bridge_sha256_b64: None,
             },
@@ -677,6 +784,7 @@ mod tests {
             CkksCollectionKeyConfig {
                 key_id: None,
                 master_key_b64: None,
+                resource_key_b64: None,
                 openfhe_bridge_path: Some("/usr/local/bin/openfhe-docs".to_string()),
                 openfhe_bridge_sha256_b64: None,
             },
