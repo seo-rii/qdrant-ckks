@@ -4,6 +4,7 @@ use std::num::NonZeroU32;
 
 use ahash::AHashSet;
 use api::rest::SearchRequestInternal;
+use collection::collection::distance_matrix::CollectionSearchMatrixRequest;
 use collection::config::{
     CkksCollectionConfig, CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams,
     CryptoMigrationState, EncryptionRuleRef, EncryptionSelector, WalConfig,
@@ -2418,6 +2419,29 @@ async fn encrypted_vector_rejects_search_path() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot search encrypted vector")
+                && description.contains("CKKS-native vector search is not implemented")
+    ));
+
+    let err = collection
+        .search_points_matrix(
+            CollectionSearchMatrixRequest {
+                sample_size: 2,
+                limit_per_sample: 1,
+                filter: None,
+                using: DEFAULT_VECTOR_NAME.to_string(),
+            },
+            ShardSelectorInternal::All,
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot filter on encrypted vector")
                 && description.contains("CKKS-native vector search is not implemented")
     ));
 }
