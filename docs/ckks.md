@@ -111,7 +111,8 @@ params:
 `payload/client-aead@v1` fails runtime validation if `materials` is non-empty
 or `backend_ref` is configured. Server-side wrapping keys/RKs belong to
 `payload/aes-256-gcm@v1`; client-side payload envelopes must keep client data
-keys outside the Qdrant process.
+keys outside the Qdrant process. It also fails validation unless
+`expected_rk_id`, `min_rk_epoch`, and `max_rk_epoch` are set explicitly.
 
 This provider does not receive plaintext and does not unwrap a data key. The
 client encrypts before insert and Qdrant only validates the envelope schema,
@@ -127,9 +128,9 @@ AES-GCM tag without the client data key, so the Ed25519 signature is the
 write-time authenticity check for this zero-trust mode.
 
 Client envelopes must carry `rk_id`, `rk_epoch`, and
-`kdf_domain: qdrant/client-payload-text/v1`. Instances may additionally pin
-`expected_rk_id`, `min_rk_epoch`, and `max_rk_epoch` so stale or wrong client
-resource-key epochs fail closed during rotation.
+`kdf_domain: qdrant/client-payload-text/v1`. Provider instances must pin
+`expected_rk_id`, `min_rk_epoch`, and `max_rk_epoch` so stale or wrong
+client resource-key epochs fail closed during rotation.
 
 For payload writes, the `aad.collection_id` value is the collection's stable
 crypto identity. New collection configs should use the persisted collection UUID

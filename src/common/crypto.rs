@@ -125,8 +125,14 @@ pub enum PayloadWriteSetupError {
     InvalidInstanceKeyId { instance: String },
     #[error("payload crypto instance {instance} expected_rk_id option must be a string")]
     InvalidClientResourceKeyId { instance: String },
+    #[error(
+        "payload crypto instance {instance} must set expected_rk_id for client payload envelopes"
+    )]
+    MissingClientResourceKeyId { instance: String },
     #[error("payload crypto instance {instance} {option} option must be an unsigned integer")]
     InvalidClientResourceKeyEpoch { instance: String, option: String },
+    #[error("payload crypto instance {instance} must set {option} for client payload envelopes")]
+    MissingClientResourceKeyEpoch { instance: String, option: String },
     #[error("payload crypto instance {instance} min_rk_epoch must be <= max_rk_epoch")]
     InvalidClientResourceKeyEpochRange { instance: String },
     #[error("payload crypto instance {instance} signature_key_id option must be a string")]
@@ -912,8 +918,17 @@ fn generic_payload_write_plan(
                     }
                 };
                 let expected_rk_id = match instance.options.get(EXPECTED_RK_ID_OPTION) {
-                    None | Some(Value::Null) => None,
-                    Some(Value::String(value)) => Some(value.clone()),
+                    None | Some(Value::Null) => {
+                        return Err(PayloadWriteSetupError::MissingClientResourceKeyId {
+                            instance: rule.instance.clone(),
+                        });
+                    }
+                    Some(Value::String(value)) if !value.is_empty() => Some(value.clone()),
+                    Some(Value::String(_)) => {
+                        return Err(PayloadWriteSetupError::InvalidClientResourceKeyId {
+                            instance: rule.instance.clone(),
+                        });
+                    }
                     Some(_) => {
                         return Err(PayloadWriteSetupError::InvalidClientResourceKeyId {
                             instance: rule.instance.clone(),
@@ -921,7 +936,12 @@ fn generic_payload_write_plan(
                     }
                 };
                 let min_rk_epoch = match instance.options.get(MIN_RK_EPOCH_OPTION) {
-                    None | Some(Value::Null) => None,
+                    None | Some(Value::Null) => {
+                        return Err(PayloadWriteSetupError::MissingClientResourceKeyEpoch {
+                            instance: rule.instance.clone(),
+                            option: MIN_RK_EPOCH_OPTION.to_string(),
+                        });
+                    }
                     Some(Value::Number(value)) => value
                         .as_u64()
                         .ok_or_else(|| PayloadWriteSetupError::InvalidClientResourceKeyEpoch {
@@ -937,7 +957,12 @@ fn generic_payload_write_plan(
                     }
                 };
                 let max_rk_epoch = match instance.options.get(MAX_RK_EPOCH_OPTION) {
-                    None | Some(Value::Null) => None,
+                    None | Some(Value::Null) => {
+                        return Err(PayloadWriteSetupError::MissingClientResourceKeyEpoch {
+                            instance: rule.instance.clone(),
+                            option: MAX_RK_EPOCH_OPTION.to_string(),
+                        });
+                    }
                     Some(Value::Number(value)) => value
                         .as_u64()
                         .ok_or_else(|| PayloadWriteSetupError::InvalidClientResourceKeyEpoch {
@@ -1790,6 +1815,17 @@ mod tests {
         (envelope, key_pair.public_key().as_ref().to_vec())
     }
 
+    fn client_policy_options(mut options: serde_json::Value) -> serde_json::Value {
+        let object = options.as_object_mut().unwrap();
+        object.insert(
+            EXPECTED_RK_ID_OPTION.to_string(),
+            json!("tenant-a/client-rk-2026-04"),
+        );
+        object.insert(MIN_RK_EPOCH_OPTION.to_string(), json!(3));
+        object.insert(MAX_RK_EPOCH_OPTION.to_string(), json!(3));
+        options
+    }
+
     #[test]
     fn validate_crypto_settings_rejects_missing_material_and_backend_refs() {
         let mut settings = CryptoSettings {
@@ -2327,12 +2363,12 @@ mod tests {
                         provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
                         materials: HashMap::new(),
                         backend_ref: None,
-                        options: json!({
+                        options: client_policy_options(json!({
                             "key_id": "tenant-a/client-rk-2026-04",
                             "key_id_required": true,
                             "signature_key_id": "tenant-a/client-signing-v1",
                             "signature_public_key_b64": BASE64URL_NOPAD.encode(&public_key),
-                        }),
+                        })),
                     },
                 )]),
                 ..CryptoSettings::default()
@@ -2384,12 +2420,12 @@ mod tests {
                         provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
                         materials: HashMap::new(),
                         backend_ref: None,
-                        options: json!({
+                        options: client_policy_options(json!({
                             "key_id": "tenant-a/client-rk-2026-04",
                             "key_id_required": true,
                             "signature_key_id": "tenant-a/client-signing-v1",
                             "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
-                        }),
+                        })),
                     },
                 )]),
                 ..CryptoSettings::default()
@@ -2461,11 +2497,11 @@ mod tests {
                         provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
                         materials: HashMap::new(),
                         backend_ref: None,
-                        options: json!({
+                        options: client_policy_options(json!({
                             "key_id": "tenant-a/client-rk-2026-04",
                             "signature_key_id": "tenant-a/client-signing-v1",
                             "signature_public_key_b64": BASE64URL_NOPAD.encode(&public_key),
-                        }),
+                        })),
                     },
                 )]),
                 ..CryptoSettings::default()
@@ -2519,11 +2555,11 @@ mod tests {
                         provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
                         materials: HashMap::new(),
                         backend_ref: None,
-                        options: json!({
+                        options: client_policy_options(json!({
                             "key_id": "tenant-a/client-rk-2026-04",
                             "signature_key_id": "tenant-a/client-signing-v1",
                             "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
-                        }),
+                        })),
                     },
                 )]),
                 ..CryptoSettings::default()
@@ -2830,7 +2866,7 @@ mod tests {
             }),
             ..CollectionParams::empty()
         };
-        let settings_with_options = |options: serde_json::Value| Settings {
+        let raw_settings_with_options = |options: serde_json::Value| Settings {
             crypto: CryptoSettings {
                 instances: HashMap::from([(
                     "docs_payload_client_v1".to_string(),
@@ -2845,6 +2881,55 @@ mod tests {
             },
             ..Settings::new(None).unwrap()
         };
+        let settings_with_options = |options: serde_json::Value| -> Settings {
+            raw_settings_with_options(client_policy_options(options))
+        };
+
+        assert!(matches!(
+            payload_write_plan_for_collection(
+                &raw_settings_with_options(json!({
+                    "key_id": "tenant-a/client-rk-2026-04",
+                    "signature_key_id": "tenant-a/client-signing-v1",
+                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                    "min_rk_epoch": 3,
+                    "max_rk_epoch": 3,
+                })),
+                "docs",
+                &params,
+            ),
+            Err(PayloadWriteSetupError::MissingClientResourceKeyId { instance })
+                if instance == "docs_payload_client_v1"
+        ));
+        assert!(matches!(
+            payload_write_plan_for_collection(
+                &raw_settings_with_options(json!({
+                    "key_id": "tenant-a/client-rk-2026-04",
+                    "expected_rk_id": "tenant-a/client-rk-2026-04",
+                    "signature_key_id": "tenant-a/client-signing-v1",
+                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                    "max_rk_epoch": 3,
+                })),
+                "docs",
+                &params,
+            ),
+            Err(PayloadWriteSetupError::MissingClientResourceKeyEpoch { instance, option })
+                if instance == "docs_payload_client_v1" && option == MIN_RK_EPOCH_OPTION
+        ));
+        assert!(matches!(
+            payload_write_plan_for_collection(
+                &raw_settings_with_options(json!({
+                    "key_id": "tenant-a/client-rk-2026-04",
+                    "expected_rk_id": "tenant-a/client-rk-2026-04",
+                    "signature_key_id": "tenant-a/client-signing-v1",
+                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                    "min_rk_epoch": 3,
+                })),
+                "docs",
+                &params,
+            ),
+            Err(PayloadWriteSetupError::MissingClientResourceKeyEpoch { instance, option })
+                if instance == "docs_payload_client_v1" && option == MAX_RK_EPOCH_OPTION
+        ));
 
         assert!(matches!(
             payload_write_plan_for_collection(
@@ -3000,11 +3085,11 @@ mod tests {
             provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
             materials: HashMap::new(),
             backend_ref: None,
-            options: json!({
+            options: client_policy_options(json!({
                 "key_id": "tenant-a/client-rk-2026-04",
                 "signature_key_id": "tenant-a/client-signing-v1",
                 "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
-            }),
+            })),
         };
 
         let settings_with_instance = |instance: CryptoInstanceConfig| Settings {
@@ -3123,12 +3208,12 @@ mod tests {
                         provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
                         materials: HashMap::new(),
                         backend_ref: None,
-                        options: json!({
+                        options: client_policy_options(json!({
                             "key_id": "tenant-a/client-rk-2026-04",
                             "signature_key_id": "tenant-a/client-signing-v1",
                             "signature_public_key_b64": BASE64URL_NOPAD
                                 .encode(key_pair.public_key().as_ref()),
-                        }),
+                        })),
                     },
                 )]),
                 ..CryptoSettings::default()
@@ -3243,7 +3328,7 @@ mod tests {
                         provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
                         materials: HashMap::new(),
                         backend_ref: None,
-                        options: json!({
+                        options: client_policy_options(json!({
                             "key_id": "tenant-a/client-rk-2026-04",
                             "signature_public_keys": {
                                 "tenant-a/client-signing-v1": BASE64URL_NOPAD
@@ -3251,7 +3336,7 @@ mod tests {
                                 "tenant-a/client-signing-v2": BASE64URL_NOPAD
                                     .encode(key_pair_v2.public_key().as_ref()),
                             },
-                        }),
+                        })),
                     },
                 )]),
                 ..CryptoSettings::default()
