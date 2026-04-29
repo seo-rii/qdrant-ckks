@@ -192,6 +192,31 @@ mod ckks_tests {
     }
 
     #[test]
+    fn encryption_config_rejects_client_envelope_without_collection_key_id() {
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: None,
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_client_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_client_v1".to_string(),
+                    binding: Some("client-payload-envelope/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = params.validate().unwrap_err();
+        assert!(format!("{err:?}").contains("client_payload_envelope_requires_key_id"));
+    }
+
+    #[test]
     fn encryption_config_rejects_reserved_and_unsupported_payload_paths() {
         for path in [
             "$qdrant_ckks.body",
@@ -642,6 +667,15 @@ fn validate_collection_encryption_config(
     if config.migration_state != CryptoMigrationState::Active {
         return Err(validator::ValidationError::new(
             "crypto_migration_state_requires_migration_job",
+        ));
+    }
+
+    if config.rules.iter().any(|rule| {
+        rule.binding.as_deref() == Some("client-payload-envelope/v1")
+            && config.key_id.as_deref().is_none_or(str::is_empty)
+    }) {
+        return Err(validator::ValidationError::new(
+            "client_payload_envelope_requires_key_id",
         ));
     }
 
