@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 
 use collection::config::{
@@ -17,7 +17,8 @@ use qdrant_ckks::{
 };
 use segment::json_path::JsonPath;
 use segment::types::Payload;
-use serde_json::Value;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use storage::content_manager::collection_meta_ops::CreateCollection;
 use storage::content_manager::errors::StorageError;
 use thiserror::Error;
@@ -597,7 +598,97 @@ pub fn effective_settings(settings: &Settings) -> CryptoSettings {
     }
 }
 
+pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
+    let mut instances = BTreeMap::new();
+    for (instance_name, instance) in &settings.crypto.instances {
+        let mut materials = BTreeMap::new();
+        for (role, material_ref) in &instance.materials {
+            materials.insert(role, material_ref);
+        }
+        instances.insert(
+            instance_name,
+            json!({
+                "provider": instance.provider,
+                "materials": materials,
+                "backend_ref": instance.backend_ref,
+                "options": instance.options,
+            }),
+        );
+    }
+
+    let mut materials = BTreeMap::new();
+    for (material_name, material) in &settings.crypto.materials {
+        materials.insert(
+            material_name,
+            json!({
+                "kind": material.kind,
+                "source": material.source,
+                "env": material.env,
+                "path": material.path,
+                "has_value_b64": material.value_b64.is_some(),
+                "wrapped_by": material.wrapped_by,
+                "wrap_algorithm": material.wrap_algorithm,
+                "has_nonce": material.nonce.is_some(),
+                "has_wrapped_key_b64": material.wrapped_key_b64.is_some(),
+                "rk_epoch": material.rk_epoch,
+                "scope": material.scope,
+            }),
+        );
+    }
+
+    let mut backends = BTreeMap::new();
+    for (backend_name, backend) in &settings.crypto.backends {
+        backends.insert(
+            backend_name,
+            json!({
+                "kind": backend.kind,
+                "program": backend.program,
+                "sha256_b64": backend.sha256_b64,
+                "size": backend.size,
+                "timeout_ms": backend.timeout_ms,
+            }),
+        );
+    }
+
+    let mut legacy_collections = BTreeMap::new();
+    for (collection_name, collection) in &settings.ckks.collections {
+        legacy_collections.insert(
+            collection_name,
+            json!({
+                "key_id": collection.key_id,
+                "has_master_key_b64": collection.master_key_b64.is_some(),
+                "openfhe_bridge_path": collection.openfhe_bridge_path,
+                "openfhe_bridge_sha256_b64": collection.openfhe_bridge_sha256_b64,
+            }),
+        );
+    }
+
+    let view = json!({
+        "version": 1,
+        "crypto": {
+            "allow_inline_key_material": settings.crypto.allow_inline_key_material,
+            "instances": instances,
+            "materials": materials,
+            "backends": backends,
+        },
+        "legacy_ckks": {
+            "enabled": settings.ckks.enabled,
+            "allow_inline_key_material": settings.ckks.allow_inline_key_material,
+            "key_id": settings.ckks.key_id,
+            "has_master_key_b64": settings.ckks.master_key_b64.is_some(),
+            "openfhe_bridge_path": settings.ckks.openfhe_bridge_path,
+            "openfhe_bridge_sha256_b64": settings.ckks.openfhe_bridge_sha256_b64,
+            "collections": legacy_collections,
+        },
+    });
+    let canonical = serde_json::to_vec(&view)
+        .expect("serializing sanitized crypto runtime capability fingerprint cannot fail");
+    let digest = Sha256::digest(&canonical);
+    BASE64URL_NOPAD.encode(&digest)
+}
+
 pub fn validate_runtime_config(settings: &Settings) -> Result<(), CryptoSetupError> {
+    let _capability_fingerprint = crypto_runtime_capability_fingerprint(settings);
     if settings.crypto.is_configured() {
         validate_crypto_settings(&settings.crypto)?;
     }
@@ -1935,6 +2026,105 @@ mod tests {
                 instance: "docs_payload_v1".to_string(),
                 backend_ref: "missing-backend".to_string(),
             }),
+        );
+    }
+
+    #[test]
+    fn crypto_runtime_capability_fingerprint_redacts_key_material() {
+        let mut settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_payload_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: "payload/aes-256-gcm@v1".to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            "tenant-a/docs-rk".to_string(),
+                        )]),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a/docs",
+                            "material_fingerprint_id": "tenant-a/docs-rk@v1",
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([
+                    (
+                        "tenant-a/mk".to_string(),
+                        CryptoMaterialConfig {
+                            kind: WRAPPING_KEY_32_KIND.to_string(),
+                            source: Some("inline".to_string()),
+                            env: None,
+                            path: None,
+                            value_b64: Some(BASE64URL_NOPAD.encode(&[1_u8; 32])),
+                            wrapped_by: None,
+                            wrap_algorithm: None,
+                            nonce: None,
+                            wrapped_key_b64: None,
+                            rk_epoch: None,
+                            scope: None,
+                        },
+                    ),
+                    (
+                        "tenant-a/docs-rk".to_string(),
+                        CryptoMaterialConfig {
+                            kind: WRAPPED_SYMMETRIC_KEY_32_KIND.to_string(),
+                            source: Some("wrapped".to_string()),
+                            env: None,
+                            path: None,
+                            value_b64: None,
+                            wrapped_by: Some("tenant-a/mk".to_string()),
+                            wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
+                            nonce: Some(BASE64URL_NOPAD.encode(&[2_u8; 12])),
+                            wrapped_key_b64: Some(BASE64URL_NOPAD.encode(&[3_u8; 48])),
+                            rk_epoch: Some(3),
+                            scope: Some("collection:docs".to_string()),
+                        },
+                    ),
+                ]),
+                backends: HashMap::new(),
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let fingerprint = crypto_runtime_capability_fingerprint(&settings);
+
+        settings
+            .crypto
+            .materials
+            .get_mut("tenant-a/mk")
+            .unwrap()
+            .value_b64 = Some(BASE64URL_NOPAD.encode(&[9_u8; 32]));
+        settings
+            .crypto
+            .materials
+            .get_mut("tenant-a/docs-rk")
+            .unwrap()
+            .nonce = Some(BASE64URL_NOPAD.encode(&[8_u8; 12]));
+        settings
+            .crypto
+            .materials
+            .get_mut("tenant-a/docs-rk")
+            .unwrap()
+            .wrapped_key_b64 = Some(BASE64URL_NOPAD.encode(&[7_u8; 48]));
+
+        assert_eq!(
+            fingerprint,
+            crypto_runtime_capability_fingerprint(&settings),
+            "fingerprint must not expose or depend on inline/wrapped key bytes",
+        );
+
+        settings
+            .crypto
+            .materials
+            .get_mut("tenant-a/docs-rk")
+            .unwrap()
+            .rk_epoch = Some(4);
+
+        assert_ne!(
+            fingerprint,
+            crypto_runtime_capability_fingerprint(&settings),
+            "fingerprint must change when non-secret runtime capability metadata changes",
         );
     }
 
