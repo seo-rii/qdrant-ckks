@@ -1504,6 +1504,7 @@ mod tests {
     };
     use ring::rand::SystemRandom;
     use ring::signature::{Ed25519KeyPair, KeyPair};
+    use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
     use segment::types::{Condition, Distance, FieldCondition, WithPayloadInterface};
     use serde_json::json;
     use storage::content_manager::collection_meta_ops::{
@@ -1803,6 +1804,82 @@ mod tests {
                 )
                 .await
                 .unwrap();
+
+            dispatcher
+                .submit_collection_meta_op(
+                    CollectionMetaOperations::CreateCollection(
+                        CreateCollectionOperation::new(
+                            "vector_docs".to_string(),
+                            CreateCollection {
+                                vectors: VectorParamsBuilder::new(2, Distance::Dot).build().into(),
+                                sparse_vectors: None,
+                                hnsw_config: None,
+                                wal_config: None,
+                                optimizers_config: None,
+                                shard_number: Some(1),
+                                on_disk_payload: None,
+                                replication_factor: None,
+                                write_consistency_factor: None,
+                                quantization_config: None,
+                                sharding_method: None,
+                                encryption: Some(CollectionEncryptionConfig {
+                                    version: 1,
+                                    key_id: Some("tenant-a:vector".to_string()),
+                                    crypto_schema_version: 1,
+                                    encryption_epoch: 0,
+                                    migration_state: CryptoMigrationState::Active,
+                                    rules: vec![EncryptionRuleRef {
+                                        id: "vector_conf".to_string(),
+                                        selector: EncryptionSelector::VectorNames {
+                                            names: vec![DEFAULT_VECTOR_NAME.to_string()],
+                                        },
+                                        instance: "docs_vector_v1".to_string(),
+                                        binding: Some("vector-envelope/v1".to_string()),
+                                    }],
+                                }),
+                                ckks: None,
+                                strict_mode_config: None,
+                                uuid: None,
+                                metadata: None,
+                            },
+                        )
+                        .unwrap(),
+                    ),
+                    auth.clone(),
+                    None,
+                )
+                .await
+                .unwrap();
+
+            let err = do_update_vectors(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "vector_docs".to_string(),
+                UpdateVectors {
+                    points: vec![PointVectors {
+                        id: 1.into(),
+                        vector: api::rest::VectorStruct::Single(vec![0.1, 0.2]),
+                    }],
+                    shard_key: None,
+                    update_filter: None,
+                },
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("encrypted vector")
+                        && description.contains("ciphertext storage/write path is not implemented")
+            ));
 
             let err = do_upsert_points(
                 UncheckedTocProvider::new_unchecked(&toc),
