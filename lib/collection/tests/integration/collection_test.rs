@@ -50,8 +50,9 @@ use segment::data_types::facets::FacetParams;
 use segment::data_types::order_by::{Direction, OrderBy, OrderByInterface};
 use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, VectorInternal, VectorStructInternal};
 use segment::types::{
-    Condition, Distance, ExtendedPointId, FieldCondition, Filter, HasIdCondition, Payload,
-    PayloadFieldSchema, PayloadSchemaType, PointIdType, WithPayloadInterface, WithVector,
+    Condition, Distance, ExtendedPointId, FieldCondition, Filter, HasIdCondition,
+    HasVectorCondition, Payload, PayloadFieldSchema, PayloadSchemaType, PointIdType,
+    WithPayloadInterface, WithVector,
 };
 use serde_json::Map;
 use shard::files::PAYLOAD_INDEX_CONFIG_FILE;
@@ -2216,6 +2217,30 @@ async fn encrypted_vector_rejects_plaintext_vector_writes() {
         CollectionError::BadInput { description }
             if description.contains("encrypted vector")
                 && description.contains("ciphertext storage/write path is not implemented")
+    ));
+
+    let has_encrypted_vector_filter = Filter::new_must(Condition::HasVector(
+        HasVectorCondition::from(DEFAULT_VECTOR_NAME.to_string()),
+    ));
+    let delete_points_by_filter = CollectionUpdateOperations::PointOperation(
+        PointOperations::DeletePointsByFilter(has_encrypted_vector_filter),
+    );
+    let err = collection
+        .update_from_client_simple(
+            delete_points_by_filter,
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot filter on encrypted vector")
+                && description.contains("CKKS-native vector search is not implemented")
     ));
 }
 

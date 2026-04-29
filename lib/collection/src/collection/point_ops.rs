@@ -915,23 +915,36 @@ impl Collection {
         };
 
         for rule in &encryption.rules {
-            let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
-                continue;
-            };
-
-            for encrypted_path in paths {
-                let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
-                    CollectionError::bad_input(format!(
-                        "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                    ))
-                })?;
-                if let Some(filter_path) =
-                    filter_touches_encrypted_payload(filter, &encrypted_json_path)
-                {
-                    return Err(CollectionError::bad_input(format!(
-                        "cannot filter on encrypted payload field '{filter_path}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
-                    )));
+            match &rule.selector {
+                EncryptionSelector::PayloadPaths { paths } => {
+                    for encrypted_path in paths {
+                        let encrypted_json_path =
+                            encrypted_path.parse::<JsonPath>().map_err(|err| {
+                                CollectionError::bad_input(format!(
+                                    "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                                ))
+                            })?;
+                        if let Some(filter_path) =
+                            filter_touches_encrypted_payload(filter, &encrypted_json_path)
+                        {
+                            return Err(CollectionError::bad_input(format!(
+                                "cannot filter on encrypted payload field '{filter_path}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                            )));
+                        }
+                    }
                 }
+                EncryptionSelector::VectorNames { names } => {
+                    for encrypted_name in names {
+                        if let Some(filter_vector) =
+                            filter_touches_encrypted_vector(filter, encrypted_name)
+                        {
+                            return Err(CollectionError::bad_input(format!(
+                                "cannot filter on encrypted vector '{filter_vector}' because CKKS-native vector search is not implemented",
+                            )));
+                        }
+                    }
+                }
+                EncryptionSelector::MetadataKeys { .. } => {}
             }
         }
 
@@ -1090,5 +1103,35 @@ fn condition_touches_encrypted_payload<'a>(
             .or_else(|| filter_touches_encrypted_payload(nested.filter(), encrypted_path)),
         Condition::Filter(filter) => filter_touches_encrypted_payload(filter, encrypted_path),
         Condition::HasId(_) | Condition::HasVector(_) | Condition::CustomIdChecker(_) => None,
+    }
+}
+
+fn filter_touches_encrypted_vector<'a>(
+    filter: &'a Filter,
+    encrypted_name: &str,
+) -> Option<&'a str> {
+    filter
+        .iter_conditions()
+        .find_map(|condition| condition_touches_encrypted_vector(condition, encrypted_name))
+}
+
+fn condition_touches_encrypted_vector<'a>(
+    condition: &'a Condition,
+    encrypted_name: &str,
+) -> Option<&'a str> {
+    match condition {
+        Condition::HasVector(has_vector) if has_vector.has_vector == encrypted_name => {
+            Some(has_vector.has_vector.as_str())
+        }
+        Condition::Nested(nested) => {
+            filter_touches_encrypted_vector(nested.filter(), encrypted_name)
+        }
+        Condition::Filter(filter) => filter_touches_encrypted_vector(filter, encrypted_name),
+        Condition::Field(_)
+        | Condition::IsEmpty(_)
+        | Condition::IsNull(_)
+        | Condition::HasId(_)
+        | Condition::HasVector(_)
+        | Condition::CustomIdChecker(_) => None,
     }
 }
