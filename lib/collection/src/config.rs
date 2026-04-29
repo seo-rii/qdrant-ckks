@@ -515,6 +515,27 @@ mod ckks_tests {
     }
 
     #[test]
+    fn legacy_ckks_projection_rejects_non_legacy_rules() {
+        let encryption = CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a/client-rk-2026-04".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 0,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![EncryptionRuleRef {
+                id: "body_client_conf".to_string(),
+                selector: EncryptionSelector::PayloadPaths {
+                    paths: vec!["body".to_string()],
+                },
+                instance: "docs_payload_client_v1".to_string(),
+                binding: Some("client-payload-envelope/v1".to_string()),
+            }],
+        };
+
+        assert_eq!(encryption.legacy_ckks_projection(), None);
+    }
+
+    #[test]
     fn encryption_config_rejects_metadata_selector_until_transport_support_exists() {
         let params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
@@ -827,9 +848,21 @@ impl CollectionEncryptionConfig {
         for rule in &self.rules {
             match &rule.selector {
                 EncryptionSelector::PayloadPaths { paths } => {
+                    if rule.id != "legacy_ckks_payload"
+                        || rule.instance != "legacy_ckks_payload"
+                        || rule.binding.as_deref() != Some("payload-field/v1")
+                    {
+                        return None;
+                    }
                     payload_text_fields.extend(paths.clone());
                 }
                 EncryptionSelector::VectorNames { names } => {
+                    if rule.id != "legacy_ckks_vector"
+                        || rule.instance != "legacy_ckks_vector"
+                        || rule.binding.as_deref() != Some("vector-envelope/v1")
+                    {
+                        return None;
+                    }
                     vector_names.extend(names.clone());
                 }
                 EncryptionSelector::MetadataKeys { .. } => return None,
