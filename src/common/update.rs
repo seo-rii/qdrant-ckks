@@ -2652,11 +2652,33 @@ mod tests {
                 assert!(matches!(
                     err,
                     StorageError::BadInput { description }
-                        if description.contains("encrypted payload field")
+                        if (description.contains("encrypted payload field")
                             && description.contains("body")
-                            && description.contains("blind index")
+                            && description.contains("blind index"))
                 ));
             }
+
+            let snapshot_temp_dir = Builder::new().prefix("snapshot-temp").tempdir().unwrap();
+            let snapshot = collection
+                .create_snapshot(snapshot_temp_dir.path(), 0)
+                .await
+                .unwrap();
+            assert!(collection.snapshots_path().join(&snapshot.name).exists());
+
+            let client_snapshot_temp_dir = Builder::new()
+                .prefix("client-snapshot-temp")
+                .tempdir()
+                .unwrap();
+            let client_snapshot = client_collection
+                .create_snapshot(client_snapshot_temp_dir.path(), 0)
+                .await
+                .unwrap();
+            assert!(
+                client_collection
+                    .snapshots_path()
+                    .join(&client_snapshot.name)
+                    .exists()
+            );
 
             client_collection.stop_gracefully().await;
             collection.stop_gracefully().await;
