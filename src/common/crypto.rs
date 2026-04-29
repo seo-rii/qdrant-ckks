@@ -123,6 +123,8 @@ pub enum PayloadWriteSetupError {
     MissingMaterialBinding { instance: String, role: String },
     #[error("payload crypto instance {instance} key_id option must be a string")]
     InvalidInstanceKeyId { instance: String },
+    #[error("payload crypto instance {instance} must require client envelope key_id")]
+    ClientKeyIdMustBeRequired { instance: String },
     #[error("payload crypto instance {instance} expected_rk_id option must be a string")]
     InvalidClientResourceKeyId { instance: String },
     #[error(
@@ -910,7 +912,12 @@ fn generic_payload_write_plan(
                 )?;
                 let key_id_required = match instance.options.get(KEY_ID_REQUIRED_OPTION) {
                     None | Some(Value::Null) => true,
-                    Some(Value::Bool(value)) => *value,
+                    Some(Value::Bool(true)) => true,
+                    Some(Value::Bool(false)) => {
+                        return Err(PayloadWriteSetupError::ClientKeyIdMustBeRequired {
+                            instance: rule.instance.clone(),
+                        });
+                    }
                     Some(_) => {
                         return Err(PayloadWriteSetupError::InvalidInstanceKeyId {
                             instance: rule.instance.clone(),
@@ -2931,6 +2938,20 @@ mod tests {
                 if instance == "docs_payload_client_v1" && option == MAX_RK_EPOCH_OPTION
         ));
 
+        assert!(matches!(
+            payload_write_plan_for_collection(
+                &settings_with_options(json!({
+                    "key_id": "tenant-a/client-rk-2026-04",
+                    "key_id_required": false,
+                    "signature_key_id": "tenant-a/client-signing-v1",
+                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                })),
+                "docs",
+                &params,
+            ),
+            Err(PayloadWriteSetupError::ClientKeyIdMustBeRequired { instance })
+                if instance == "docs_payload_client_v1"
+        ));
         assert!(matches!(
             payload_write_plan_for_collection(
                 &settings_with_options(json!({
