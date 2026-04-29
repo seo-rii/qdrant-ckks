@@ -1906,12 +1906,14 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
             }]),
         ));
     collection
-        .update_from_client_simple(
+        .update_from_client(
             encrypted_upsert,
-            true,
+            true.into(),
             None,
             WriteOrdering::default(),
+            None,
             HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::RuntimeEncryptedPayloads,
         )
         .await
         .unwrap();
