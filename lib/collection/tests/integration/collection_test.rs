@@ -21,8 +21,9 @@ use collection::operations::point_ops::{
 };
 use collection::operations::shard_selector_internal::ShardSelectorInternal;
 use collection::operations::types::{
-    CollectionError, CountRequestInternal, DiscoverRequestInternal, PointRequestInternal,
-    RecommendExample, RecommendRequestInternal, ScrollRequestInternal, UpdateStatus,
+    CollectionError, CollectionUpdateProvenance, CountRequestInternal, DiscoverRequestInternal,
+    PointRequestInternal, RecommendExample, RecommendRequestInternal, ScrollRequestInternal,
+    UpdateStatus,
 };
 use collection::operations::universal_query::collection_query::{
     CollectionPrefetch, CollectionQueryRequest, Query, VectorInputInternal, VectorQuery,
@@ -1611,7 +1612,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         encrypted_collection_fixture(collection_dir.path(), 1, client_payload_encryption_config())
             .await;
 
-    let client_payload = |collection_id: &str, point_id: &str| {
+    let client_payload = |collection_id: &str, point_id: &str, rk_id: &str| {
         Payload(
             serde_json::json!({
                 "document": {
@@ -1621,7 +1622,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
                             "kind": "payload_text",
                             "algorithm": "AES-256-GCM",
                             "key_id": "tenant-a/client-rk-2026-04",
-                            "rk_id": "tenant-a/client-rk-2026-04",
+                            "rk_id": rk_id,
                             "rk_epoch": 3,
                             "kdf_domain": "qdrant/client-payload-text/v1",
                             "aad": {
@@ -1631,7 +1632,12 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
                                 "schema_version": 1
                             },
                             "nonce": "AAAAAAAAAAAAAAAA",
-                            "ciphertext": "AQID"
+                            "ciphertext": "AQID",
+                            "signature": {
+                                "alg": "ed25519",
+                                "key_id": "tenant-a/client-signing-v1",
+                                "sig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                            }
                         }
                     }
                 }
@@ -1647,16 +1653,22 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
             PointInsertOperationsInternal::from(vec![PointStructPersisted {
                 id: 1.into(),
                 vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
-                payload: Some(client_payload("wrong-collection", "1")),
+                payload: Some(client_payload(
+                    "wrong-collection",
+                    "1",
+                    "tenant-a/client-rk-2026-04",
+                )),
             }]),
         ));
     let err = collection
-        .update_from_client_simple(
+        .update_from_client(
             wrong_collection_marker,
-            true,
+            true.into(),
             None,
             WriteOrdering::default(),
+            None,
             HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes,
         )
         .await
         .unwrap_err();
@@ -1667,20 +1679,49 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
                 && description.contains("collection_id")
     ));
 
+    let wrong_rk_marker =
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                id: 1.into(),
+                vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                payload: Some(client_payload("test", "1", "tenant-a/old-client-rk")),
+            }]),
+        ));
+    let err = collection
+        .update_from_client(
+            wrong_rk_marker,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("client encrypted payload marker")
+                && description.contains("resource key id does not match")
+    ));
+
     let valid_marker = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
         PointInsertOperationsInternal::from(vec![PointStructPersisted {
             id: 1.into(),
             vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
-            payload: Some(client_payload("test", "1")),
+            payload: Some(client_payload("test", "1", "tenant-a/client-rk-2026-04")),
         }]),
     ));
     collection
-        .update_from_client_simple(
+        .update_from_client(
             valid_marker,
-            true,
+            true.into(),
             None,
             WriteOrdering::default(),
+            None,
             HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes,
         )
         .await
         .unwrap();
