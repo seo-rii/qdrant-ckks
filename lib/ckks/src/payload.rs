@@ -615,6 +615,7 @@ pub fn client_payload_signature_key_id(
             envelope.aad.field_path,
         ));
     }
+    validate_resource_key_id(&signature.key_id)?;
 
     Ok(Some(signature.key_id))
 }
@@ -729,6 +730,7 @@ fn validate_client_payload_signature(
             envelope.aad.field_path.clone(),
         ));
     }
+    validate_resource_key_id(&signature.key_id)?;
     let signature_bytes = BASE64URL_NOPAD
         .decode(signature.sig.as_bytes())
         .map_err(|_| PayloadEncryptionError::MalformedEnvelope(envelope.aad.field_path.clone()))?;

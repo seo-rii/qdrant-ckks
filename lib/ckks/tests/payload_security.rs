@@ -4,8 +4,9 @@ use qdrant_ckks::{
     AeadCipher, AeadKeyring, CLIENT_ENCRYPTED_PAYLOAD_MARKER, ClientPayloadSignatureVerification,
     ClientPayloadValidationContext, ENCRYPTED_PAYLOAD_MARKER, EncryptionError, ExistingPayloadMode,
     PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
-    ServerPayloadValidationContext, client_payload_signature_message,
-    is_client_encrypted_payload_value, is_encrypted_payload_value, validate_client_payload_value,
+    ServerPayloadValidationContext, client_payload_signature_key_id,
+    client_payload_signature_message, is_client_encrypted_payload_value,
+    is_encrypted_payload_value, validate_client_payload_value,
     validate_server_payload_value_metadata,
 };
 use ring::rand::SystemRandom;
@@ -471,6 +472,51 @@ fn client_payload_envelope_requires_signature_when_verifier_is_configured() {
             },
         ),
         Err(PayloadEncryptionError::MissingClientSignature),
+    );
+}
+
+#[test]
+fn client_payload_envelope_rejects_invalid_signature_key_id() {
+    let mut envelope = client_envelope("point-1", "body");
+    envelope
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert(
+            "signature".to_string(),
+            json!({
+                "alg": "ed25519",
+                "key_id": "not valid",
+                "sig": BASE64URL_NOPAD.encode(&[0u8; 64])
+            }),
+        );
+
+    assert_eq!(
+        client_payload_signature_key_id(&envelope, "body"),
+        Err(PayloadEncryptionError::Crypto(
+            EncryptionError::InvalidResourceKeyId,
+        )),
+    );
+    assert_eq!(
+        validate_client_payload_value(
+            &envelope,
+            ClientPayloadValidationContext {
+                collection_id: "docs",
+                point_id: "point-1",
+                field_path: "body",
+                expected_key_id: Some("tenant-a/client-rk-2026-04"),
+                expected_rk_id: None,
+                min_rk_epoch: None,
+                max_rk_epoch: None,
+                key_id_required: true,
+                signature_required: true,
+                signature_verification: None,
+            },
+        ),
+        Err(PayloadEncryptionError::Crypto(
+            EncryptionError::InvalidResourceKeyId,
+        )),
     );
 }
 
