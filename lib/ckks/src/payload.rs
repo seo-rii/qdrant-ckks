@@ -7,6 +7,7 @@ use thiserror::Error;
 use crate::aead::{
     AeadCipher, AeadKeyring, EncryptedEnvelope, EncryptionContext, EncryptionError,
     PAYLOAD_TEXT_KEY_DOMAIN, SecretKey, validate_encrypted_envelope_metadata,
+    validate_resource_key_id,
 };
 
 pub const ENCRYPTED_PAYLOAD_MARKER: &str = "$qdrant_ckks";
@@ -495,6 +496,9 @@ pub fn validate_client_payload_value(
     if context.key_id_required && envelope.key_id.as_deref().is_none_or(str::is_empty) {
         return Err(PayloadEncryptionError::MissingClientKeyId);
     }
+    if let Some(key_id) = envelope.key_id.as_deref() {
+        validate_resource_key_id(key_id)?;
+    }
     if let Some(expected_key_id) = context.expected_key_id {
         if envelope.key_id.as_deref() != Some(expected_key_id) {
             return Err(PayloadEncryptionError::ClientKeyIdMismatch);
@@ -509,6 +513,7 @@ pub fn validate_client_payload_value(
             context.field_path.to_string(),
         ));
     }
+    validate_resource_key_id(rk_id)?;
     if let Some(expected_rk_id) = context.expected_rk_id
         && rk_id != expected_rk_id
     {

@@ -827,7 +827,7 @@ fn validate_material_fingerprint_id(material_fingerprint: &str) -> Result<(), En
     }
 }
 
-fn validate_resource_key_id(rk_id: &str) -> Result<(), EncryptionError> {
+pub(crate) fn validate_resource_key_id(rk_id: &str) -> Result<(), EncryptionError> {
     if rk_id.is_empty() || rk_id.len() > MAX_KEY_ID_LEN {
         return Err(EncryptionError::InvalidResourceKeyId);
     }

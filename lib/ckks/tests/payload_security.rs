@@ -222,6 +222,50 @@ fn client_payload_envelope_rejects_aad_and_key_mismatch() {
 }
 
 #[test]
+fn client_payload_envelope_rejects_invalid_key_identifiers() {
+    let context = ClientPayloadValidationContext {
+        collection_id: "docs",
+        point_id: "point-1",
+        field_path: "body",
+        expected_key_id: None,
+        expected_rk_id: None,
+        min_rk_epoch: None,
+        max_rk_epoch: None,
+        key_id_required: true,
+        signature_required: false,
+        signature_verification: None,
+    };
+
+    let mut invalid_key_id = client_envelope("point-1", "body");
+    invalid_key_id
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("key_id".to_string(), Value::String("not valid".to_string()));
+    assert_eq!(
+        validate_client_payload_value(&invalid_key_id, context),
+        Err(PayloadEncryptionError::Crypto(
+            EncryptionError::InvalidResourceKeyId,
+        )),
+    );
+
+    let mut invalid_rk_id = client_envelope("point-1", "body");
+    invalid_rk_id
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("rk_id".to_string(), Value::String("not valid".to_string()));
+    assert_eq!(
+        validate_client_payload_value(&invalid_rk_id, context),
+        Err(PayloadEncryptionError::Crypto(
+            EncryptionError::InvalidResourceKeyId,
+        )),
+    );
+}
+
+#[test]
 fn client_payload_envelope_requires_resource_key_metadata_and_kdf_domain() {
     for field in ["rk_id", "rk_epoch", "kdf_domain"] {
         let mut envelope = client_envelope("point-1", "body");
