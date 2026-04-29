@@ -78,12 +78,26 @@ pub enum CollectionStatus {
 pub enum CollectionUpdateProvenance {
     #[default]
     ClientPlaintext,
+    RuntimeEncryptedPayloads,
     RuntimeVerifiedClientEnvelopes,
+    RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes,
 }
 
 impl CollectionUpdateProvenance {
+    pub const fn allows_server_envelopes(self) -> bool {
+        matches!(
+            self,
+            Self::RuntimeEncryptedPayloads
+                | Self::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes
+        )
+    }
+
     pub const fn allows_client_envelopes(self) -> bool {
-        matches!(self, Self::RuntimeVerifiedClientEnvelopes)
+        matches!(
+            self,
+            Self::RuntimeVerifiedClientEnvelopes
+                | Self::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes
+        )
     }
 }
 

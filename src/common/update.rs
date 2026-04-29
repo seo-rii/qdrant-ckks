@@ -1269,10 +1269,16 @@ async fn maybe_encrypt_upsert_payloads(
     else {
         return Ok((operation, CollectionUpdateProvenance::ClientPlaintext));
     };
-    let update_provenance = if plan.has_client_envelope_rules() {
-        CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes
-    } else {
-        CollectionUpdateProvenance::ClientPlaintext
+    let update_provenance = match (
+        plan.has_server_encrypt_rules(),
+        plan.has_client_envelope_rules(),
+    ) {
+        (true, true) => {
+            CollectionUpdateProvenance::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes
+        }
+        (true, false) => CollectionUpdateProvenance::RuntimeEncryptedPayloads,
+        (false, true) => CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes,
+        (false, false) => CollectionUpdateProvenance::ClientPlaintext,
     };
     let mut seen_client_nonces = std::collections::HashSet::new();
 
@@ -1364,10 +1370,16 @@ async fn maybe_encrypt_point_payload_update(
             CollectionUpdateProvenance::ClientPlaintext,
         ));
     };
-    let update_provenance = if plan.has_client_envelope_rules() {
-        CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes
-    } else {
-        CollectionUpdateProvenance::ClientPlaintext
+    let update_provenance = match (
+        plan.has_server_encrypt_rules(),
+        plan.has_client_envelope_rules(),
+    ) {
+        (true, true) => {
+            CollectionUpdateProvenance::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes
+        }
+        (true, false) => CollectionUpdateProvenance::RuntimeEncryptedPayloads,
+        (false, true) => CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes,
+        (false, false) => CollectionUpdateProvenance::ClientPlaintext,
     };
     let mut seen_client_nonces = std::collections::HashSet::new();
 

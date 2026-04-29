@@ -1532,7 +1532,7 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
             PointInsertOperationsInternal::from(vec![PointStructPersisted {
                 id: 4.into(),
                 vector: VectorStructPersisted::from(vec![0.0, 0.0, 0.0, 1.0]),
-                payload: Some(wrong_key_payload),
+                payload: Some(wrong_key_payload.clone()),
             }]),
         ));
     let err = collection
@@ -1542,6 +1542,35 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
             None,
             WriteOrdering::default(),
             HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("encrypted payload marker")
+                && description.contains("document.body")
+                && description.contains("requires runtime payload encryption")
+    ));
+
+    let wrong_key_marker_upsert_with_provenance =
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                id: 4.into(),
+                vector: VectorStructPersisted::from(vec![0.0, 0.0, 0.0, 1.0]),
+                payload: Some(wrong_key_payload),
+            }]),
+        ));
+    let err = collection
+        .update_from_client(
+            wrong_key_marker_upsert_with_provenance,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::RuntimeEncryptedPayloads,
         )
         .await
         .unwrap_err();

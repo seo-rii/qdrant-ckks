@@ -271,6 +271,12 @@ pub struct PayloadWritePlan {
 }
 
 impl PayloadWritePlan {
+    pub fn has_server_encrypt_rules(&self) -> bool {
+        self.rules
+            .iter()
+            .any(|rule| matches!(rule, PayloadWriteRule::ServerEncrypt { .. }))
+    }
+
     pub fn has_client_envelope_rules(&self) -> bool {
         self.rules
             .iter()

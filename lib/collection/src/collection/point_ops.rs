@@ -237,6 +237,11 @@ impl Collection {
 
                 for value in encrypted_path.value_get(&payload.0) {
                     if is_encrypted_payload_value(value) {
+                        if !update_provenance.allows_server_envelopes() {
+                            return Err(CollectionError::bad_input(format!(
+                                "encrypted payload marker for field '{encrypted_path_str}' requires runtime payload encryption before collection write",
+                            )));
+                        }
                         validate_server_payload_value_metadata(
                                 value,
                                 ServerPayloadValidationContext {
