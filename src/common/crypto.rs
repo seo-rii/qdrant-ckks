@@ -21,6 +21,7 @@ use serde_json::Value;
 use storage::content_manager::collection_meta_ops::CreateCollection;
 use storage::content_manager::errors::StorageError;
 use thiserror::Error;
+use validator::Validate;
 use zeroize::Zeroizing;
 
 use crate::settings::{
@@ -563,6 +564,29 @@ pub fn validate_collection_crypto_runtime(
         collection_name,
         &encryption,
     )
+}
+
+pub fn validate_recovered_collection_crypto_runtime(
+    settings: &Settings,
+    collection_name: &str,
+    params: &CollectionParams,
+) -> Result<(), StorageError> {
+    if let Some(encryption) = &params.encryption {
+        encryption.validate().map_err(|err| {
+            StorageError::bad_input(format!(
+                "recovered collection {collection_name} encryption config is invalid: {err}",
+            ))
+        })?;
+    }
+    if let Some(ckks) = &params.ckks {
+        ckks.validate().map_err(|err| {
+            StorageError::bad_input(format!(
+                "recovered collection {collection_name} ckks config is invalid: {err}",
+            ))
+        })?;
+    }
+
+    validate_collection_crypto_runtime(settings, collection_name, params)
 }
 
 pub fn effective_settings(settings: &Settings) -> CryptoSettings {
@@ -3960,6 +3984,56 @@ mod tests {
         let err = validate_collection_crypto_runtime(&settings, "docs", &params).unwrap_err();
         assert!(
             matches!(err, StorageError::BadInput { ref description } if description.contains("unknown payload crypto instance docs_payload_v1")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
+    fn validate_recovered_collection_crypto_runtime_rejects_invalid_crypto_selectors() {
+        let settings = Settings::new(None).unwrap();
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "embedding_conf".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["embedding".to_string()],
+                    },
+                    instance: "docs_vector_v1".to_string(),
+                    binding: Some("vector-envelope/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = validate_recovered_collection_crypto_runtime(&settings, "docs", &params)
+            .expect_err("recovered vector selector must fail schema validation");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("recovered collection docs encryption config is invalid")
+                    && description.contains("unsupported_encryption_selector")),
+            "unexpected error: {err:?}",
+        );
+
+        let legacy_params = CollectionParams {
+            ckks: Some(CkksCollectionConfig {
+                enabled: true,
+                key_id: Some("tenant-a:docs".to_string()),
+                payload_text_fields: Vec::new(),
+                vector_names: vec!["embedding".to_string()],
+            }),
+            ..CollectionParams::empty()
+        };
+        let err = validate_recovered_collection_crypto_runtime(&settings, "docs", &legacy_params)
+            .expect_err("recovered legacy vector selector must fail schema validation");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("recovered collection docs ckks config is invalid")
+                    && description.contains("unsupported_ckks_vector_selector")),
             "unexpected error: {err:?}",
         );
     }

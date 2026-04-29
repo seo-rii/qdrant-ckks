@@ -14,7 +14,7 @@ use storage::content_manager::alias_mapping::AliasPersistence;
 use storage::content_manager::snapshots::SnapshotConfig;
 use storage::content_manager::toc::{ALIASES_PATH, COLLECTIONS_DIR};
 
-use crate::common::crypto::validate_collection_crypto_runtime;
+use crate::common::crypto::validate_recovered_collection_crypto_runtime;
 use crate::settings::Settings;
 
 /// Recover snapshots from the given arguments
@@ -173,7 +173,7 @@ fn validate_restored_collection_crypto_params(
     collection_name: &str,
     params: &collection::config::CollectionParams,
 ) -> Result<(), String> {
-    validate_collection_crypto_runtime(settings, collection_name, params).map_err(|err| {
+    validate_recovered_collection_crypto_runtime(settings, collection_name, params).map_err(|err| {
         format!(
             "Failed to validate crypto runtime for recovered snapshot {collection_name}: {err}",
         )
