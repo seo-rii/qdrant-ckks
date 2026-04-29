@@ -559,11 +559,10 @@ pub fn validate_client_payload_value(
             context.field_path.to_string(),
         ));
     }
-    if BASE64URL_NOPAD
+    let ciphertext = BASE64URL_NOPAD
         .decode(envelope.ciphertext.as_bytes())
-        .map_err(|_| PayloadEncryptionError::MalformedEnvelope(context.field_path.to_string()))?
-        .is_empty()
-    {
+        .map_err(|_| PayloadEncryptionError::MalformedEnvelope(context.field_path.to_string()))?;
+    if ciphertext.len() < 16 {
         return Err(PayloadEncryptionError::MalformedEnvelope(
             context.field_path.to_string(),
         ));

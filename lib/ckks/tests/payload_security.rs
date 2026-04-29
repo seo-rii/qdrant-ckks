@@ -102,7 +102,7 @@ fn client_envelope(point_id: &str, field_path: &str) -> Value {
                 "schema_version": 1
             },
             "nonce": "AAAAAAAAAAAAAAAA",
-            "ciphertext": "AQID"
+            "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA"
         }
     })
 }
@@ -162,6 +162,20 @@ fn client_payload_envelope_validates_expected_aad_and_key_policy() {
     validate_client_payload_value(&envelope, context).unwrap();
     assert!(is_client_encrypted_payload_value(&envelope));
     assert!(!is_encrypted_payload_value(&envelope));
+
+    let mut short_ciphertext = envelope.clone();
+    short_ciphertext
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("ciphertext".to_string(), Value::String("AQID".to_string()));
+    assert_eq!(
+        validate_client_payload_value(&short_ciphertext, context),
+        Err(PayloadEncryptionError::MalformedEnvelope(
+            "body".to_string()
+        )),
+    );
 }
 
 #[test]
@@ -361,7 +375,10 @@ fn client_payload_envelope_verifies_ed25519_signature() {
         .unwrap()
         .as_object_mut()
         .unwrap()
-        .insert("ciphertext".to_string(), Value::String("BAUG".to_string()));
+        .insert(
+            "ciphertext".to_string(),
+            Value::String("AQEBAQEBAQEBAQEBAQEBAQ".to_string()),
+        );
     assert_eq!(
         validate_client_payload_value(
             &tampered,
