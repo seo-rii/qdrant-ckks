@@ -80,6 +80,9 @@ crypto:
     docs_payload_client_v1:
       provider: payload/client-aead@v1
       materials: {}
+      # backend_ref must be omitted. This provider is server-blind:
+      # Qdrant stores and verifies client envelopes, but never holds the
+      # client data key or runs a bridge/backend for this payload field.
       options:
         key_id: tenant-a/client-rk-2026-04
         key_id_required: true
@@ -104,6 +107,11 @@ params:
         instance: docs_payload_client_v1
         binding: client-payload-envelope/v1
 ```
+
+`payload/client-aead@v1` fails runtime validation if `materials` is non-empty
+or `backend_ref` is configured. Server-side wrapping keys/RKs belong to
+`payload/aes-256-gcm@v1`; client-side payload envelopes must keep client data
+keys outside the Qdrant process.
 
 This provider does not receive plaintext and does not unwrap a data key. The
 client encrypts before insert and Qdrant only validates the envelope schema,

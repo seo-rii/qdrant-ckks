@@ -115,6 +115,10 @@ pub enum PayloadWriteSetupError {
         rule_id: String,
         binding: String,
     },
+    #[error(
+        "payload crypto instance {instance} uses client-side payload provider and must not configure server materials or backend_ref"
+    )]
+    ClientProviderMustBeServerBlind { instance: String },
     #[error("payload crypto instance {instance} must bind role {role} to a symmetric key material")]
     MissingMaterialBinding { instance: String, role: String },
     #[error("payload crypto instance {instance} key_id option must be a string")]
@@ -880,6 +884,11 @@ fn generic_payload_write_plan(
                 rules.push(PayloadWriteRule::ServerEncrypt { encryptor, policy });
             }
             PAYLOAD_CLIENT_AEAD_PROVIDER => {
+                if !instance.materials.is_empty() || instance.backend_ref.is_some() {
+                    return Err(PayloadWriteSetupError::ClientProviderMustBeServerBlind {
+                        instance: rule.instance.clone(),
+                    });
+                }
                 if rule.binding.as_deref() != Some(CLIENT_PAYLOAD_ENVELOPE_BINDING) {
                     return Err(PayloadWriteSetupError::InvalidClientEnvelopeBinding {
                         collection: collection_name.to_string(),
@@ -2965,6 +2974,94 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn payload_write_plan_keeps_client_provider_server_blind() {
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/client-rk-2026-04".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_client_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_client_v1".to_string(),
+                    binding: Some(CLIENT_PAYLOAD_ENVELOPE_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let base_instance = CryptoInstanceConfig {
+            provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
+            materials: HashMap::new(),
+            backend_ref: None,
+            options: json!({
+                "key_id": "tenant-a/client-rk-2026-04",
+                "signature_key_id": "tenant-a/client-signing-v1",
+                "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+            }),
+        };
+
+        let settings_with_instance = |instance: CryptoInstanceConfig| Settings {
+            crypto: CryptoSettings {
+                instances: HashMap::from([("docs_payload_client_v1".to_string(), instance)]),
+                materials: HashMap::from([(
+                    "tenant-a/server-rk".to_string(),
+                    CryptoMaterialConfig {
+                        kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        env: None,
+                        path: None,
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[7u8; 32])),
+                        ..CryptoMaterialConfig::default()
+                    },
+                )]),
+                backends: HashMap::from([(
+                    "openfhe_local".to_string(),
+                    CryptoBackendConfig {
+                        kind: "noop".to_string(),
+                        program: None,
+                        sha256_b64: None,
+                        size: None,
+                        timeout_ms: None,
+                    },
+                )]),
+                allow_inline_key_material: true,
+            },
+            ..Settings::new(None).unwrap()
+        };
+
+        let mut material_bound = base_instance.clone();
+        material_bound.materials = HashMap::from([(
+            PAYLOAD_SYM_KEY_ROLE.to_string(),
+            "tenant-a/server-rk".to_string(),
+        )]);
+        assert!(matches!(
+            payload_write_plan_for_collection(
+                &settings_with_instance(material_bound),
+                "docs",
+                &params
+            ),
+            Err(PayloadWriteSetupError::ClientProviderMustBeServerBlind { instance })
+                if instance == "docs_payload_client_v1"
+        ));
+
+        let mut backend_bound = base_instance;
+        backend_bound.backend_ref = Some("openfhe_local".to_string());
+        assert!(matches!(
+            payload_write_plan_for_collection(
+                &settings_with_instance(backend_bound),
+                "docs",
+                &params
+            ),
+            Err(PayloadWriteSetupError::ClientProviderMustBeServerBlind { instance })
+                if instance == "docs_payload_client_v1"
+        ));
     }
 
     #[test]
