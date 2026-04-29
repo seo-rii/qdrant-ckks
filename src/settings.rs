@@ -1207,6 +1207,38 @@ ckks:
     }
 
     #[test]
+    fn test_crypto_settings_from_legacy_ckks_uses_resource_key_alias() {
+        let crypto = CryptoSettings::from_legacy_ckks(&CkksConfig {
+            enabled: true,
+            allow_inline_key_material: true,
+            key_id: Some("tenant-a:docs".to_string()),
+            master_key_b64: None,
+            resource_key_b64: Some("AQID".to_string()),
+            openfhe_bridge_path: None,
+            openfhe_bridge_sha256_b64: None,
+            collections: HashMap::from([(
+                "docs".to_string(),
+                CkksCollectionKeyConfig {
+                    key_id: None,
+                    master_key_b64: None,
+                    resource_key_b64: Some("BAUG".to_string()),
+                    openfhe_bridge_path: None,
+                    openfhe_bridge_sha256_b64: None,
+                },
+            )]),
+        });
+
+        assert_eq!(
+            crypto.materials["legacy_ckks/default/master_key"].value_b64,
+            Some("AQID".to_string()),
+        );
+        assert_eq!(
+            crypto.materials["legacy_ckks/docs/master_key"].value_b64,
+            Some("BAUG".to_string()),
+        );
+    }
+
+    #[test]
     fn test_inline_key_material_defaults_to_disabled() {
         assert!(!CryptoSettings::default().allow_inline_key_material);
         assert!(!CkksConfig::default().allow_inline_key_material);
