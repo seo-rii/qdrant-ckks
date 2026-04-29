@@ -312,6 +312,7 @@ fn main() -> anyhow::Result<()> {
             args.force_snapshot,
             persistent_consensus_state.this_peer_id(),
             is_distributed_deployment,
+            &settings,
         )
     } else if let Some(snapshots) = args.snapshot {
         // recover from snapshots
@@ -322,6 +323,7 @@ fn main() -> anyhow::Result<()> {
             &settings.storage.storage_path,
             persistent_consensus_state.this_peer_id(),
             is_distributed_deployment,
+            &settings,
         )
     } else {
         vec![]

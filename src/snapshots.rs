@@ -2,6 +2,7 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use collection::collection::Collection;
+use collection::config::CollectionConfigInternal;
 use collection::shards::shard::PeerId;
 use common::fs::safe_delete_in_tmp;
 use common::tar_unpack::tar_unpack_file;
@@ -12,6 +13,9 @@ use shard::snapshots::snapshot_data::SnapshotData;
 use storage::content_manager::alias_mapping::AliasPersistence;
 use storage::content_manager::snapshots::SnapshotConfig;
 use storage::content_manager::toc::{ALIASES_PATH, COLLECTIONS_DIR};
+
+use crate::common::crypto::validate_collection_crypto_runtime;
+use crate::settings::Settings;
 
 /// Recover snapshots from the given arguments
 ///
@@ -30,6 +34,7 @@ pub fn recover_snapshots(
     storage_dir: &Path,
     this_peer_id: PeerId,
     is_distributed: bool,
+    settings: &Settings,
 ) -> Vec<String> {
     let collection_dir_path = storage_dir.join(COLLECTIONS_DIR);
     let mut recovered_collections: Vec<String> = vec![];
@@ -74,6 +79,12 @@ pub fn recover_snapshots(
         ) {
             panic!("Failed to recover snapshot {collection_name}: {err}");
         }
+        validate_restored_collection_crypto_runtime(
+            settings,
+            collection_name,
+            &collection_temp_path,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
         // Remove collection_path directory if exists
         if collection_path.exists()
             && let Err(err) = safe_delete_in_tmp(&collection_path, &storage_dir.join(".deleted"))
@@ -93,6 +104,7 @@ pub fn recover_full_snapshot(
     force: bool,
     this_peer_id: PeerId,
     is_distributed: bool,
+    settings: &Settings,
 ) -> Vec<String> {
     let snapshot_temp_path = temp_dir
         .map(PathBuf::from)
@@ -127,6 +139,7 @@ pub fn recover_full_snapshot(
         storage_dir,
         this_peer_id,
         is_distributed,
+        settings,
     );
 
     let alias_path = storage_dir.join(ALIASES_PATH);
@@ -142,4 +155,66 @@ pub fn recover_full_snapshot(
     // Remove temporary directory
     fs::remove_dir_all(&snapshot_temp_path).unwrap();
     recovered_collection
+}
+
+fn validate_restored_collection_crypto_runtime(
+    settings: &Settings,
+    collection_name: &str,
+    collection_path: &Path,
+) -> Result<(), String> {
+    let config = CollectionConfigInternal::load(collection_path).map_err(|err| {
+        format!("Failed to load recovered snapshot config for collection {collection_name}: {err}",)
+    })?;
+    validate_restored_collection_crypto_params(settings, collection_name, &config.params)
+}
+
+fn validate_restored_collection_crypto_params(
+    settings: &Settings,
+    collection_name: &str,
+    params: &collection::config::CollectionParams,
+) -> Result<(), String> {
+    validate_collection_crypto_runtime(settings, collection_name, params).map_err(|err| {
+        format!(
+            "Failed to validate crypto runtime for recovered snapshot {collection_name}: {err}",
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use collection::config::{
+        CollectionEncryptionConfig, CollectionParams, CryptoMigrationState, EncryptionRuleRef,
+        EncryptionSelector,
+    };
+
+    use super::*;
+
+    #[test]
+    fn cli_snapshot_crypto_preflight_rejects_missing_runtime_instance() {
+        let settings = Settings::new(None).unwrap();
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = validate_restored_collection_crypto_params(&settings, "docs", &params)
+            .expect_err("missing runtime instance must fail CLI snapshot preflight");
+
+        assert!(err.contains("recovered snapshot docs"));
+        assert!(err.contains("unknown payload crypto instance docs_payload_v1"));
+    }
 }
