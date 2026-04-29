@@ -1881,6 +1881,33 @@ mod tests {
                         && description.contains("ciphertext storage/write path is not implemented")
             ));
 
+            let err = do_delete_vectors(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "vector_docs".to_string(),
+                DeleteVectors {
+                    points: Some(vec![1.into()]),
+                    filter: None,
+                    vector: std::iter::once(DEFAULT_VECTOR_NAME.to_string()).collect(),
+                    shard_key: None,
+                },
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("encrypted vector")
+                        && description.contains("ciphertext storage/write path is not implemented")
+            ));
+
             let err = do_upsert_points(
                 UncheckedTocProvider::new_unchecked(&toc),
                 "docs".to_string(),
