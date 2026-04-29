@@ -211,6 +211,7 @@ pub struct VerifiedCkksVector {
 pub struct CkksVectorEncryptor<B> {
     metadata_keyring: AeadKeyring,
     vector_name: String,
+    collection_identity: Option<String>,
     parameters: CkksParameters,
     crypto_schema_version: u16,
     encryption_epoch: u64,
@@ -316,6 +317,7 @@ where
         Ok(Self {
             metadata_keyring: AeadKeyring::new(metadata_cipher),
             vector_name,
+            collection_identity: None,
             parameters,
             crypto_schema_version: CRYPTO_SCHEMA_VERSION,
             encryption_epoch: DEFAULT_ENCRYPTION_EPOCH,
@@ -326,6 +328,30 @@ where
     pub fn with_encryption_epoch(mut self, encryption_epoch: u64) -> Self {
         self.encryption_epoch = encryption_epoch;
         self
+    }
+
+    pub fn with_collection_identity(
+        mut self,
+        collection_identity: impl Into<String>,
+    ) -> Result<Self, CkksError> {
+        let collection_identity = collection_identity.into();
+        Self::validate_context_value("collection identity", &collection_identity)?;
+        self.collection_identity = Some(collection_identity);
+        Ok(self)
+    }
+
+    fn collection_context<'a>(&'a self, collection: &'a str) -> Result<&'a str, CkksError> {
+        Self::validate_context_value("collection", collection)?;
+        Ok(self.collection_identity.as_deref().unwrap_or(collection))
+    }
+
+    fn validate_context_value(label: &str, value: &str) -> Result<(), CkksError> {
+        if value.is_empty() || value.contains('\0') {
+            return Err(CkksError::InvalidContext(format!(
+                "{label} must be non-empty and must not contain NUL",
+            )));
+        }
+        Ok(())
     }
 
     pub fn with_retired_metadata_key(
@@ -370,16 +396,8 @@ where
         public_material: &CkksPublicMaterial,
         values: &[f64],
     ) -> Result<EncryptedCkksVector, CkksError> {
-        if collection.is_empty() || collection.contains('\0') {
-            return Err(CkksError::InvalidContext(
-                "collection must be non-empty and must not contain NUL".to_string(),
-            ));
-        }
-        if point_id.is_empty() || point_id.contains('\0') {
-            return Err(CkksError::InvalidContext(
-                "point_id must be non-empty and must not contain NUL".to_string(),
-            ));
-        }
+        let collection_context = self.collection_context(collection)?;
+        Self::validate_context_value("point_id", point_id)?;
         if values.is_empty() {
             return Err(CkksError::EmptyVector);
         }
@@ -400,7 +418,7 @@ where
         let ciphertext = self.backend.encrypt(CkksEncryptionInput {
             parameters: &self.parameters,
             public_material,
-            collection,
+            collection: collection_context,
             point_id,
             vector_name: &self.vector_name,
             values,
@@ -421,7 +439,7 @@ where
             })
             .map_err(|err| CkksError::MalformedEnvelope(err.to_string()))?
             .as_slice(),
-            EncryptionContext::ckks_vector(collection, point_id, &self.vector_name),
+            EncryptionContext::ckks_vector(collection_context, point_id, &self.vector_name),
             &vector_metadata_aad(VERSION, CKKS_SCHEME),
         )?;
 
@@ -445,11 +463,13 @@ where
         if encrypted.scheme != CKKS_SCHEME {
             return Err(CkksError::UnsupportedScheme(encrypted.scheme.clone()));
         }
+        let collection_context = self.collection_context(collection)?;
+        Self::validate_context_value("point_id", point_id)?;
 
         let verified: VerifiedCkksVector =
             serde_json::from_slice(&self.metadata_keyring.decrypt_with_aad_suffix(
                 &encrypted.envelope,
-                EncryptionContext::ckks_vector(collection, point_id, &self.vector_name),
+                EncryptionContext::ckks_vector(collection_context, point_id, &self.vector_name),
                 &vector_metadata_aad(encrypted.version, &encrypted.scheme),
             )?)
             .map_err(|err| CkksError::MalformedEnvelope(err.to_string()))?;

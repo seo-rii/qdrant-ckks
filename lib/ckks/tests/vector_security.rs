@@ -1058,3 +1058,27 @@ fn vector_envelope_is_bound_to_collection_point_and_vector() {
         Err(CkksError::Envelope(_)),
     ));
 }
+
+#[test]
+fn vector_envelope_can_bind_to_stable_collection_identity() {
+    let material = public_material();
+    let stable_identity = encryptor()
+        .with_collection_identity("collection-uuid-123")
+        .unwrap();
+    let encrypted = stable_identity
+        .encrypt("docs", "point-1", &material, &[1.0, 2.0])
+        .unwrap();
+
+    stable_identity
+        .open("renamed-docs", "point-1", &material, &encrypted)
+        .unwrap();
+
+    assert!(matches!(
+        encryptor().open("renamed-docs", "point-1", &material, &encrypted),
+        Err(CkksError::Envelope(_)),
+    ));
+    assert!(matches!(
+        encryptor().with_collection_identity(""),
+        Err(CkksError::InvalidContext(_)),
+    ));
+}
