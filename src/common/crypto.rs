@@ -936,7 +936,9 @@ fn generic_payload_write_plan(
                             instance: rule.instance.clone(),
                         });
                     }
-                    Some(Value::String(value)) if !value.is_empty() => Some(value.clone()),
+                    Some(Value::String(value)) if is_crypto_identifier(value) => {
+                        Some(value.clone())
+                    }
                     Some(Value::String(_)) => {
                         return Err(PayloadWriteSetupError::InvalidClientResourceKeyId {
                             instance: rule.instance.clone(),
@@ -1344,7 +1346,12 @@ fn resolve_payload_key_id<'a>(
 ) -> Result<&'a str, PayloadWriteSetupError> {
     let instance_key_id = match instance.options.get("key_id") {
         None | Some(Value::Null) => None,
-        Some(Value::String(key_id)) => Some(key_id.as_str()),
+        Some(Value::String(key_id)) if is_crypto_identifier(key_id) => Some(key_id.as_str()),
+        Some(Value::String(_)) => {
+            return Err(PayloadWriteSetupError::InvalidInstanceKeyId {
+                instance: instance_name.to_string(),
+            });
+        }
         Some(_) => {
             return Err(PayloadWriteSetupError::InvalidInstanceKeyId {
                 instance: instance_name.to_string(),
@@ -1375,7 +1382,12 @@ fn resolve_optional_payload_key_id<'a>(
 ) -> Result<Option<&'a str>, PayloadWriteSetupError> {
     let instance_key_id = match instance.options.get("key_id") {
         None | Some(Value::Null) => None,
-        Some(Value::String(key_id)) => Some(key_id.as_str()),
+        Some(Value::String(key_id)) if is_crypto_identifier(key_id) => Some(key_id.as_str()),
+        Some(Value::String(_)) => {
+            return Err(PayloadWriteSetupError::InvalidInstanceKeyId {
+                instance: instance_name.to_string(),
+            });
+        }
         Some(_) => {
             return Err(PayloadWriteSetupError::InvalidInstanceKeyId {
                 instance: instance_name.to_string(),
@@ -2955,6 +2967,35 @@ mod tests {
             ),
             Err(PayloadWriteSetupError::MissingClientResourceKeyEpoch { instance, option })
                 if instance == "docs_payload_client_v1" && option == MAX_RK_EPOCH_OPTION
+        ));
+        assert!(matches!(
+            payload_write_plan_for_collection(
+                &settings_with_options(json!({
+                    "key_id": "not valid",
+                    "signature_key_id": "tenant-a/client-signing-v1",
+                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                })),
+                "docs",
+                &params,
+            ),
+            Err(PayloadWriteSetupError::InvalidInstanceKeyId { instance })
+                if instance == "docs_payload_client_v1"
+        ));
+        assert!(matches!(
+            payload_write_plan_for_collection(
+                &raw_settings_with_options(json!({
+                    "key_id": "tenant-a/client-rk-2026-04",
+                    "expected_rk_id": "not valid",
+                    "signature_key_id": "tenant-a/client-signing-v1",
+                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                    "min_rk_epoch": 3,
+                    "max_rk_epoch": 3,
+                })),
+                "docs",
+                &params,
+            ),
+            Err(PayloadWriteSetupError::InvalidClientResourceKeyId { instance })
+                if instance == "docs_payload_client_v1"
         ));
 
         assert!(matches!(
