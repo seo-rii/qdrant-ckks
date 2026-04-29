@@ -1512,7 +1512,7 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
                 && description.contains("document.body")
     ));
 
-    let wrong_key_encryptor = PayloadTextEncryptor::new(
+    let wrong_key_encryptor = PayloadTextEncryptor::new_with_derived_cipher_unchecked(
         "docs",
         AeadCipher::new("tenant-a:other", SecretKey::from_bytes([7u8; 32])).unwrap(),
     )
@@ -1771,7 +1771,7 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     let metadata_key = SecretKey::from_bytes([31u8; 32])
         .derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)
         .unwrap();
-    let encryptor = PayloadTextEncryptor::new(
+    let encryptor = PayloadTextEncryptor::new_with_derived_cipher_unchecked(
         "test",
         AeadCipher::new("tenant-a:docs", metadata_key).unwrap(),
     )

@@ -14,7 +14,7 @@ use serde_json::{Map, Value, json};
 
 fn encryptor() -> PayloadTextEncryptor {
     let cipher = AeadCipher::new("tenant-a:payload", SecretKey::from_bytes([11u8; 32])).unwrap();
-    PayloadTextEncryptor::new("docs", cipher).unwrap()
+    PayloadTextEncryptor::new_with_derived_cipher_unchecked("docs", cipher).unwrap()
 }
 
 #[test]
@@ -33,7 +33,7 @@ fn resource_key_constructor_derives_payload_text_subkey() {
         .encrypt_selected_fields("point-1", &mut payload, &policy)
         .unwrap();
 
-    let wrong_raw_resource_key = PayloadTextEncryptor::new(
+    let wrong_raw_resource_key = PayloadTextEncryptor::new_with_derived_cipher_unchecked(
         "docs",
         AeadCipher::new_with_material_fingerprint(
             "tenant-a:payload",
@@ -598,7 +598,8 @@ fn payload_decrypt_accepts_retired_key_but_new_writes_use_active_key() {
     let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
     let old_cipher =
         AeadCipher::new("tenant-a:payload-old", SecretKey::from_bytes([11u8; 32])).unwrap();
-    let old_encryptor = PayloadTextEncryptor::new("docs", old_cipher).unwrap();
+    let old_encryptor =
+        PayloadTextEncryptor::new_with_derived_cipher_unchecked("docs", old_cipher).unwrap();
     let mut old_payload = object(json!({ "body": "rotation protected" }));
 
     old_encryptor
@@ -611,7 +612,8 @@ fn payload_decrypt_accepts_retired_key_but_new_writes_use_active_key() {
     .with_retired(
         AeadCipher::new("tenant-a:payload-old", SecretKey::from_bytes([11u8; 32])).unwrap(),
     );
-    let rotated_encryptor = PayloadTextEncryptor::new_with_keyring("docs", keyring).unwrap();
+    let rotated_encryptor =
+        PayloadTextEncryptor::new_with_derived_keyring_unchecked("docs", keyring).unwrap();
 
     assert_eq!(
         rotated_encryptor
