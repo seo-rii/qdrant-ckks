@@ -217,6 +217,52 @@ mod ckks_tests {
     }
 
     #[test]
+    fn encryption_config_allows_resource_key_style_key_ids() {
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/client-rk-2026-04@v3".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_client_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_client_v1".to_string(),
+                    binding: Some("client-payload-envelope/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        params.validate().unwrap();
+
+        let invalid = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/client key".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_client_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_client_v1".to_string(),
+                    binding: Some("client-payload-envelope/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = invalid.validate().unwrap_err();
+        assert!(format!("{err:?}").contains("invalid_encryption_key_id"));
+    }
+
+    #[test]
     fn encryption_config_rejects_reserved_and_unsupported_payload_paths() {
         for path in [
             "$qdrant_ckks.body",
@@ -591,6 +637,19 @@ fn validate_ckks_key_id(key_id: &str) -> Result<(), validator::ValidationError> 
     Ok(())
 }
 
+fn validate_encryption_key_id(key_id: &str) -> Result<(), validator::ValidationError> {
+    if key_id.is_empty()
+        || key_id.len() > 128
+        || !key_id.bytes().all(|b| {
+            b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b':' | b'-' | b'/' | b'@')
+        })
+    {
+        return Err(validator::ValidationError::new("invalid_encryption_key_id"));
+    }
+
+    Ok(())
+}
+
 fn validate_ckks_payload_fields(fields: &[String]) -> Result<(), validator::ValidationError> {
     for field in fields {
         if field.is_empty()
@@ -639,7 +698,7 @@ pub struct CollectionEncryptionConfig {
     pub version: u16,
     /// Public key id recorded in encryption envelopes. Key material is resolved from runtime config.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[validate(custom(function = "validate_ckks_key_id"))]
+    #[validate(custom(function = "validate_encryption_key_id"))]
     #[anonymize(false)]
     pub key_id: Option<String>,
     #[serde(default = "default_crypto_schema_version")]
