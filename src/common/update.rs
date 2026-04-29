@@ -1423,6 +1423,11 @@ async fn maybe_encrypt_point_payload_update(
     }
 
     if points.len() > 1 && touches_encrypted_payload {
+        if plan.has_client_envelope_rules() {
+            return Err(StorageError::bad_input(format!(
+                "{operation_name} cannot reuse client-side encrypted payload envelopes across multiple point ids in collection {collection_name}; send one point-specific update per client envelope",
+            )));
+        }
         let mut encrypted_operations = Vec::with_capacity(points.len());
         for point_id in points {
             let mut payload = operation.payload.clone();
@@ -2445,6 +2450,39 @@ mod tests {
                 .get("body")
                 .unwrap();
             assert!(is_client_encrypted_payload_value(body));
+
+            let err = do_set_payload(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "client_docs".to_string(),
+                SetPayload {
+                    points: Some(vec![10.into(), 11.into()]),
+                    payload: segment::types::Payload(
+                        json!({ "body": signed_client_body("10") })
+                            .as_object()
+                            .unwrap()
+                            .clone(),
+                    ),
+                    filter: None,
+                    shard_key: None,
+                    key: None,
+                },
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+                Some(&client_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cannot reuse client-side encrypted payload envelopes")
+            ));
 
             let err = do_upsert_points(
                 UncheckedTocProvider::new_unchecked(&toc),
