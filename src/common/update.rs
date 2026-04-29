@@ -1477,6 +1477,7 @@ fn payload_write_error_to_storage_error(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::fs;
     use std::num::NonZeroUsize;
     use std::sync::Arc;
 
@@ -2278,6 +2279,7 @@ mod tests {
             let signing_pkcs8 = Ed25519KeyPair::generate_pkcs8(&signing_rng).unwrap();
             let signing_key = Ed25519KeyPair::from_pkcs8(signing_pkcs8.as_ref()).unwrap();
             let signed_client_body = |point_id: &str| {
+                let client_ciphertext = BASE64URL_NOPAD.encode(&[42u8; 16]);
                 let mut body = {
                     let mut marker = serde_json::Map::new();
                     marker.insert(
@@ -2297,7 +2299,7 @@ mod tests {
                                 "schema_version": 1
                             },
                             "nonce": "AAAAAAAAAAAAAAAA",
-                            "ciphertext": "AQID",
+                            "ciphertext": client_ciphertext,
                             "signature": {
                                 "alg": "ed25519",
                                 "key_id": "tenant-a/client-signing-v1",
@@ -2618,7 +2620,40 @@ mod tests {
                 ));
             }
 
+            client_collection.stop_gracefully().await;
             collection.stop_gracefully().await;
         });
+
+        for sentinel in [
+            "public ingress secret",
+            "public set payload secret",
+            "public overwrite payload secret",
+            "multi point secret",
+            "multi point overwrite secret",
+        ] {
+            let sentinel = sentinel.as_bytes();
+            let mut pending = vec![storage_dir.path().to_path_buf()];
+            while let Some(path) = pending.pop() {
+                let metadata = fs::metadata(&path).unwrap();
+                if metadata.is_dir() {
+                    for entry in fs::read_dir(&path).unwrap() {
+                        pending.push(entry.unwrap().path());
+                    }
+                    continue;
+                }
+                if !metadata.is_file() {
+                    continue;
+                }
+
+                let bytes = fs::read(&path).unwrap();
+                assert!(
+                    !bytes
+                        .windows(sentinel.len())
+                        .any(|window| window == sentinel),
+                    "plaintext sentinel leaked into {}",
+                    path.display(),
+                );
+            }
+        }
     }
 }
