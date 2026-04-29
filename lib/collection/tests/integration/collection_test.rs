@@ -1706,6 +1706,49 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
                 && description.contains("resource key id does not match")
     ));
 
+    let mut unsigned_payload = client_payload("test", "1", "tenant-a/client-rk-2026-04");
+    unsigned_payload
+        .0
+        .get_mut("document")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut("body")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("signature");
+    let unsigned_marker =
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                id: 1.into(),
+                vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                payload: Some(unsigned_payload),
+            }]),
+        ));
+    let err = collection
+        .update_from_client(
+            unsigned_marker,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("client encrypted payload marker")
+                && description.contains("signature is missing")
+    ));
+
     let valid_marker = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
         PointInsertOperationsInternal::from(vec![PointStructPersisted {
             id: 1.into(),
