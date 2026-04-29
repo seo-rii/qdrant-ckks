@@ -152,6 +152,7 @@ fn client_payload_envelope_validates_expected_aad_and_key_policy() {
         field_path: "body",
         expected_key_id: Some("tenant-a/client-rk-2026-04"),
         key_id_required: true,
+        signature_required: false,
         signature_verification: None,
     };
 
@@ -172,6 +173,7 @@ fn client_payload_envelope_rejects_aad_and_key_mismatch() {
                 field_path: "body",
                 expected_key_id: Some("tenant-a/client-rk-2026-04"),
                 key_id_required: true,
+                signature_required: false,
                 signature_verification: None,
             },
         ),
@@ -188,6 +190,7 @@ fn client_payload_envelope_rejects_aad_and_key_mismatch() {
                 field_path: "body",
                 expected_key_id: Some("tenant-a/other-rk"),
                 key_id_required: true,
+                signature_required: false,
                 signature_verification: None,
             },
         ),
@@ -215,6 +218,7 @@ fn client_payload_envelope_requires_resource_key_metadata_and_kdf_domain() {
                     field_path: "body",
                     expected_key_id: Some("tenant-a/client-rk-2026-04"),
                     key_id_required: true,
+                    signature_required: false,
                     signature_verification: None,
                 },
             ),
@@ -243,6 +247,7 @@ fn client_payload_envelope_requires_resource_key_metadata_and_kdf_domain() {
                 field_path: "body",
                 expected_key_id: Some("tenant-a/client-rk-2026-04"),
                 key_id_required: true,
+                signature_required: false,
                 signature_verification: None,
             },
         ),
@@ -263,6 +268,7 @@ fn client_payload_envelope_verifies_ed25519_signature() {
             field_path: "body",
             expected_key_id: Some("tenant-a/client-rk-2026-04"),
             key_id_required: true,
+            signature_required: true,
             signature_verification: Some(ClientPayloadSignatureVerification {
                 expected_key_id: "tenant-a/client-signing-v1",
                 public_key: &public_key,
@@ -287,6 +293,7 @@ fn client_payload_envelope_verifies_ed25519_signature() {
                 field_path: "body",
                 expected_key_id: Some("tenant-a/client-rk-2026-04"),
                 key_id_required: true,
+                signature_required: true,
                 signature_verification: Some(ClientPayloadSignatureVerification {
                     expected_key_id: "tenant-a/client-signing-v1",
                     public_key: &public_key,
@@ -311,6 +318,7 @@ fn client_payload_envelope_requires_signature_when_verifier_is_configured() {
                 field_path: "body",
                 expected_key_id: Some("tenant-a/client-rk-2026-04"),
                 key_id_required: true,
+                signature_required: true,
                 signature_verification: Some(ClientPayloadSignatureVerification {
                     expected_key_id: "tenant-a/client-signing-v1",
                     public_key: &public_key,

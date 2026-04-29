@@ -145,6 +145,7 @@ pub struct ClientPayloadValidationContext<'a> {
     pub field_path: &'a str,
     pub expected_key_id: Option<&'a str>,
     pub key_id_required: bool,
+    pub signature_required: bool,
     pub signature_verification: Option<ClientPayloadSignatureVerification<'a>>,
 }
 
@@ -530,7 +531,11 @@ pub fn validate_client_payload_value(
             context.field_path.to_string(),
         ));
     }
-    validate_client_payload_signature(&envelope, context.signature_verification)?;
+    validate_client_payload_signature(
+        &envelope,
+        context.signature_required,
+        context.signature_verification,
+    )?;
 
     Ok(())
 }
@@ -621,10 +626,11 @@ struct ClientPayloadSignature {
 
 fn validate_client_payload_signature(
     envelope: &ClientPayloadEnvelope,
+    signature_required: bool,
     signature_verification: Option<ClientPayloadSignatureVerification<'_>>,
 ) -> Result<(), PayloadEncryptionError> {
     let Some(signature) = &envelope.signature else {
-        return if signature_verification.is_some() {
+        return if signature_required || signature_verification.is_some() {
             Err(PayloadEncryptionError::MissingClientSignature)
         } else {
             Ok(())

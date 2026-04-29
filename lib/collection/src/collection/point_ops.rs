@@ -264,6 +264,7 @@ impl Collection {
                                     field_path: encrypted_path_str,
                                     expected_key_id: encryption.key_id.as_deref(),
                                     key_id_required: true,
+                                    signature_required: true,
                                     signature_verification: None,
                                 },
                             )

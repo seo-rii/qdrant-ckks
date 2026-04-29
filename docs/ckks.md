@@ -104,12 +104,16 @@ params:
 
 This provider does not receive plaintext and does not unwrap a data key. The
 client encrypts before insert and Qdrant only validates the envelope schema,
-AAD metadata, key policy, nonce/ciphertext encoding, and optional Ed25519
-signature before storing the opaque ciphertext. If
-`signature_public_keys` is configured, every write must carry a valid
-`signature` object whose `key_id` selects one configured public key. The legacy
-single-key options `signature_key_id` and `signature_public_key_b64` are still
-accepted, but they cannot be mixed with `signature_public_keys`.
+AAD metadata, key policy, nonce/ciphertext encoding, and Ed25519 signature
+before storing the opaque ciphertext. By default every write must carry a valid
+`signature` object whose `key_id` selects one configured public key from
+`signature_public_keys`. The legacy single-key options `signature_key_id` and
+`signature_public_key_b64` are still accepted, but they cannot be mixed with
+`signature_public_keys`.
+
+Unsigned client envelopes are rejected. Qdrant cannot verify the client-side
+AES-GCM tag without the client data key, so the Ed25519 signature is the
+write-time authenticity check for this zero-trust mode.
 
 For payload writes, the `aad.collection_id` value is the collection's stable
 crypto identity. New collection configs should use the persisted collection UUID

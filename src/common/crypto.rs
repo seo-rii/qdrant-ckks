@@ -136,6 +136,8 @@ pub enum PayloadWriteSetupError {
         "payload crypto instance {instance} must set signature_public_key_b64 when signature_key_id is set"
     )]
     MissingClientSignaturePublicKey { instance: String },
+    #[error("payload crypto instance {instance} must configure client signature verification")]
+    MissingClientSignatureVerifier { instance: String },
     #[error("payload crypto instance {instance} material_fingerprint_id option must be a string")]
     InvalidInstanceMaterialFingerprintId { instance: String },
     #[error("payload crypto instance {instance} must set material_fingerprint_id")]
@@ -197,6 +199,7 @@ enum PayloadWriteRule {
         policy: PayloadEncryptionPolicy,
         expected_key_id: Option<String>,
         key_id_required: bool,
+        signature_required: bool,
         signature_verifier: Option<ClientPayloadSignatureVerifier>,
     },
 }
@@ -263,6 +266,7 @@ impl PayloadWritePlan {
                     policy,
                     expected_key_id,
                     key_id_required,
+                    signature_required,
                     signature_verifier,
                 } => {
                     for field in policy.fields() {
@@ -284,6 +288,7 @@ impl PayloadWritePlan {
                                     field_path: field,
                                     expected_key_id: expected_key_id.as_deref(),
                                     key_id_required: *key_id_required,
+                                    signature_required: *signature_required,
                                     signature_verification,
                                 },
                             )?;
@@ -318,6 +323,7 @@ impl PayloadWritePlan {
                     policy,
                     expected_key_id,
                     key_id_required,
+                    signature_required,
                     signature_verifier,
                 } => {
                     for field in policy.fields() {
@@ -339,6 +345,7 @@ impl PayloadWritePlan {
                                     field_path: field,
                                     expected_key_id: expected_key_id.as_deref(),
                                     key_id_required: *key_id_required,
+                                    signature_required: *signature_required,
                                     signature_verification,
                                 },
                             )?;
@@ -838,12 +845,13 @@ fn generic_payload_write_plan(
                         });
                     }
                 };
-                let signature_verifier =
+                let (signature_required, signature_verifier) =
                     client_payload_signature_verifier(instance, &rule.instance)?;
                 rules.push(PayloadWriteRule::ClientEnvelope {
                     policy,
                     expected_key_id: expected_key_id.map(ToOwned::to_owned),
                     key_id_required,
+                    signature_required,
                     signature_verifier,
                 });
             }
@@ -870,7 +878,7 @@ fn generic_payload_write_plan(
 fn client_payload_signature_verifier(
     instance: &CryptoInstanceConfig,
     instance_id: &str,
-) -> Result<Option<ClientPayloadSignatureVerifier>, PayloadWriteSetupError> {
+) -> Result<(bool, Option<ClientPayloadSignatureVerifier>), PayloadWriteSetupError> {
     let signature_key_id = match instance.options.get(SIGNATURE_KEY_ID_OPTION) {
         None | Some(Value::Null) => None,
         Some(Value::String(value)) => Some(value.as_str()),
@@ -941,11 +949,16 @@ fn client_payload_signature_verifier(
             public_keys.insert(key_id.clone(), public_key);
         }
 
-        return Ok(Some(ClientPayloadSignatureVerifier::Registry(public_keys)));
+        return Ok((
+            true,
+            Some(ClientPayloadSignatureVerifier::Registry(public_keys)),
+        ));
     }
 
     match (signature_key_id, signature_public_key) {
-        (None, None) => Ok(None),
+        (None, None) => Err(PayloadWriteSetupError::MissingClientSignatureVerifier {
+            instance: instance_id.to_string(),
+        }),
         (Some(_), None) => Err(PayloadWriteSetupError::MissingClientSignaturePublicKey {
             instance: instance_id.to_string(),
         }),
@@ -965,10 +978,13 @@ fn client_payload_signature_verifier(
                     instance: instance_id.to_string(),
                 });
             }
-            Ok(Some(ClientPayloadSignatureVerifier::Single {
-                key_id: key_id.to_string(),
-                public_key,
-            }))
+            Ok((
+                true,
+                Some(ClientPayloadSignatureVerifier::Single {
+                    key_id: key_id.to_string(),
+                    public_key,
+                }),
+            ))
         }
     }
 }
@@ -1595,10 +1611,67 @@ mod tests {
     };
     use ring::rand::SystemRandom;
     use ring::signature::{Ed25519KeyPair, KeyPair};
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
     use crate::settings::{CkksConfig, CryptoInstanceConfig};
+
+    fn signed_client_envelope(
+        collection_id: &str,
+        point_id: &str,
+        field_path: &str,
+        signing_key_id: &str,
+    ) -> (serde_json::Value, Vec<u8>) {
+        let rng = SystemRandom::new();
+        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+        let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+        let mut envelope = {
+            let mut marker = serde_json::Map::new();
+            marker.insert(
+                CLIENT_ENCRYPTED_PAYLOAD_MARKER.to_string(),
+                json!({
+                    "version": 1,
+                    "kind": "payload_text",
+                    "algorithm": "AES-256-GCM",
+                    "key_id": "tenant-a/client-rk-2026-04",
+                    "rk_id": "tenant-a/client-rk-2026-04",
+                    "rk_epoch": 3,
+                    "kdf_domain": "qdrant/client-payload-text/v1",
+                    "aad": {
+                        "collection_id": collection_id,
+                        "point_id": point_id,
+                        "field_path": field_path,
+                        "schema_version": 1
+                    },
+                    "nonce": "AAAAAAAAAAAAAAAA",
+                    "ciphertext": "AQID",
+                    "signature": {
+                        "alg": "ed25519",
+                        "key_id": signing_key_id,
+                        "sig": ""
+                    }
+                }),
+            );
+            Value::Object(marker)
+        };
+        let message = client_payload_signature_message(&envelope, field_path).unwrap();
+        let signature = key_pair.sign(&message);
+        envelope
+            .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .get_mut("signature")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                "sig".to_string(),
+                Value::String(BASE64URL_NOPAD.encode(signature.as_ref())),
+            );
+
+        (envelope, key_pair.public_key().as_ref().to_vec())
+    }
 
     #[test]
     fn validate_crypto_settings_rejects_missing_material_and_backend_refs() {
@@ -2126,7 +2199,9 @@ mod tests {
     }
 
     #[test]
-    fn payload_write_plan_accepts_valid_client_envelopes_without_server_key_material() {
+    fn payload_write_plan_accepts_valid_signed_client_envelopes_without_server_key_material() {
+        let (signed_envelope, public_key) =
+            signed_client_envelope("docs", "point-1", "body", "tenant-a/client-signing-v1");
         let settings = Settings {
             crypto: CryptoSettings {
                 instances: HashMap::from([(
@@ -2138,6 +2213,8 @@ mod tests {
                         options: json!({
                             "key_id": "tenant-a/client-rk-2026-04",
                             "key_id_required": true,
+                            "signature_key_id": "tenant-a/client-signing-v1",
+                            "signature_public_key_b64": BASE64URL_NOPAD.encode(&public_key),
                         }),
                     },
                 )]),
@@ -2164,30 +2241,10 @@ mod tests {
             ..CollectionParams::empty()
         };
         let mut payload = segment::types::Payload(
-            json!({
-                "body": {
-                    CLIENT_ENCRYPTED_PAYLOAD_MARKER: {
-                        "version": 1,
-                        "kind": "payload_text",
-                        "algorithm": "AES-256-GCM",
-                        "key_id": "tenant-a/client-rk-2026-04",
-                        "rk_id": "tenant-a/client-rk-2026-04",
-                        "rk_epoch": 3,
-                        "kdf_domain": "qdrant/client-payload-text/v1",
-                        "aad": {
-                            "collection_id": "docs",
-                            "point_id": "point-1",
-                            "field_path": "body",
-                            "schema_version": 1
-                        },
-                        "nonce": "AAAAAAAAAAAAAAAA",
-                        "ciphertext": "AQID",
-                    }
-                }
-            })
-            .as_object()
-            .unwrap()
-            .clone(),
+            json!({ "body": signed_envelope })
+                .as_object()
+                .unwrap()
+                .clone(),
         );
 
         let plan = payload_write_plan_for_collection(&settings, "docs", &params)
@@ -2213,6 +2270,8 @@ mod tests {
                         options: json!({
                             "key_id": "tenant-a/client-rk-2026-04",
                             "key_id_required": true,
+                            "signature_key_id": "tenant-a/client-signing-v1",
+                            "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
                         }),
                     },
                 )]),
@@ -2271,6 +2330,12 @@ mod tests {
 
     #[test]
     fn payload_write_plan_uses_explicit_crypto_collection_id_for_client_envelopes() {
+        let (signed_envelope, public_key) = signed_client_envelope(
+            "crypto-docs-uuid",
+            "point-1",
+            "body",
+            "tenant-a/client-signing-v1",
+        );
         let settings = Settings {
             crypto: CryptoSettings {
                 instances: HashMap::from([(
@@ -2279,7 +2344,11 @@ mod tests {
                         provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
                         materials: HashMap::new(),
                         backend_ref: None,
-                        options: json!({ "key_id": "tenant-a/client-rk-2026-04" }),
+                        options: json!({
+                            "key_id": "tenant-a/client-rk-2026-04",
+                            "signature_key_id": "tenant-a/client-signing-v1",
+                            "signature_public_key_b64": BASE64URL_NOPAD.encode(&public_key),
+                        }),
                     },
                 )]),
                 ..CryptoSettings::default()
@@ -2305,30 +2374,10 @@ mod tests {
             ..CollectionParams::empty()
         };
         let mut payload = segment::types::Payload(
-            json!({
-                "body": {
-                    CLIENT_ENCRYPTED_PAYLOAD_MARKER: {
-                        "version": 1,
-                        "kind": "payload_text",
-                        "algorithm": "AES-256-GCM",
-                        "key_id": "tenant-a/client-rk-2026-04",
-                        "rk_id": "tenant-a/client-rk-2026-04",
-                        "rk_epoch": 3,
-                        "kdf_domain": "qdrant/client-payload-text/v1",
-                        "aad": {
-                            "collection_id": "crypto-docs-uuid",
-                            "point_id": "point-1",
-                            "field_path": "body",
-                            "schema_version": 1
-                        },
-                        "nonce": "AAAAAAAAAAAAAAAA",
-                        "ciphertext": "AQID"
-                    }
-                }
-            })
-            .as_object()
-            .unwrap()
-            .clone(),
+            json!({ "body": signed_envelope })
+                .as_object()
+                .unwrap()
+                .clone(),
         );
 
         let plan = payload_write_plan_for_collection_with_crypto_id(
@@ -2353,7 +2402,11 @@ mod tests {
                         provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
                         materials: HashMap::new(),
                         backend_ref: None,
-                        options: json!({ "key_id": "tenant-a/client-rk-2026-04" }),
+                        options: json!({
+                            "key_id": "tenant-a/client-rk-2026-04",
+                            "signature_key_id": "tenant-a/client-signing-v1",
+                            "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                        }),
                     },
                 )]),
                 ..CryptoSettings::default()
@@ -2500,6 +2553,17 @@ mod tests {
             ..Settings::new(None).unwrap()
         };
 
+        assert!(matches!(
+            payload_write_plan_for_collection(
+                &settings_with_options(json!({
+                    "key_id": "tenant-a/client-rk-2026-04",
+                })),
+                "docs",
+                &params,
+            ),
+            Err(PayloadWriteSetupError::MissingClientSignatureVerifier { instance })
+                if instance == "docs_payload_client_v1"
+        ));
         assert!(matches!(
             payload_write_plan_for_collection(
                 &settings_with_options(json!({
