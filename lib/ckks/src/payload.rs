@@ -633,6 +633,7 @@ pub fn client_payload_nonce_replay_key(
     if key_id.is_empty() {
         return Err(PayloadEncryptionError::MissingClientKeyId);
     }
+    validate_resource_key_id(&key_id)?;
     let rk_id = envelope
         .rk_id
         .ok_or_else(|| PayloadEncryptionError::MalformedEnvelope(field_path.to_string()))?;
@@ -641,6 +642,7 @@ pub fn client_payload_nonce_replay_key(
             field_path.to_string(),
         ));
     }
+    validate_resource_key_id(&rk_id)?;
     let rk_epoch = envelope
         .rk_epoch
         .ok_or_else(|| PayloadEncryptionError::MalformedEnvelope(field_path.to_string()))?;

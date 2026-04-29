@@ -4,9 +4,9 @@ use qdrant_ckks::{
     AeadCipher, AeadKeyring, CLIENT_ENCRYPTED_PAYLOAD_MARKER, ClientPayloadSignatureVerification,
     ClientPayloadValidationContext, ENCRYPTED_PAYLOAD_MARKER, EncryptionError, ExistingPayloadMode,
     PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
-    ServerPayloadValidationContext, client_payload_signature_key_id,
-    client_payload_signature_message, is_client_encrypted_payload_value,
-    is_encrypted_payload_value, validate_client_payload_value,
+    ServerPayloadValidationContext, client_payload_nonce_replay_key,
+    client_payload_signature_key_id, client_payload_signature_message,
+    is_client_encrypted_payload_value, is_encrypted_payload_value, validate_client_payload_value,
     validate_server_payload_value_metadata,
 };
 use ring::rand::SystemRandom;
@@ -250,6 +250,12 @@ fn client_payload_envelope_rejects_invalid_key_identifiers() {
             EncryptionError::InvalidResourceKeyId,
         )),
     );
+    assert_eq!(
+        client_payload_nonce_replay_key(&invalid_key_id, "body"),
+        Err(PayloadEncryptionError::Crypto(
+            EncryptionError::InvalidResourceKeyId,
+        )),
+    );
 
     let mut invalid_rk_id = client_envelope("point-1", "body");
     invalid_rk_id
@@ -260,6 +266,12 @@ fn client_payload_envelope_rejects_invalid_key_identifiers() {
         .insert("rk_id".to_string(), Value::String("not valid".to_string()));
     assert_eq!(
         validate_client_payload_value(&invalid_rk_id, context),
+        Err(PayloadEncryptionError::Crypto(
+            EncryptionError::InvalidResourceKeyId,
+        )),
+    );
+    assert_eq!(
+        client_payload_nonce_replay_key(&invalid_rk_id, "body"),
         Err(PayloadEncryptionError::Crypto(
             EncryptionError::InvalidResourceKeyId,
         )),
