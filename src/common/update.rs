@@ -1466,7 +1466,12 @@ mod tests {
     use common::load_concurrency::LoadConcurrencyConfig;
     use common::mmap;
     use data_encoding::BASE64URL_NOPAD;
-    use qdrant_ckks::is_encrypted_payload_value;
+    use qdrant_ckks::{
+        CLIENT_ENCRYPTED_PAYLOAD_MARKER, client_payload_signature_message,
+        is_client_encrypted_payload_value, is_encrypted_payload_value,
+    };
+    use ring::rand::SystemRandom;
+    use ring::signature::{Ed25519KeyPair, KeyPair};
     use segment::types::{Condition, Distance, FieldCondition, WithPayloadInterface};
     use serde_json::json;
     use storage::content_manager::collection_meta_ops::{
@@ -2242,6 +2247,213 @@ mod tests {
                         if description.contains(expected_error)
                 ));
             }
+
+            let signing_rng = SystemRandom::new();
+            let signing_pkcs8 = Ed25519KeyPair::generate_pkcs8(&signing_rng).unwrap();
+            let signing_key = Ed25519KeyPair::from_pkcs8(signing_pkcs8.as_ref()).unwrap();
+            let signed_client_body = |point_id: &str| {
+                let mut body = {
+                    let mut marker = serde_json::Map::new();
+                    marker.insert(
+                        CLIENT_ENCRYPTED_PAYLOAD_MARKER.to_string(),
+                        json!({
+                            "version": 1,
+                            "kind": "payload_text",
+                            "algorithm": "AES-256-GCM",
+                            "key_id": "tenant-a/client-rk-2026-04",
+                            "rk_id": "tenant-a/client-rk-2026-04",
+                            "rk_epoch": 3,
+                            "kdf_domain": "qdrant/client-payload-text/v1",
+                            "aad": {
+                                "collection_id": "client_docs",
+                                "point_id": point_id,
+                                "field_path": "body",
+                                "schema_version": 1
+                            },
+                            "nonce": "AAAAAAAAAAAAAAAA",
+                            "ciphertext": "AQID",
+                            "signature": {
+                                "alg": "ed25519",
+                                "key_id": "tenant-a/client-signing-v1",
+                                "sig": ""
+                            }
+                        }),
+                    );
+                    serde_json::Value::Object(marker)
+                };
+                let message = client_payload_signature_message(&body, "body").unwrap();
+                let signature = signing_key.sign(&message);
+                body.get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .get_mut("signature")
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(
+                        "sig".to_string(),
+                        serde_json::Value::String(BASE64URL_NOPAD.encode(signature.as_ref())),
+                    );
+                body
+            };
+            let mut client_settings = Settings::new(None).unwrap();
+            client_settings.crypto.instances = HashMap::from([(
+                "docs_payload_client_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: "payload/client-aead@v1".to_string(),
+                    materials: HashMap::new(),
+                    backend_ref: None,
+                    options: json!({
+                        "key_id": "tenant-a/client-rk-2026-04",
+                        "expected_rk_id": "tenant-a/client-rk-2026-04",
+                        "min_rk_epoch": 3,
+                        "max_rk_epoch": 3,
+                        "signature_key_id": "tenant-a/client-signing-v1",
+                        "signature_public_key_b64": BASE64URL_NOPAD
+                            .encode(signing_key.public_key().as_ref()),
+                    }),
+                },
+            )]);
+            dispatcher
+                .submit_collection_meta_op(
+                    CollectionMetaOperations::CreateCollection(
+                        CreateCollectionOperation::new(
+                            "client_docs".to_string(),
+                            CreateCollection {
+                                vectors: VectorParamsBuilder::new(2, Distance::Dot).build().into(),
+                                sparse_vectors: None,
+                                hnsw_config: None,
+                                wal_config: None,
+                                optimizers_config: None,
+                                shard_number: Some(1),
+                                on_disk_payload: None,
+                                replication_factor: None,
+                                write_consistency_factor: None,
+                                quantization_config: None,
+                                sharding_method: None,
+                                encryption: Some(CollectionEncryptionConfig {
+                                    version: 1,
+                                    key_id: Some("tenant-a/client-rk-2026-04".to_string()),
+                                    crypto_schema_version: 1,
+                                    encryption_epoch: 0,
+                                    migration_state: CryptoMigrationState::Active,
+                                    rules: vec![EncryptionRuleRef {
+                                        id: "body_client_conf".to_string(),
+                                        selector: EncryptionSelector::PayloadPaths {
+                                            paths: vec!["body".to_string()],
+                                        },
+                                        instance: "docs_payload_client_v1".to_string(),
+                                        binding: Some("client-payload-envelope/v1".to_string()),
+                                    }],
+                                }),
+                                ckks: None,
+                                strict_mode_config: None,
+                                uuid: None,
+                                metadata: None,
+                            },
+                        )
+                        .unwrap(),
+                    ),
+                    auth.clone(),
+                    None,
+                )
+                .await
+                .unwrap();
+            do_upsert_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "client_docs".to_string(),
+                PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                    points: vec![api::rest::PointStruct {
+                        id: 10.into(),
+                        vector: api::rest::VectorStruct::Single(vec![0.7, 0.8]),
+                        payload: Some(segment::types::Payload(
+                            json!({ "body": signed_client_body("10") })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        )),
+                    }],
+                    shard_key: None,
+                    update_filter: None,
+                    update_mode: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                Some(&client_settings),
+            )
+            .await
+            .unwrap();
+            let client_collection_pass = auth
+                .check_collection_access("client_docs", AccessRequirements::new(), "test")
+                .unwrap();
+            let client_collection = toc.get_collection(&client_collection_pass).await.unwrap();
+            let retrieved = client_collection
+                .retrieve(
+                    PointRequestInternal {
+                        ids: vec![10.into()],
+                        with_payload: Some(WithPayloadInterface::Bool(true)),
+                        with_vector: false.into(),
+                    },
+                    None,
+                    &ShardSelectorInternal::All,
+                    None,
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .unwrap();
+            let body = retrieved[0]
+                .payload
+                .as_ref()
+                .unwrap()
+                .0
+                .get("body")
+                .unwrap();
+            assert!(is_client_encrypted_payload_value(body));
+
+            let err = do_upsert_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "client_docs".to_string(),
+                PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                    points: vec![api::rest::PointStruct {
+                        id: 11.into(),
+                        vector: api::rest::VectorStruct::Single(vec![0.8, 0.9]),
+                        payload: Some(segment::types::Payload(
+                            json!({ "body": signed_client_body("11") })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        )),
+                    }],
+                    shard_key: None,
+                    update_filter: None,
+                    update_mode: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("requires runtime envelope verification")
+            ));
 
             let encrypted_filter = || {
                 Filter::new_must(Condition::Field(FieldCondition::new_match(
