@@ -500,10 +500,10 @@ impl Collection {
                                     )
                                 }),
                                 CollectionUpdateOperations::VectorOperation(
-                                    VectorOperations::DeleteVectors(_, _)
-                                    | VectorOperations::DeleteVectorsByFilter(_, _),
-                                )
-                                | CollectionUpdateOperations::PayloadOperation(_)
+                                    VectorOperations::DeleteVectors(_, vector_names)
+                                    | VectorOperations::DeleteVectorsByFilter(_, vector_names),
+                                ) => vector_names.iter().any(|name| name == encrypted_name),
+                                CollectionUpdateOperations::PayloadOperation(_)
                                 | CollectionUpdateOperations::FieldIndexOperation(_) => false,
                                 #[cfg(feature = "staging")]
                                 CollectionUpdateOperations::StagingOperation(_) => false,

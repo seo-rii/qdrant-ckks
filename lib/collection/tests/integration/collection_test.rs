@@ -2171,6 +2171,52 @@ async fn encrypted_vector_rejects_plaintext_vector_writes() {
             if description.contains("encrypted vector")
                 && description.contains("ciphertext storage/write path is not implemented")
     ));
+
+    let delete_vector =
+        CollectionUpdateOperations::VectorOperation(VectorOperations::DeleteVectors(
+            vec![1.into()].into(),
+            vec![DEFAULT_VECTOR_NAME.to_string()],
+        ));
+    let err = collection
+        .update_from_client_simple(
+            delete_vector,
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("encrypted vector")
+                && description.contains("ciphertext storage/write path is not implemented")
+    ));
+
+    let delete_vector_by_filter =
+        CollectionUpdateOperations::VectorOperation(VectorOperations::DeleteVectorsByFilter(
+            Filter::default(),
+            vec![DEFAULT_VECTOR_NAME.to_string()],
+        ));
+    let err = collection
+        .update_from_client_simple(
+            delete_vector_by_filter,
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("encrypted vector")
+                && description.contains("ciphertext storage/write path is not implemented")
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread")]
