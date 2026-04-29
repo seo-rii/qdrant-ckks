@@ -255,6 +255,44 @@ impl Debug for EncryptedEnvelope {
     }
 }
 
+pub(crate) fn validate_encrypted_envelope_metadata(
+    envelope: &EncryptedEnvelope,
+) -> Result<(), EncryptionError> {
+    if envelope.version != VERSION {
+        return Err(EncryptionError::UnsupportedVersion(envelope.version));
+    }
+    if envelope.algorithm != ALGORITHM {
+        return Err(EncryptionError::UnsupportedAlgorithm(
+            envelope.algorithm.clone(),
+        ));
+    }
+    validate_key_id(&envelope.key_id)?;
+    if !envelope.material_fingerprint.is_empty() {
+        validate_material_fingerprint_id(&envelope.material_fingerprint)?;
+    }
+    if !envelope.rk_id.is_empty() {
+        validate_resource_key_id(&envelope.rk_id)?;
+    } else if envelope.rk_epoch.is_some() {
+        return Err(EncryptionError::InvalidResourceKeyId);
+    }
+
+    let nonce = BASE64URL_NOPAD
+        .decode(envelope.nonce.as_bytes())
+        .map_err(|_| EncryptionError::InvalidEncoding)?;
+    if nonce.len() != NONCE_LEN {
+        return Err(EncryptionError::InvalidNonceLength);
+    }
+
+    let ciphertext = BASE64URL_NOPAD
+        .decode(envelope.ciphertext.as_bytes())
+        .map_err(|_| EncryptionError::InvalidEncoding)?;
+    if ciphertext.len() < TAG_LEN {
+        return Err(EncryptionError::InvalidCiphertextLength);
+    }
+
+    Ok(())
+}
+
 pub struct AeadCipher {
     key_id: String,
     material_fingerprint: String,
@@ -568,14 +606,7 @@ impl AeadCipher {
         context: EncryptionContext<'_>,
         aad_suffix: &[u8],
     ) -> Result<Vec<u8>, EncryptionError> {
-        if envelope.version != VERSION {
-            return Err(EncryptionError::UnsupportedVersion(envelope.version));
-        }
-        if envelope.algorithm != ALGORITHM {
-            return Err(EncryptionError::UnsupportedAlgorithm(
-                envelope.algorithm.clone(),
-            ));
-        }
+        validate_encrypted_envelope_metadata(envelope)?;
         if envelope.key_id != self.key_id {
             return Err(EncryptionError::KeyMismatch);
         }
@@ -595,7 +626,6 @@ impl AeadCipher {
                 return Err(EncryptionError::KeyMismatch);
             }
         }
-        validate_key_id(&envelope.key_id)?;
 
         let nonce_bytes = BASE64URL_NOPAD
             .decode(envelope.nonce.as_bytes())
@@ -692,15 +722,7 @@ impl AeadKeyring {
         context: EncryptionContext<'_>,
         aad_suffix: &[u8],
     ) -> Result<Vec<u8>, EncryptionError> {
-        if envelope.version != VERSION {
-            return Err(EncryptionError::UnsupportedVersion(envelope.version));
-        }
-        if envelope.algorithm != ALGORITHM {
-            return Err(EncryptionError::UnsupportedAlgorithm(
-                envelope.algorithm.clone(),
-            ));
-        }
-        validate_key_id(&envelope.key_id)?;
+        validate_encrypted_envelope_metadata(envelope)?;
 
         if !envelope.material_fingerprint.is_empty() {
             if self.active.matches_envelope_metadata(envelope)? {

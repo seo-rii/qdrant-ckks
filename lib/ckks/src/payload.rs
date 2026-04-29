@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use crate::aead::{
     AeadCipher, AeadKeyring, EncryptedEnvelope, EncryptionContext, EncryptionError,
-    PAYLOAD_TEXT_KEY_DOMAIN, SecretKey,
+    PAYLOAD_TEXT_KEY_DOMAIN, SecretKey, validate_encrypted_envelope_metadata,
 };
 
 pub const ENCRYPTED_PAYLOAD_MARKER: &str = "$qdrant_ckks";
@@ -456,6 +456,7 @@ pub fn validate_server_payload_value_metadata(
     if envelope.encryption_epoch != context.encryption_epoch {
         return Err(PayloadEncryptionError::EncryptionEpochMismatch);
     }
+    validate_encrypted_envelope_metadata(&envelope.envelope)?;
     if let Some(key_id) = context.key_id
         && envelope.envelope.key_id != key_id
     {

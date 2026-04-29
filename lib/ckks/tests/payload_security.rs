@@ -514,6 +514,97 @@ fn server_payload_metadata_validation_rejects_stale_or_wrong_key_markers() {
 }
 
 #[test]
+fn server_payload_metadata_validation_rejects_invalid_envelope_headers() {
+    let encryptor = encryptor();
+    let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
+    let mut base_payload = object(json!({ "body": "metadata checked" }));
+
+    encryptor
+        .encrypt_selected_fields("point-1", &mut base_payload, &policy)
+        .unwrap();
+
+    let tampered_body = |field: &str, value: Value| {
+        let mut payload = base_payload.clone();
+        payload
+            .get_mut("body")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .get_mut(ENCRYPTED_PAYLOAD_MARKER)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .get_mut("envelope")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert(field.to_string(), value);
+        payload.remove("body").unwrap()
+    };
+    let context = ServerPayloadValidationContext {
+        field_path: "body",
+        key_id: Some("tenant-a:payload"),
+        crypto_schema_version: 1,
+        encryption_epoch: 0,
+    };
+
+    assert_eq!(
+        validate_server_payload_value_metadata(&tampered_body("version", json!(2)), context),
+        Err(PayloadEncryptionError::Crypto(
+            EncryptionError::UnsupportedVersion(2),
+        )),
+    );
+    assert_eq!(
+        validate_server_payload_value_metadata(
+            &tampered_body("algorithm", json!("plaintext")),
+            context
+        ),
+        Err(PayloadEncryptionError::Crypto(
+            EncryptionError::UnsupportedAlgorithm("plaintext".to_string()),
+        )),
+    );
+    assert_eq!(
+        validate_server_payload_value_metadata(&tampered_body("nonce", json!("AQID")), context),
+        Err(PayloadEncryptionError::Crypto(
+            EncryptionError::InvalidNonceLength,
+        )),
+    );
+    assert_eq!(
+        validate_server_payload_value_metadata(
+            &tampered_body("ciphertext", json!("AQID")),
+            context
+        ),
+        Err(PayloadEncryptionError::Crypto(
+            EncryptionError::InvalidCiphertextLength,
+        )),
+    );
+    assert_eq!(
+        validate_server_payload_value_metadata(
+            &tampered_body("material_fingerprint", json!("not valid")),
+            context,
+        ),
+        Err(PayloadEncryptionError::Crypto(
+            EncryptionError::InvalidMaterialFingerprintId,
+        )),
+    );
+    assert_eq!(
+        validate_server_payload_value_metadata(
+            &tampered_body("rk_id", json!("not valid")),
+            context
+        ),
+        Err(PayloadEncryptionError::Crypto(
+            EncryptionError::InvalidResourceKeyId,
+        )),
+    );
+    assert_eq!(
+        validate_server_payload_value_metadata(&tampered_body("rk_epoch", json!(3)), context),
+        Err(PayloadEncryptionError::Crypto(
+            EncryptionError::InvalidResourceKeyId,
+        )),
+    );
+}
+
+#[test]
 fn payload_outer_metadata_tampering_fails_authentication() {
     let encryptor = encryptor();
     let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
