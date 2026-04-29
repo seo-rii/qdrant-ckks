@@ -1036,7 +1036,12 @@ fn client_payload_signature_verifier(
 ) -> Result<(bool, Option<ClientPayloadSignatureVerifier>), PayloadWriteSetupError> {
     let signature_key_id = match instance.options.get(SIGNATURE_KEY_ID_OPTION) {
         None | Some(Value::Null) => None,
-        Some(Value::String(value)) => Some(value.as_str()),
+        Some(Value::String(value)) if is_crypto_identifier(value) => Some(value.as_str()),
+        Some(Value::String(_)) => {
+            return Err(PayloadWriteSetupError::InvalidClientSignatureKeyId {
+                instance: instance_id.to_string(),
+            });
+        }
         Some(_) => {
             return Err(PayloadWriteSetupError::InvalidClientSignatureKeyId {
                 instance: instance_id.to_string(),
@@ -1079,7 +1084,7 @@ fn client_payload_signature_verifier(
 
         let mut public_keys = std::collections::HashMap::new();
         for (key_id, public_key_b64) in signature_public_keys {
-            if key_id.is_empty() {
+            if !is_crypto_identifier(key_id) {
                 return Err(PayloadWriteSetupError::InvalidClientSignaturePublicKeys {
                     instance: instance_id.to_string(),
                 });
@@ -1142,6 +1147,14 @@ fn client_payload_signature_verifier(
             ))
         }
     }
+}
+
+fn is_crypto_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-' | b'/' | b'@')
+        })
 }
 
 fn validate_generic_collection_crypto_runtime(
@@ -2973,6 +2986,19 @@ mod tests {
             payload_write_plan_for_collection(
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
+                    "signature_key_id": "not valid",
+                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                })),
+                "docs",
+                &params,
+            ),
+            Err(PayloadWriteSetupError::InvalidClientSignatureKeyId { instance })
+                if instance == "docs_payload_client_v1"
+        ));
+        assert!(matches!(
+            payload_write_plan_for_collection(
+                &settings_with_options(json!({
+                    "key_id": "tenant-a/client-rk-2026-04",
                     "signature_key_id": "tenant-a/client-signing-v1",
                 })),
                 "docs",
@@ -3039,6 +3065,20 @@ mod tests {
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "signature_public_keys": {},
+                })),
+                "docs",
+                &params,
+            ),
+            Err(PayloadWriteSetupError::InvalidClientSignaturePublicKeys { instance })
+                if instance == "docs_payload_client_v1"
+        ));
+        assert!(matches!(
+            payload_write_plan_for_collection(
+                &settings_with_options(json!({
+                    "key_id": "tenant-a/client-rk-2026-04",
+                    "signature_public_keys": {
+                        "not valid": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                    },
                 })),
                 "docs",
                 &params,
