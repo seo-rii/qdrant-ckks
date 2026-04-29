@@ -47,6 +47,10 @@ pub enum PayloadEncryptionError {
     MissingClientKeyId,
     #[error("payload field client envelope key id does not match policy")]
     ClientKeyIdMismatch,
+    #[error("payload field client envelope resource key id does not match policy")]
+    ClientResourceKeyIdMismatch,
+    #[error("payload field client envelope resource key epoch is outside policy")]
+    ClientResourceKeyEpochMismatch,
     #[error("payload field client envelope signature is missing")]
     MissingClientSignature,
     #[error("payload field client envelope signature key id does not match policy")]
@@ -144,6 +148,9 @@ pub struct ClientPayloadValidationContext<'a> {
     pub point_id: &'a str,
     pub field_path: &'a str,
     pub expected_key_id: Option<&'a str>,
+    pub expected_rk_id: Option<&'a str>,
+    pub min_rk_epoch: Option<u64>,
+    pub max_rk_epoch: Option<u64>,
     pub key_id_required: bool,
     pub signature_required: bool,
     pub signature_verification: Option<ClientPayloadSignatureVerification<'a>>,
@@ -479,15 +486,31 @@ pub fn validate_client_payload_value(
             return Err(PayloadEncryptionError::ClientKeyIdMismatch);
         }
     }
-    if envelope.rk_id.as_deref().is_none_or(str::is_empty) {
+    let rk_id = envelope
+        .rk_id
+        .as_deref()
+        .ok_or_else(|| PayloadEncryptionError::MalformedEnvelope(context.field_path.to_string()))?;
+    if rk_id.is_empty() {
         return Err(PayloadEncryptionError::MalformedEnvelope(
             context.field_path.to_string(),
         ));
     }
-    if envelope.rk_epoch.is_none() {
-        return Err(PayloadEncryptionError::MalformedEnvelope(
-            context.field_path.to_string(),
-        ));
+    if let Some(expected_rk_id) = context.expected_rk_id
+        && rk_id != expected_rk_id
+    {
+        return Err(PayloadEncryptionError::ClientResourceKeyIdMismatch);
+    }
+    let rk_epoch = envelope
+        .rk_epoch
+        .ok_or_else(|| PayloadEncryptionError::MalformedEnvelope(context.field_path.to_string()))?;
+    if context
+        .min_rk_epoch
+        .is_some_and(|min_rk_epoch| rk_epoch < min_rk_epoch)
+        || context
+            .max_rk_epoch
+            .is_some_and(|max_rk_epoch| rk_epoch > max_rk_epoch)
+    {
+        return Err(PayloadEncryptionError::ClientResourceKeyEpochMismatch);
     }
     if envelope.kdf_domain.as_deref() != Some(CLIENT_PAYLOAD_KDF_DOMAIN) {
         return Err(PayloadEncryptionError::MalformedEnvelope(

@@ -151,6 +151,9 @@ fn client_payload_envelope_validates_expected_aad_and_key_policy() {
         point_id: "point-1",
         field_path: "body",
         expected_key_id: Some("tenant-a/client-rk-2026-04"),
+        expected_rk_id: None,
+        min_rk_epoch: None,
+        max_rk_epoch: None,
         key_id_required: true,
         signature_required: false,
         signature_verification: None,
@@ -172,6 +175,9 @@ fn client_payload_envelope_rejects_aad_and_key_mismatch() {
                 point_id: "point-2",
                 field_path: "body",
                 expected_key_id: Some("tenant-a/client-rk-2026-04"),
+                expected_rk_id: None,
+                min_rk_epoch: None,
+                max_rk_epoch: None,
                 key_id_required: true,
                 signature_required: false,
                 signature_verification: None,
@@ -189,6 +195,9 @@ fn client_payload_envelope_rejects_aad_and_key_mismatch() {
                 point_id: "point-1",
                 field_path: "body",
                 expected_key_id: Some("tenant-a/other-rk"),
+                expected_rk_id: None,
+                min_rk_epoch: None,
+                max_rk_epoch: None,
                 key_id_required: true,
                 signature_required: false,
                 signature_verification: None,
@@ -217,6 +226,9 @@ fn client_payload_envelope_requires_resource_key_metadata_and_kdf_domain() {
                     point_id: "point-1",
                     field_path: "body",
                     expected_key_id: Some("tenant-a/client-rk-2026-04"),
+                    expected_rk_id: None,
+                    min_rk_epoch: None,
+                    max_rk_epoch: None,
                     key_id_required: true,
                     signature_required: false,
                     signature_verification: None,
@@ -246,6 +258,9 @@ fn client_payload_envelope_requires_resource_key_metadata_and_kdf_domain() {
                 point_id: "point-1",
                 field_path: "body",
                 expected_key_id: Some("tenant-a/client-rk-2026-04"),
+                expected_rk_id: None,
+                min_rk_epoch: None,
+                max_rk_epoch: None,
                 key_id_required: true,
                 signature_required: false,
                 signature_verification: None,
@@ -254,6 +269,66 @@ fn client_payload_envelope_requires_resource_key_metadata_and_kdf_domain() {
         Err(PayloadEncryptionError::MalformedEnvelope(
             "body".to_string()
         )),
+    );
+}
+
+#[test]
+fn client_payload_envelope_enforces_resource_key_policy() {
+    let envelope = client_envelope("point-1", "body");
+
+    assert_eq!(
+        validate_client_payload_value(
+            &envelope,
+            ClientPayloadValidationContext {
+                collection_id: "docs",
+                point_id: "point-1",
+                field_path: "body",
+                expected_key_id: Some("tenant-a/client-rk-2026-04"),
+                expected_rk_id: Some("tenant-a/other-rk"),
+                min_rk_epoch: None,
+                max_rk_epoch: None,
+                key_id_required: true,
+                signature_required: false,
+                signature_verification: None,
+            },
+        ),
+        Err(PayloadEncryptionError::ClientResourceKeyIdMismatch),
+    );
+    assert_eq!(
+        validate_client_payload_value(
+            &envelope,
+            ClientPayloadValidationContext {
+                collection_id: "docs",
+                point_id: "point-1",
+                field_path: "body",
+                expected_key_id: Some("tenant-a/client-rk-2026-04"),
+                expected_rk_id: Some("tenant-a/client-rk-2026-04"),
+                min_rk_epoch: Some(4),
+                max_rk_epoch: None,
+                key_id_required: true,
+                signature_required: false,
+                signature_verification: None,
+            },
+        ),
+        Err(PayloadEncryptionError::ClientResourceKeyEpochMismatch),
+    );
+    assert_eq!(
+        validate_client_payload_value(
+            &envelope,
+            ClientPayloadValidationContext {
+                collection_id: "docs",
+                point_id: "point-1",
+                field_path: "body",
+                expected_key_id: Some("tenant-a/client-rk-2026-04"),
+                expected_rk_id: Some("tenant-a/client-rk-2026-04"),
+                min_rk_epoch: Some(3),
+                max_rk_epoch: Some(3),
+                key_id_required: true,
+                signature_required: false,
+                signature_verification: None,
+            },
+        ),
+        Ok(()),
     );
 }
 
@@ -267,6 +342,9 @@ fn client_payload_envelope_verifies_ed25519_signature() {
             point_id: "point-1",
             field_path: "body",
             expected_key_id: Some("tenant-a/client-rk-2026-04"),
+            expected_rk_id: None,
+            min_rk_epoch: None,
+            max_rk_epoch: None,
             key_id_required: true,
             signature_required: true,
             signature_verification: Some(ClientPayloadSignatureVerification {
@@ -292,6 +370,9 @@ fn client_payload_envelope_verifies_ed25519_signature() {
                 point_id: "point-1",
                 field_path: "body",
                 expected_key_id: Some("tenant-a/client-rk-2026-04"),
+                expected_rk_id: None,
+                min_rk_epoch: None,
+                max_rk_epoch: None,
                 key_id_required: true,
                 signature_required: true,
                 signature_verification: Some(ClientPayloadSignatureVerification {
@@ -317,6 +398,9 @@ fn client_payload_envelope_requires_signature_when_verifier_is_configured() {
                 point_id: "point-1",
                 field_path: "body",
                 expected_key_id: Some("tenant-a/client-rk-2026-04"),
+                expected_rk_id: None,
+                min_rk_epoch: None,
+                max_rk_epoch: None,
                 key_id_required: true,
                 signature_required: true,
                 signature_verification: Some(ClientPayloadSignatureVerification {

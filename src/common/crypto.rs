@@ -84,6 +84,9 @@ const WRAPPING_KEY_32_KIND: &str = "wrapping_key_32";
 const WRAPPED_SYMMETRIC_KEY_32_KIND: &str = "wrapped_symmetric_key_32";
 const MATERIAL_FINGERPRINT_ID_OPTION: &str = "material_fingerprint_id";
 const KEY_ID_REQUIRED_OPTION: &str = "key_id_required";
+const EXPECTED_RK_ID_OPTION: &str = "expected_rk_id";
+const MIN_RK_EPOCH_OPTION: &str = "min_rk_epoch";
+const MAX_RK_EPOCH_OPTION: &str = "max_rk_epoch";
 const SIGNATURE_PUBLIC_KEY_B64_OPTION: &str = "signature_public_key_b64";
 const SIGNATURE_PUBLIC_KEYS_OPTION: &str = "signature_public_keys";
 const SIGNATURE_KEY_ID_OPTION: &str = "signature_key_id";
@@ -114,6 +117,12 @@ pub enum PayloadWriteSetupError {
     MissingMaterialBinding { instance: String, role: String },
     #[error("payload crypto instance {instance} key_id option must be a string")]
     InvalidInstanceKeyId { instance: String },
+    #[error("payload crypto instance {instance} expected_rk_id option must be a string")]
+    InvalidClientResourceKeyId { instance: String },
+    #[error("payload crypto instance {instance} {option} option must be an unsigned integer")]
+    InvalidClientResourceKeyEpoch { instance: String, option: String },
+    #[error("payload crypto instance {instance} min_rk_epoch must be <= max_rk_epoch")]
+    InvalidClientResourceKeyEpochRange { instance: String },
     #[error("payload crypto instance {instance} signature_key_id option must be a string")]
     InvalidClientSignatureKeyId { instance: String },
     #[error(
@@ -198,6 +207,9 @@ enum PayloadWriteRule {
     ClientEnvelope {
         policy: PayloadEncryptionPolicy,
         expected_key_id: Option<String>,
+        expected_rk_id: Option<String>,
+        min_rk_epoch: Option<u64>,
+        max_rk_epoch: Option<u64>,
         key_id_required: bool,
         signature_required: bool,
         signature_verifier: Option<ClientPayloadSignatureVerifier>,
@@ -265,6 +277,9 @@ impl PayloadWritePlan {
                 PayloadWriteRule::ClientEnvelope {
                     policy,
                     expected_key_id,
+                    expected_rk_id,
+                    min_rk_epoch,
+                    max_rk_epoch,
                     key_id_required,
                     signature_required,
                     signature_verifier,
@@ -287,6 +302,9 @@ impl PayloadWritePlan {
                                     point_id,
                                     field_path: field,
                                     expected_key_id: expected_key_id.as_deref(),
+                                    expected_rk_id: expected_rk_id.as_deref(),
+                                    min_rk_epoch: *min_rk_epoch,
+                                    max_rk_epoch: *max_rk_epoch,
                                     key_id_required: *key_id_required,
                                     signature_required: *signature_required,
                                     signature_verification,
@@ -322,6 +340,9 @@ impl PayloadWritePlan {
                 PayloadWriteRule::ClientEnvelope {
                     policy,
                     expected_key_id,
+                    expected_rk_id,
+                    min_rk_epoch,
+                    max_rk_epoch,
                     key_id_required,
                     signature_required,
                     signature_verifier,
@@ -344,6 +365,9 @@ impl PayloadWritePlan {
                                     point_id,
                                     field_path: field,
                                     expected_key_id: expected_key_id.as_deref(),
+                                    expected_rk_id: expected_rk_id.as_deref(),
+                                    min_rk_epoch: *min_rk_epoch,
+                                    max_rk_epoch: *max_rk_epoch,
                                     key_id_required: *key_id_required,
                                     signature_required: *signature_required,
                                     signature_verification,
@@ -845,11 +869,62 @@ fn generic_payload_write_plan(
                         });
                     }
                 };
+                let expected_rk_id = match instance.options.get(EXPECTED_RK_ID_OPTION) {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(value)) => Some(value.clone()),
+                    Some(_) => {
+                        return Err(PayloadWriteSetupError::InvalidClientResourceKeyId {
+                            instance: rule.instance.clone(),
+                        });
+                    }
+                };
+                let min_rk_epoch = match instance.options.get(MIN_RK_EPOCH_OPTION) {
+                    None | Some(Value::Null) => None,
+                    Some(Value::Number(value)) => value
+                        .as_u64()
+                        .ok_or_else(|| PayloadWriteSetupError::InvalidClientResourceKeyEpoch {
+                            instance: rule.instance.clone(),
+                            option: MIN_RK_EPOCH_OPTION.to_string(),
+                        })?
+                        .into(),
+                    Some(_) => {
+                        return Err(PayloadWriteSetupError::InvalidClientResourceKeyEpoch {
+                            instance: rule.instance.clone(),
+                            option: MIN_RK_EPOCH_OPTION.to_string(),
+                        });
+                    }
+                };
+                let max_rk_epoch = match instance.options.get(MAX_RK_EPOCH_OPTION) {
+                    None | Some(Value::Null) => None,
+                    Some(Value::Number(value)) => value
+                        .as_u64()
+                        .ok_or_else(|| PayloadWriteSetupError::InvalidClientResourceKeyEpoch {
+                            instance: rule.instance.clone(),
+                            option: MAX_RK_EPOCH_OPTION.to_string(),
+                        })?
+                        .into(),
+                    Some(_) => {
+                        return Err(PayloadWriteSetupError::InvalidClientResourceKeyEpoch {
+                            instance: rule.instance.clone(),
+                            option: MAX_RK_EPOCH_OPTION.to_string(),
+                        });
+                    }
+                };
+                if let (Some(min_rk_epoch), Some(max_rk_epoch)) = (min_rk_epoch, max_rk_epoch)
+                    && min_rk_epoch > max_rk_epoch
+                {
+                    return Err(PayloadWriteSetupError::InvalidClientResourceKeyEpochRange {
+                        instance: rule.instance.clone(),
+                    });
+                }
                 let (signature_required, signature_verifier) =
                     client_payload_signature_verifier(instance, &rule.instance)?;
                 rules.push(PayloadWriteRule::ClientEnvelope {
                     policy,
                     expected_key_id: expected_key_id.map(ToOwned::to_owned),
+                    expected_rk_id,
+                    min_rk_epoch,
+                    max_rk_epoch,
                     key_id_required,
                     signature_required,
                     signature_verifier,
@@ -2466,6 +2541,96 @@ mod tests {
             Err(PayloadWriteSetupError::Payload(
                 PayloadEncryptionError::ClientEnvelopeAadMismatch(field)
             )) if field == "point_id"
+        ));
+    }
+
+    #[test]
+    fn payload_write_plan_enforces_client_resource_key_policy() {
+        let (signed_envelope, public_key) =
+            signed_client_envelope("docs", "point-1", "body", "tenant-a/client-signing-v1");
+        let settings = Settings {
+            crypto: CryptoSettings {
+                instances: HashMap::from([(
+                    "docs_payload_client_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a/client-rk-2026-04",
+                            "expected_rk_id": "tenant-a/client-rk-2026-04",
+                            "min_rk_epoch": 3,
+                            "max_rk_epoch": 3,
+                            "signature_key_id": "tenant-a/client-signing-v1",
+                            "signature_public_key_b64": BASE64URL_NOPAD.encode(&public_key),
+                        }),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/client-rk-2026-04".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_client_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_client_v1".to_string(),
+                    binding: Some(CLIENT_PAYLOAD_ENVELOPE_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
+            .unwrap()
+            .unwrap();
+        let payload_from_envelope =
+            |envelope: Value| Payload(json!({ "body": envelope }).as_object().unwrap().clone());
+
+        let mut valid_payload = payload_from_envelope(signed_envelope.clone());
+        assert_eq!(
+            plan.encrypt_payload("point-1", &mut valid_payload).unwrap(),
+            1
+        );
+
+        let mut wrong_rk_envelope = signed_envelope.clone();
+        wrong_rk_envelope
+            .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                "rk_id".to_string(),
+                Value::String("tenant-a/old-client-rk".to_string()),
+            );
+        let mut wrong_rk_payload = payload_from_envelope(wrong_rk_envelope);
+        assert!(matches!(
+            plan.encrypt_payload("point-1", &mut wrong_rk_payload),
+            Err(PayloadWriteSetupError::Payload(
+                PayloadEncryptionError::ClientResourceKeyIdMismatch
+            ))
+        ));
+
+        let mut stale_epoch_envelope = signed_envelope;
+        stale_epoch_envelope
+            .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("rk_epoch".to_string(), json!(2));
+        let mut stale_epoch_payload = payload_from_envelope(stale_epoch_envelope);
+        assert!(matches!(
+            plan.encrypt_payload("point-1", &mut stale_epoch_payload),
+            Err(PayloadWriteSetupError::Payload(
+                PayloadEncryptionError::ClientResourceKeyEpochMismatch
+            ))
         ));
     }
 

@@ -83,6 +83,9 @@ crypto:
       options:
         key_id: tenant-a/client-rk-2026-04
         key_id_required: true
+        expected_rk_id: tenant-a/client-rk-2026-04
+        min_rk_epoch: 3
+        max_rk_epoch: 3
         signature_public_keys:
           tenant-a/client-signing-v1: base64url-no-pad-ed25519-public-key
           tenant-a/client-signing-v2: base64url-no-pad-ed25519-public-key
@@ -114,6 +117,11 @@ before storing the opaque ciphertext. By default every write must carry a valid
 Unsigned client envelopes are rejected. Qdrant cannot verify the client-side
 AES-GCM tag without the client data key, so the Ed25519 signature is the
 write-time authenticity check for this zero-trust mode.
+
+Client envelopes must carry `rk_id`, `rk_epoch`, and
+`kdf_domain: qdrant/client-payload-text/v1`. Instances may additionally pin
+`expected_rk_id`, `min_rk_epoch`, and `max_rk_epoch` so stale or wrong client
+resource-key epochs fail closed during rotation.
 
 For payload writes, the `aad.collection_id` value is the collection's stable
 crypto identity. New collection configs should use the persisted collection UUID
