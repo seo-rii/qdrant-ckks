@@ -2438,6 +2438,55 @@ mod tests {
                 UncheckedTocProvider::new_unchecked(&toc),
                 "client_docs".to_string(),
                 PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                    points: vec![
+                        api::rest::PointStruct {
+                            id: 11.into(),
+                            vector: api::rest::VectorStruct::Single(vec![0.8, 0.9]),
+                            payload: Some(segment::types::Payload(
+                                json!({ "body": signed_client_body("11") })
+                                    .as_object()
+                                    .unwrap()
+                                    .clone(),
+                            )),
+                        },
+                        api::rest::PointStruct {
+                            id: 12.into(),
+                            vector: api::rest::VectorStruct::Single(vec![0.9, 1.0]),
+                            payload: Some(segment::types::Payload(
+                                json!({ "body": signed_client_body("12") })
+                                    .as_object()
+                                    .unwrap()
+                                    .clone(),
+                            )),
+                        },
+                    ],
+                    shard_key: None,
+                    update_filter: None,
+                    update_mode: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                Some(&client_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("nonce was already used")
+            ));
+
+            let err = do_upsert_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "client_docs".to_string(),
+                PointInsertOperations::PointsList(api::rest::schema::PointsList {
                     points: vec![api::rest::PointStruct {
                         id: 11.into(),
                         vector: api::rest::VectorStruct::Single(vec![0.8, 0.9]),
