@@ -28,8 +28,8 @@ implementation.
 
 | API/path | Server-side payload AEAD | Client-side payload envelope | CKKS vector envelope |
 | --- | --- | --- | --- |
-| `upsert` payload | Supported for selected JSON string fields. Values are encrypted before storage and client-supplied `$qdrant_ckks` markers are rejected. | Supported for selected fields that already contain a valid `$qdrant_client_aead` marker. Qdrant validates schema, AAD metadata, key policy, and optional Ed25519 signature, but does not decrypt. | Unsupported. CKKS vector selectors are rejected until ciphertext storage/search semantics are implemented. |
-| `set_payload` / `overwrite_payload` | Supported for a single explicit point when Qdrant can bind AAD to the point id. Filter-based, key-path, and multi-point encrypted-field updates fail closed. | Same point-id limitation as server-side payload writes. Clients must provide one envelope per point/field. | Not applicable. |
+| `upsert` payload | Supported for selected JSON string fields. Values are encrypted before storage and client-supplied `$qdrant_ckks` markers are rejected. | Supported for selected fields that already contain a valid `$qdrant_client_aead` marker. Qdrant validates schema, AAD metadata, key policy, and a mandatory Ed25519 signature, but does not decrypt. | Unsupported. CKKS vector selectors are rejected until ciphertext storage/search semantics are implemented. |
+| `set_payload` / `overwrite_payload` | Supported for explicit point ids when Qdrant can bind AAD to each point id. Multi-point updates are fanned out into one encrypted operation per point; filter-based and key-path encrypted-field updates fail closed. | Same explicit-point-id limitation as server-side payload writes. Clients must provide one envelope per point/field; filter-based and key-path encrypted-field updates fail closed. | Not applicable. |
 | `update_vectors` | Not applicable. | Not applicable. | Unsupported. Plaintext writes to encrypted vector names fail closed. |
 | Payload indexes, filters, facets, ordering, grouping, and formulas | Plaintext indexes, read/update filters, facet keys, order-by keys, group-by keys, and formula payload references over encrypted paths, parent paths, or child paths are rejected. Searching, mutating by filter, ordering, grouping, or aggregating encrypted content requires a future blind-index provider. | Same policy. The opaque ciphertext field is not searchable, orderable, groupable, facetable, or usable in mutation filters as plaintext. | Payload filtering/faceting over encrypted metadata is unsupported. |
 | `retrieve`, `scroll`, and `search` result payloads | Stored `$qdrant_ckks` markers are returned raw. There is no `decrypt_payload` option or RBAC capability yet. | Stored `$qdrant_client_aead` markers are returned raw for SDK/client decryption. | Search over CKKS ciphertext vectors is unsupported; separate plaintext or surrogate vectors must be modeled explicitly outside this branch. |
@@ -132,6 +132,10 @@ Client envelopes must carry `rk_id`, `rk_epoch`, and
 `kdf_domain: qdrant/client-payload-text/v1`. Provider instances must pin
 `expected_rk_id`, `min_rk_epoch`, and `max_rk_epoch` so stale or wrong
 client resource-key epochs fail closed during rotation.
+Envelope `key_id`, `rk_id`, and `signature.key_id` values, plus matching
+provider options such as `key_id`, `expected_rk_id`, and signature registry
+keys, must use the bounded qdrant-sec crypto identifier syntax
+`[A-Za-z0-9._:/@-]`.
 
 For payload writes, the `aad.collection_id` value is the collection's stable
 crypto identity. New collection configs should use the persisted collection UUID
