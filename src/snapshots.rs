@@ -79,12 +79,15 @@ pub fn recover_snapshots(
         ) {
             panic!("Failed to recover snapshot {collection_name}: {err}");
         }
-        validate_restored_collection_crypto_runtime(
+        if let Err(err) = validate_restored_collection_crypto_runtime(
             settings,
             collection_name,
             &collection_temp_path,
-        )
-        .unwrap_or_else(|err| panic!("{err}"));
+        ) {
+            let _ = safe_delete_in_tmp(&collection_temp_path, &storage_dir.join(".deleted"))
+                .and_then(|to_delete| to_delete.close());
+            panic!("{err}");
+        }
         // Remove collection_path directory if exists
         if collection_path.exists()
             && let Err(err) = safe_delete_in_tmp(&collection_path, &storage_dir.join(".deleted"))
