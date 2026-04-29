@@ -40,6 +40,7 @@ use collection::operations::vector_params_builder::VectorParamsBuilder;
 use collection::recommendations::recommend_by;
 use collection::shards::replica_set::replica_set_state::{ReplicaSetState, ReplicaState};
 use common::counter::hardware_accumulator::HwMeasurementAcc;
+use common::types::{DetailsLevel, TelemetryDetail};
 use fs_err::{self as fs, File};
 use itertools::Itertools;
 use qdrant_ckks::{
@@ -2050,6 +2051,21 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
         .unwrap();
     assert_eq!(searched.len(), 1);
     assert_raw_encrypted_body(searched[0].payload.as_ref().unwrap());
+
+    let telemetry = collection
+        .get_telemetry_data(
+            TelemetryDetail::new(DetailsLevel::Level4, true),
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+    let telemetry_bytes = serde_json::to_vec(&telemetry).unwrap();
+    assert!(
+        !telemetry_bytes
+            .windows(sentinel.as_bytes().len())
+            .any(|window| window == sentinel.as_bytes()),
+        "plaintext sentinel leaked into collection telemetry",
+    );
 
     let snapshot_temp_dir = Builder::new().prefix("snapshot-temp").tempdir().unwrap();
     let snapshot = collection
