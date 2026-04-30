@@ -656,6 +656,7 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
                 "has_nonce": material.nonce.is_some(),
                 "has_wrapped_key_b64": material.wrapped_key_b64.is_some(),
                 "rk_epoch": material.rk_epoch,
+                "state": material.state,
                 "scope": material.scope,
             }),
         );
@@ -2223,6 +2224,20 @@ mod tests {
             fingerprint,
             crypto_runtime_capability_fingerprint(&settings),
             "fingerprint must change when non-secret runtime capability metadata changes",
+        );
+
+        let epoch_fingerprint = crypto_runtime_capability_fingerprint(&settings);
+        settings
+            .crypto
+            .materials
+            .get_mut("tenant-a/docs-rk")
+            .unwrap()
+            .state = Some(RESOURCE_KEY_STATE_RETIRED.to_string());
+
+        assert_ne!(
+            epoch_fingerprint,
+            crypto_runtime_capability_fingerprint(&settings),
+            "fingerprint must change when resource key lifecycle state changes",
         );
     }
 
