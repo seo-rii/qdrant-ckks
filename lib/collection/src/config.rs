@@ -581,6 +581,100 @@ mod ckks_tests {
     }
 
     #[test]
+    fn crypto_migration_plan_validates_against_current_config() {
+        use CryptoMigrationState::{Active, Rotating};
+
+        let current = CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a:docs".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 3,
+            migration_state: Active,
+            rules: vec![EncryptionRuleRef {
+                id: "body_conf".to_string(),
+                selector: EncryptionSelector::PayloadPaths {
+                    paths: vec!["body".to_string()],
+                },
+                instance: "docs_payload_v1".to_string(),
+                binding: Some("payload-field/v1".to_string()),
+            }],
+        };
+
+        let stale_rotation = CryptoMigrationPlan {
+            from: Active,
+            to: Rotating,
+            target_epoch: 3,
+            active_rk_id: Some("rk/docs/3".to_string()),
+            retired_rk_id: Some("rk/docs/2".to_string()),
+            dry_run: false,
+            checkpoints: Vec::new(),
+        };
+        assert!(
+            stale_rotation
+                .validate_admin_plan_for_config(&current)
+                .is_err()
+        );
+
+        let valid_rotation = CryptoMigrationPlan {
+            from: Active,
+            to: Rotating,
+            target_epoch: 4,
+            active_rk_id: Some("rk/docs/4".to_string()),
+            retired_rk_id: Some("rk/docs/3".to_string()),
+            dry_run: false,
+            checkpoints: Vec::new(),
+        };
+        valid_rotation
+            .validate_admin_plan_for_config(&current)
+            .unwrap();
+
+        let mut rotating_current = current.clone();
+        rotating_current.migration_state = Rotating;
+        rotating_current.encryption_epoch = 4;
+        let wrong_completion_epoch = CryptoMigrationPlan {
+            from: Rotating,
+            to: Active,
+            target_epoch: 5,
+            active_rk_id: Some("rk/docs/4".to_string()),
+            retired_rk_id: Some("rk/docs/3".to_string()),
+            dry_run: false,
+            checkpoints: vec![CryptoMigrationCheckpoint {
+                shard_id: 0,
+                total_points: 10,
+                processed_points: 10,
+                rewritten_points: 10,
+                status: CryptoMigrationCheckpointStatus::Verified,
+            }],
+        };
+        assert!(
+            wrong_completion_epoch
+                .validate_admin_plan_for_config(&rotating_current)
+                .is_err()
+        );
+
+        let wrong_current_state = CryptoMigrationPlan {
+            from: Rotating,
+            to: Active,
+            target_epoch: 3,
+            active_rk_id: Some("rk/docs/3".to_string()),
+            retired_rk_id: Some("rk/docs/2".to_string()),
+            dry_run: false,
+            checkpoints: vec![CryptoMigrationCheckpoint {
+                shard_id: 0,
+                total_points: 10,
+                processed_points: 10,
+                rewritten_points: 10,
+                status: CryptoMigrationCheckpointStatus::Verified,
+            }],
+        };
+        assert!(
+            wrong_current_state
+                .validate_admin_plan_for_config(&current)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn collection_params_reject_encryption_changes_without_migration() {
         let ckks = CkksCollectionConfig {
             enabled: true,
@@ -879,6 +973,56 @@ impl CryptoMigrationPlan {
                     "crypto_migration_requires_verified_checkpoints",
                 ));
             }
+        }
+
+        Ok(())
+    }
+
+    pub fn validate_admin_plan_for_config(
+        &self,
+        current: &CollectionEncryptionConfig,
+    ) -> Result<(), ValidationError> {
+        self.validate_admin_plan()?;
+
+        if current.migration_state != self.from {
+            return Err(ValidationError::new(
+                "crypto_migration_current_state_mismatch",
+            ));
+        }
+
+        if matches!(
+            (self.from, self.to),
+            (
+                CryptoMigrationState::Disabled,
+                CryptoMigrationState::Encrypting
+            ) | (CryptoMigrationState::Active, CryptoMigrationState::Rotating)
+        ) && self.target_epoch <= current.encryption_epoch
+        {
+            return Err(ValidationError::new(
+                "crypto_migration_target_epoch_must_advance",
+            ));
+        }
+
+        if matches!(
+            (self.from, self.to),
+            (
+                CryptoMigrationState::Encrypting,
+                CryptoMigrationState::Active
+            ) | (CryptoMigrationState::Rotating, CryptoMigrationState::Active)
+                | (
+                    CryptoMigrationState::Active,
+                    CryptoMigrationState::Decrypting
+                )
+                | (
+                    CryptoMigrationState::Decrypting,
+                    CryptoMigrationState::Disabled
+                )
+        ) && self.target_epoch != 0
+            && self.target_epoch != current.encryption_epoch
+        {
+            return Err(ValidationError::new(
+                "crypto_migration_target_epoch_mismatch",
+            ));
         }
 
         Ok(())
