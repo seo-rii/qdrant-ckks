@@ -710,6 +710,22 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
     BASE64URL_NOPAD.encode(&digest)
 }
 
+pub fn validate_crypto_runtime_capability_parity<'a>(
+    settings: &Settings,
+    peer_fingerprints: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Result<(), StorageError> {
+    let local_fingerprint = crypto_runtime_capability_fingerprint(settings);
+    for (peer_id, peer_fingerprint) in peer_fingerprints {
+        if peer_fingerprint != local_fingerprint {
+            return Err(StorageError::bad_input(format!(
+                "crypto runtime capability mismatch for peer {peer_id}: local fingerprint {local_fingerprint} does not match peer fingerprint {peer_fingerprint}; encrypted shard transfer and replication must fail closed",
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 pub fn validate_runtime_config(settings: &Settings) -> Result<(), CryptoSetupError> {
     let _capability_fingerprint = crypto_runtime_capability_fingerprint(settings);
     if settings.crypto.is_configured() {
@@ -2156,6 +2172,105 @@ mod tests {
             crypto_runtime_capability_fingerprint(&settings),
             "fingerprint must change when non-secret runtime capability metadata changes",
         );
+    }
+
+    #[test]
+    fn crypto_runtime_capability_parity_rejects_peer_mismatch() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_payload_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: "payload/aes-256-gcm@v1".to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            "tenant-a/docs-rk".to_string(),
+                        )]),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a/docs",
+                            "material_fingerprint_id": "tenant-a/docs-rk@v1",
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([
+                    (
+                        "tenant-a/mk".to_string(),
+                        CryptoMaterialConfig {
+                            kind: WRAPPING_KEY_32_KIND.to_string(),
+                            source: Some("inline".to_string()),
+                            value_b64: Some(BASE64URL_NOPAD.encode(&[1_u8; 32])),
+                            ..CryptoMaterialConfig::default()
+                        },
+                    ),
+                    (
+                        "tenant-a/docs-rk".to_string(),
+                        CryptoMaterialConfig {
+                            kind: WRAPPED_SYMMETRIC_KEY_32_KIND.to_string(),
+                            source: Some("wrapped".to_string()),
+                            wrapped_by: Some("tenant-a/mk".to_string()),
+                            wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
+                            nonce: Some(BASE64URL_NOPAD.encode(&[2_u8; 12])),
+                            wrapped_key_b64: Some(BASE64URL_NOPAD.encode(&[3_u8; 48])),
+                            rk_epoch: Some(3),
+                            scope: Some("collection:docs".to_string()),
+                            ..CryptoMaterialConfig::default()
+                        },
+                    ),
+                ]),
+                backends: HashMap::new(),
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let local_fingerprint = crypto_runtime_capability_fingerprint(&settings);
+        validate_crypto_runtime_capability_parity(
+            &settings,
+            [("peer-a", local_fingerprint.as_str())],
+        )
+        .unwrap();
+
+        let mut peer_with_different_secret_bytes = settings.clone();
+        peer_with_different_secret_bytes
+            .crypto
+            .materials
+            .get_mut("tenant-a/mk")
+            .unwrap()
+            .value_b64 = Some(BASE64URL_NOPAD.encode(&[9_u8; 32]));
+        peer_with_different_secret_bytes
+            .crypto
+            .materials
+            .get_mut("tenant-a/docs-rk")
+            .unwrap()
+            .wrapped_key_b64 = Some(BASE64URL_NOPAD.encode(&[8_u8; 48]));
+        let peer_secret_fingerprint =
+            crypto_runtime_capability_fingerprint(&peer_with_different_secret_bytes);
+        validate_crypto_runtime_capability_parity(
+            &settings,
+            [("peer-secret-redacted", peer_secret_fingerprint.as_str())],
+        )
+        .unwrap();
+
+        let mut peer_with_different_epoch = settings.clone();
+        peer_with_different_epoch
+            .crypto
+            .materials
+            .get_mut("tenant-a/docs-rk")
+            .unwrap()
+            .rk_epoch = Some(4);
+        let peer_epoch_fingerprint =
+            crypto_runtime_capability_fingerprint(&peer_with_different_epoch);
+        let err = validate_crypto_runtime_capability_parity(
+            &settings,
+            [("peer-b", peer_epoch_fingerprint.as_str())],
+        )
+        .expect_err("runtime capability mismatch must fail closed");
+
+        assert!(
+            err.to_string()
+                .contains("crypto runtime capability mismatch")
+        );
+        assert!(err.to_string().contains("peer-b"));
     }
 
     #[test]
