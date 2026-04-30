@@ -185,12 +185,16 @@ fn validate_restored_collection_crypto_params(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use collection::config::{
         CollectionEncryptionConfig, CollectionParams, CryptoMigrationState, EncryptionRuleRef,
         EncryptionSelector,
     };
+    use serde_json::json;
 
     use super::*;
+    use crate::settings::{CryptoInstanceConfig, CryptoSettings};
 
     #[test]
     fn cli_snapshot_crypto_preflight_rejects_missing_runtime_instance() {
@@ -219,5 +223,54 @@ mod tests {
 
         assert!(err.contains("recovered snapshot docs"));
         assert!(err.contains("unknown payload crypto instance docs_payload_v1"));
+    }
+
+    #[test]
+    fn cli_snapshot_crypto_preflight_rejects_missing_runtime_material() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                instances: HashMap::from([(
+                    "docs_payload_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: "payload/aes-256-gcm@v1".to_string(),
+                        materials: HashMap::from([(
+                            "sym_key".to_string(),
+                            "tenant-a/missing-payload-rk".to_string(),
+                        )]),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a:docs",
+                            "material_fingerprint_id": "tenant-a/payload@v1",
+                        }),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = validate_restored_collection_crypto_params(&settings, "docs", &params)
+            .expect_err("missing runtime material must fail CLI snapshot preflight");
+
+        assert!(err.contains("recovered snapshot docs"));
+        assert!(err.contains("must bind role sym_key"));
     }
 }
