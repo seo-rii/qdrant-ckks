@@ -179,7 +179,7 @@ mod tests {
         PointInsertOperationsInternal, PointOperations, PointStructPersisted, VectorStructPersisted,
     };
     use shard::query::query_enum::QueryEnum;
-    use shard::query::{ScoringQuery, ShardQueryRequest};
+    use shard::query::{MmrInternal, ScoringQuery, ShardQueryRequest};
 
     use super::*;
 
@@ -310,5 +310,32 @@ mod tests {
 
         assert_eq!(first.to_log_value(), second.to_log_value());
         assert_eq!(first.request_hash(), second.request_hash());
+    }
+
+    #[test]
+    fn mmr_query_log_value_redacts_query_vector() {
+        let request = vec![ShardQueryRequest {
+            prefetches: vec![],
+            query: Some(ScoringQuery::Mmr(MmrInternal {
+                vector: vec![54321.125, -12345.25].into(),
+                using: "embedding".to_string(),
+                lambda: ordered_float::OrderedFloat(0.5),
+                candidates_limit: 20,
+            })),
+            filter: None,
+            score_threshold: None,
+            limit: 10,
+            offset: 0,
+            params: None,
+            with_vector: WithVector::Bool(false),
+            with_payload: WithPayloadInterface::Bool(false),
+        }];
+
+        let log_value = request.to_log_value();
+        let serialized = serde_json::to_string(&log_value).unwrap();
+
+        assert!(!serialized.contains("54321.125"));
+        assert!(!serialized.contains("-12345.25"));
+        assert!(serialized.contains("[redacted]"));
     }
 }
