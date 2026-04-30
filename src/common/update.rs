@@ -14,6 +14,7 @@ use collection::operations::vector_ops::*;
 use collection::operations::verification::*;
 use collection::shards::shard::ShardId;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
+use qdrant_ckks::ClientPayloadNonceReplayKey;
 use schemars::JsonSchema;
 use segment::json_path::JsonPath;
 use segment::types::{Filter, PayloadFieldSchema, PayloadKeyType, StrictModeConfig};
@@ -309,6 +310,34 @@ pub async fn do_upsert_points(
     hw_measurement_acc: HwMeasurementAcc,
     runtime_settings: Option<&Settings>,
 ) -> Result<(UpdateResult, Option<models::InferenceUsage>), StorageError> {
+    do_upsert_points_with_replay_cache(
+        toc_provider,
+        collection_name,
+        operation,
+        internal_params,
+        params,
+        auth,
+        inference_params,
+        hw_measurement_acc,
+        runtime_settings,
+        None,
+    )
+    .await
+}
+
+#[expect(clippy::too_many_arguments)]
+async fn do_upsert_points_with_replay_cache(
+    toc_provider: impl CheckedTocProvider,
+    collection_name: String,
+    operation: PointInsertOperations,
+    internal_params: InternalUpdateParams,
+    params: UpdateParams,
+    auth: Auth,
+    inference_params: InferenceParams,
+    hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
+    client_nonce_replay_cache: Option<&mut std::collections::HashSet<ClientPayloadNonceReplayKey>>,
+) -> Result<(UpdateResult, Option<models::InferenceUsage>), StorageError> {
     use point_ops::UpdateMode;
     use segment::types::Filter;
 
@@ -321,9 +350,15 @@ pub async fn do_upsert_points(
         )
         .await?;
 
-    let (operation, update_provenance) =
-        maybe_encrypt_upsert_payloads(toc, &collection_name, operation, &auth, runtime_settings)
-            .await?;
+    let (operation, update_provenance) = maybe_encrypt_upsert_payloads(
+        toc,
+        &collection_name,
+        operation,
+        &auth,
+        runtime_settings,
+        client_nonce_replay_cache,
+    )
+    .await?;
 
     let (operation, shard_key, usage, update_filter, update_mode) = match operation {
         PointInsertOperations::PointsBatch(batch) => {
@@ -580,6 +615,32 @@ pub async fn do_set_payload(
     hw_measurement_acc: HwMeasurementAcc,
     runtime_settings: Option<&Settings>,
 ) -> Result<UpdateResult, StorageError> {
+    do_set_payload_with_replay_cache(
+        toc_provider,
+        collection_name,
+        operation,
+        internal_params,
+        params,
+        auth,
+        hw_measurement_acc,
+        runtime_settings,
+        None,
+    )
+    .await
+}
+
+#[expect(clippy::too_many_arguments)]
+async fn do_set_payload_with_replay_cache(
+    toc_provider: impl CheckedTocProvider,
+    collection_name: String,
+    operation: SetPayload,
+    internal_params: InternalUpdateParams,
+    params: UpdateParams,
+    auth: Auth,
+    hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
+    client_nonce_replay_cache: Option<&mut std::collections::HashSet<ClientPayloadNonceReplayKey>>,
+) -> Result<UpdateResult, StorageError> {
     let toc = toc_provider
         .check_strict_mode(
             &operation,
@@ -596,6 +657,7 @@ pub async fn do_set_payload(
         &auth,
         runtime_settings,
         "set_payload",
+        client_nonce_replay_cache,
     )
     .await?;
 
@@ -646,6 +708,32 @@ pub async fn do_overwrite_payload(
     hw_measurement_acc: HwMeasurementAcc,
     runtime_settings: Option<&Settings>,
 ) -> Result<UpdateResult, StorageError> {
+    do_overwrite_payload_with_replay_cache(
+        toc_provider,
+        collection_name,
+        operation,
+        internal_params,
+        params,
+        auth,
+        hw_measurement_acc,
+        runtime_settings,
+        None,
+    )
+    .await
+}
+
+#[expect(clippy::too_many_arguments)]
+async fn do_overwrite_payload_with_replay_cache(
+    toc_provider: impl CheckedTocProvider,
+    collection_name: String,
+    operation: SetPayload,
+    internal_params: InternalUpdateParams,
+    params: UpdateParams,
+    auth: Auth,
+    hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
+    client_nonce_replay_cache: Option<&mut std::collections::HashSet<ClientPayloadNonceReplayKey>>,
+) -> Result<UpdateResult, StorageError> {
     let toc = toc_provider
         .check_strict_mode(
             &operation,
@@ -662,6 +750,7 @@ pub async fn do_overwrite_payload(
         &auth,
         runtime_settings,
         "overwrite_payload",
+        client_nonce_replay_cache,
     )
     .await?;
 
@@ -820,11 +909,12 @@ pub async fn do_batch_update_points(
 
     let mut results = Vec::with_capacity(operations.len());
     let mut inference_usage = InferenceUsage::default();
+    let mut seen_client_nonces = std::collections::HashSet::new();
 
     for operation in operations {
         let current_update_result = match operation {
             UpdateOperation::Upsert(operation) => {
-                let (result, usage) = do_upsert_points(
+                let (result, usage) = do_upsert_points_with_replay_cache(
                     toc_provider.clone(),
                     collection_name.clone(),
                     operation.upsert,
@@ -834,6 +924,7 @@ pub async fn do_batch_update_points(
                     inference_params.clone(),
                     hw_measurement_acc.clone(),
                     runtime_settings,
+                    Some(&mut seen_client_nonces),
                 )
                 .await?;
 
@@ -853,7 +944,7 @@ pub async fn do_batch_update_points(
                 .await?
             }
             UpdateOperation::SetPayload(operation) => {
-                do_set_payload(
+                do_set_payload_with_replay_cache(
                     toc_provider.clone(),
                     collection_name.clone(),
                     operation.set_payload,
@@ -862,11 +953,12 @@ pub async fn do_batch_update_points(
                     auth.clone(),
                     hw_measurement_acc.clone(),
                     runtime_settings,
+                    Some(&mut seen_client_nonces),
                 )
                 .await?
             }
             UpdateOperation::OverwritePayload(operation) => {
-                do_overwrite_payload(
+                do_overwrite_payload_with_replay_cache(
                     toc_provider.clone(),
                     collection_name.clone(),
                     operation.overwrite_payload,
@@ -875,6 +967,7 @@ pub async fn do_batch_update_points(
                     auth.clone(),
                     hw_measurement_acc.clone(),
                     runtime_settings,
+                    Some(&mut seen_client_nonces),
                 )
                 .await?
             }
@@ -1242,6 +1335,7 @@ async fn maybe_encrypt_upsert_payloads(
     mut operation: PointInsertOperations,
     auth: &Auth,
     runtime_settings: Option<&Settings>,
+    client_nonce_replay_cache: Option<&mut std::collections::HashSet<ClientPayloadNonceReplayKey>>,
 ) -> Result<(PointInsertOperations, CollectionUpdateProvenance), StorageError> {
     let Some(runtime_settings) = runtime_settings else {
         return Ok((operation, CollectionUpdateProvenance::ClientPlaintext));
@@ -1280,7 +1374,8 @@ async fn maybe_encrypt_upsert_payloads(
         (false, true) => CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes,
         (false, false) => CollectionUpdateProvenance::ClientPlaintext,
     };
-    let mut seen_client_nonces = std::collections::HashSet::new();
+    let mut local_seen_client_nonces = std::collections::HashSet::new();
+    let seen_client_nonces = client_nonce_replay_cache.unwrap_or(&mut local_seen_client_nonces);
 
     match &mut operation {
         PointInsertOperations::PointsList(list) => {
@@ -1289,7 +1384,7 @@ async fn maybe_encrypt_upsert_payloads(
                     plan.encrypt_payload_with_replay_cache(
                         &point.id.to_string(),
                         payload,
-                        &mut seen_client_nonces,
+                        &mut *seen_client_nonces,
                     )
                     .map_err(|err| payload_write_error_to_storage_error(collection_name, err))?;
                 }
@@ -1302,7 +1397,7 @@ async fn maybe_encrypt_upsert_payloads(
                         plan.encrypt_payload_with_replay_cache(
                             &point_id.to_string(),
                             payload,
-                            &mut seen_client_nonces,
+                            &mut *seen_client_nonces,
                         )
                         .map_err(|err| {
                             payload_write_error_to_storage_error(collection_name, err)
@@ -1337,6 +1432,7 @@ async fn maybe_encrypt_point_payload_update(
     auth: &Auth,
     runtime_settings: Option<&Settings>,
     operation_name: &str,
+    client_nonce_replay_cache: Option<&mut std::collections::HashSet<ClientPayloadNonceReplayKey>>,
 ) -> Result<(PayloadUpdatePlan, CollectionUpdateProvenance), StorageError> {
     let Some(runtime_settings) = runtime_settings else {
         return Ok((
@@ -1381,7 +1477,8 @@ async fn maybe_encrypt_point_payload_update(
         (false, true) => CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes,
         (false, false) => CollectionUpdateProvenance::ClientPlaintext,
     };
-    let mut seen_client_nonces = std::collections::HashSet::new();
+    let mut local_seen_client_nonces = std::collections::HashSet::new();
+    let seen_client_nonces = client_nonce_replay_cache.unwrap_or(&mut local_seen_client_nonces);
 
     let touches_encrypted_payload =
         plan.touches_selected_fields(&operation.payload, operation.key.as_ref());
@@ -1434,7 +1531,7 @@ async fn maybe_encrypt_point_payload_update(
             plan.encrypt_payload_with_replay_cache(
                 &point_id.to_string(),
                 &mut payload,
-                &mut seen_client_nonces,
+                &mut *seen_client_nonces,
             )
             .map_err(|err| payload_write_error_to_storage_error(collection_name, err))?;
             encrypted_operations.push(SetPayload {
@@ -1458,7 +1555,7 @@ async fn maybe_encrypt_point_payload_update(
     plan.encrypt_payload_with_replay_cache(
         &point_id.to_string(),
         &mut operation.payload,
-        &mut seen_client_nonces,
+        &mut *seen_client_nonces,
     )
     .map_err(|err| payload_write_error_to_storage_error(collection_name, err))?;
 
@@ -2775,6 +2872,64 @@ mod tests {
                     update_filter: None,
                     update_mode: None,
                 }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                Some(&client_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("nonce was already used")
+            ));
+
+            let err = do_batch_update_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "client_docs".to_string(),
+                vec![
+                    UpdateOperation::Upsert(UpsertOperation {
+                        upsert: PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                            points: vec![api::rest::PointStruct {
+                                id: 11.into(),
+                                vector: api::rest::VectorStruct::Single(vec![0.8, 0.9]),
+                                payload: Some(segment::types::Payload(
+                                    json!({ "body": signed_client_body("client_docs", "11") })
+                                        .as_object()
+                                        .unwrap()
+                                        .clone(),
+                                )),
+                            }],
+                            shard_key: None,
+                            update_filter: None,
+                            update_mode: None,
+                        }),
+                    }),
+                    UpdateOperation::Upsert(UpsertOperation {
+                        upsert: PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                            points: vec![api::rest::PointStruct {
+                                id: 12.into(),
+                                vector: api::rest::VectorStruct::Single(vec![0.9, 1.0]),
+                                payload: Some(segment::types::Payload(
+                                    json!({ "body": signed_client_body("client_docs", "12") })
+                                        .as_object()
+                                        .unwrap()
+                                        .clone(),
+                                )),
+                            }],
+                            shard_key: None,
+                            update_filter: None,
+                            update_mode: None,
+                        }),
+                    }),
+                ],
                 InternalUpdateParams::default(),
                 UpdateParams {
                     wait: true,
