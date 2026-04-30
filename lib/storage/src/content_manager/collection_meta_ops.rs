@@ -215,7 +215,7 @@ pub struct CreateCollectionOperation {
 impl CreateCollectionOperation {
     pub fn new(
         collection_name: String,
-        create_collection: CreateCollection,
+        mut create_collection: CreateCollection,
     ) -> StorageResult<Self> {
         // validate vector names are unique between dense and sparse vectors
         if let Some(sparse_config) = &create_collection.sparse_vectors {
@@ -226,6 +226,15 @@ impl CreateCollectionOperation {
                     "Dense and sparse vector names must be unique - duplicate found with '{duplicate_name}'",
                 )));
             }
+        }
+
+        let crypto_identity_bound = create_collection.encryption.is_some()
+            || create_collection
+                .ckks
+                .as_ref()
+                .is_some_and(|config| config.enabled);
+        if crypto_identity_bound && create_collection.uuid.is_none() {
+            create_collection.uuid = Some(Uuid::new_v4());
         }
 
         Ok(Self {
@@ -492,5 +501,84 @@ impl From<CollectionConfigInternal> for CreateCollection {
             uuid,
             metadata,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use collection::config::{
+        CollectionEncryptionConfig, CryptoMigrationState, EncryptionRuleRef, EncryptionSelector,
+    };
+
+    use super::*;
+
+    fn create_collection(encryption: Option<CollectionEncryptionConfig>) -> CreateCollection {
+        CreateCollection {
+            vectors: VectorsConfig::default(),
+            shard_number: None,
+            sharding_method: None,
+            replication_factor: None,
+            write_consistency_factor: None,
+            on_disk_payload: None,
+            hnsw_config: None,
+            wal_config: None,
+            optimizers_config: None,
+            quantization_config: None,
+            sparse_vectors: None,
+            encryption,
+            ckks: None,
+            strict_mode_config: None,
+            uuid: None,
+            metadata: None,
+        }
+    }
+
+    fn encrypted_config() -> CollectionEncryptionConfig {
+        CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a:docs".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 0,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![EncryptionRuleRef {
+                id: "body_conf".to_string(),
+                selector: EncryptionSelector::PayloadPaths {
+                    paths: vec!["body".to_string()],
+                },
+                instance: "docs_payload_v1".to_string(),
+                binding: Some("payload-field/v1".to_string()),
+            }],
+        }
+    }
+
+    #[test]
+    fn encrypted_create_collection_gets_stable_uuid() {
+        let operation = CreateCollectionOperation::new(
+            "docs".to_string(),
+            create_collection(Some(encrypted_config())),
+        )
+        .unwrap();
+
+        assert!(operation.create_collection.uuid.is_some());
+    }
+
+    #[test]
+    fn plaintext_create_collection_keeps_uuid_empty() {
+        let operation =
+            CreateCollectionOperation::new("docs".to_string(), create_collection(None)).unwrap();
+
+        assert!(operation.create_collection.uuid.is_none());
+    }
+
+    #[test]
+    fn encrypted_create_collection_preserves_existing_uuid() {
+        let uuid = Uuid::from_u128(7);
+        let mut create_collection = create_collection(Some(encrypted_config()));
+        create_collection.uuid = Some(uuid);
+
+        let operation =
+            CreateCollectionOperation::new("docs".to_string(), create_collection).unwrap();
+
+        assert_eq!(operation.create_collection.uuid, Some(uuid));
     }
 }
