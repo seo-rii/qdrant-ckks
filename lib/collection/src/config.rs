@@ -538,7 +538,7 @@ mod ckks_tests {
 
     #[test]
     fn crypto_migration_plan_requires_verified_completion_checkpoints() {
-        use CryptoMigrationState::{Active, Rotating};
+        use CryptoMigrationState::{Active, Decrypting, Disabled, Rotating};
 
         let no_checkpoints = CryptoMigrationPlan {
             from: Rotating,
@@ -644,6 +644,57 @@ mod ckks_tests {
             }],
         };
         complete.validate_admin_plan().unwrap();
+
+        let incomplete_decryption = CryptoMigrationPlan {
+            from: Decrypting,
+            to: Disabled,
+            target_epoch: 4,
+            active_rk_id: None,
+            retired_rk_id: None,
+            dry_run: false,
+            checkpoints: vec![CryptoMigrationCheckpoint {
+                shard_id: 0,
+                total_points: 10,
+                processed_points: 9,
+                rewritten_points: 9,
+                status: CryptoMigrationCheckpointStatus::Verified,
+            }],
+        };
+        assert!(incomplete_decryption.validate_admin_plan().is_err());
+
+        let unverified_decryption = CryptoMigrationPlan {
+            from: Decrypting,
+            to: Disabled,
+            target_epoch: 4,
+            active_rk_id: None,
+            retired_rk_id: None,
+            dry_run: false,
+            checkpoints: vec![CryptoMigrationCheckpoint {
+                shard_id: 0,
+                total_points: 10,
+                processed_points: 10,
+                rewritten_points: 10,
+                status: CryptoMigrationCheckpointStatus::Running,
+            }],
+        };
+        assert!(unverified_decryption.validate_admin_plan().is_err());
+
+        let complete_decryption = CryptoMigrationPlan {
+            from: Decrypting,
+            to: Disabled,
+            target_epoch: 4,
+            active_rk_id: None,
+            retired_rk_id: None,
+            dry_run: false,
+            checkpoints: vec![CryptoMigrationCheckpoint {
+                shard_id: 0,
+                total_points: 10,
+                processed_points: 10,
+                rewritten_points: 10,
+                status: CryptoMigrationCheckpointStatus::Verified,
+            }],
+        };
+        complete_decryption.validate_admin_plan().unwrap();
     }
 
     #[test]
