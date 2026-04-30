@@ -138,9 +138,11 @@ keys, must use the bounded qdrant-sec crypto identifier syntax
 `[A-Za-z0-9._:/@-]`.
 
 For payload writes, the `aad.collection_id` value is the collection's stable
-crypto identity. New collection configs should use the persisted collection UUID
-when available; legacy/test collections without a UUID fall back to the
-collection name.
+crypto identity. Encrypted collection create/recovery paths must have a
+persisted collection UUID; existing encrypted snapshot recovery fails closed if
+either side is missing a UUID or if the UUIDs differ. Low-level legacy/test
+fixtures may still construct name-bound envelopes, but production recovery must
+not rely on collection names as the crypto identity.
 
 Qdrant rejects duplicate client-side AEAD nonces within a single public write
 request, including `update_batch`, by tracking `(key_id, rk_id, rk_epoch,
@@ -392,7 +394,7 @@ row.
 | Segment files | Selected payload strings should appear as marker/envelope JSON; CKKS vector plaintext should not be stored by the CKKS envelope path. | Payload sentinel leakage scan covers persisted collection files after graceful stop. Optimizer temp-path and vector-pattern scans are still missing. | Add optimizer temp-path and vector-pattern leakage tests. |
 | Payload indexes | AEAD-encrypted fields are not searchable as plaintext. | Index creation over encrypted payload paths and parent/child overlaps is rejected. | Keep rejecting plaintext indexes until a blind index provider exists. |
 | HNSW graph and quantization | CKKS ciphertext vectors are not HNSW-searchable in this branch. | Unsupported. | Reject/avoid CKKS ciphertext vectors in HNSW, quantization, recommend, and discover flows. |
-| Snapshots | Snapshot archives should contain encrypted payload/vector envelopes and enough metadata to preflight required keys/context. | Payload sentinel leakage scan now creates and scans a collection snapshot archive. Collection, shard, and CLI startup snapshot recover paths preflight runtime crypto settings for missing instance/material/backend, wrong wrapped-RK key, and provider key-id mismatch. Wrong CKKS context restore tests are still missing. | Add restore tests for wrong CKKS context and broaden restore coverage across cluster paths. |
+| Snapshots | Snapshot archives should contain encrypted payload/vector envelopes and enough metadata to preflight required keys/context and stable collection identity. | Payload sentinel leakage scan now creates and scans a collection snapshot archive. Collection, shard, and CLI startup snapshot recover paths preflight runtime crypto settings for missing instance/material/backend, wrong wrapped-RK key, provider key-id mismatch, missing encrypted collection UUID, and UUID mismatch. Wrong CKKS context restore tests are still missing. | Add restore tests for wrong CKKS context and broaden restore coverage across cluster paths. |
 | Shard transfer and replication | Sender and receiver must have matching crypto runtime material and CKKS context. | App and distributed peer telemetry expose a non-secret crypto runtime capability fingerprint that operators or future cluster code can compare, but shard transfer does not yet enforce parity automatically. | Add cluster capability parity checks and fail-closed transfer tests. |
 | Telemetry, logs, and audit | No plaintext payload bodies or embeddings should be emitted. | Bridge request bodies and stderr are not included in returned errors; broader logging scans are still missing. | Add telemetry/log smoke tests with sentinel values. |
 
