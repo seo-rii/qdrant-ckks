@@ -141,6 +141,8 @@ pub enum PayloadWriteSetupError {
     ClientKeyIdMustBeRequired { instance: String },
     #[error("payload crypto instance {instance} expected_rk_id option must be a string")]
     InvalidClientResourceKeyId { instance: String },
+    #[error("payload crypto instance {instance} expected_rk_id must match the collection key_id")]
+    ClientResourceKeyIdCollectionMismatch { instance: String },
     #[error(
         "payload crypto instance {instance} must set expected_rk_id for client payload envelopes"
     )]
@@ -1167,6 +1169,13 @@ fn generic_payload_write_plan(
                         });
                     }
                 };
+                if expected_rk_id.as_deref() != expected_key_id {
+                    return Err(
+                        PayloadWriteSetupError::ClientResourceKeyIdCollectionMismatch {
+                            instance: rule.instance.clone(),
+                        },
+                    );
+                }
                 let min_rk_epoch = match instance.options.get(MIN_RK_EPOCH_OPTION) {
                     None | Some(Value::Null) => {
                         return Err(PayloadWriteSetupError::MissingClientResourceKeyEpoch {
@@ -3562,6 +3571,22 @@ mod tests {
             ),
             Err(PayloadWriteSetupError::MissingClientResourceKeyEpoch { instance, option })
                 if instance == "docs_payload_client_v1" && option == MAX_RK_EPOCH_OPTION
+        ));
+        assert!(matches!(
+            payload_write_plan_for_collection(
+                &raw_settings_with_options(json!({
+                    "key_id": "tenant-a/client-rk-2026-04",
+                    "expected_rk_id": "tenant-a/other-client-rk",
+                    "signature_key_id": "tenant-a/client-signing-v1",
+                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                    "min_rk_epoch": 3,
+                    "max_rk_epoch": 3,
+                })),
+                "docs",
+                &params,
+            ),
+            Err(PayloadWriteSetupError::ClientResourceKeyIdCollectionMismatch { instance })
+                if instance == "docs_payload_client_v1"
         ));
         assert!(matches!(
             payload_write_plan_for_collection(
