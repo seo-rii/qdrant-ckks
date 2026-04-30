@@ -171,10 +171,7 @@ impl Collection {
             let collection_config = self.collection_config.read().await;
             (
                 collection_config.params.effective_encryption(),
-                collection_config
-                    .uuid
-                    .map(|uuid| uuid.to_string())
-                    .unwrap_or_else(|| self.name().to_string()),
+                collection_config.stable_crypto_id(self.name())?,
             )
         };
         if encryption.is_some() {

@@ -1985,6 +1985,19 @@ pub struct CollectionConfigInternal {
 }
 
 impl CollectionConfigInternal {
+    pub fn stable_crypto_id(&self, collection_name: &str) -> CollectionResult<String> {
+        if self.params.effective_encryption().is_none() {
+            return Ok(collection_name.to_string());
+        }
+
+        self.uuid.map(|uuid| uuid.to_string()).ok_or_else(|| {
+            CollectionError::bad_input(format!(
+                "encrypted collection {collection_name} is missing a stable UUID; \
+                 encrypted payload/vector AAD cannot fall back to collection name",
+            ))
+        })
+    }
+
     pub fn to_bytes(&self) -> CollectionResult<Vec<u8>> {
         serde_json::to_vec(self).map_err(|err| CollectionError::service_error(err.to_string()))
     }
@@ -2056,6 +2069,71 @@ impl CollectionConfigInternal {
     pub fn to_base_segment_config(&self) -> SegmentConfig {
         self.params
             .to_base_segment_config(self.quantization_config.as_ref())
+    }
+}
+
+#[cfg(test)]
+mod stable_crypto_id_tests {
+    use super::*;
+
+    fn config_with_params(
+        params: CollectionParams,
+        uuid: Option<Uuid>,
+    ) -> CollectionConfigInternal {
+        CollectionConfigInternal {
+            params,
+            hnsw_config: HnswConfig::default(),
+            optimizer_config: OptimizersConfig::fixture(),
+            wal_config: WalConfig::default(),
+            quantization_config: None,
+            strict_mode_config: None,
+            uuid,
+            metadata: None,
+        }
+    }
+
+    fn encrypted_params() -> CollectionParams {
+        CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        }
+    }
+
+    #[test]
+    fn plaintext_stable_crypto_id_keeps_collection_name() {
+        let config = config_with_params(CollectionParams::empty(), None);
+
+        assert_eq!(config.stable_crypto_id("docs").unwrap(), "docs");
+    }
+
+    #[test]
+    fn encrypted_stable_crypto_id_requires_uuid() {
+        let config = config_with_params(encrypted_params(), None);
+
+        let err = config.stable_crypto_id("docs").unwrap_err();
+        assert!(err.to_string().contains("missing a stable UUID"));
+    }
+
+    #[test]
+    fn encrypted_stable_crypto_id_uses_uuid() {
+        let uuid = Uuid::from_u128(0x1234567890abcdef1234567890abcdef);
+        let config = config_with_params(encrypted_params(), Some(uuid));
+
+        assert_eq!(config.stable_crypto_id("docs").unwrap(), uuid.to_string());
     }
 }
 

@@ -1346,9 +1346,8 @@ async fn maybe_encrypt_upsert_payloads(
     let collection = toc.get_collection(&collection_pass).await?;
     let collection_config = collection.config_snapshot().await;
     let collection_crypto_id = collection_config
-        .uuid
-        .map(|uuid| uuid.to_string())
-        .unwrap_or_else(|| collection_name.to_string());
+        .stable_crypto_id(collection_name)
+        .map_err(|err| StorageError::bad_input(err.to_string()))?;
     let Some(plan) = payload_write_plan_for_collection_with_crypto_id(
         runtime_settings,
         collection_name,
@@ -1446,9 +1445,8 @@ async fn maybe_encrypt_point_payload_update(
     let collection = toc.get_collection(&collection_pass).await?;
     let collection_config = collection.config_snapshot().await;
     let collection_crypto_id = collection_config
-        .uuid
-        .map(|uuid| uuid.to_string())
-        .unwrap_or_else(|| collection_name.to_string());
+        .stable_crypto_id(collection_name)
+        .map_err(|err| StorageError::bad_input(err.to_string()))?;
     let Some(plan) = payload_write_plan_for_collection_with_crypto_id(
         runtime_settings,
         collection_name,
@@ -2583,6 +2581,8 @@ mod tests {
                     }),
                 },
             )]);
+            let client_docs_uuid = Uuid::from_u128(0x2234567890abcdef1234567890abcdef);
+            let client_docs_uuid_string = client_docs_uuid.to_string();
             dispatcher
                 .submit_collection_meta_op(
                     CollectionMetaOperations::CreateCollection(
@@ -2617,7 +2617,7 @@ mod tests {
                                 }),
                                 ckks: None,
                                 strict_mode_config: None,
-                                uuid: None,
+                                uuid: Some(client_docs_uuid),
                                 metadata: None,
                             },
                         )
@@ -2683,7 +2683,7 @@ mod tests {
                         id: 10.into(),
                         vector: api::rest::VectorStruct::Single(vec![0.7, 0.8]),
                         payload: Some(segment::types::Payload(
-                            json!({ "body": signed_client_body("client_docs", "10") })
+                            json!({ "body": signed_client_body(&client_docs_uuid_string, "10") })
                                 .as_object()
                                 .unwrap()
                                 .clone(),
@@ -2815,7 +2815,7 @@ mod tests {
                 SetPayload {
                     points: Some(vec![10.into(), 11.into()]),
                     payload: segment::types::Payload(
-                        json!({ "body": signed_client_body("client_docs", "10") })
+                        json!({ "body": signed_client_body(&client_docs_uuid_string, "10") })
                             .as_object()
                             .unwrap()
                             .clone(),
@@ -2851,7 +2851,7 @@ mod tests {
                             id: 11.into(),
                             vector: api::rest::VectorStruct::Single(vec![0.8, 0.9]),
                             payload: Some(segment::types::Payload(
-                                json!({ "body": signed_client_body("client_docs", "11") })
+                                json!({ "body": signed_client_body(&client_docs_uuid_string, "11") })
                                     .as_object()
                                     .unwrap()
                                     .clone(),
@@ -2861,7 +2861,7 @@ mod tests {
                             id: 12.into(),
                             vector: api::rest::VectorStruct::Single(vec![0.9, 1.0]),
                             payload: Some(segment::types::Payload(
-                                json!({ "body": signed_client_body("client_docs", "12") })
+                                json!({ "body": signed_client_body(&client_docs_uuid_string, "12") })
                                     .as_object()
                                     .unwrap()
                                     .clone(),
@@ -2901,7 +2901,7 @@ mod tests {
                                 id: 11.into(),
                                 vector: api::rest::VectorStruct::Single(vec![0.8, 0.9]),
                                 payload: Some(segment::types::Payload(
-                                    json!({ "body": signed_client_body("client_docs", "11") })
+                                    json!({ "body": signed_client_body(&client_docs_uuid_string, "11") })
                                         .as_object()
                                         .unwrap()
                                         .clone(),
@@ -2918,7 +2918,7 @@ mod tests {
                                 id: 12.into(),
                                 vector: api::rest::VectorStruct::Single(vec![0.9, 1.0]),
                                 payload: Some(segment::types::Payload(
-                                    json!({ "body": signed_client_body("client_docs", "12") })
+                                    json!({ "body": signed_client_body(&client_docs_uuid_string, "12") })
                                         .as_object()
                                         .unwrap()
                                         .clone(),
@@ -2957,7 +2957,7 @@ mod tests {
                         set_payload: SetPayload {
                             points: Some(vec![10.into()]),
                             payload: segment::types::Payload(
-                                json!({ "body": signed_client_body("client_docs", "10") })
+                                json!({ "body": signed_client_body(&client_docs_uuid_string, "10") })
                                     .as_object()
                                     .unwrap()
                                     .clone(),
@@ -2971,7 +2971,7 @@ mod tests {
                         set_payload: SetPayload {
                             points: Some(vec![10.into()]),
                             payload: segment::types::Payload(
-                                json!({ "body": signed_client_body("client_docs", "10") })
+                                json!({ "body": signed_client_body(&client_docs_uuid_string, "10") })
                                     .as_object()
                                     .unwrap()
                                     .clone(),
@@ -3009,7 +3009,7 @@ mod tests {
                         id: 11.into(),
                         vector: api::rest::VectorStruct::Single(vec![0.8, 0.9]),
                         payload: Some(segment::types::Payload(
-                            json!({ "body": signed_client_body("client_docs", "11") })
+                            json!({ "body": signed_client_body(&client_docs_uuid_string, "11") })
                                 .as_object()
                                 .unwrap()
                                 .clone(),
