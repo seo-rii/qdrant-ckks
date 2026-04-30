@@ -4294,6 +4294,29 @@ mod tests {
         assert_eq!(rewrapped.rk_epoch, Some(3));
         assert_eq!(rewrapped.scope.as_deref(), Some("collection:docs"));
 
+        let mut retired_runtime_settings = runtime_settings.clone();
+        retired_runtime_settings
+            .materials
+            .get_mut(rk_material)
+            .unwrap()
+            .state = Some(RESOURCE_KEY_STATE_RETIRED.to_string());
+        let retired_rewrapped = rewrap_runtime_resource_key_material(
+            &retired_runtime_settings,
+            rk_material,
+            new_mk_material,
+        )
+        .unwrap();
+        assert_eq!(
+            retired_rewrapped.state.as_deref(),
+            Some(RESOURCE_KEY_STATE_RETIRED)
+        );
+        assert_eq!(
+            retired_rewrapped.wrapped_by.as_deref(),
+            Some(new_mk_material)
+        );
+        assert_eq!(retired_rewrapped.rk_epoch, Some(3));
+        assert_eq!(retired_rewrapped.scope.as_deref(), Some("collection:docs"));
+
         let mut rewrapped_settings = runtime_settings.clone();
         rewrapped_settings
             .materials
