@@ -1726,7 +1726,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
                                 "schema_version": 1
                             },
                             "nonce": "AAAAAAAAAAAAAAAA",
-                            "ciphertext": "AQID",
+                            "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA",
                             "signature": {
                                 "alg": "ed25519",
                                 "key_id": "tenant-a/client-signing-v1",
@@ -1741,6 +1741,34 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
             .clone(),
         )
     };
+
+    let unverified_sync_marker = CollectionUpdateOperations::PointOperation(
+        PointOperations::SyncPoints(PointSyncOperation {
+            from_id: None,
+            to_id: None,
+            points: vec![PointStructPersisted {
+                id: 1.into(),
+                vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                payload: Some(client_payload("test", "1", "tenant-a/client-rk-2026-04")),
+            }],
+        }),
+    );
+    let err = collection
+        .update_from_client_simple(
+            unverified_sync_marker,
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("client encrypted payload marker")
+                && description.contains("requires runtime envelope verification")
+    ));
 
     let wrong_collection_marker =
         CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
