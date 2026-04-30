@@ -9,8 +9,9 @@ use futures::{StreamExt as _, TryFutureExt, TryStreamExt as _, future};
 use itertools::Itertools;
 use qdrant_ckks::{
     CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadValidationContext,
-    ServerPayloadValidationContext, is_client_encrypted_payload_value, is_encrypted_payload_value,
-    validate_client_payload_value, validate_server_payload_value_metadata,
+    ServerPayloadValidationContext, client_payload_nonce_replay_key,
+    is_client_encrypted_payload_value, is_encrypted_payload_value, validate_client_payload_value,
+    validate_server_payload_value_metadata,
 };
 use segment::data_types::order_by::{Direction, OrderBy};
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
@@ -226,12 +227,13 @@ impl Collection {
             }
         }
         if let Some(encryption) = encryption {
-            let payload_write_touches_encrypted_path = |payload: &Payload,
-                                                        key: Option<&JsonPath>,
-                                                        point_id: Option<&str>,
-                                                        encrypted_path: &JsonPath,
-                                                        encrypted_path_str: &str,
-                                                        allow_client_envelope: bool|
+            let mut seen_client_nonces = std::collections::HashSet::new();
+            let mut payload_write_touches_encrypted_path = |payload: &Payload,
+                                                            key: Option<&JsonPath>,
+                                                            point_id: Option<&str>,
+                                                            encrypted_path: &JsonPath,
+                                                            encrypted_path_str: &str,
+                                                            allow_client_envelope: bool|
              -> CollectionResult<bool> {
                 if let Some(key) = key {
                     return Ok(key.compatible(encrypted_path));
@@ -289,6 +291,22 @@ impl Collection {
                                     "client encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: {err}",
                                 ))
                             })?;
+                        let Some(nonce_replay_key) =
+                            client_payload_nonce_replay_key(value, encrypted_path_str).map_err(
+                                |err| {
+                                    CollectionError::bad_input(format!(
+                                        "client encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: {err}",
+                                    ))
+                                },
+                            )?
+                        else {
+                            return Ok(true);
+                        };
+                        if !seen_client_nonces.insert(nonce_replay_key) {
+                            return Err(CollectionError::bad_input(format!(
+                                "client encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: payload field client envelope nonce was already used in this write request",
+                            )));
+                        }
                         continue;
                     }
                     return Ok(true);

@@ -1871,6 +1871,39 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
                 && description.contains("signature is missing")
     ));
 
+    let replay_marker = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+        PointInsertOperationsInternal::from(vec![
+            PointStructPersisted {
+                id: 1.into(),
+                vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                payload: Some(client_payload("test", "1", "tenant-a/client-rk-2026-04")),
+            },
+            PointStructPersisted {
+                id: 2.into(),
+                vector: VectorStructPersisted::from(vec![0.0, 1.0, 0.0, 0.0]),
+                payload: Some(client_payload("test", "2", "tenant-a/client-rk-2026-04")),
+            },
+        ]),
+    ));
+    let err = collection
+        .update_from_client(
+            replay_marker,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("client encrypted payload marker")
+                && description.contains("nonce was already used")
+    ));
+
     let valid_marker = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
         PointInsertOperationsInternal::from(vec![PointStructPersisted {
             id: 1.into(),
