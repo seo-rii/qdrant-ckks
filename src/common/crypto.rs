@@ -151,6 +151,10 @@ pub enum PayloadWriteSetupError {
     MissingClientResourceKeyEpoch { instance: String, option: String },
     #[error("payload crypto instance {instance} min_rk_epoch must be <= max_rk_epoch")]
     InvalidClientResourceKeyEpochRange { instance: String },
+    #[error(
+        "payload crypto instance {instance} must pin min_rk_epoch and max_rk_epoch to the same active client resource-key epoch"
+    )]
+    ClientResourceKeyEpochMustBePinned { instance: String },
     #[error("payload crypto instance {instance} signature_key_id option must be a string")]
     InvalidClientSignatureKeyId { instance: String },
     #[error(
@@ -1209,6 +1213,11 @@ fn generic_payload_write_plan(
                     && min_rk_epoch > max_rk_epoch
                 {
                     return Err(PayloadWriteSetupError::InvalidClientResourceKeyEpochRange {
+                        instance: rule.instance.clone(),
+                    });
+                }
+                if min_rk_epoch != max_rk_epoch {
+                    return Err(PayloadWriteSetupError::ClientResourceKeyEpochMustBePinned {
                         instance: rule.instance.clone(),
                     });
                 }
@@ -3553,6 +3562,38 @@ mod tests {
             ),
             Err(PayloadWriteSetupError::MissingClientResourceKeyEpoch { instance, option })
                 if instance == "docs_payload_client_v1" && option == MAX_RK_EPOCH_OPTION
+        ));
+        assert!(matches!(
+            payload_write_plan_for_collection(
+                &raw_settings_with_options(json!({
+                    "key_id": "tenant-a/client-rk-2026-04",
+                    "expected_rk_id": "tenant-a/client-rk-2026-04",
+                    "signature_key_id": "tenant-a/client-signing-v1",
+                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                    "min_rk_epoch": 4,
+                    "max_rk_epoch": 3,
+                })),
+                "docs",
+                &params,
+            ),
+            Err(PayloadWriteSetupError::InvalidClientResourceKeyEpochRange { instance })
+                if instance == "docs_payload_client_v1"
+        ));
+        assert!(matches!(
+            payload_write_plan_for_collection(
+                &raw_settings_with_options(json!({
+                    "key_id": "tenant-a/client-rk-2026-04",
+                    "expected_rk_id": "tenant-a/client-rk-2026-04",
+                    "signature_key_id": "tenant-a/client-signing-v1",
+                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                    "min_rk_epoch": 3,
+                    "max_rk_epoch": 4,
+                })),
+                "docs",
+                &params,
+            ),
+            Err(PayloadWriteSetupError::ClientResourceKeyEpochMustBePinned { instance })
+                if instance == "docs_payload_client_v1"
         ));
         assert!(matches!(
             payload_write_plan_for_collection(

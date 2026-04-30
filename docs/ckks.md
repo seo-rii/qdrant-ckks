@@ -113,7 +113,9 @@ or `backend_ref` is configured. Server-side wrapping keys/RKs belong to
 `payload/aes-256-gcm@v1`; client-side payload envelopes must keep client data
 keys outside the Qdrant process. It also fails validation unless
 `key_id` is required and `expected_rk_id`, `min_rk_epoch`, and `max_rk_epoch`
-are set explicitly.
+are set explicitly. `min_rk_epoch` and `max_rk_epoch` must be identical; broad
+epoch ranges are rejected so a client provider pins exactly one active
+resource-key epoch.
 
 This provider does not receive plaintext and does not unwrap a data key. The
 client encrypts before insert and Qdrant only validates the envelope schema,
@@ -130,8 +132,9 @@ write-time authenticity check for this zero-trust mode.
 
 Client envelopes must carry `rk_id`, `rk_epoch`, and
 `kdf_domain: qdrant/client-payload-text/v1`. Provider instances must pin
-`expected_rk_id`, `min_rk_epoch`, and `max_rk_epoch` so stale or wrong
-client resource-key epochs fail closed during rotation.
+`expected_rk_id`, `min_rk_epoch`, and `max_rk_epoch` to a single active epoch
+so stale, retired, or wrong client resource-key epochs fail closed during
+rotation.
 Envelope `key_id`, `rk_id`, and `signature.key_id` values, plus matching
 provider options such as `key_id`, `expected_rk_id`, and signature registry
 keys, must use the bounded qdrant-sec crypto identifier syntax
