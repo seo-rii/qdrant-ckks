@@ -10,10 +10,11 @@ use qdrant_ckks::{
     CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadNonceReplayKey,
     ClientPayloadSignatureVerification, ClientPayloadValidationContext, ExistingPayloadMode,
     LocalMasterKeyProvider, MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER,
-    PAYLOAD_CLIENT_AEAD_PROVIDER, PayloadEncryptionError, PayloadEncryptionPolicy,
-    PayloadTextEncryptor, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, VECTOR_OPENFHE_CKKS_PROVIDER,
-    WrappedKeyBlob, client_payload_nonce_replay_key, client_payload_signature_key_id,
-    rewrap_resource_key, validate_client_payload_value,
+    PAYLOAD_CLIENT_AEAD_PROVIDER, PAYLOAD_FIELD_BINDING, PayloadEncryptionError,
+    PayloadEncryptionPolicy, PayloadTextEncryptor, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey,
+    VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER, WrappedKeyBlob,
+    client_payload_nonce_replay_key, client_payload_signature_key_id, rewrap_resource_key,
+    validate_client_payload_value,
 };
 use segment::json_path::JsonPath;
 use segment::types::Payload;
@@ -117,6 +118,12 @@ pub enum PayloadWriteSetupError {
     },
     #[error("collection {collection} client payload rule {rule_id} must use binding {binding}")]
     InvalidClientEnvelopeBinding {
+        collection: String,
+        rule_id: String,
+        binding: String,
+    },
+    #[error("collection {collection} server payload rule {rule_id} must use binding {binding}")]
+    InvalidPayloadBinding {
         collection: String,
         rule_id: String,
         binding: String,
@@ -1021,6 +1028,17 @@ fn generic_payload_write_plan(
         let policy = PayloadEncryptionPolicy::new(paths.clone())?;
         match instance.provider.as_str() {
             PAYLOAD_AES_GCM_PROVIDER => {
+                if rule
+                    .binding
+                    .as_deref()
+                    .is_some_and(|binding| binding != PAYLOAD_FIELD_BINDING)
+                {
+                    return Err(PayloadWriteSetupError::InvalidPayloadBinding {
+                        collection: collection_name.to_string(),
+                        rule_id: rule.id.clone(),
+                        binding: PAYLOAD_FIELD_BINDING.to_string(),
+                    });
+                }
                 let material_ref =
                     instance
                         .materials
@@ -1374,6 +1392,17 @@ fn validate_generic_collection_crypto_runtime(
     for rule in &encryption.rules {
         if !matches!(rule.selector, EncryptionSelector::VectorNames { .. }) {
             continue;
+        }
+
+        if rule
+            .binding
+            .as_deref()
+            .is_some_and(|binding| binding != VECTOR_ENVELOPE_BINDING)
+        {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} vector rule {} must use binding {VECTOR_ENVELOPE_BINDING}",
+                rule.id
+            )));
         }
 
         let Some(instance) = runtime_settings.instances.get(&rule.instance) else {
@@ -3352,6 +3381,54 @@ mod tests {
     }
 
     #[test]
+    fn payload_write_plan_rejects_client_binding_for_server_provider() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                instances: HashMap::from([(
+                    "docs_payload_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_AES_GCM_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: json!({ "key_id": "tenant-a:docs" }),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some(CLIENT_PAYLOAD_ENVELOPE_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        assert!(matches!(
+            payload_write_plan_for_collection(&settings, "docs", &params),
+            Err(PayloadWriteSetupError::InvalidPayloadBinding {
+                collection,
+                rule_id,
+                binding,
+            }) if collection == "docs"
+                && rule_id == "body_conf"
+                && binding == PAYLOAD_FIELD_BINDING
+        ));
+    }
+
+    #[test]
     fn payload_write_plan_validates_client_signature_verifier_options() {
         let params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
@@ -4534,6 +4611,37 @@ mod tests {
         let err = validate_collection_crypto_runtime(&settings, "docs", &params).unwrap_err();
         assert!(
             matches!(err, StorageError::BadInput { ref description } if description.contains("unknown crypto instance docs_vector_v1")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_rejects_wrong_vector_binding() {
+        let settings = Settings::new(None).unwrap();
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "embedding_conf".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["embedding".to_string()],
+                    },
+                    instance: "docs_vector_v1".to_string(),
+                    binding: Some(PAYLOAD_FIELD_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = validate_collection_crypto_runtime(&settings, "docs", &params).unwrap_err();
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("vector rule embedding_conf must use binding")
+                    && description.contains(VECTOR_ENVELOPE_BINDING)),
             "unexpected error: {err:?}",
         );
     }
