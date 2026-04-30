@@ -142,6 +142,13 @@ crypto identity. New collection configs should use the persisted collection UUID
 when available; legacy/test collections without a UUID fall back to the
 collection name.
 
+Qdrant rejects duplicate client-side AEAD nonces within a single public write
+request, including `update_batch`, by tracking `(key_id, rk_id, rk_epoch,
+nonce)` while validating envelopes. This is a request-local guard only. A
+persistent replay index is not implemented, so SDKs must generate fresh 96-bit
+CSPRNG nonces and regenerate envelopes on retry instead of replaying failed
+request bodies.
+
 ```json
 {
   "body": {
