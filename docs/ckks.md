@@ -140,9 +140,10 @@ keys, must use the bounded qdrant-sec crypto identifier syntax
 For payload writes, the `aad.collection_id` value is the collection's stable
 crypto identity. Encrypted collection create/recovery paths must have a
 persisted collection UUID; existing encrypted snapshot recovery fails closed if
-either side is missing a UUID or if the UUIDs differ. Low-level legacy/test
-fixtures may still construct name-bound envelopes, but production recovery must
-not rely on collection names as the crypto identity.
+either side is missing a UUID or if the UUIDs differ. Public encrypted write
+paths and the collection write guard fail closed when an encrypted collection
+does not have a persisted UUID; collection names are not accepted as the
+production crypto identity.
 
 Qdrant rejects duplicate client-side AEAD nonces within a single public write
 request, including `update_batch`, by tracking `(key_id, rk_id, rk_epoch,
@@ -278,9 +279,8 @@ re-encryption mode rather than normal write-path idempotency. The
 and vector envelopes, so storage-side edits to resource-key identity fail closed.
 
 Payload AEAD AAD also binds the stable collection crypto identity, point id, and
-canonical field path. On public writes Qdrant uses the collection UUID when the
-collection config has one and falls back to the collection name only for legacy
-configs without a UUID.
+canonical field path. On public writes Qdrant uses the collection UUID and
+rejects encrypted collection configs that are missing that stable identity.
 
 The wrapped RK AES-GCM AAD is a length-prefixed tuple of `qdrant-sec`, `v1`,
 `resource-key-wrap`, the material reference, `rk_epoch`, `scope`, `wrapped_by`,
@@ -425,10 +425,11 @@ public material still encrypts the embedding itself:
 
 The vector envelope uses `collection identity`, `point_id`, and `vector_name`
 AAD binding. New callers should pass the persisted collection UUID or a stable
-crypto collection id as the vector collection identity; legacy/test callers may
-fall back to collection name. Moving an encrypted vector envelope to a
-different point, vector name, or collection identity must fail authentication
-after unwrap.
+crypto collection id as the vector collection identity. Collection-level
+encrypted vector write/read/search guards require a persisted UUID and do not
+fall back to collection name. Moving an encrypted vector envelope to a different
+point, vector name, or collection identity must fail authentication after
+unwrap.
 Inside the sealed body, `context_digest` is still the SHA-256 digest over the
 CKKS parameters, serialized OpenFHE crypto context, and public key. It is
 intended to prevent mixing ciphertexts created for incompatible contexts.
