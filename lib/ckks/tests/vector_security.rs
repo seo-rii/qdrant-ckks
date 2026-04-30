@@ -1,13 +1,15 @@
 use std::fs;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_ckks::{
-    AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CkksEncryptionInput, CkksError,
-    CkksParameters, CkksPublicMaterial, CkksVectorBackend, CkksVectorEncryptor,
-    CommandOpenFheBackend, EncryptionContext, EncryptionError, SecretKey,
+    AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CkksBatchEncryptionInput,
+    CkksEncryptionInput, CkksError, CkksParameters, CkksPublicMaterial, CkksVectorBackend,
+    CkksVectorBatchItem, CkksVectorEncryptor, CommandOpenFheBackend, EncryptionContext,
+    EncryptionError, SecretKey,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -32,6 +34,40 @@ impl CkksVectorBackend for SealedTestBackend {
     }
 }
 
+#[derive(Clone, Debug)]
+struct BatchTestBackend {
+    single_calls: Arc<AtomicUsize>,
+    batch_calls: Arc<AtomicUsize>,
+}
+
+impl BatchTestBackend {
+    fn new() -> Self {
+        Self {
+            single_calls: Arc::new(AtomicUsize::new(0)),
+            batch_calls: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+}
+
+impl CkksVectorBackend for BatchTestBackend {
+    fn encrypt(&self, input: CkksEncryptionInput<'_>) -> Result<Vec<u8>, CkksError> {
+        self.single_calls.fetch_add(1, Ordering::Relaxed);
+        Ok(format!("single:{}:{}", input.point_id, input.values.len()).into_bytes())
+    }
+
+    fn encrypt_batch(
+        &self,
+        input: CkksBatchEncryptionInput<'_>,
+    ) -> Result<Vec<Vec<u8>>, CkksError> {
+        self.batch_calls.fetch_add(1, Ordering::Relaxed);
+        Ok(input
+            .items
+            .iter()
+            .map(|item| format!("batch:{}:{}", item.point_id, item.values.len()).into_bytes())
+            .collect())
+    }
+}
+
 fn public_material() -> CkksPublicMaterial {
     CkksPublicMaterial::new(
         b"openfhe crypto context".to_vec(),
@@ -49,6 +85,56 @@ fn encryptor() -> CkksVectorEncryptor<SealedTestBackend> {
         SealedTestBackend,
     )
     .unwrap()
+}
+
+#[test]
+fn ckks_vector_encrypt_batch_uses_backend_batch_and_binds_each_point() {
+    let backend = BatchTestBackend::new();
+    let encryptor = CkksVectorEncryptor::new(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend.clone(),
+    )
+    .unwrap();
+    let material = public_material();
+    let first = [1.0, 2.0];
+    let second = [3.0, 4.0, 5.0];
+    let items = [
+        CkksVectorBatchItem {
+            point_id: "point-1",
+            values: &first,
+        },
+        CkksVectorBatchItem {
+            point_id: "point-2",
+            values: &second,
+        },
+    ];
+
+    let encrypted = encryptor.encrypt_batch("docs", &material, &items).unwrap();
+
+    assert_eq!(backend.batch_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(backend.single_calls.load(Ordering::Relaxed), 0);
+    assert_eq!(encrypted.len(), 2);
+    assert_eq!(
+        encryptor
+            .open("docs", "point-1", &material, &encrypted[0])
+            .unwrap()
+            .slots,
+        2,
+    );
+    assert_eq!(
+        encryptor
+            .open("docs", "point-2", &material, &encrypted[1])
+            .unwrap()
+            .slots,
+        3,
+    );
+    assert!(matches!(
+        encryptor.open("docs", "point-2", &material, &encrypted[0]),
+        Err(CkksError::Envelope(_)),
+    ));
 }
 
 #[test]

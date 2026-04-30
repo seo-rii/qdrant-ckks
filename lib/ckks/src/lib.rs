@@ -36,7 +36,7 @@ pub use payload::{
     validate_server_payload_value_metadata,
 };
 pub use vector::{
-    CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_SCHEME, CkksEncryptionInput, CkksError,
-    CkksParameters, CkksPublicMaterial, CkksVectorBackend, CkksVectorEncryptor,
-    EncryptedCkksVector, VerifiedCkksVector,
+    CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_SCHEME, CkksBatchEncryptionInput,
+    CkksEncryptionInput, CkksError, CkksParameters, CkksPublicMaterial, CkksVectorBackend,
+    CkksVectorBatchItem, CkksVectorEncryptor, EncryptedCkksVector, VerifiedCkksVector,
 };

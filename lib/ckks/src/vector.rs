@@ -35,6 +35,8 @@ pub enum CkksError {
     NonFiniteValue { index: usize },
     #[error("openfhe backend returned empty ciphertext")]
     EmptyCiphertext,
+    #[error("openfhe backend returned {actual} batch ciphertexts for {expected} input vectors")]
+    BackendBatchSizeMismatch { expected: usize, actual: usize },
     #[error("unsupported ckks vector envelope version {0}")]
     UnsupportedEnvelopeVersion(u8),
     #[error("unsupported ckks vector scheme {0}")]
@@ -172,8 +174,43 @@ pub struct CkksEncryptionInput<'a> {
     pub values: &'a [f64],
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct CkksVectorBatchItem<'a> {
+    pub point_id: &'a str,
+    pub values: &'a [f64],
+}
+
+#[derive(Clone, Debug)]
+pub struct CkksBatchEncryptionInput<'a> {
+    pub parameters: &'a CkksParameters,
+    pub public_material: &'a CkksPublicMaterial,
+    pub collection: &'a str,
+    pub vector_name: &'a str,
+    pub items: &'a [CkksVectorBatchItem<'a>],
+}
+
 pub trait CkksVectorBackend {
     fn encrypt(&self, input: CkksEncryptionInput<'_>) -> Result<Vec<u8>, CkksError>;
+
+    fn encrypt_batch(
+        &self,
+        input: CkksBatchEncryptionInput<'_>,
+    ) -> Result<Vec<Vec<u8>>, CkksError> {
+        input
+            .items
+            .iter()
+            .map(|item| {
+                self.encrypt(CkksEncryptionInput {
+                    parameters: input.parameters,
+                    public_material: input.public_material,
+                    collection: input.collection,
+                    point_id: item.point_id,
+                    vector_name: input.vector_name,
+                    values: item.values,
+                })
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -389,14 +426,7 @@ where
         Ok(self)
     }
 
-    pub fn encrypt(
-        &self,
-        collection: &str,
-        point_id: &str,
-        public_material: &CkksPublicMaterial,
-        values: &[f64],
-    ) -> Result<EncryptedCkksVector, CkksError> {
-        let collection_context = self.collection_context(collection)?;
+    fn validate_vector_values(&self, point_id: &str, values: &[f64]) -> Result<(), CkksError> {
         Self::validate_context_value("point_id", point_id)?;
         if values.is_empty() {
             return Err(CkksError::EmptyVector);
@@ -415,14 +445,17 @@ where
             return Err(CkksError::NonFiniteValue { index });
         }
 
-        let ciphertext = self.backend.encrypt(CkksEncryptionInput {
-            parameters: &self.parameters,
-            public_material,
-            collection: collection_context,
-            point_id,
-            vector_name: &self.vector_name,
-            values,
-        })?;
+        Ok(())
+    }
+
+    fn seal_ciphertext(
+        &self,
+        collection_context: &str,
+        point_id: &str,
+        public_material: &CkksPublicMaterial,
+        slots: usize,
+        ciphertext: &[u8],
+    ) -> Result<EncryptedCkksVector, CkksError> {
         if ciphertext.is_empty() {
             return Err(CkksError::EmptyCiphertext);
         }
@@ -433,9 +466,9 @@ where
                 encryption_epoch: self.encryption_epoch,
                 key_id: self.metadata_keyring.key_id().to_string(),
                 vector_name: self.vector_name.clone(),
-                slots: values.len(),
+                slots,
                 context_digest: public_material.digest_for(&self.parameters),
-                ciphertext: BASE64URL_NOPAD.encode(&ciphertext),
+                ciphertext: BASE64URL_NOPAD.encode(ciphertext),
             })
             .map_err(|err| CkksError::MalformedEnvelope(err.to_string()))?
             .as_slice(),
@@ -448,6 +481,73 @@ where
             scheme: CKKS_SCHEME.to_string(),
             envelope,
         })
+    }
+
+    pub fn encrypt(
+        &self,
+        collection: &str,
+        point_id: &str,
+        public_material: &CkksPublicMaterial,
+        values: &[f64],
+    ) -> Result<EncryptedCkksVector, CkksError> {
+        let collection_context = self.collection_context(collection)?;
+        self.validate_vector_values(point_id, values)?;
+
+        let ciphertext = self.backend.encrypt(CkksEncryptionInput {
+            parameters: &self.parameters,
+            public_material,
+            collection: collection_context,
+            point_id,
+            vector_name: &self.vector_name,
+            values,
+        })?;
+        self.seal_ciphertext(
+            collection_context,
+            point_id,
+            public_material,
+            values.len(),
+            &ciphertext,
+        )
+    }
+
+    pub fn encrypt_batch(
+        &self,
+        collection: &str,
+        public_material: &CkksPublicMaterial,
+        items: &[CkksVectorBatchItem<'_>],
+    ) -> Result<Vec<EncryptedCkksVector>, CkksError> {
+        let collection_context = self.collection_context(collection)?;
+        for item in items {
+            self.validate_vector_values(item.point_id, item.values)?;
+        }
+
+        let ciphertexts = self.backend.encrypt_batch(CkksBatchEncryptionInput {
+            parameters: &self.parameters,
+            public_material,
+            collection: collection_context,
+            vector_name: &self.vector_name,
+            items,
+        })?;
+        if ciphertexts.len() != items.len() {
+            return Err(CkksError::BackendBatchSizeMismatch {
+                expected: items.len(),
+                actual: ciphertexts.len(),
+            });
+        }
+
+        items
+            .iter()
+            .zip(ciphertexts)
+            .map(|(item, ciphertext)| {
+                self.seal_ciphertext(
+                    collection_context,
+                    item.point_id,
+                    public_material,
+                    item.values.len(),
+                    &ciphertext,
+                )
+            })
+            .collect()
     }
 
     pub fn open(
