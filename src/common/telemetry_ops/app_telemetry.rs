@@ -8,6 +8,7 @@ use segment::common::anonymize::Anonymize;
 use segment::types::HnswGlobalConfig;
 use serde::Serialize;
 
+use crate::common::crypto::crypto_runtime_capability_fingerprint;
 use crate::settings::Settings;
 
 pub struct AppBuildTelemetryCollector {
@@ -70,6 +71,9 @@ pub struct AppBuildTelemetry {
     pub jwt_rbac: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hide_jwt_dashboard: Option<bool>,
+    #[anonymize(false)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crypto_runtime_capability_fingerprint: Option<String>,
     pub startup: DateTime<Utc>,
 }
 
@@ -97,6 +101,9 @@ impl AppBuildTelemetry {
             system: (detail.level >= DetailsLevel::Level1).then(get_system_data),
             jwt_rbac: settings.service.jwt_rbac,
             hide_jwt_dashboard: settings.service.hide_jwt_dashboard,
+            crypto_runtime_capability_fingerprint: (detail.level >= DetailsLevel::Level1
+                && (settings.crypto.is_configured() || settings.ckks.is_configured()))
+            .then(|| crypto_runtime_capability_fingerprint(settings)),
             startup: collector.startup,
         }
     }
@@ -207,4 +214,57 @@ impl CpuEndian {
 pub struct GpuDeviceTelemetry {
     #[anonymize(false)]
     pub name: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::settings::{CryptoInstanceConfig, CryptoSettings};
+
+    #[test]
+    fn app_telemetry_includes_crypto_runtime_capability_fingerprint() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                instances: HashMap::from([(
+                    "docs_payload_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: "payload/aes-256-gcm@v1".to_string(),
+                        materials: HashMap::from([(
+                            "sym_key".to_string(),
+                            "tenant-a/payload-rk-v1".to_string(),
+                        )]),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a:docs",
+                            "material_fingerprint_id": "tenant-a/payload@v1",
+                        }),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let collector = AppBuildTelemetryCollector::new();
+
+        let telemetry = AppBuildTelemetry::collect(
+            TelemetryDetail::new(DetailsLevel::Level1, false),
+            &collector,
+            &settings,
+        );
+        assert_eq!(
+            telemetry.crypto_runtime_capability_fingerprint.as_deref(),
+            Some(crypto_runtime_capability_fingerprint(&settings).as_str()),
+        );
+
+        let low_detail = AppBuildTelemetry::collect(
+            TelemetryDetail::new(DetailsLevel::Level0, false),
+            &collector,
+            &settings,
+        );
+        assert!(low_detail.crypto_runtime_capability_fingerprint.is_none());
+    }
 }
