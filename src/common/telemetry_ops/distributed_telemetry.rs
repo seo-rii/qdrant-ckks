@@ -145,6 +145,10 @@ pub struct DistributedPeerDetails {
 
     /// Status of consensus thread
     consensus_thread_status: ConsensusThreadStatus,
+
+    /// Non-secret crypto runtime capability fingerprint for peer parity checks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crypto_runtime_capability_fingerprint: Option<String>,
 }
 
 impl DistributedTelemetryData {
@@ -500,6 +504,9 @@ fn aggregate_peers_info(
                     commit: status.commit,
                     num_pending_operations: status.pending_operations as u64,
                     consensus_thread_status: status.consensus_thread_status.clone(),
+                    crypto_runtime_capability_fingerprint: peer_telemetry.app.as_ref().and_then(
+                        |telemetry| telemetry.crypto_runtime_capability_fingerprint.clone(),
+                    ),
                 })
             });
 
