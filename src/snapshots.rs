@@ -374,6 +374,103 @@ mod tests {
         assert!(err.contains("decryption authentication failed"));
     }
 
+    #[test]
+    fn cli_snapshot_crypto_preflight_rejects_runtime_key_id_mismatch() {
+        let mk_material = "tenant-a/mk-v1";
+        let rk_material = "tenant-a/payload-rk-v1";
+        let rk_epoch = 1;
+        let rk_scope = "collection:docs";
+        let wrapping_key_bytes = [91; 32];
+        let wrapping_key = SecretKey::from_bytes(wrapping_key_bytes);
+        let resource_key = SecretKey::from_bytes([92; 32]);
+        let wrap_provider =
+            LocalMasterKeyProvider::new(mk_material, wrapping_key).expect("valid test MK");
+        let wrapped = wrap_provider
+            .wrap_resource_key(
+                &resource_key,
+                &resource_key_wrap_test_aad(
+                    rk_material,
+                    rk_epoch,
+                    rk_scope,
+                    mk_material,
+                    RESOURCE_KEY_WRAP_ALGORITHM,
+                ),
+            )
+            .expect("test RK should wrap");
+
+        let settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_payload_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: "payload/aes-256-gcm@v1".to_string(),
+                        materials: HashMap::from([(
+                            "sym_key".to_string(),
+                            rk_material.to_string(),
+                        )]),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a:wrong-docs",
+                            "material_fingerprint_id": "tenant-a/payload@v1",
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([
+                    (
+                        mk_material.to_string(),
+                        CryptoMaterialConfig {
+                            kind: "wrapping_key_32".to_string(),
+                            source: Some("inline".to_string()),
+                            value_b64: Some(BASE64URL_NOPAD.encode(&wrapping_key_bytes)),
+                            ..CryptoMaterialConfig::default()
+                        },
+                    ),
+                    (
+                        rk_material.to_string(),
+                        CryptoMaterialConfig {
+                            kind: "wrapped_symmetric_key_32".to_string(),
+                            wrapped_by: Some(mk_material.to_string()),
+                            wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
+                            nonce: Some(wrapped.nonce),
+                            wrapped_key_b64: Some(wrapped.wrapped_key),
+                            rk_epoch: Some(rk_epoch),
+                            state: Some("active".to_string()),
+                            scope: Some(rk_scope.to_string()),
+                            ..CryptoMaterialConfig::default()
+                        },
+                    ),
+                ]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = validate_restored_collection_crypto_params(&settings, "docs", &params)
+            .expect_err("runtime key_id mismatch must fail CLI snapshot preflight");
+
+        assert!(err.contains("recovered snapshot docs"));
+        assert!(err.contains("key id does not match"));
+    }
+
     fn resource_key_wrap_test_aad(
         material_name: &str,
         epoch: u64,
