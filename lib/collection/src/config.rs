@@ -502,6 +502,23 @@ mod ckks_tests {
         };
         assert!(incomplete.validate_admin_plan().is_err());
 
+        let verified_but_incomplete = CryptoMigrationPlan {
+            from: Rotating,
+            to: Active,
+            target_epoch: 4,
+            active_rk_id: Some("rk/docs/4".to_string()),
+            retired_rk_id: Some("rk/docs/3".to_string()),
+            dry_run: false,
+            checkpoints: vec![CryptoMigrationCheckpoint {
+                shard_id: 0,
+                total_points: 10,
+                processed_points: 9,
+                rewritten_points: 9,
+                status: CryptoMigrationCheckpointStatus::Verified,
+            }],
+        };
+        assert!(verified_but_incomplete.validate_admin_plan().is_err());
+
         let invalid_counts = CryptoMigrationPlan {
             from: Active,
             to: Rotating,
@@ -518,6 +535,32 @@ mod ckks_tests {
             }],
         };
         assert!(invalid_counts.validate_admin_plan().is_err());
+
+        let duplicate_shard = CryptoMigrationPlan {
+            from: Active,
+            to: Rotating,
+            target_epoch: 4,
+            active_rk_id: Some("rk/docs/4".to_string()),
+            retired_rk_id: Some("rk/docs/3".to_string()),
+            dry_run: false,
+            checkpoints: vec![
+                CryptoMigrationCheckpoint {
+                    shard_id: 0,
+                    total_points: 10,
+                    processed_points: 10,
+                    rewritten_points: 10,
+                    status: CryptoMigrationCheckpointStatus::Verified,
+                },
+                CryptoMigrationCheckpoint {
+                    shard_id: 0,
+                    total_points: 8,
+                    processed_points: 8,
+                    rewritten_points: 8,
+                    status: CryptoMigrationCheckpointStatus::Verified,
+                },
+            ],
+        };
+        assert!(duplicate_shard.validate_admin_plan().is_err());
 
         let complete = CryptoMigrationPlan {
             from: Rotating,
@@ -799,29 +842,42 @@ impl CryptoMigrationPlan {
             return Err(ValidationError::new("missing_crypto_migration_retired_rk"));
         }
 
-        if matches!(
+        let requires_verified_completion = matches!(
             (self.from, self.to),
             (CryptoMigrationState::Rotating, CryptoMigrationState::Active)
                 | (
                     CryptoMigrationState::Decrypting,
                     CryptoMigrationState::Disabled
                 )
-        ) && (self.checkpoints.is_empty()
-            || self
-                .checkpoints
-                .iter()
-                .any(|checkpoint| checkpoint.status != CryptoMigrationCheckpointStatus::Verified))
-        {
-            return Err(ValidationError::new(
-                "crypto_migration_requires_verified_checkpoints",
-            ));
-        }
+        );
 
         for checkpoint in &self.checkpoints {
             if checkpoint.processed_points > checkpoint.total_points
                 || checkpoint.rewritten_points > checkpoint.processed_points
             {
                 return Err(ValidationError::new("invalid_crypto_migration_checkpoint"));
+            }
+        }
+
+        let mut shard_ids = std::collections::HashSet::new();
+        for checkpoint in &self.checkpoints {
+            if !shard_ids.insert(checkpoint.shard_id) {
+                return Err(ValidationError::new(
+                    "duplicate_crypto_migration_checkpoint",
+                ));
+            }
+        }
+
+        if requires_verified_completion {
+            if self.checkpoints.is_empty()
+                || self.checkpoints.iter().any(|checkpoint| {
+                    checkpoint.status != CryptoMigrationCheckpointStatus::Verified
+                        || checkpoint.processed_points != checkpoint.total_points
+                })
+            {
+                return Err(ValidationError::new(
+                    "crypto_migration_requires_verified_checkpoints",
+                ));
             }
         }
 
