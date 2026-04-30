@@ -411,6 +411,111 @@ mod ckks_tests {
     }
 
     #[test]
+    fn crypto_migration_plan_rejects_noop_and_unsafe_edges() {
+        use CryptoMigrationState::{Active, Disabled, Encrypting};
+
+        let noop = CryptoMigrationPlan {
+            from: Active,
+            to: Active,
+            target_epoch: 3,
+            active_rk_id: Some("rk/docs/3".to_string()),
+            retired_rk_id: None,
+            dry_run: false,
+            checkpoints: Vec::new(),
+        };
+        assert!(noop.validate_admin_plan().is_err());
+
+        let direct_active = CryptoMigrationPlan {
+            from: Disabled,
+            to: Active,
+            target_epoch: 3,
+            active_rk_id: Some("rk/docs/3".to_string()),
+            retired_rk_id: None,
+            dry_run: false,
+            checkpoints: Vec::new(),
+        };
+        assert!(direct_active.validate_admin_plan().is_err());
+
+        let missing_epoch = CryptoMigrationPlan {
+            from: Disabled,
+            to: Encrypting,
+            target_epoch: 0,
+            active_rk_id: Some("rk/docs/3".to_string()),
+            retired_rk_id: None,
+            dry_run: false,
+            checkpoints: Vec::new(),
+        };
+        assert!(missing_epoch.validate_admin_plan().is_err());
+
+        let valid_start = CryptoMigrationPlan {
+            from: Disabled,
+            to: Encrypting,
+            target_epoch: 3,
+            active_rk_id: Some("rk/docs/3".to_string()),
+            retired_rk_id: None,
+            dry_run: false,
+            checkpoints: Vec::new(),
+        };
+        valid_start.validate_admin_plan().unwrap();
+    }
+
+    #[test]
+    fn crypto_migration_plan_requires_verified_completion_checkpoints() {
+        use CryptoMigrationState::{Active, Rotating};
+
+        let incomplete = CryptoMigrationPlan {
+            from: Rotating,
+            to: Active,
+            target_epoch: 4,
+            active_rk_id: Some("rk/docs/4".to_string()),
+            retired_rk_id: Some("rk/docs/3".to_string()),
+            dry_run: false,
+            checkpoints: vec![CryptoMigrationCheckpoint {
+                shard_id: 0,
+                total_points: 10,
+                processed_points: 9,
+                rewritten_points: 9,
+                status: CryptoMigrationCheckpointStatus::Running,
+            }],
+        };
+        assert!(incomplete.validate_admin_plan().is_err());
+
+        let invalid_counts = CryptoMigrationPlan {
+            from: Active,
+            to: Rotating,
+            target_epoch: 4,
+            active_rk_id: Some("rk/docs/4".to_string()),
+            retired_rk_id: Some("rk/docs/3".to_string()),
+            dry_run: false,
+            checkpoints: vec![CryptoMigrationCheckpoint {
+                shard_id: 0,
+                total_points: 10,
+                processed_points: 11,
+                rewritten_points: 11,
+                status: CryptoMigrationCheckpointStatus::Verified,
+            }],
+        };
+        assert!(invalid_counts.validate_admin_plan().is_err());
+
+        let complete = CryptoMigrationPlan {
+            from: Rotating,
+            to: Active,
+            target_epoch: 4,
+            active_rk_id: Some("rk/docs/4".to_string()),
+            retired_rk_id: Some("rk/docs/3".to_string()),
+            dry_run: false,
+            checkpoints: vec![CryptoMigrationCheckpoint {
+                shard_id: 0,
+                total_points: 10,
+                processed_points: 10,
+                rewritten_points: 10,
+                status: CryptoMigrationCheckpointStatus::Verified,
+            }],
+        };
+        complete.validate_admin_plan().unwrap();
+    }
+
+    #[test]
     fn collection_params_reject_encryption_changes_without_migration() {
         let ckks = CkksCollectionConfig {
             enabled: true,
@@ -606,6 +711,118 @@ impl CryptoMigrationState {
                     | (Self::Decrypting, Self::Disabled)
             )
     }
+
+    pub fn is_job_transition_to(self, next: Self) -> bool {
+        self != next && self.can_transition_to(next)
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Anonymize, Clone, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub struct CryptoMigrationPlan {
+    pub from: CryptoMigrationState,
+    pub to: CryptoMigrationState,
+    #[serde(default)]
+    #[anonymize(false)]
+    pub target_epoch: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[anonymize(false)]
+    pub active_rk_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[anonymize(false)]
+    pub retired_rk_id: Option<String>,
+    #[serde(default)]
+    #[anonymize(false)]
+    pub dry_run: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checkpoints: Vec<CryptoMigrationCheckpoint>,
+}
+
+impl CryptoMigrationPlan {
+    pub fn validate_admin_plan(&self) -> Result<(), ValidationError> {
+        if !self.from.is_job_transition_to(self.to) {
+            return Err(ValidationError::new("invalid_crypto_migration_transition"));
+        }
+
+        if matches!(
+            (self.from, self.to),
+            (
+                CryptoMigrationState::Disabled,
+                CryptoMigrationState::Encrypting
+            ) | (CryptoMigrationState::Active, CryptoMigrationState::Rotating)
+        ) && self.target_epoch == 0
+        {
+            return Err(ValidationError::new(
+                "missing_crypto_migration_target_epoch",
+            ));
+        }
+
+        if matches!(
+            (self.from, self.to),
+            (
+                CryptoMigrationState::Disabled,
+                CryptoMigrationState::Encrypting
+            ) | (CryptoMigrationState::Active, CryptoMigrationState::Rotating)
+        ) && self.active_rk_id.as_deref().is_none_or(str::is_empty)
+        {
+            return Err(ValidationError::new("missing_crypto_migration_active_rk"));
+        }
+
+        if matches!(
+            (self.from, self.to),
+            (CryptoMigrationState::Rotating, CryptoMigrationState::Active)
+                | (
+                    CryptoMigrationState::Decrypting,
+                    CryptoMigrationState::Disabled
+                )
+        ) && self
+            .checkpoints
+            .iter()
+            .any(|checkpoint| checkpoint.status != CryptoMigrationCheckpointStatus::Verified)
+        {
+            return Err(ValidationError::new(
+                "crypto_migration_requires_verified_checkpoints",
+            ));
+        }
+
+        for checkpoint in &self.checkpoints {
+            if checkpoint.processed_points > checkpoint.total_points
+                || checkpoint.rewritten_points > checkpoint.processed_points
+            {
+                return Err(ValidationError::new("invalid_crypto_migration_checkpoint"));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Anonymize, Clone, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub struct CryptoMigrationCheckpoint {
+    #[anonymize(false)]
+    pub shard_id: u32,
+    #[anonymize(false)]
+    pub total_points: u64,
+    #[anonymize(false)]
+    pub processed_points: u64,
+    #[anonymize(false)]
+    pub rewritten_points: u64,
+    #[serde(default)]
+    #[anonymize(false)]
+    pub status: CryptoMigrationCheckpointStatus,
+}
+
+#[derive(
+    Debug, Deserialize, Serialize, JsonSchema, Anonymize, Clone, Copy, PartialEq, Eq, Hash, Default,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum CryptoMigrationCheckpointStatus {
+    #[default]
+    Pending,
+    Running,
+    Verified,
+    RolledBack,
 }
 
 #[derive(
