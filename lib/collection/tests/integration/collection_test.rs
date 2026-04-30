@@ -1705,6 +1705,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
     let collection =
         encrypted_collection_fixture(collection_dir.path(), 1, client_payload_encryption_config())
             .await;
+    let collection_crypto_id = collection.config_snapshot().await.uuid.unwrap().to_string();
 
     let client_payload = |collection_id: &str, point_id: &str, rk_id: &str| {
         Payload(
@@ -1749,7 +1750,11 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
             points: vec![PointStructPersisted {
                 id: 1.into(),
                 vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
-                payload: Some(client_payload("test", "1", "tenant-a/client-rk-2026-04")),
+                payload: Some(client_payload(
+                    &collection_crypto_id,
+                    "1",
+                    "tenant-a/client-rk-2026-04",
+                )),
             }],
         }),
     );
@@ -1806,7 +1811,11 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
             PointInsertOperationsInternal::from(vec![PointStructPersisted {
                 id: 1.into(),
                 vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
-                payload: Some(client_payload("test", "1", "tenant-a/old-client-rk")),
+                payload: Some(client_payload(
+                    &collection_crypto_id,
+                    "1",
+                    "tenant-a/old-client-rk",
+                )),
             }]),
         ));
     let err = collection
@@ -1828,7 +1837,8 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
                 && description.contains("resource key id does not match")
     ));
 
-    let mut unsigned_payload = client_payload("test", "1", "tenant-a/client-rk-2026-04");
+    let mut unsigned_payload =
+        client_payload(&collection_crypto_id, "1", "tenant-a/client-rk-2026-04");
     unsigned_payload
         .0
         .get_mut("document")
@@ -1876,12 +1886,20 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
             PointStructPersisted {
                 id: 1.into(),
                 vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
-                payload: Some(client_payload("test", "1", "tenant-a/client-rk-2026-04")),
+                payload: Some(client_payload(
+                    &collection_crypto_id,
+                    "1",
+                    "tenant-a/client-rk-2026-04",
+                )),
             },
             PointStructPersisted {
                 id: 2.into(),
                 vector: VectorStructPersisted::from(vec![0.0, 1.0, 0.0, 0.0]),
-                payload: Some(client_payload("test", "2", "tenant-a/client-rk-2026-04")),
+                payload: Some(client_payload(
+                    &collection_crypto_id,
+                    "2",
+                    "tenant-a/client-rk-2026-04",
+                )),
             },
         ]),
     ));
@@ -1908,7 +1926,11 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         PointInsertOperationsInternal::from(vec![PointStructPersisted {
             id: 1.into(),
             vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
-            payload: Some(client_payload("test", "1", "tenant-a/client-rk-2026-04")),
+            payload: Some(client_payload(
+                &collection_crypto_id,
+                "1",
+                "tenant-a/client-rk-2026-04",
+            )),
         }]),
     ));
     collection

@@ -16,6 +16,7 @@ use collection::shards::replica_set::replica_set_state::ReplicaState;
 use collection::shards::replica_set::{AbortShardTransfer, ChangePeerFromState};
 use common::budget::ResourceBudget;
 use segment::types::Distance;
+use uuid::Uuid;
 
 /// Test collections for this upper bound of shards.
 /// Testing with more shards is problematic due to `number of open files problem`
@@ -75,6 +76,7 @@ async fn simple_collection_fixture_with_params(
         wal_retain_closed: 1,
     };
 
+    let encrypted = collection_params.effective_encryption().is_some();
     let collection_config = CollectionConfigInternal {
         params: collection_params,
         optimizer_config: TEST_OPTIMIZERS_CONFIG.clone(),
@@ -82,7 +84,7 @@ async fn simple_collection_fixture_with_params(
         hnsw_config: Default::default(),
         quantization_config: Default::default(),
         strict_mode_config: Default::default(),
-        uuid: None,
+        uuid: encrypted.then(|| Uuid::from_u128(0x11111111111111111111111111111111)),
         metadata: None,
     };
 
