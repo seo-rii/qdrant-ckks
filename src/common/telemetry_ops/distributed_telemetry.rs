@@ -565,3 +565,110 @@ fn newest_telemetry(telemetries: &[TelemetryData]) -> Option<&TelemetryData> {
             .map(|status| (status.term, status.commit))
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use storage::rbac::Access;
+    use storage::types::PeerInfo;
+
+    use super::*;
+    use crate::common::telemetry_ops::app_telemetry::AppBuildTelemetry;
+    use crate::common::telemetry_ops::collections_telemetry::CollectionsTelemetry;
+
+    fn telemetry_for_peer(
+        peer_id: PeerId,
+        term: u64,
+        commit: u64,
+        crypto_runtime_capability_fingerprint: &str,
+    ) -> TelemetryData {
+        let peers = HashMap::from([
+            (
+                1,
+                PeerInfo {
+                    uri: "http://peer-1".to_string(),
+                },
+            ),
+            (
+                2,
+                PeerInfo {
+                    uri: "http://peer-2".to_string(),
+                },
+            ),
+        ]);
+
+        TelemetryData {
+            id: peer_id.to_string(),
+            app: Some(AppBuildTelemetry {
+                name: "qdrant-sec".to_string(),
+                version: "test-version".to_string(),
+                features: None,
+                runtime_features: None,
+                hnsw_global_config: None,
+                system: None,
+                jwt_rbac: None,
+                hide_jwt_dashboard: None,
+                crypto_runtime_capability_fingerprint: Some(
+                    crypto_runtime_capability_fingerprint.to_string(),
+                ),
+                startup: Utc::now(),
+            }),
+            collections: CollectionsTelemetry::default(),
+            cluster: Some(ClusterTelemetry {
+                enabled: true,
+                status: Some(
+                    crate::common::telemetry_ops::cluster_telemetry::ClusterStatusTelemetry {
+                        number_of_peers: peers.len(),
+                        term,
+                        commit,
+                        pending_operations: 0,
+                        role: Some(StateRole::Follower),
+                        is_voter: true,
+                        peer_id: Some(peer_id),
+                        consensus_thread_status: ConsensusThreadStatus::Stopped,
+                    },
+                ),
+                config: None,
+                peers: Some(peers),
+                peer_metadata: None,
+                metadata: None,
+                resharding_enabled: Some(true),
+            }),
+            requests: None,
+            memory: None,
+            hardware: None,
+        }
+    }
+
+    #[test]
+    fn distributed_telemetry_preserves_peer_crypto_runtime_fingerprints() {
+        let distributed = DistributedTelemetryData::resolve_telemetries(
+            &Access::full("test"),
+            vec![
+                telemetry_for_peer(1, 2, 10, "crypto-runtime-peer-1"),
+                telemetry_for_peer(2, 1, 9, "crypto-runtime-peer-2"),
+            ],
+            Vec::new(),
+        )
+        .unwrap();
+
+        let cluster = distributed.cluster.expect("cluster telemetry");
+        let peer_1 = cluster.peers.get(&1).expect("peer 1");
+        let peer_2 = cluster.peers.get(&2).expect("peer 2");
+
+        assert_eq!(
+            peer_1
+                .details
+                .as_ref()
+                .and_then(|details| details.crypto_runtime_capability_fingerprint.as_deref()),
+            Some("crypto-runtime-peer-1"),
+        );
+        assert_eq!(
+            peer_2
+                .details
+                .as_ref()
+                .and_then(|details| details.crypto_runtime_capability_fingerprint.as_deref()),
+            Some("crypto-runtime-peer-2"),
+        );
+    }
+}
