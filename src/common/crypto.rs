@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, HashSet};
 use std::fs;
 
 use collection::config::{
-    CkksCollectionConfig, CollectionEncryptionConfig, CollectionParams, EncryptionSelector,
+    CkksCollectionConfig, CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams,
+    EncryptionSelector,
 };
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_ckks::{
@@ -620,6 +621,21 @@ pub fn validate_recovered_collection_crypto_runtime(
     }
 
     validate_collection_crypto_runtime(settings, collection_name, params)
+}
+
+pub fn validate_recovered_collection_crypto_config(
+    settings: &Settings,
+    collection_name: &str,
+    config: &CollectionConfigInternal,
+) -> Result<(), StorageError> {
+    if config.params.effective_encryption().is_some() && config.uuid.is_none() {
+        return Err(StorageError::bad_input(format!(
+            "recovered encrypted collection {collection_name} is missing a stable UUID; \
+             encrypted payload/vector AAD requires an explicit stable collection identity",
+        )));
+    }
+
+    validate_recovered_collection_crypto_runtime(settings, collection_name, &config.params)
 }
 
 pub fn effective_settings(settings: &Settings) -> CryptoSettings {
@@ -2021,9 +2037,10 @@ mod tests {
     use std::collections::{HashMap, HashSet};
 
     use collection::config::{
-        CkksCollectionConfig, CollectionEncryptionConfig, CollectionParams, CryptoMigrationState,
-        EncryptionRuleRef, EncryptionSelector,
+        CkksCollectionConfig, CollectionConfigInternal, CollectionEncryptionConfig,
+        CollectionParams, CryptoMigrationState, EncryptionRuleRef, EncryptionSelector, WalConfig,
     };
+    use collection::optimizers_builder::OptimizersConfig;
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_ckks::{
         CLIENT_ENCRYPTED_PAYLOAD_MARKER, CLIENT_PAYLOAD_ENVELOPE_BINDING, LocalMasterKeyProvider,
@@ -2033,9 +2050,34 @@ mod tests {
     use ring::rand::SystemRandom;
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use serde_json::{Value, json};
+    use uuid::Uuid;
 
     use super::*;
     use crate::settings::{CkksConfig, CryptoInstanceConfig};
+
+    fn recovered_config(params: CollectionParams, uuid: Option<Uuid>) -> CollectionConfigInternal {
+        CollectionConfigInternal {
+            params,
+            hnsw_config: segment::types::HnswConfig::default(),
+            optimizer_config: OptimizersConfig {
+                deleted_threshold: 0.1,
+                vacuum_min_vector_number: 1000,
+                default_segment_number: 0,
+                max_segment_size: None,
+                #[expect(deprecated)]
+                memmap_threshold: None,
+                indexing_threshold: Some(100_000),
+                flush_interval_sec: 60,
+                max_optimization_threads: Some(0),
+                prevent_unoptimized: None,
+            },
+            wal_config: WalConfig::default(),
+            quantization_config: None,
+            strict_mode_config: None,
+            uuid,
+            metadata: None,
+        }
+    }
 
     fn signed_client_envelope(
         collection_id: &str,
@@ -4607,6 +4649,48 @@ mod tests {
                     && description.contains("unsupported_ckks_vector_selector")),
             "unexpected error: {err:?}",
         );
+    }
+
+    #[test]
+    fn validate_recovered_collection_crypto_config_requires_encrypted_uuid() {
+        let settings = Settings::new(None).unwrap();
+        let encrypted_params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = validate_recovered_collection_crypto_config(
+            &settings,
+            "docs",
+            &recovered_config(encrypted_params, None),
+        )
+        .expect_err("encrypted snapshot config without UUID must fail before runtime lookup");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("recovered encrypted collection docs is missing a stable UUID")),
+            "unexpected error: {err:?}",
+        );
+
+        validate_recovered_collection_crypto_config(
+            &settings,
+            "docs",
+            &recovered_config(CollectionParams::empty(), None),
+        )
+        .unwrap();
     }
 
     #[test]

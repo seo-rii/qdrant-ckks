@@ -47,7 +47,7 @@ use crate::actix::helpers::{self, HttpError};
 use crate::common;
 use crate::common::auth::Auth;
 use crate::common::collections::*;
-use crate::common::crypto::validate_recovered_collection_crypto_runtime;
+use crate::common::crypto::validate_recovered_collection_crypto_config;
 use crate::common::http_client::HttpClient;
 use crate::common::snapshots::try_take_partial_snapshot_recovery_lock;
 use crate::settings::Settings;
@@ -245,10 +245,10 @@ async fn upload_snapshot(
             http_client,
             Some(Arc::new(
                 move |collection_name: &str, snapshot_config: &CollectionConfigInternal| {
-                    validate_recovered_collection_crypto_runtime(
+                    validate_recovered_collection_crypto_config(
                         &settings,
                         collection_name,
-                        &snapshot_config.params,
+                        snapshot_config,
                     )
                 },
             )),
@@ -282,10 +282,10 @@ async fn recover_from_snapshot(
             http_client,
             Some(Arc::new(
                 move |collection_name: &str, snapshot_config: &CollectionConfigInternal| {
-                    validate_recovered_collection_crypto_runtime(
+                    validate_recovered_collection_crypto_config(
                         &settings,
                         collection_name,
-                        &snapshot_config.params,
+                        snapshot_config,
                     )
                 },
             )),

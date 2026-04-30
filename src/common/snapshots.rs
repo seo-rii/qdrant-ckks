@@ -21,7 +21,7 @@ use storage::rbac::AccessRequirements;
 use tokio::sync::OwnedRwLockWriteGuard;
 
 use super::auth::Auth;
-use super::crypto::validate_recovered_collection_crypto_runtime;
+use super::crypto::validate_recovered_collection_crypto_config;
 use super::http_client::HttpClient;
 use crate::settings::Settings;
 
@@ -324,7 +324,7 @@ pub async fn recover_shard_snapshot_impl(
 
     if let Some(settings) = runtime_settings {
         let config = collection.config_snapshot().await;
-        validate_recovered_collection_crypto_runtime(settings, collection.name(), &config.params)?;
+        validate_recovered_collection_crypto_config(settings, collection.name(), &config)?;
     }
 
     // `Collection::restore_shard_snapshot` and `activate_shard` calls *have to* be executed as a
