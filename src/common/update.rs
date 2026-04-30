@@ -1338,6 +1338,7 @@ async fn maybe_encrypt_upsert_payloads(
     client_nonce_replay_cache: Option<&mut std::collections::HashSet<ClientPayloadNonceReplayKey>>,
 ) -> Result<(PointInsertOperations, CollectionUpdateProvenance), StorageError> {
     let Some(runtime_settings) = runtime_settings else {
+        ensure_payload_runtime_available_for_upsert(toc, collection_name, &operation, auth).await?;
         return Ok((operation, CollectionUpdateProvenance::ClientPlaintext));
     };
 
@@ -1434,6 +1435,14 @@ async fn maybe_encrypt_point_payload_update(
     client_nonce_replay_cache: Option<&mut std::collections::HashSet<ClientPayloadNonceReplayKey>>,
 ) -> Result<(PayloadUpdatePlan, CollectionUpdateProvenance), StorageError> {
     let Some(runtime_settings) = runtime_settings else {
+        ensure_payload_runtime_available_for_payload_update(
+            toc,
+            collection_name,
+            &operation,
+            auth,
+            operation_name,
+        )
+        .await?;
         return Ok((
             PayloadUpdatePlan::Single(operation),
             CollectionUpdateProvenance::ClientPlaintext,
@@ -1558,6 +1567,105 @@ async fn maybe_encrypt_point_payload_update(
     .map_err(|err| payload_write_error_to_storage_error(collection_name, err))?;
 
     Ok((PayloadUpdatePlan::Single(operation), update_provenance))
+}
+
+async fn ensure_payload_runtime_available_for_upsert(
+    toc: &Arc<TableOfContent>,
+    collection_name: &str,
+    operation: &PointInsertOperations,
+    auth: &Auth,
+) -> Result<(), StorageError> {
+    let collection_pass =
+        auth.check_collection_access(collection_name, AccessRequirements::new(), "upsert_points")?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let collection_config = collection.config_snapshot().await;
+    let Some(encryption) = collection_config.params.effective_encryption() else {
+        return Ok(());
+    };
+
+    let mut touches_encrypted_payload = false;
+    match operation {
+        PointInsertOperations::PointsList(list) => {
+            for point in &list.points {
+                if let Some(payload) = &point.payload
+                    && payload_touches_encrypted_config(&encryption, payload, None)?
+                {
+                    touches_encrypted_payload = true;
+                    break;
+                }
+            }
+        }
+        PointInsertOperations::PointsBatch(batch) => {
+            if let Some(payloads) = batch.batch.payloads.as_ref() {
+                for payload in payloads.iter().flatten() {
+                    if payload_touches_encrypted_config(&encryption, payload, None)? {
+                        touches_encrypted_payload = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if touches_encrypted_payload {
+        return Err(StorageError::bad_input(format!(
+            "payload encryption runtime for collection {collection_name} is required before writing encrypted payload fields",
+        )));
+    }
+
+    Ok(())
+}
+
+async fn ensure_payload_runtime_available_for_payload_update(
+    toc: &Arc<TableOfContent>,
+    collection_name: &str,
+    operation: &SetPayload,
+    auth: &Auth,
+    operation_name: &str,
+) -> Result<(), StorageError> {
+    let collection_pass =
+        auth.check_collection_access(collection_name, AccessRequirements::new(), operation_name)?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let collection_config = collection.config_snapshot().await;
+    let Some(encryption) = collection_config.params.effective_encryption() else {
+        return Ok(());
+    };
+
+    if payload_touches_encrypted_config(&encryption, &operation.payload, operation.key.as_ref())? {
+        return Err(StorageError::bad_input(format!(
+            "payload encryption runtime for collection {collection_name} is required before writing encrypted payload fields",
+        )));
+    }
+
+    Ok(())
+}
+
+fn payload_touches_encrypted_config(
+    encryption: &collection::config::CollectionEncryptionConfig,
+    payload: &segment::types::Payload,
+    key: Option<&JsonPath>,
+) -> Result<bool, StorageError> {
+    for rule in &encryption.rules {
+        let collection::config::EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
+            continue;
+        };
+        for encrypted_path in paths {
+            let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
+                StorageError::bad_input(format!(
+                    "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                ))
+            })?;
+            if let Some(key) = key {
+                if key.compatible(&encrypted_json_path) {
+                    return Ok(true);
+                }
+            } else if !encrypted_json_path.value_get(&payload.0).is_empty() {
+                return Ok(true);
+            }
+        }
+    }
+
+    Ok(false)
 }
 
 fn payload_write_error_to_storage_error(
@@ -2071,8 +2179,8 @@ mod tests {
             assert!(matches!(
                 err,
                 StorageError::BadInput { description }
-                    if description.contains("plaintext payload")
-                        && description.contains("body")
+                    if description.contains("payload encryption runtime")
+                        && description.contains("required")
             ));
 
             let operation = PointInsertOperations::PointsList(api::rest::schema::PointsList {
@@ -3035,7 +3143,8 @@ mod tests {
             assert!(matches!(
                 err,
                 StorageError::BadInput { description }
-                    if description.contains("requires runtime envelope verification")
+                    if description.contains("payload encryption runtime")
+                        && description.contains("required")
             ));
 
             let encrypted_filter = || {
