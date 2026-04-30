@@ -925,6 +925,7 @@ fn command_openfhe_backend_rejects_invalid_json_response() {
         r#"#!/usr/bin/env bash
 set -euo pipefail
 IFS= read -r _request
+printf 'plaintext-embedding-secret-should-not-leak\n' >&2
 printf '{not-json}\n'
 "#,
     )
@@ -948,9 +949,12 @@ printf '{not-json}\n'
         .encrypt("docs", "point-1", &public_material(), &[1.0])
         .unwrap_err();
 
-    assert!(
-        matches!(err, CkksError::Backend(message) if message.contains("failed to parse OpenFHE bridge response"))
-    );
+    assert!(matches!(
+        err,
+        CkksError::Backend(message)
+            if message.contains("failed to parse OpenFHE bridge response")
+                && !message.contains("plaintext-embedding-secret-should-not-leak")
+    ));
 }
 
 #[cfg(unix)]
