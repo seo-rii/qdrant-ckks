@@ -2133,14 +2133,24 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
 #[tokio::test(flavor = "multi_thread")]
 async fn encrypted_vector_rejects_plaintext_vector_writes() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection_path = collection_dir.path().to_path_buf();
     let collection =
         encrypted_collection_fixture(collection_dir.path(), 1, vector_encryption_config()).await;
+    let vector_sentinel = [12345.125_f32, -23456.25, 34567.5, -45678.75];
+    let vector_sentinel_f32_bytes: Vec<u8> = vector_sentinel
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect();
+    let vector_sentinel_f64_bytes: Vec<u8> = vector_sentinel
+        .iter()
+        .flat_map(|value| (*value as f64).to_le_bytes())
+        .collect();
 
     let plaintext_upsert =
         CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
             PointInsertOperationsInternal::from(vec![PointStructPersisted {
                 id: 1.into(),
-                vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                vector: VectorStructPersisted::from(vector_sentinel.to_vec()),
                 payload: None,
             }]),
         ));
@@ -2287,6 +2297,34 @@ async fn encrypted_vector_rejects_plaintext_vector_writes() {
             if description.contains("cannot filter on encrypted vector")
                 && description.contains("CKKS-native vector search is not implemented")
     ));
+
+    collection.stop_gracefully().await;
+
+    let mut pending = vec![collection_path];
+    while let Some(path) = pending.pop() {
+        let metadata = fs::metadata(&path).unwrap();
+        if metadata.is_dir() {
+            for entry in fs::read_dir(&path).unwrap() {
+                pending.push(entry.unwrap().path());
+            }
+            continue;
+        }
+        if !metadata.is_file() {
+            continue;
+        }
+
+        let bytes = fs::read(&path).unwrap();
+        for pattern in [
+            vector_sentinel_f32_bytes.as_slice(),
+            vector_sentinel_f64_bytes.as_slice(),
+        ] {
+            assert!(
+                !bytes.windows(pattern.len()).any(|window| window == pattern),
+                "plaintext vector sentinel leaked into {}",
+                path.display(),
+            );
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
