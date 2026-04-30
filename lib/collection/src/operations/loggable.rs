@@ -141,6 +141,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "geo_bounding_box"
                         | "geo_radius"
                         | "geo_polygon"
+                        | "Vector"
+                        | "Mmr"
                 ) {
                     *value = Value::String("[redacted]".to_string());
                 } else {
@@ -168,12 +170,16 @@ fn redacted_request_hash(request_name: &str, log_value: &Value) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use segment::types::{Condition, FieldCondition, Filter, Payload};
+    use segment::types::{
+        Condition, FieldCondition, Filter, Payload, WithPayloadInterface, WithVector,
+    };
     use serde_json::json;
     use shard::count::CountRequestInternal;
     use shard::operations::point_ops::{
         PointInsertOperationsInternal, PointOperations, PointStructPersisted, VectorStructPersisted,
     };
+    use shard::query::query_enum::QueryEnum;
+    use shard::query::{ScoringQuery, ShardQueryRequest};
 
     use super::*;
 
@@ -255,6 +261,52 @@ mod tests {
         };
         let first = request("secret-a");
         let second = request("secret-b");
+
+        assert_eq!(first.to_log_value(), second.to_log_value());
+        assert_eq!(first.request_hash(), second.request_hash());
+    }
+
+    #[test]
+    fn query_log_value_redacts_query_vectors() {
+        let request = vec![ShardQueryRequest {
+            prefetches: vec![],
+            query: Some(ScoringQuery::Vector(QueryEnum::from(vec![
+                98765.125, -87654.25,
+            ]))),
+            filter: None,
+            score_threshold: None,
+            limit: 10,
+            offset: 0,
+            params: None,
+            with_vector: WithVector::Bool(false),
+            with_payload: WithPayloadInterface::Bool(false),
+        }];
+
+        let log_value = request.to_log_value();
+        let serialized = serde_json::to_string(&log_value).unwrap();
+
+        assert!(!serialized.contains("98765.125"));
+        assert!(!serialized.contains("-87654.25"));
+        assert!(serialized.contains("[redacted]"));
+    }
+
+    #[test]
+    fn query_request_hash_uses_redacted_query_vectors() {
+        let request = |vector: Vec<f32>| {
+            vec![ShardQueryRequest {
+                prefetches: vec![],
+                query: Some(ScoringQuery::Vector(QueryEnum::from(vector))),
+                filter: None,
+                score_threshold: None,
+                limit: 10,
+                offset: 0,
+                params: None,
+                with_vector: WithVector::Bool(false),
+                with_payload: WithPayloadInterface::Bool(false),
+            }]
+        };
+        let first = request(vec![1.0, 2.0]);
+        let second = request(vec![3.0, 4.0]);
 
         assert_eq!(first.to_log_value(), second.to_log_value());
         assert_eq!(first.request_hash(), second.request_hash());
