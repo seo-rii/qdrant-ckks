@@ -412,7 +412,7 @@ mod ckks_tests {
 
     #[test]
     fn crypto_migration_plan_rejects_noop_and_unsafe_edges() {
-        use CryptoMigrationState::{Active, Disabled, Encrypting, Rotating};
+        use CryptoMigrationState::{Active, Decrypting, Disabled, Encrypting, Rotating};
 
         let noop = CryptoMigrationPlan {
             from: Active,
@@ -457,6 +457,28 @@ mod ckks_tests {
             checkpoints: Vec::new(),
         };
         assert!(missing_retired_rk.validate_admin_plan().is_err());
+
+        let missing_decryption_epoch = CryptoMigrationPlan {
+            from: Active,
+            to: Decrypting,
+            target_epoch: 0,
+            active_rk_id: Some("rk/docs/3".to_string()),
+            retired_rk_id: None,
+            dry_run: false,
+            checkpoints: Vec::new(),
+        };
+        assert!(missing_decryption_epoch.validate_admin_plan().is_err());
+
+        let missing_decryption_rk = CryptoMigrationPlan {
+            from: Active,
+            to: Decrypting,
+            target_epoch: 3,
+            active_rk_id: None,
+            retired_rk_id: None,
+            dry_run: false,
+            checkpoints: Vec::new(),
+        };
+        assert!(missing_decryption_rk.validate_admin_plan().is_err());
 
         let valid_start = CryptoMigrationPlan {
             from: Disabled,
@@ -649,7 +671,7 @@ mod ckks_tests {
             from: Decrypting,
             to: Disabled,
             target_epoch: 4,
-            active_rk_id: None,
+            active_rk_id: Some("rk/docs/4".to_string()),
             retired_rk_id: None,
             dry_run: false,
             checkpoints: vec![CryptoMigrationCheckpoint {
@@ -666,7 +688,7 @@ mod ckks_tests {
             from: Decrypting,
             to: Disabled,
             target_epoch: 4,
-            active_rk_id: None,
+            active_rk_id: Some("rk/docs/4".to_string()),
             retired_rk_id: None,
             dry_run: false,
             checkpoints: vec![CryptoMigrationCheckpoint {
@@ -683,7 +705,7 @@ mod ckks_tests {
             from: Decrypting,
             to: Disabled,
             target_epoch: 4,
-            active_rk_id: None,
+            active_rk_id: Some("rk/docs/4".to_string()),
             retired_rk_id: None,
             dry_run: false,
             checkpoints: vec![CryptoMigrationCheckpoint {
@@ -742,6 +764,34 @@ mod ckks_tests {
             checkpoints: Vec::new(),
         };
         valid_rotation
+            .validate_admin_plan_for_config(&current)
+            .unwrap();
+
+        let wrong_decryption_epoch = CryptoMigrationPlan {
+            from: Active,
+            to: CryptoMigrationState::Decrypting,
+            target_epoch: 4,
+            active_rk_id: Some("rk/docs/3".to_string()),
+            retired_rk_id: None,
+            dry_run: false,
+            checkpoints: Vec::new(),
+        };
+        assert!(
+            wrong_decryption_epoch
+                .validate_admin_plan_for_config(&current)
+                .is_err()
+        );
+
+        let valid_decryption_start = CryptoMigrationPlan {
+            from: Active,
+            to: CryptoMigrationState::Decrypting,
+            target_epoch: 3,
+            active_rk_id: Some("rk/docs/3".to_string()),
+            retired_rk_id: None,
+            dry_run: false,
+            checkpoints: Vec::new(),
+        };
+        valid_decryption_start
             .validate_admin_plan_for_config(&current)
             .unwrap();
 
@@ -1026,6 +1076,14 @@ impl CryptoMigrationPlan {
                 CryptoMigrationState::Disabled,
                 CryptoMigrationState::Encrypting
             ) | (CryptoMigrationState::Active, CryptoMigrationState::Rotating)
+                | (
+                    CryptoMigrationState::Active,
+                    CryptoMigrationState::Decrypting
+                )
+                | (
+                    CryptoMigrationState::Decrypting,
+                    CryptoMigrationState::Disabled
+                )
         ) && self.target_epoch == 0
         {
             return Err(ValidationError::new(
@@ -1043,6 +1101,14 @@ impl CryptoMigrationPlan {
                 CryptoMigrationState::Active
             ) | (CryptoMigrationState::Active, CryptoMigrationState::Rotating)
                 | (CryptoMigrationState::Rotating, CryptoMigrationState::Active)
+                | (
+                    CryptoMigrationState::Active,
+                    CryptoMigrationState::Decrypting
+                )
+                | (
+                    CryptoMigrationState::Decrypting,
+                    CryptoMigrationState::Disabled
+                )
         ) && self.active_rk_id.as_deref().is_none_or(str::is_empty)
         {
             return Err(ValidationError::new("missing_crypto_migration_active_rk"));
