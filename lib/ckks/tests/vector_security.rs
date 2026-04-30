@@ -674,6 +674,66 @@ printf '{"version":1,"ciphertexts":["YmF0Y2gtb25l","YmF0Y2gtdHdv"]}\n'
 
 #[cfg(unix)]
 #[test]
+fn command_openfhe_backend_rejects_batch_response_size_mismatch() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("bad-openfhe-batch-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+IFS= read -r request
+case "$request" in
+  *'"items"'*) ;;
+  *) exit 7 ;;
+esac
+printf '{"version":1,"ciphertexts":["b25seS1vbmU"]}\n'
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+        .with_args([script_path.display().to_string()]);
+    let encryptor = CkksVectorEncryptor::new(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+    let first = [1.0, 2.0];
+    let second = [3.0, 4.0];
+    let err = encryptor
+        .encrypt_batch(
+            "docs",
+            &public_material(),
+            &[
+                CkksVectorBatchItem {
+                    point_id: "point-1",
+                    values: &first,
+                },
+                CkksVectorBatchItem {
+                    point_id: "point-2",
+                    values: &second,
+                },
+            ],
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CkksError::Backend(message)
+            if message.contains("returned 1 batch ciphertexts for 2 input vectors")
+    ));
+}
+
+#[cfg(unix)]
+#[test]
 fn command_openfhe_backend_times_out_and_kills_hung_bridge() {
     use std::os::unix::fs::PermissionsExt;
 
