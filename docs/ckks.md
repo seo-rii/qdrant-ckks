@@ -192,6 +192,23 @@ integration is not implemented yet. Exact-match search requires a future client
 blind-index field, and range, geo, or full-text search over client ciphertext
 remains unsupported.
 
+SDKs that implement this mode must do all cryptographic data-key operations
+outside Qdrant:
+
+- Generate a random client RK and derive the payload AEAD key with
+  `qdrant/client-payload-text/v1`; do not send the RK to Qdrant.
+- Generate a fresh 96-bit CSPRNG nonce for every envelope and regenerate the
+  envelope on retry instead of replaying a failed request body.
+- Canonicalize AAD with the collection crypto identity, point id, field path,
+  schema version, `key_id`, `rk_id`, and `rk_epoch` before signing.
+- Sign the envelope with the configured Ed25519 key and rotate signing keys via
+  the `signature_public_keys` registry.
+- Verify and decrypt raw `$qdrant_client_aead` envelopes on read. Qdrant will
+  return the opaque envelope, not plaintext.
+- If exact-match filtering is required, generate a separate blind-index token
+  with a different client key/HKDF domain. Plain Qdrant payload indexes remain
+  unsupported for encrypted fields.
+
 Collection params enable encryption and select fields/vectors per collection:
 
 ```yaml
