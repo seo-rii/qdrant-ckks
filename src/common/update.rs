@@ -2949,6 +2949,58 @@ mod tests {
                     if description.contains("nonce was already used")
             ));
 
+            let err = do_batch_update_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "client_docs".to_string(),
+                vec![
+                    UpdateOperation::SetPayload(SetPayloadOperation {
+                        set_payload: SetPayload {
+                            points: Some(vec![10.into()]),
+                            payload: segment::types::Payload(
+                                json!({ "body": signed_client_body("client_docs", "10") })
+                                    .as_object()
+                                    .unwrap()
+                                    .clone(),
+                            ),
+                            filter: None,
+                            shard_key: None,
+                            key: None,
+                        },
+                    }),
+                    UpdateOperation::SetPayload(SetPayloadOperation {
+                        set_payload: SetPayload {
+                            points: Some(vec![10.into()]),
+                            payload: segment::types::Payload(
+                                json!({ "body": signed_client_body("client_docs", "10") })
+                                    .as_object()
+                                    .unwrap()
+                                    .clone(),
+                            ),
+                            filter: None,
+                            shard_key: None,
+                            key: None,
+                        },
+                    }),
+                ],
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                Some(&client_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("nonce was already used")
+            ));
+
             let err = do_upsert_points(
                 UncheckedTocProvider::new_unchecked(&toc),
                 "client_docs".to_string(),
