@@ -452,10 +452,10 @@ impl CryptoSettings {
 
         let default_material_ref = ckks
             .direct_resource_key_b64()
-            .map(|_| "legacy_ckks/default/master_key".to_string());
+            .map(|_| "legacy_ckks/default/resource_key".to_string());
         if let Some(resource_key_b64) = ckks.direct_resource_key_b64() {
             settings.materials.insert(
-                "legacy_ckks/default/master_key".to_string(),
+                "legacy_ckks/default/resource_key".to_string(),
                 CryptoMaterialConfig {
                     kind: "symmetric_key_32".to_string(),
                     source: Some("inline".to_string()),
@@ -510,10 +510,10 @@ impl CryptoSettings {
 
             let material_ref = config
                 .direct_resource_key_b64()
-                .map(|_| format!("legacy_ckks/{collection}/master_key"));
+                .map(|_| format!("legacy_ckks/{collection}/resource_key"));
             if let Some(resource_key_b64) = config.direct_resource_key_b64() {
                 settings.materials.insert(
-                    format!("legacy_ckks/{collection}/master_key"),
+                    format!("legacy_ckks/{collection}/resource_key"),
                     CryptoMaterialConfig {
                         kind: "symmetric_key_32".to_string(),
                         source: Some("inline".to_string()),
@@ -1192,19 +1192,23 @@ ckks:
         );
         assert_eq!(
             crypto.instances[CryptoSettings::LEGACY_CKKS_VECTOR_INSTANCE].materials["sym_key"],
-            "legacy_ckks/default/master_key"
+            "legacy_ckks/default/resource_key"
         );
         assert_eq!(
             crypto.instances[&CryptoSettings::legacy_ckks_vector_instance_for_collection("docs")]
                 .materials["sym_key"],
-            "legacy_ckks/docs/master_key"
+            "legacy_ckks/docs/resource_key"
         );
         assert!(
             crypto
                 .materials
-                .contains_key("legacy_ckks/default/master_key")
+                .contains_key("legacy_ckks/default/resource_key")
         );
-        assert!(crypto.materials.contains_key("legacy_ckks/docs/master_key"));
+        assert!(
+            crypto
+                .materials
+                .contains_key("legacy_ckks/docs/resource_key")
+        );
         assert!(crypto.backends.contains_key("legacy_ckks/default/backend"));
         assert!(crypto.backends.contains_key("legacy_ckks/docs/backend"));
     }
@@ -1232,11 +1236,11 @@ ckks:
         });
 
         assert_eq!(
-            crypto.materials["legacy_ckks/default/master_key"].value_b64,
+            crypto.materials["legacy_ckks/default/resource_key"].value_b64,
             Some("AQID".to_string()),
         );
         assert_eq!(
-            crypto.materials["legacy_ckks/docs/master_key"].value_b64,
+            crypto.materials["legacy_ckks/docs/resource_key"].value_b64,
             Some("BAUG".to_string()),
         );
     }
