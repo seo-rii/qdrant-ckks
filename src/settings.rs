@@ -286,6 +286,8 @@ pub struct CryptoMaterialConfig {
     #[serde(default)]
     pub rk_epoch: Option<u64>,
     #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
     pub scope: Option<String>,
 }
 
@@ -305,6 +307,7 @@ impl fmt::Debug for CryptoMaterialConfig {
                 &self.wrapped_key_b64.as_ref().map(|_| "[redacted]"),
             )
             .field("rk_epoch", &self.rk_epoch)
+            .field("state", &self.state)
             .field("scope", &self.scope)
             .finish()
     }

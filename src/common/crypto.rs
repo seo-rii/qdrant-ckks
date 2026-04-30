@@ -86,6 +86,10 @@ const PAYLOAD_SYM_KEY_ROLE: &str = "sym_key";
 const SYMMETRIC_KEY_32_KIND: &str = "symmetric_key_32";
 const WRAPPING_KEY_32_KIND: &str = "wrapping_key_32";
 const WRAPPED_SYMMETRIC_KEY_32_KIND: &str = "wrapped_symmetric_key_32";
+const RESOURCE_KEY_STATE_ACTIVE: &str = "active";
+const RESOURCE_KEY_STATE_RETIRED: &str = "retired";
+const RESOURCE_KEY_STATE_DISABLED: &str = "disabled";
+const RESOURCE_KEY_STATE_DESTROYED: &str = "destroyed";
 const MATERIAL_FINGERPRINT_ID_OPTION: &str = "material_fingerprint_id";
 const KEY_ID_REQUIRED_OPTION: &str = "key_id_required";
 const EXPECTED_RK_ID_OPTION: &str = "expected_rk_id";
@@ -811,6 +815,7 @@ fn validate_material(
         || material.nonce.is_some()
         || material.wrapped_key_b64.is_some()
         || material.rk_epoch.is_some()
+        || material.state.is_some()
         || material.scope.is_some()
     {
         return Err(CryptoSetupError::InvalidWrappedMaterial {
@@ -915,6 +920,18 @@ fn validate_wrapped_resource_key_material(
             reason: "missing scope".to_string(),
         });
     }
+    match wrapped_resource_key_state(material) {
+        RESOURCE_KEY_STATE_ACTIVE
+        | RESOURCE_KEY_STATE_RETIRED
+        | RESOURCE_KEY_STATE_DISABLED
+        | RESOURCE_KEY_STATE_DESTROYED => {}
+        state => {
+            return Err(CryptoSetupError::InvalidWrappedMaterial {
+                material: material_name.to_string(),
+                reason: format!("unsupported state {state}"),
+            });
+        }
+    }
 
     let algorithm = material
         .wrap_algorithm
@@ -928,6 +945,13 @@ fn validate_wrapped_resource_key_material(
     }
 
     Ok(())
+}
+
+fn wrapped_resource_key_state(material: &CryptoMaterialConfig) -> &str {
+    material
+        .state
+        .as_deref()
+        .unwrap_or(RESOURCE_KEY_STATE_ACTIVE)
 }
 
 fn validate_backend(
@@ -1584,6 +1608,32 @@ fn decode_wrapped_resource_key(
     material_name: &str,
     material: &CryptoMaterialConfig,
 ) -> Result<SecretKey, PayloadWriteSetupError> {
+    match wrapped_resource_key_state(material) {
+        RESOURCE_KEY_STATE_ACTIVE => {}
+        RESOURCE_KEY_STATE_RETIRED => {
+            return Err(PayloadWriteSetupError::InvalidWrappedMaterial {
+                material: material_name.to_string(),
+                reason: "retired resource key material cannot be used for active encryption"
+                    .to_string(),
+            });
+        }
+        RESOURCE_KEY_STATE_DISABLED | RESOURCE_KEY_STATE_DESTROYED => {
+            return Err(PayloadWriteSetupError::InvalidWrappedMaterial {
+                material: material_name.to_string(),
+                reason: format!(
+                    "resource key material state {} cannot be unwrapped",
+                    wrapped_resource_key_state(material)
+                ),
+            });
+        }
+        state => {
+            return Err(PayloadWriteSetupError::InvalidWrappedMaterial {
+                material: material_name.to_string(),
+                reason: format!("unsupported state {state}"),
+            });
+        }
+    }
+
     let wrapped_by = material.wrapped_by.as_deref().ok_or_else(|| {
         PayloadWriteSetupError::InvalidWrappedMaterial {
             material: material_name.to_string(),
@@ -2109,6 +2159,7 @@ mod tests {
                             nonce: None,
                             wrapped_key_b64: None,
                             rk_epoch: None,
+                            state: None,
                             scope: None,
                         },
                     ),
@@ -2125,6 +2176,7 @@ mod tests {
                             nonce: Some(BASE64URL_NOPAD.encode(&[2_u8; 12])),
                             wrapped_key_b64: Some(BASE64URL_NOPAD.encode(&[3_u8; 48])),
                             rk_epoch: Some(3),
+                            state: None,
                             scope: Some("collection:docs".to_string()),
                         },
                     ),
@@ -2421,6 +2473,47 @@ mod tests {
             Err(CryptoSetupError::InvalidWrappedMaterial {
                 material: "tenant-a/payload-rk-v1".to_string(),
                 reason: "missing scope".to_string(),
+            }),
+        );
+    }
+
+    #[test]
+    fn validate_crypto_settings_rejects_unknown_wrapped_resource_key_state() {
+        let wrapping_material = CryptoMaterialConfig {
+            kind: WRAPPING_KEY_32_KIND.to_string(),
+            source: Some("inline".to_string()),
+            env: None,
+            path: None,
+            value_b64: Some(BASE64URL_NOPAD.encode(&[91u8; 32])),
+            ..CryptoMaterialConfig::default()
+        };
+        let settings = CryptoSettings {
+            allow_inline_key_material: true,
+            materials: HashMap::from([
+                ("tenant-a/mk-v1".to_string(), wrapping_material),
+                (
+                    "tenant-a/payload-rk-v1".to_string(),
+                    CryptoMaterialConfig {
+                        kind: WRAPPED_SYMMETRIC_KEY_32_KIND.to_string(),
+                        wrapped_by: Some("tenant-a/mk-v1".to_string()),
+                        wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
+                        nonce: Some("nonce".to_string()),
+                        wrapped_key_b64: Some("wrapped".to_string()),
+                        rk_epoch: Some(3),
+                        state: Some("paused".to_string()),
+                        scope: Some("collection:docs".to_string()),
+                        ..CryptoMaterialConfig::default()
+                    },
+                ),
+            ]),
+            ..CryptoSettings::default()
+        };
+
+        assert_eq!(
+            validate_crypto_settings(&settings),
+            Err(CryptoSetupError::InvalidWrappedMaterial {
+                material: "tenant-a/payload-rk-v1".to_string(),
+                reason: "unsupported state paused".to_string(),
             }),
         );
     }
@@ -3965,6 +4058,34 @@ mod tests {
             Err(PayloadWriteSetupError::MissingMaterialFingerprintId { instance })
                 if instance == "docs_payload_v1"
         ));
+
+        for (state, expected_error) in [
+            (
+                RESOURCE_KEY_STATE_RETIRED,
+                "retired resource key material cannot be used for active encryption",
+            ),
+            (
+                RESOURCE_KEY_STATE_DISABLED,
+                "resource key material state disabled cannot be unwrapped",
+            ),
+            (
+                RESOURCE_KEY_STATE_DESTROYED,
+                "resource key material state destroyed cannot be unwrapped",
+            ),
+        ] {
+            let mut state_settings = settings.clone();
+            state_settings
+                .crypto
+                .materials
+                .get_mut(rk_material)
+                .unwrap()
+                .state = Some(state.to_string());
+            assert!(matches!(
+                payload_write_plan_for_collection(&state_settings, "docs", &params),
+                Err(PayloadWriteSetupError::InvalidWrappedMaterial { material, reason })
+                    if material == rk_material && reason == expected_error
+            ));
+        }
 
         let plan = payload_write_plan_for_collection(&settings, "docs", &params)
             .unwrap()
