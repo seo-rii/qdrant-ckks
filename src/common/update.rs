@@ -1513,6 +1513,7 @@ mod tests {
     use storage::types::{PerformanceConfig, StorageConfig};
     use tempfile::Builder;
     use tokio::runtime::Runtime;
+    use uuid::Uuid;
 
     use super::*;
     use crate::common::crypto::{PayloadWriteSetupError, payload_write_plan_for_collection};
@@ -2420,7 +2421,7 @@ mod tests {
             let signing_rng = SystemRandom::new();
             let signing_pkcs8 = Ed25519KeyPair::generate_pkcs8(&signing_rng).unwrap();
             let signing_key = Ed25519KeyPair::from_pkcs8(signing_pkcs8.as_ref()).unwrap();
-            let signed_client_body = |point_id: &str| {
+            let signed_client_body = |collection_id: &str, point_id: &str| {
                 let client_ciphertext = BASE64URL_NOPAD.encode(&[42u8; 16]);
                 let mut body = {
                     let mut marker = serde_json::Map::new();
@@ -2435,7 +2436,7 @@ mod tests {
                             "rk_epoch": 3,
                             "kdf_domain": "qdrant/client-payload-text/v1",
                             "aad": {
-                                "collection_id": "client_docs",
+                                "collection_id": collection_id,
                                 "point_id": point_id,
                                 "field_path": "body",
                                 "schema_version": 1
@@ -2530,6 +2531,53 @@ mod tests {
                 )
                 .await
                 .unwrap();
+            let client_uuid = Uuid::from_u128(0x1234567890abcdef1234567890abcdef);
+            let client_uuid_string = client_uuid.to_string();
+            dispatcher
+                .submit_collection_meta_op(
+                    CollectionMetaOperations::CreateCollection(
+                        CreateCollectionOperation::new(
+                            "client_uuid_docs".to_string(),
+                            CreateCollection {
+                                vectors: VectorParamsBuilder::new(2, Distance::Dot).build().into(),
+                                sparse_vectors: None,
+                                hnsw_config: None,
+                                wal_config: None,
+                                optimizers_config: None,
+                                shard_number: Some(1),
+                                on_disk_payload: None,
+                                replication_factor: None,
+                                write_consistency_factor: None,
+                                quantization_config: None,
+                                sharding_method: None,
+                                encryption: Some(CollectionEncryptionConfig {
+                                    version: 1,
+                                    key_id: Some("tenant-a/client-rk-2026-04".to_string()),
+                                    crypto_schema_version: 1,
+                                    encryption_epoch: 0,
+                                    migration_state: CryptoMigrationState::Active,
+                                    rules: vec![EncryptionRuleRef {
+                                        id: "body_client_conf".to_string(),
+                                        selector: EncryptionSelector::PayloadPaths {
+                                            paths: vec!["body".to_string()],
+                                        },
+                                        instance: "docs_payload_client_v1".to_string(),
+                                        binding: Some("client-payload-envelope/v1".to_string()),
+                                    }],
+                                }),
+                                ckks: None,
+                                strict_mode_config: None,
+                                uuid: Some(client_uuid),
+                                metadata: None,
+                            },
+                        )
+                        .unwrap(),
+                    ),
+                    auth.clone(),
+                    None,
+                )
+                .await
+                .unwrap();
             do_upsert_points(
                 UncheckedTocProvider::new_unchecked(&toc),
                 "client_docs".to_string(),
@@ -2538,7 +2586,7 @@ mod tests {
                         id: 10.into(),
                         vector: api::rest::VectorStruct::Single(vec![0.7, 0.8]),
                         payload: Some(segment::types::Payload(
-                            json!({ "body": signed_client_body("10") })
+                            json!({ "body": signed_client_body("client_docs", "10") })
                                 .as_object()
                                 .unwrap()
                                 .clone(),
@@ -2588,13 +2636,89 @@ mod tests {
                 .unwrap();
             assert!(is_client_encrypted_payload_value(body));
 
+            let err = do_upsert_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "client_uuid_docs".to_string(),
+                PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                    points: vec![api::rest::PointStruct {
+                        id: 20.into(),
+                        vector: api::rest::VectorStruct::Single(vec![0.2, 0.1]),
+                        payload: Some(segment::types::Payload(
+                            json!({ "body": signed_client_body("client_uuid_docs", "20") })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        )),
+                    }],
+                    shard_key: None,
+                    update_filter: None,
+                    update_mode: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                Some(&client_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("collection_id")
+            ));
+
+            do_upsert_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "client_uuid_docs".to_string(),
+                PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                    points: vec![api::rest::PointStruct {
+                        id: 20.into(),
+                        vector: api::rest::VectorStruct::Single(vec![0.2, 0.1]),
+                        payload: Some(segment::types::Payload(
+                            json!({ "body": signed_client_body(&client_uuid_string, "20") })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        )),
+                    }],
+                    shard_key: None,
+                    update_filter: None,
+                    update_mode: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                Some(&client_settings),
+            )
+            .await
+            .unwrap();
+            let client_uuid_collection_pass = auth
+                .check_collection_access("client_uuid_docs", AccessRequirements::new(), "test")
+                .unwrap();
+            let client_uuid_collection = toc
+                .get_collection(&client_uuid_collection_pass)
+                .await
+                .unwrap();
+
             let err = do_set_payload(
                 UncheckedTocProvider::new_unchecked(&toc),
                 "client_docs".to_string(),
                 SetPayload {
                     points: Some(vec![10.into(), 11.into()]),
                     payload: segment::types::Payload(
-                        json!({ "body": signed_client_body("10") })
+                        json!({ "body": signed_client_body("client_docs", "10") })
                             .as_object()
                             .unwrap()
                             .clone(),
@@ -2630,7 +2754,7 @@ mod tests {
                             id: 11.into(),
                             vector: api::rest::VectorStruct::Single(vec![0.8, 0.9]),
                             payload: Some(segment::types::Payload(
-                                json!({ "body": signed_client_body("11") })
+                                json!({ "body": signed_client_body("client_docs", "11") })
                                     .as_object()
                                     .unwrap()
                                     .clone(),
@@ -2640,7 +2764,7 @@ mod tests {
                             id: 12.into(),
                             vector: api::rest::VectorStruct::Single(vec![0.9, 1.0]),
                             payload: Some(segment::types::Payload(
-                                json!({ "body": signed_client_body("12") })
+                                json!({ "body": signed_client_body("client_docs", "12") })
                                     .as_object()
                                     .unwrap()
                                     .clone(),
@@ -2678,7 +2802,7 @@ mod tests {
                         id: 11.into(),
                         vector: api::rest::VectorStruct::Single(vec![0.8, 0.9]),
                         payload: Some(segment::types::Payload(
-                            json!({ "body": signed_client_body("11") })
+                            json!({ "body": signed_client_body("client_docs", "11") })
                                 .as_object()
                                 .unwrap()
                                 .clone(),
@@ -2818,6 +2942,7 @@ mod tests {
             );
 
             client_collection.stop_gracefully().await;
+            client_uuid_collection.stop_gracefully().await;
             collection.stop_gracefully().await;
         });
 
