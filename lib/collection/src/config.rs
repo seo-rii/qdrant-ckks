@@ -412,7 +412,7 @@ mod ckks_tests {
 
     #[test]
     fn crypto_migration_plan_rejects_noop_and_unsafe_edges() {
-        use CryptoMigrationState::{Active, Disabled, Encrypting};
+        use CryptoMigrationState::{Active, Disabled, Encrypting, Rotating};
 
         let noop = CryptoMigrationPlan {
             from: Active,
@@ -447,6 +447,17 @@ mod ckks_tests {
         };
         assert!(missing_epoch.validate_admin_plan().is_err());
 
+        let missing_retired_rk = CryptoMigrationPlan {
+            from: Active,
+            to: Rotating,
+            target_epoch: 4,
+            active_rk_id: Some("rk/docs/4".to_string()),
+            retired_rk_id: None,
+            dry_run: false,
+            checkpoints: Vec::new(),
+        };
+        assert!(missing_retired_rk.validate_admin_plan().is_err());
+
         let valid_start = CryptoMigrationPlan {
             from: Disabled,
             to: Encrypting,
@@ -462,6 +473,17 @@ mod ckks_tests {
     #[test]
     fn crypto_migration_plan_requires_verified_completion_checkpoints() {
         use CryptoMigrationState::{Active, Rotating};
+
+        let no_checkpoints = CryptoMigrationPlan {
+            from: Rotating,
+            to: Active,
+            target_epoch: 4,
+            active_rk_id: Some("rk/docs/4".to_string()),
+            retired_rk_id: Some("rk/docs/3".to_string()),
+            dry_run: false,
+            checkpoints: Vec::new(),
+        };
+        assert!(no_checkpoints.validate_admin_plan().is_err());
 
         let incomplete = CryptoMigrationPlan {
             from: Rotating,
@@ -770,15 +792,25 @@ impl CryptoMigrationPlan {
 
         if matches!(
             (self.from, self.to),
+            (CryptoMigrationState::Active, CryptoMigrationState::Rotating)
+                | (CryptoMigrationState::Rotating, CryptoMigrationState::Active)
+        ) && self.retired_rk_id.as_deref().is_none_or(str::is_empty)
+        {
+            return Err(ValidationError::new("missing_crypto_migration_retired_rk"));
+        }
+
+        if matches!(
+            (self.from, self.to),
             (CryptoMigrationState::Rotating, CryptoMigrationState::Active)
                 | (
                     CryptoMigrationState::Decrypting,
                     CryptoMigrationState::Disabled
                 )
-        ) && self
-            .checkpoints
-            .iter()
-            .any(|checkpoint| checkpoint.status != CryptoMigrationCheckpointStatus::Verified)
+        ) && (self.checkpoints.is_empty()
+            || self
+                .checkpoints
+                .iter()
+                .any(|checkpoint| checkpoint.status != CryptoMigrationCheckpointStatus::Verified))
         {
             return Err(ValidationError::new(
                 "crypto_migration_requires_verified_checkpoints",
