@@ -468,6 +468,72 @@ mod ckks_tests {
             checkpoints: Vec::new(),
         };
         valid_start.validate_admin_plan().unwrap();
+
+        let incomplete_initial_completion = CryptoMigrationPlan {
+            from: Encrypting,
+            to: Active,
+            target_epoch: 3,
+            active_rk_id: Some("rk/docs/3".to_string()),
+            retired_rk_id: None,
+            dry_run: false,
+            checkpoints: vec![CryptoMigrationCheckpoint {
+                shard_id: 0,
+                total_points: 10,
+                processed_points: 9,
+                rewritten_points: 9,
+                status: CryptoMigrationCheckpointStatus::Verified,
+            }],
+        };
+        assert!(incomplete_initial_completion.validate_admin_plan().is_err());
+
+        let missing_initial_completion_active_rk = CryptoMigrationPlan {
+            from: Encrypting,
+            to: Active,
+            target_epoch: 3,
+            active_rk_id: None,
+            retired_rk_id: None,
+            dry_run: false,
+            checkpoints: vec![CryptoMigrationCheckpoint {
+                shard_id: 0,
+                total_points: 10,
+                processed_points: 10,
+                rewritten_points: 10,
+                status: CryptoMigrationCheckpointStatus::Verified,
+            }],
+        };
+        assert!(
+            missing_initial_completion_active_rk
+                .validate_admin_plan()
+                .is_err()
+        );
+
+        let invalid_resource_key_id = CryptoMigrationPlan {
+            from: Disabled,
+            to: Encrypting,
+            target_epoch: 3,
+            active_rk_id: Some("rk docs 3".to_string()),
+            retired_rk_id: None,
+            dry_run: false,
+            checkpoints: Vec::new(),
+        };
+        assert!(invalid_resource_key_id.validate_admin_plan().is_err());
+
+        let complete_initial = CryptoMigrationPlan {
+            from: Encrypting,
+            to: Active,
+            target_epoch: 3,
+            active_rk_id: Some("rk/docs/3".to_string()),
+            retired_rk_id: None,
+            dry_run: false,
+            checkpoints: vec![CryptoMigrationCheckpoint {
+                shard_id: 0,
+                total_points: 10,
+                processed_points: 10,
+                rewritten_points: 10,
+                status: CryptoMigrationCheckpointStatus::Verified,
+            }],
+        };
+        complete_initial.validate_admin_plan().unwrap();
     }
 
     #[test]
@@ -921,7 +987,11 @@ impl CryptoMigrationPlan {
             (
                 CryptoMigrationState::Disabled,
                 CryptoMigrationState::Encrypting
+            ) | (
+                CryptoMigrationState::Encrypting,
+                CryptoMigrationState::Active
             ) | (CryptoMigrationState::Active, CryptoMigrationState::Rotating)
+                | (CryptoMigrationState::Rotating, CryptoMigrationState::Active)
         ) && self.active_rk_id.as_deref().is_none_or(str::is_empty)
         {
             return Err(ValidationError::new("missing_crypto_migration_active_rk"));
@@ -938,12 +1008,23 @@ impl CryptoMigrationPlan {
 
         let requires_verified_completion = matches!(
             (self.from, self.to),
-            (CryptoMigrationState::Rotating, CryptoMigrationState::Active)
+            (
+                CryptoMigrationState::Encrypting,
+                CryptoMigrationState::Active
+            ) | (CryptoMigrationState::Rotating, CryptoMigrationState::Active)
                 | (
                     CryptoMigrationState::Decrypting,
                     CryptoMigrationState::Disabled
                 )
         );
+
+        for rk_id in [&self.active_rk_id, &self.retired_rk_id]
+            .into_iter()
+            .flatten()
+        {
+            validate_crypto_identifier(rk_id)
+                .map_err(|_| ValidationError::new("invalid_crypto_migration_resource_key"))?;
+        }
 
         for checkpoint in &self.checkpoints {
             if checkpoint.processed_points > checkpoint.total_points
