@@ -146,7 +146,20 @@ fn redact_sensitive_log_fields(value: &mut Value) {
     match value {
         Value::Object(map) => {
             for (key, value) in map.iter_mut() {
-                if matches!(key.as_str(), "payload" | "payloads" | "vector" | "vectors") {
+                if matches!(
+                    key.as_str(),
+                    "payload"
+                        | "payloads"
+                        | "vector"
+                        | "vectors"
+                        | "value"
+                        | "values"
+                        | "match"
+                        | "range"
+                        | "geo_bounding_box"
+                        | "geo_radius"
+                        | "geo_polygon"
+                ) {
                     *value = Value::String("[redacted]".to_string());
                 } else {
                     redact_sensitive_log_fields(value);
@@ -164,8 +177,9 @@ fn redact_sensitive_log_fields(value: &mut Value) {
 
 #[cfg(test)]
 mod tests {
-    use segment::types::Payload;
+    use segment::types::{Condition, FieldCondition, Filter, Payload};
     use serde_json::json;
+    use shard::count::CountRequestInternal;
     use shard::operations::point_ops::{
         PointInsertOperationsInternal, PointOperations, PointStructPersisted, VectorStructPersisted,
     };
@@ -192,6 +206,28 @@ mod tests {
 
         assert!(!serialized.contains("qdrant-sec-log-plaintext-sentinel"));
         assert!(!serialized.contains("12345.125"));
+        assert!(serialized.contains("[redacted]"));
+    }
+
+    #[test]
+    fn query_log_value_redacts_payload_filter_literals() {
+        let request = CountRequestInternal {
+            filter: Some(Filter::new_must(Condition::Field(
+                FieldCondition::new_match(
+                    "document.body".parse().unwrap(),
+                    serde_json::from_value(json!({
+                        "value": "qdrant-sec-filter-log-sentinel",
+                    }))
+                    .unwrap(),
+                ),
+            ))),
+            exact: true,
+        };
+
+        let log_value = request.to_log_value();
+        let serialized = serde_json::to_string(&log_value).unwrap();
+
+        assert!(!serialized.contains("qdrant-sec-filter-log-sentinel"));
         assert!(serialized.contains("[redacted]"));
     }
 }
