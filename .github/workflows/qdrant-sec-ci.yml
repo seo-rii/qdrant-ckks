@@ -28,15 +28,10 @@ jobs:
         with:
           key: qdrant-sec-ci
 
-      - name: Install protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang libunwind-dev
+          sudo apt-get install -y clang libunwind-dev protobuf-compiler
 
       - name: Run qdrant-sec crypto crate security tests
         run: cargo test --locked -p qdrant-ckks
