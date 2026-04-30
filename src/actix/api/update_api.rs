@@ -450,6 +450,7 @@ async fn staging_operation(
     params: Query<UpdateParams>,
     ActixAuth(auth): ActixAuth,
 ) -> impl Responder {
+    use collection::operations::types::CollectionUpdateProvenance;
     use collection::operations::verification::new_unchecked_verification_pass;
     use shard::operations::CollectionUpdateOperations;
 
@@ -472,6 +473,7 @@ async fn staging_operation(
         None, // shard_key
         auth,
         HwMeasurementAcc::disposable(),
+        CollectionUpdateProvenance::ClientPlaintext,
     )
     .await;
 
