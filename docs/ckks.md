@@ -254,6 +254,16 @@ The generic `crypto` control plane supports a safer MK/RK hierarchy:
 - Payload text and CKKS vector envelope AEAD keys are still purpose-specific
   HKDF subkeys derived from the unwrapped RK.
 
+Wrapped RK material may declare a lifecycle `state`:
+
+- `active` or omitted: the RK can be unwrapped and used for new encryption.
+- `retired`: the RK is read-only and must not be selected for new write plans.
+- `disabled` or `destroyed`: the RK must not be unwrapped by runtime crypto.
+
+Runtime validation includes this non-secret state in the cluster capability
+fingerprint so nodes disagreeing on RK lifecycle cannot silently accept the same
+collection plan.
+
 Data envelopes record the runtime `key_id`, material fingerprint, and, for
 wrapped RK material, the `rk_id` plus `rk_epoch` used for the RK-derived subkey.
 They do not reference the MK directly, so MK rotation can rewrap the stored RK
@@ -308,6 +318,7 @@ crypto:
       wrapped_by: tenant-a/mk-v1
       wrap_algorithm: AES-256-GCM
       rk_epoch: 3
+      state: active
       scope: collection:docs
       nonce: base64url-no-pad-96-bit-nonce
       wrapped_key_b64: base64url-no-pad-wrapped-rk
@@ -473,6 +484,12 @@ Response fields:
   "ciphertext": "base64url-no-pad-openfhe-ciphertext"
 }
 ```
+
+The Rust `CkksVectorBackend` trait also exposes `encrypt_batch` so in-process or
+future bridge implementations can amortize vector encryption overhead. The
+default implementation preserves existing bridge compatibility by sending each
+vector through the single-vector request path, while `CkksVectorEncryptor` still
+validates and seals every returned ciphertext with per-point AAD.
 
 The Rust side does not include request or bridge stderr in returned errors to
 avoid accidentally propagating plaintext embeddings into logs.
