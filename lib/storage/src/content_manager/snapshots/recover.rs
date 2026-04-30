@@ -6,7 +6,7 @@ use collection::collection::payload_index_schema::{
     PayloadIndexSchema, validate_payload_index_paths_for_encrypted_paths,
 };
 use collection::common::sha_256::hashes_equal;
-use collection::config::CollectionConfigInternal;
+use collection::config::{CollectionConfigInternal, CollectionParams};
 use collection::operations::snapshot_ops::{SnapshotPriority, SnapshotRecover};
 use collection::operations::verification::new_unchecked_verification_pass;
 use collection::shards::check_shard_path;
@@ -238,6 +238,13 @@ async fn _do_recover_from_snapshot(
     };
 
     let state = collection.state().await;
+    validate_existing_collection_crypto_identity(
+        collection_pass.name(),
+        state.config.uuid,
+        &state.config.params,
+        snapshot_config.uuid,
+        &snapshot_config.params,
+    )?;
 
     // Check config compatibility
     // Check vectors config
@@ -468,4 +475,92 @@ async fn _do_recover_from_snapshot(
     tokio_fs::remove_dir_all(&tmp_collection_dir).await?;
 
     Ok(true)
+}
+
+fn validate_existing_collection_crypto_identity(
+    collection_name: &str,
+    existing_uuid: Option<uuid::Uuid>,
+    existing_params: &CollectionParams,
+    snapshot_uuid: Option<uuid::Uuid>,
+    snapshot_params: &CollectionParams,
+) -> Result<(), StorageError> {
+    let crypto_identity_bound = existing_params.effective_encryption().is_some()
+        || snapshot_params.effective_encryption().is_some();
+    if !crypto_identity_bound {
+        return Ok(());
+    }
+
+    if let (Some(existing_uuid), Some(snapshot_uuid)) = (existing_uuid, snapshot_uuid)
+        && existing_uuid != snapshot_uuid
+    {
+        return Err(StorageError::bad_input(format!(
+            "Snapshot is not compatible with existing encrypted collection {collection_name}: \
+             collection UUID {existing_uuid} does not match snapshot UUID {snapshot_uuid}; \
+             encrypted payload/vector AAD is bound to the stable collection identity",
+        )));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use collection::config::{
+        CollectionEncryptionConfig, CollectionParams, CryptoMigrationState, EncryptionRuleRef,
+        EncryptionSelector,
+    };
+    use uuid::Uuid;
+
+    use super::validate_existing_collection_crypto_identity;
+
+    fn encrypted_params() -> CollectionParams {
+        CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        }
+    }
+
+    #[test]
+    fn encrypted_snapshot_recovery_rejects_collection_uuid_mismatch() {
+        let existing_uuid = Uuid::from_u128(1);
+        let snapshot_uuid = Uuid::from_u128(2);
+        let err = validate_existing_collection_crypto_identity(
+            "docs",
+            Some(existing_uuid),
+            &encrypted_params(),
+            Some(snapshot_uuid),
+            &encrypted_params(),
+        )
+        .expect_err("encrypted restore must reject mismatched stable identity");
+
+        assert!(err.to_string().contains("encrypted collection docs"));
+        assert!(err.to_string().contains(&existing_uuid.to_string()));
+        assert!(err.to_string().contains(&snapshot_uuid.to_string()));
+    }
+
+    #[test]
+    fn plaintext_snapshot_recovery_keeps_existing_uuid_behavior() {
+        validate_existing_collection_crypto_identity(
+            "docs",
+            Some(Uuid::from_u128(1)),
+            &CollectionParams::empty(),
+            Some(Uuid::from_u128(2)),
+            &CollectionParams::empty(),
+        )
+        .unwrap();
+    }
 }
