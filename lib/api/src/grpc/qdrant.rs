@@ -12913,6 +12913,9 @@ pub struct AppTelemetry {
     /// Last startup timestamp in seconds
     #[prost(int64, tag = "3")]
     pub startup: i64,
+    /// Non-secret crypto runtime capability fingerprint
+    #[prost(string, tag = "4")]
+    pub crypto_runtime_capability_fingerprint: ::prost::alloc::string::String,
 }
 #[derive(serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]

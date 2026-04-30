@@ -42,6 +42,8 @@ message AppTelemetry {
     string version = 2;
     // Last startup timestamp in seconds
     int64 startup = 3;
+    // Non-secret crypto runtime capability fingerprint
+    string crypto_runtime_capability_fingerprint = 4;
 }
 
 message CollectionTelemetry {

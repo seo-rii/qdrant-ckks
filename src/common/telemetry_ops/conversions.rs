@@ -26,6 +26,7 @@ impl TryFrom<grpc::AppTelemetry> for AppBuildTelemetry {
             name,
             version,
             startup,
+            crypto_runtime_capability_fingerprint,
         } = value;
 
         Ok(Self {
@@ -37,7 +38,9 @@ impl TryFrom<grpc::AppTelemetry> for AppBuildTelemetry {
             system: None,
             jwt_rbac: None,
             hide_jwt_dashboard: None,
-            crypto_runtime_capability_fingerprint: None,
+            crypto_runtime_capability_fingerprint: (!crypto_runtime_capability_fingerprint
+                .is_empty())
+            .then_some(crypto_runtime_capability_fingerprint),
             startup: DateTime::from_timestamp_secs(startup)
                 .ok_or_else(|| Status::internal("startup time is out-of-range"))?,
         })
@@ -55,7 +58,7 @@ impl From<AppBuildTelemetry> for grpc::AppTelemetry {
             system: _,
             jwt_rbac: _,
             hide_jwt_dashboard: _,
-            crypto_runtime_capability_fingerprint: _,
+            crypto_runtime_capability_fingerprint,
             startup,
         } = value;
 
@@ -63,6 +66,8 @@ impl From<AppBuildTelemetry> for grpc::AppTelemetry {
             name,
             version,
             startup: startup.timestamp(),
+            crypto_runtime_capability_fingerprint: crypto_runtime_capability_fingerprint
+                .unwrap_or_default(),
         }
     }
 }
@@ -175,5 +180,40 @@ impl From<ClusterTelemetry> for grpc::ClusterTelemetry {
             status: status.map(grpc::ClusterStatusTelemetry::from),
             peers,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+
+    use super::*;
+
+    #[test]
+    fn grpc_app_telemetry_preserves_crypto_runtime_fingerprint() {
+        let app = AppBuildTelemetry {
+            name: "qdrant".to_string(),
+            version: "test".to_string(),
+            features: None,
+            runtime_features: None,
+            hnsw_global_config: None,
+            system: None,
+            jwt_rbac: None,
+            hide_jwt_dashboard: None,
+            crypto_runtime_capability_fingerprint: Some("crypto-fingerprint".to_string()),
+            startup: Utc::now(),
+        };
+
+        let grpc = grpc::AppTelemetry::from(app.clone());
+        assert_eq!(
+            grpc.crypto_runtime_capability_fingerprint,
+            "crypto-fingerprint"
+        );
+
+        let restored = AppBuildTelemetry::try_from(grpc).unwrap();
+        assert_eq!(
+            restored.crypto_runtime_capability_fingerprint,
+            app.crypto_runtime_capability_fingerprint,
+        );
     }
 }
