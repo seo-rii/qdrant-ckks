@@ -109,6 +109,8 @@ pub struct DistributedClusterTelemetry {
     enabled: bool,
     number_of_peers: Option<u64>,
     peers: HashMap<PeerId, DistributedPeerInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crypto_runtime_capability_mismatches: Option<Vec<PeerId>>,
 }
 
 #[derive(Serialize, JsonSchema)]
@@ -460,7 +462,33 @@ fn aggregate_cluster_telemetry(
         enabled: base_cluster.enabled,
         number_of_peers,
         peers,
+        crypto_runtime_capability_mismatches: crypto_runtime_capability_mismatches(
+            base_telemetry,
+            telemetry_by_peer,
+        ),
     })
+}
+
+fn crypto_runtime_capability_mismatches(
+    base_telemetry: &TelemetryData,
+    telemetry_by_peer: &HashMap<u64, &TelemetryData>,
+) -> Option<Vec<PeerId>> {
+    let base_fingerprint = base_telemetry
+        .app
+        .as_ref()
+        .and_then(|app| app.crypto_runtime_capability_fingerprint.as_deref())?;
+    let mut mismatches: Vec<_> = telemetry_by_peer
+        .iter()
+        .filter_map(|(peer_id, telemetry)| {
+            let peer_fingerprint = telemetry
+                .app
+                .as_ref()
+                .and_then(|app| app.crypto_runtime_capability_fingerprint.as_deref());
+            (peer_fingerprint != Some(base_fingerprint)).then_some(*peer_id)
+        })
+        .collect();
+    mismatches.sort_unstable();
+    (!mismatches.is_empty()).then_some(mismatches)
 }
 
 fn aggregate_peers_info(
@@ -670,5 +698,25 @@ mod tests {
                 .and_then(|details| details.crypto_runtime_capability_fingerprint.as_deref()),
             Some("crypto-runtime-peer-2"),
         );
+        assert_eq!(
+            cluster.crypto_runtime_capability_mismatches.as_deref(),
+            Some([2].as_slice()),
+        );
+    }
+
+    #[test]
+    fn distributed_telemetry_omits_crypto_runtime_mismatches_when_peers_match() {
+        let distributed = DistributedTelemetryData::resolve_telemetries(
+            &Access::full("test"),
+            vec![
+                telemetry_for_peer(1, 2, 10, "crypto-runtime-shared"),
+                telemetry_for_peer(2, 1, 9, "crypto-runtime-shared"),
+            ],
+            Vec::new(),
+        )
+        .unwrap();
+
+        let cluster = distributed.cluster.expect("cluster telemetry");
+        assert!(cluster.crypto_runtime_capability_mismatches.is_none());
     }
 }
