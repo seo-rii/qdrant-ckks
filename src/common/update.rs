@@ -1851,6 +1851,39 @@ mod tests {
                 .await
                 .unwrap();
 
+            let err = do_upsert_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "vector_docs".to_string(),
+                PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                    points: vec![api::rest::PointStruct {
+                        id: 1.into(),
+                        vector: api::rest::VectorStruct::Single(vec![0.1, 0.2]),
+                        payload: None,
+                    }],
+                    shard_key: None,
+                    update_filter: None,
+                    update_mode: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("encrypted vector")
+                        && description.contains("ciphertext storage/write path is not implemented")
+            ));
+
             let err = do_update_vectors(
                 UncheckedTocProvider::new_unchecked(&toc),
                 "vector_docs".to_string(),
