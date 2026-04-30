@@ -490,14 +490,36 @@ fn validate_existing_collection_crypto_identity(
         return Ok(());
     }
 
-    if let (Some(existing_uuid), Some(snapshot_uuid)) = (existing_uuid, snapshot_uuid)
-        && existing_uuid != snapshot_uuid
-    {
-        return Err(StorageError::bad_input(format!(
-            "Snapshot is not compatible with existing encrypted collection {collection_name}: \
-             collection UUID {existing_uuid} does not match snapshot UUID {snapshot_uuid}; \
-             encrypted payload/vector AAD is bound to the stable collection identity",
-        )));
+    match (existing_uuid, snapshot_uuid) {
+        (Some(existing_uuid), Some(snapshot_uuid)) if existing_uuid == snapshot_uuid => {}
+        (Some(existing_uuid), Some(snapshot_uuid)) => {
+            return Err(StorageError::bad_input(format!(
+                "Snapshot is not compatible with existing encrypted collection {collection_name}: \
+                 collection UUID {existing_uuid} does not match snapshot UUID {snapshot_uuid}; \
+                 encrypted payload/vector AAD is bound to the stable collection identity",
+            )));
+        }
+        (None, Some(snapshot_uuid)) => {
+            return Err(StorageError::bad_input(format!(
+                "Snapshot is not compatible with existing encrypted collection {collection_name}: \
+                 existing collection is missing a stable UUID while snapshot UUID is {snapshot_uuid}; \
+                 encrypted payload/vector AAD requires an explicit stable collection identity",
+            )));
+        }
+        (Some(existing_uuid), None) => {
+            return Err(StorageError::bad_input(format!(
+                "Snapshot is not compatible with existing encrypted collection {collection_name}: \
+                 snapshot is missing a stable UUID while existing collection UUID is {existing_uuid}; \
+                 encrypted payload/vector AAD requires an explicit stable collection identity",
+            )));
+        }
+        (None, None) => {
+            return Err(StorageError::bad_input(format!(
+                "Snapshot is not compatible with existing encrypted collection {collection_name}: \
+                 both existing collection and snapshot are missing stable UUIDs; \
+                 encrypted payload/vector AAD requires an explicit stable collection identity",
+            )));
+        }
     }
 
     Ok(())
@@ -550,6 +572,59 @@ mod tests {
         assert!(err.to_string().contains("encrypted collection docs"));
         assert!(err.to_string().contains(&existing_uuid.to_string()));
         assert!(err.to_string().contains(&snapshot_uuid.to_string()));
+    }
+
+    #[test]
+    fn encrypted_snapshot_recovery_requires_collection_uuids() {
+        let err = validate_existing_collection_crypto_identity(
+            "docs",
+            None,
+            &encrypted_params(),
+            Some(Uuid::from_u128(2)),
+            &encrypted_params(),
+        )
+        .expect_err("encrypted restore must reject missing existing stable identity");
+        assert!(err.to_string().contains("missing a stable UUID"));
+        assert!(err.to_string().contains("snapshot UUID"));
+
+        let err = validate_existing_collection_crypto_identity(
+            "docs",
+            Some(Uuid::from_u128(1)),
+            &encrypted_params(),
+            None,
+            &encrypted_params(),
+        )
+        .expect_err("encrypted restore must reject missing snapshot stable identity");
+        assert!(
+            err.to_string()
+                .contains("snapshot is missing a stable UUID")
+        );
+
+        let err = validate_existing_collection_crypto_identity(
+            "docs",
+            None,
+            &encrypted_params(),
+            None,
+            &encrypted_params(),
+        )
+        .expect_err("encrypted restore must reject missing stable identities");
+        assert!(
+            err.to_string()
+                .contains("both existing collection and snapshot")
+        );
+    }
+
+    #[test]
+    fn encrypted_snapshot_recovery_accepts_matching_collection_uuid() {
+        let uuid = Uuid::from_u128(7);
+        validate_existing_collection_crypto_identity(
+            "docs",
+            Some(uuid),
+            &encrypted_params(),
+            Some(uuid),
+            &encrypted_params(),
+        )
+        .unwrap();
     }
 
     #[test]
