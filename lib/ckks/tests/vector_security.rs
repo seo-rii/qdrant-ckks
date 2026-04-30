@@ -605,6 +605,75 @@ printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
 
 #[cfg(unix)]
 #[test]
+fn command_openfhe_backend_uses_batch_bridge_protocol() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("fake-openfhe-batch-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+IFS= read -r request
+case "$request" in
+  *'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*'"items"'*'"point_id":"point-1"'*'"point_id":"point-2"'*) ;;
+  *) exit 7 ;;
+esac
+printf '{"version":1,"ciphertexts":["YmF0Y2gtb25l","YmF0Y2gtdHdv"]}\n'
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+        .with_args([script_path.display().to_string()]);
+    let encryptor = CkksVectorEncryptor::new(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+    let first = [1.0, 2.0];
+    let second = [3.0, 4.0];
+    let encrypted = encryptor
+        .encrypt_batch(
+            "docs",
+            &public_material(),
+            &[
+                CkksVectorBatchItem {
+                    point_id: "point-1",
+                    values: &first,
+                },
+                CkksVectorBatchItem {
+                    point_id: "point-2",
+                    values: &second,
+                },
+            ],
+        )
+        .unwrap();
+
+    assert_eq!(
+        encryptor
+            .open("docs", "point-1", &public_material(), &encrypted[0])
+            .unwrap()
+            .ciphertext,
+        BASE64URL_NOPAD.encode(b"batch-one"),
+    );
+    assert_eq!(
+        encryptor
+            .open("docs", "point-2", &public_material(), &encrypted[1])
+            .unwrap()
+            .ciphertext,
+        BASE64URL_NOPAD.encode(b"batch-two"),
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn command_openfhe_backend_times_out_and_kills_hung_bridge() {
     use std::os::unix::fs::PermissionsExt;
 

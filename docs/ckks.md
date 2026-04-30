@@ -485,11 +485,47 @@ Response fields:
 }
 ```
 
-The Rust `CkksVectorBackend` trait also exposes `encrypt_batch` so in-process or
-future bridge implementations can amortize vector encryption overhead. The
-default implementation preserves existing bridge compatibility by sending each
-vector through the single-vector request path, while `CkksVectorEncryptor` still
-validates and seals every returned ciphertext with per-point AAD.
+The Rust `CkksVectorBackend` trait also exposes `encrypt_batch` so backends can
+amortize vector encryption overhead. `CommandOpenFheBackend` sends one
+newline-delimited batch request with shared parameters/material and per-point
+items:
+
+```json
+{
+  "version": 1,
+  "scheme": "openfhe-ckks",
+  "collection": "docs",
+  "vector_name": "embedding",
+  "parameters": {
+    "poly_modulus_degree": 16384,
+    "multiplicative_depth": 4,
+    "scaling_mod_size": 50,
+    "first_mod_size": 60,
+    "batch_size": 8192
+  },
+  "crypto_context": "base64url-no-pad",
+  "public_key": "base64url-no-pad",
+  "items": [
+    { "point_id": "point-1", "values": [0.125, -42.5] },
+    { "point_id": "point-2", "values": [9.75, 3.5] }
+  ]
+}
+```
+
+The bridge response must preserve item order:
+
+```json
+{
+  "version": 1,
+  "ciphertexts": [
+    "base64url-no-pad-openfhe-ciphertext-1",
+    "base64url-no-pad-openfhe-ciphertext-2"
+  ]
+}
+```
+
+`CkksVectorEncryptor` still validates each input vector before the backend call
+and seals every returned ciphertext with per-point AAD.
 
 The Rust side does not include request or bridge stderr in returned errors to
 avoid accidentally propagating plaintext embeddings into logs.

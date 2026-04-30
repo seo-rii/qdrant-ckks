@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::vector::{
-    CKKS_SCHEME, CkksEncryptionInput, CkksError, CkksParameters, CkksVectorBackend,
+    CKKS_SCHEME, CkksBatchEncryptionInput, CkksEncryptionInput, CkksError, CkksParameters,
+    CkksVectorBackend,
 };
 
 const DEFAULT_BRIDGE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -382,9 +383,58 @@ impl CkksVectorBackend for CommandOpenFheBackend {
             public_key: BASE64URL_NOPAD.encode(input.public_material.public_key()),
             values: input.values,
         };
-        let mut request_bytes = serde_json::to_vec(&request).map_err(|err| {
+        let request_bytes = serde_json::to_vec(&request).map_err(|err| {
             CkksError::Backend(format!("failed to serialize OpenFHE bridge request: {err}"))
         })?;
+
+        self.send_bridge_request(&request_bytes, decode_single_bridge_response)
+    }
+
+    fn encrypt_batch(
+        &self,
+        input: CkksBatchEncryptionInput<'_>,
+    ) -> Result<Vec<Vec<u8>>, CkksError> {
+        if input.items.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let items: Vec<_> = input
+            .items
+            .iter()
+            .map(|item| CommandOpenFheBatchItem {
+                point_id: item.point_id,
+                values: item.values,
+            })
+            .collect();
+        let request = CommandOpenFheBatchRequest {
+            version: 1,
+            scheme: CKKS_SCHEME,
+            collection: input.collection,
+            vector_name: input.vector_name,
+            parameters: input.parameters,
+            crypto_context: BASE64URL_NOPAD.encode(input.public_material.crypto_context()),
+            public_key: BASE64URL_NOPAD.encode(input.public_material.public_key()),
+            items,
+        };
+        let request_bytes = serde_json::to_vec(&request).map_err(|err| {
+            CkksError::Backend(format!(
+                "failed to serialize OpenFHE bridge batch request: {err}"
+            ))
+        })?;
+
+        self.send_bridge_request(&request_bytes, |response_bytes| {
+            decode_batch_bridge_response(response_bytes, input.items.len())
+        })
+    }
+}
+
+impl CommandOpenFheBackend {
+    fn send_bridge_request<T>(
+        &self,
+        request_bytes: &[u8],
+        decode_response: impl Fn(&[u8]) -> Result<T, CkksError>,
+    ) -> Result<T, CkksError> {
+        let mut request_bytes = request_bytes.to_vec();
         request_bytes.push(b'\n');
 
         for attempt in 0..=1 {
@@ -545,30 +595,11 @@ impl CkksVectorBackend for CommandOpenFheBackend {
                 None => {}
             }
 
-            let response: CommandOpenFheResponse = match serde_json::from_slice(&response_bytes) {
-                Ok(response) => response,
+            return match decode_response(&response_bytes) {
+                Ok(response) => Ok(response),
                 Err(err) => {
                     self.discard_worker(&worker_process, false)?;
-                    return Err(CkksError::Backend(format!(
-                        "failed to parse OpenFHE bridge response: {err}",
-                    )));
-                }
-            };
-            if response.version != 1 {
-                self.discard_worker(&worker_process, false)?;
-                return Err(CkksError::Backend(format!(
-                    "unsupported OpenFHE bridge response version {}",
-                    response.version,
-                )));
-            }
-
-            return match BASE64URL_NOPAD.decode(response.ciphertext.as_bytes()) {
-                Ok(ciphertext) => Ok(ciphertext),
-                Err(_) => {
-                    self.discard_worker(&worker_process, false)?;
-                    Err(CkksError::Backend(
-                        "OpenFHE bridge returned invalid ciphertext".to_string(),
-                    ))
+                    Err(err)
                 }
             };
         }
@@ -577,9 +608,7 @@ impl CkksVectorBackend for CommandOpenFheBackend {
             "OpenFHE bridge retry budget was exhausted".to_string(),
         ))
     }
-}
 
-impl CommandOpenFheBackend {
     fn worker_process(&self) -> Result<Arc<WorkerProcess>, CkksError> {
         let mut workers = self.workers.lock().map_err(|_| {
             CkksError::Backend("OpenFHE bridge workers mutex was poisoned".to_string())
@@ -751,9 +780,87 @@ struct CommandOpenFheRequest<'a> {
     values: &'a [f64],
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+struct CommandOpenFheBatchRequest<'a> {
+    version: u8,
+    scheme: &'static str,
+    collection: &'a str,
+    vector_name: &'a str,
+    parameters: &'a CkksParameters,
+    crypto_context: String,
+    public_key: String,
+    items: Vec<CommandOpenFheBatchItem<'a>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+struct CommandOpenFheBatchItem<'a> {
+    point_id: &'a str,
+    values: &'a [f64],
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 struct CommandOpenFheResponse {
     version: u8,
     ciphertext: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct CommandOpenFheBatchResponse {
+    version: u8,
+    ciphertexts: Vec<String>,
+}
+
+fn decode_single_bridge_response(response_bytes: &[u8]) -> Result<Vec<u8>, CkksError> {
+    let response: CommandOpenFheResponse =
+        serde_json::from_slice(response_bytes).map_err(|err| {
+            CkksError::Backend(format!("failed to parse OpenFHE bridge response: {err}"))
+        })?;
+    if response.version != 1 {
+        return Err(CkksError::Backend(format!(
+            "unsupported OpenFHE bridge response version {}",
+            response.version,
+        )));
+    }
+
+    BASE64URL_NOPAD
+        .decode(response.ciphertext.as_bytes())
+        .map_err(|_| CkksError::Backend("OpenFHE bridge returned invalid ciphertext".to_string()))
+}
+
+fn decode_batch_bridge_response(
+    response_bytes: &[u8],
+    expected: usize,
+) -> Result<Vec<Vec<u8>>, CkksError> {
+    let response: CommandOpenFheBatchResponse =
+        serde_json::from_slice(response_bytes).map_err(|err| {
+            CkksError::Backend(format!(
+                "failed to parse OpenFHE bridge batch response: {err}"
+            ))
+        })?;
+    if response.version != 1 {
+        return Err(CkksError::Backend(format!(
+            "unsupported OpenFHE bridge batch response version {}",
+            response.version,
+        )));
+    }
+    if response.ciphertexts.len() != expected {
+        return Err(CkksError::Backend(format!(
+            "OpenFHE bridge returned {} batch ciphertexts for {expected} input vectors",
+            response.ciphertexts.len(),
+        )));
+    }
+
+    response
+        .ciphertexts
+        .iter()
+        .map(|ciphertext| {
+            BASE64URL_NOPAD.decode(ciphertext.as_bytes()).map_err(|_| {
+                CkksError::Backend("OpenFHE bridge returned invalid batch ciphertext".to_string())
+            })
+        })
+        .collect()
 }
