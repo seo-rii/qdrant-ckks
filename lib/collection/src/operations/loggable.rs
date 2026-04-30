@@ -30,10 +30,7 @@ impl Loggable for CollectionUpdateOperations {
     }
 
     fn request_hash(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.request_name().hash(&mut hasher);
-        self.hash(&mut hasher);
-        hasher.finish()
+        redacted_request_hash(self.request_name(), &self.to_log_value())
     }
 }
 
@@ -47,10 +44,7 @@ impl Loggable for Vec<ShardQueryRequest> {
     }
 
     fn request_hash(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.request_name().hash(&mut hasher);
-        self.hash(&mut hasher);
-        hasher.finish()
+        redacted_request_hash(self.request_name(), &self.to_log_value())
     }
 }
 
@@ -64,10 +58,7 @@ impl Loggable for ScrollRequestInternal {
     }
 
     fn request_hash(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.request_name().hash(&mut hasher);
-        self.hash(&mut hasher);
-        hasher.finish()
+        redacted_request_hash(self.request_name(), &self.to_log_value())
     }
 }
 
@@ -95,10 +86,7 @@ impl Loggable for FacetParams {
     }
 
     fn request_hash(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.request_name().hash(&mut hasher);
-        self.hash(&mut hasher);
-        hasher.finish()
+        redacted_request_hash(self.request_name(), &self.to_log_value())
     }
 }
 
@@ -112,10 +100,7 @@ impl Loggable for CountRequestInternal {
     }
 
     fn request_hash(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.request_name().hash(&mut hasher);
-        self.hash(&mut hasher);
-        hasher.finish()
+        redacted_request_hash(self.request_name(), &self.to_log_value())
     }
 }
 
@@ -129,10 +114,7 @@ impl Loggable for PointRequestInternal {
     }
 
     fn request_hash(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.request_name().hash(&mut hasher);
-        self.hash(&mut hasher);
-        hasher.finish()
+        redacted_request_hash(self.request_name(), &self.to_log_value())
     }
 }
 
@@ -175,6 +157,15 @@ fn redact_sensitive_log_fields(value: &mut Value) {
     }
 }
 
+fn redacted_request_hash(request_name: &str, log_value: &Value) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    request_name.hash(&mut hasher);
+    serde_json::to_string(log_value)
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    hasher.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use segment::types::{Condition, FieldCondition, Filter, Payload};
@@ -210,6 +201,26 @@ mod tests {
     }
 
     #[test]
+    fn update_request_hash_uses_redacted_payloads_and_vectors() {
+        let update = |payload: &str, vector: Vec<f32>| {
+            CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+                PointInsertOperationsInternal::PointsList(vec![PointStructPersisted {
+                    id: 1.into(),
+                    vector: VectorStructPersisted::from(vector),
+                    payload: Some(Payload(
+                        json!({ "body": payload }).as_object().unwrap().clone(),
+                    )),
+                }]),
+            ))
+        };
+        let first = update("secret-a", vec![1.0, 2.0]);
+        let second = update("secret-b", vec![3.0, 4.0]);
+
+        assert_eq!(first.to_log_value(), second.to_log_value());
+        assert_eq!(first.request_hash(), second.request_hash());
+    }
+
+    #[test]
     fn query_log_value_redacts_payload_filter_literals() {
         let request = CountRequestInternal {
             filter: Some(Filter::new_must(Condition::Field(
@@ -229,5 +240,23 @@ mod tests {
 
         assert!(!serialized.contains("qdrant-sec-filter-log-sentinel"));
         assert!(serialized.contains("[redacted]"));
+    }
+
+    #[test]
+    fn query_request_hash_uses_redacted_filter_literals() {
+        let request = |literal: &str| CountRequestInternal {
+            filter: Some(Filter::new_must(Condition::Field(
+                FieldCondition::new_match(
+                    "document.body".parse().unwrap(),
+                    serde_json::from_value(json!({ "value": literal })).unwrap(),
+                ),
+            ))),
+            exact: true,
+        };
+        let first = request("secret-a");
+        let second = request("secret-b");
+
+        assert_eq!(first.to_log_value(), second.to_log_value());
+        assert_eq!(first.request_hash(), second.request_hash());
     }
 }
