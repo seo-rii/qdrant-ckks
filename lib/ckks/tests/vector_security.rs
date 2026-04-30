@@ -586,6 +586,17 @@ printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
     let second = encryptor
         .encrypt("docs", "point-2", &public_material(), &[3.0, 4.0])
         .unwrap();
+    let single_batch_values = [5.0, 6.0];
+    let single_batch = encryptor
+        .encrypt_batch(
+            "docs",
+            &public_material(),
+            &[CkksVectorBatchItem {
+                point_id: "point-3",
+                values: &single_batch_values,
+            }],
+        )
+        .unwrap();
 
     assert_eq!(
         encryptor
@@ -597,6 +608,13 @@ printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
     assert_eq!(
         encryptor
             .open("docs", "point-2", &public_material(), &second)
+            .unwrap()
+            .ciphertext,
+        BASE64URL_NOPAD.encode(b"openfhe-cipher"),
+    );
+    assert_eq!(
+        encryptor
+            .open("docs", "point-3", &public_material(), &single_batch[0])
             .unwrap()
             .ciphertext,
         BASE64URL_NOPAD.encode(b"openfhe-cipher"),

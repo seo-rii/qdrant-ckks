@@ -397,6 +397,19 @@ impl CkksVectorBackend for CommandOpenFheBackend {
         if input.items.is_empty() {
             return Ok(Vec::new());
         }
+        if input.items.len() == 1 {
+            let item = input.items[0];
+            return self
+                .encrypt(CkksEncryptionInput {
+                    parameters: input.parameters,
+                    public_material: input.public_material,
+                    collection: input.collection,
+                    point_id: item.point_id,
+                    vector_name: input.vector_name,
+                    values: item.values,
+                })
+                .map(|ciphertext| vec![ciphertext]);
+        }
 
         let items: Vec<_> = input
             .items
