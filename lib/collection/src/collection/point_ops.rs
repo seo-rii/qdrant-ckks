@@ -16,7 +16,9 @@ use segment::data_types::order_by::{Direction, OrderBy};
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
 use segment::index::query_optimization::rescore_formula::parsed_formula::ParsedFormula;
 use segment::json_path::JsonPath;
-use segment::types::{Condition, Filter, Payload, ShardKey, WithPayload, WithPayloadInterface};
+use segment::types::{
+    Condition, Filter, Payload, ShardKey, WithPayload, WithPayloadInterface, WithVector,
+};
 use shard::count::CountRequestInternal;
 use shard::retrieve::record_internal::RecordInternal;
 use shard::scroll::ScrollRequestInternal;
@@ -703,6 +705,8 @@ impl Collection {
         let order_by = request.order_by.clone().map(OrderBy::from);
         self.ensure_order_by_does_not_touch_encrypted_payload(order_by.as_ref())
             .await?;
+        self.ensure_with_vector_does_not_touch_encrypted_vector(&request.with_vector)
+            .await?;
 
         let local_only = shard_selection.is_shard_id();
 
@@ -821,6 +825,51 @@ impl Collection {
         Ok(CountResult { count })
     }
 
+    pub(crate) async fn ensure_with_vector_does_not_touch_encrypted_vector(
+        &self,
+        with_vector: &WithVector,
+    ) -> CollectionResult<()> {
+        if !with_vector.is_enabled() {
+            return Ok(());
+        }
+        let Some(encryption) = self
+            .collection_config
+            .read()
+            .await
+            .params
+            .effective_encryption()
+        else {
+            return Ok(());
+        };
+
+        for rule in &encryption.rules {
+            let EncryptionSelector::VectorNames { names } = &rule.selector else {
+                continue;
+            };
+            match with_vector {
+                WithVector::Bool(true) => {
+                    if let Some(encrypted_name) = names.first() {
+                        return Err(CollectionError::bad_input(format!(
+                            "cannot return encrypted vector '{encrypted_name}'; CKKS vector ciphertext read path is not implemented",
+                        )));
+                    }
+                }
+                WithVector::Selector(vector_names) => {
+                    for requested_name in vector_names {
+                        if names.iter().any(|name| name == requested_name) {
+                            return Err(CollectionError::bad_input(format!(
+                                "cannot return encrypted vector '{requested_name}'; CKKS vector ciphertext read path is not implemented",
+                            )));
+                        }
+                    }
+                }
+                WithVector::Bool(false) => {}
+            }
+        }
+
+        Ok(())
+    }
+
     pub async fn retrieve(
         &self,
         request: PointRequestInternal,
@@ -832,6 +881,8 @@ impl Collection {
         if request.ids.is_empty() {
             return Ok(Vec::new());
         }
+        self.ensure_with_vector_does_not_touch_encrypted_vector(&request.with_vector)
+            .await?;
         let with_payload_interface = request
             .with_payload
             .as_ref()

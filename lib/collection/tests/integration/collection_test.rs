@@ -2290,6 +2290,57 @@ async fn encrypted_vector_rejects_plaintext_vector_writes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn encrypted_vector_rejects_plaintext_vector_reads() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, vector_encryption_config()).await;
+
+    let err = collection
+        .retrieve(
+            PointRequestInternal {
+                ids: vec![1.into()],
+                with_payload: Some(WithPayloadInterface::Bool(false)),
+                with_vector: WithVector::Bool(true),
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot return encrypted vector")
+                && description.contains("ciphertext read path is not implemented")
+    ));
+
+    let err = collection
+        .scroll_by(
+            ScrollRequestInternal {
+                with_payload: Some(WithPayloadInterface::Bool(false)),
+                with_vector: WithVector::Selector(vec![DEFAULT_VECTOR_NAME.to_string()]),
+                ..ScrollRequestInternal::default()
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot return encrypted vector")
+                && description.contains("ciphertext read path is not implemented")
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn encrypted_vector_rejects_search_path() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection =
