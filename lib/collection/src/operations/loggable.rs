@@ -2,6 +2,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use segment::data_types::facets::FacetParams;
+use serde::Serialize;
 use serde_json::Value;
 use shard::count::CountRequestInternal;
 use shard::operations::CollectionUpdateOperations;
@@ -21,7 +22,7 @@ pub trait Loggable {
 
 impl Loggable for CollectionUpdateOperations {
     fn to_log_value(&self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_redacted_log_value(self)
     }
 
     fn request_name(&self) -> &'static str {
@@ -38,7 +39,7 @@ impl Loggable for CollectionUpdateOperations {
 
 impl Loggable for Vec<ShardQueryRequest> {
     fn to_log_value(&self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_redacted_log_value(self)
     }
 
     fn request_name(&self) -> &'static str {
@@ -55,7 +56,7 @@ impl Loggable for Vec<ShardQueryRequest> {
 
 impl Loggable for ScrollRequestInternal {
     fn to_log_value(&self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_redacted_log_value(self)
     }
 
     fn request_name(&self) -> &'static str {
@@ -86,7 +87,7 @@ impl<T: Loggable> Loggable for Arc<T> {
 
 impl Loggable for FacetParams {
     fn to_log_value(&self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_redacted_log_value(self)
     }
 
     fn request_name(&self) -> &'static str {
@@ -103,7 +104,7 @@ impl Loggable for FacetParams {
 
 impl Loggable for CountRequestInternal {
     fn to_log_value(&self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_redacted_log_value(self)
     }
 
     fn request_name(&self) -> &'static str {
@@ -120,7 +121,7 @@ impl Loggable for CountRequestInternal {
 
 impl Loggable for PointRequestInternal {
     fn to_log_value(&self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_redacted_log_value(self)
     }
 
     fn request_name(&self) -> &'static str {
@@ -132,5 +133,65 @@ impl Loggable for PointRequestInternal {
         self.request_name().hash(&mut hasher);
         self.hash(&mut hasher);
         hasher.finish()
+    }
+}
+
+fn to_redacted_log_value(value: &impl Serialize) -> Value {
+    let mut value = serde_json::to_value(value).unwrap_or_default();
+    redact_sensitive_log_fields(&mut value);
+    value
+}
+
+fn redact_sensitive_log_fields(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, value) in map.iter_mut() {
+                if matches!(key.as_str(), "payload" | "payloads" | "vector" | "vectors") {
+                    *value = Value::String("[redacted]".to_string());
+                } else {
+                    redact_sensitive_log_fields(value);
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                redact_sensitive_log_fields(value);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use segment::types::Payload;
+    use serde_json::json;
+    use shard::operations::point_ops::{
+        PointInsertOperationsInternal, PointOperations, PointStructPersisted, VectorStructPersisted,
+    };
+
+    use super::*;
+
+    #[test]
+    fn update_log_value_redacts_payloads_and_vectors() {
+        let operation = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::PointsList(vec![PointStructPersisted {
+                id: 1.into(),
+                vector: VectorStructPersisted::from(vec![12345.125, -23456.25]),
+                payload: Some(Payload(
+                    json!({ "body": "qdrant-sec-log-plaintext-sentinel" })
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                )),
+            }]),
+        ));
+
+        let log_value = operation.to_log_value();
+        let serialized = serde_json::to_string(&log_value).unwrap();
+
+        assert!(!serialized.contains("qdrant-sec-log-plaintext-sentinel"));
+        assert!(!serialized.contains("12345.125"));
+        assert!(serialized.contains("[redacted]"));
     }
 }
