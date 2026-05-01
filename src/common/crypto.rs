@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
+use std::path::Path;
 
 use collection::config::{
     CkksCollectionConfig, CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams,
@@ -44,6 +45,12 @@ pub enum CryptoSetupError {
     UnsupportedMaterialKind { material: String, kind: String },
     #[error("crypto material {material} source does not match configured fields")]
     MaterialSourceMismatch { material: String },
+    #[error("crypto material {material} file source {path} is invalid: {reason}")]
+    InvalidMaterialFileSource {
+        material: String,
+        path: String,
+        reason: String,
+    },
     #[error("crypto material {material} wrapped resource key config is invalid: {reason}")]
     InvalidWrappedMaterial { material: String, reason: String },
     #[error("crypto material {material} references unknown wrapping key material {wrapped_by}")]
@@ -1274,7 +1281,54 @@ fn validate_material(
             material: material_name.to_string(),
             material_source: source.to_string(),
         }),
+    }?;
+
+    if let Some(path) = material.path.as_deref() {
+        validate_material_file_source(material_name, path)?;
     }
+
+    Ok(())
+}
+
+fn validate_material_file_source(material_name: &str, path: &str) -> Result<(), CryptoSetupError> {
+    let material_path = Path::new(path);
+    if !material_path.is_absolute() {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: path.to_string(),
+            reason: "path must be absolute".to_string(),
+        });
+    }
+
+    let link_metadata = fs::symlink_metadata(material_path).map_err(|err| {
+        CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: path.to_string(),
+            reason: format!("failed to inspect file: {err}"),
+        }
+    })?;
+    if link_metadata.file_type().is_symlink() || !link_metadata.is_file() {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: path.to_string(),
+            reason: "must be a regular non-symlink file".to_string(),
+        });
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        if link_metadata.permissions().mode() & 0o077 != 0 {
+            return Err(CryptoSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: path.to_string(),
+                reason: "must not be group/world accessible".to_string(),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 fn validate_wrapped_resource_key_material(
@@ -3678,6 +3732,58 @@ mod tests {
                 material: "tenant-a/payload-v1".to_string(),
             }),
         );
+    }
+
+    #[test]
+    fn validate_crypto_settings_validates_material_file_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("payload.key");
+        std::fs::write(&key_path, BASE64URL_NOPAD.encode(&[7u8; 32])).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut permissions = std::fs::metadata(&key_path).unwrap().permissions();
+            permissions.set_mode(0o600);
+            std::fs::set_permissions(&key_path, permissions).unwrap();
+        }
+
+        let file_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("file".to_string()),
+            path: Some(key_path.to_string_lossy().to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        assert_eq!(
+            validate_material("tenant-a/payload-v1", &file_material, false),
+            Ok(())
+        );
+
+        let relative_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("file".to_string()),
+            path: Some("payload.key".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        assert!(matches!(
+            validate_material("tenant-a/payload-v1", &relative_material, false),
+            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("absolute")
+        ));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut permissions = std::fs::metadata(&key_path).unwrap().permissions();
+            permissions.set_mode(0o644);
+            std::fs::set_permissions(&key_path, permissions).unwrap();
+            assert!(matches!(
+                validate_material("tenant-a/payload-v1", &file_material, false),
+                Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                    if reason.contains("group/world")
+            ));
+        }
     }
 
     #[test]

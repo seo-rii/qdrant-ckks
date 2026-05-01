@@ -279,6 +279,11 @@ The generic `crypto` control plane supports a safer MK/RK hierarchy:
 - Payload text and CKKS vector envelope AEAD keys are still purpose-specific
   HKDF subkeys derived from the unwrapped RK.
 
+When a material uses `source: file`, the path must be absolute and point to a
+regular non-symlink file. On Unix, qdrant-sec rejects group/world-accessible key
+files so file-backed MK/RK material is not accidentally exposed through broad
+filesystem permissions.
+
 Wrapped RK material may declare a lifecycle `state`:
 
 - `active` or omitted: the RK can be unwrapped and used for new encryption.
