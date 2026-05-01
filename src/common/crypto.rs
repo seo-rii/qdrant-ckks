@@ -40,6 +40,8 @@ pub enum CryptoSetupError {
         material: String,
         material_source: String,
     },
+    #[error("crypto material {material} uses unsupported kind {kind}")]
+    UnsupportedMaterialKind { material: String, kind: String },
     #[error("crypto material {material} source does not match configured fields")]
     MaterialSourceMismatch { material: String },
     #[error("crypto material {material} wrapped resource key config is invalid: {reason}")]
@@ -1008,6 +1010,15 @@ fn validate_material(
 ) -> Result<(), CryptoSetupError> {
     if material.kind == WRAPPED_SYMMETRIC_KEY_32_KIND {
         return validate_wrapped_resource_key_material(material_name, material);
+    }
+    if !matches!(
+        material.kind.as_str(),
+        SYMMETRIC_KEY_32_KIND | WRAPPING_KEY_32_KIND
+    ) {
+        return Err(CryptoSetupError::UnsupportedMaterialKind {
+            material: material_name.to_string(),
+            kind: material.kind.clone(),
+        });
     }
 
     if material.wrapped_by.is_some()
@@ -3092,6 +3103,25 @@ mod tests {
             Err(CryptoSetupError::UnsupportedMaterialSource {
                 material: "tenant-a/payload-v1".to_string(),
                 material_source: "kms".to_string(),
+            }),
+        );
+
+        assert_eq!(
+            validate_material(
+                "tenant-a/payload-v1",
+                &CryptoMaterialConfig {
+                    kind: "kms_key".to_string(),
+                    source: Some("inline".to_string()),
+                    env: None,
+                    path: None,
+                    value_b64: Some("AQID".to_string()),
+                    ..CryptoMaterialConfig::default()
+                },
+                true,
+            ),
+            Err(CryptoSetupError::UnsupportedMaterialKind {
+                material: "tenant-a/payload-v1".to_string(),
+                kind: "kms_key".to_string(),
             }),
         );
     }
