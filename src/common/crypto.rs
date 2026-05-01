@@ -80,6 +80,12 @@ pub enum CryptoSetupError {
         instance: String,
         backend_ref: String,
     },
+    #[error("crypto instance name {instance} is invalid")]
+    InvalidInstanceName { instance: String },
+    #[error("crypto material name {material} is invalid")]
+    InvalidMaterialName { material: String },
+    #[error("crypto backend name {backend} is invalid")]
+    InvalidBackendName { backend: String },
     #[error("crypto instance {instance} option {option} is invalid: {reason}")]
     InvalidInstanceOption {
         instance: String,
@@ -785,6 +791,28 @@ pub fn validate_runtime_config(settings: &Settings) -> Result<(), CryptoSetupErr
 }
 
 fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetupError> {
+    for material_name in settings.materials.keys() {
+        if !is_crypto_identifier(material_name) {
+            return Err(CryptoSetupError::InvalidMaterialName {
+                material: material_name.clone(),
+            });
+        }
+    }
+    for backend_name in settings.backends.keys() {
+        if !is_crypto_identifier(backend_name) {
+            return Err(CryptoSetupError::InvalidBackendName {
+                backend: backend_name.clone(),
+            });
+        }
+    }
+    for instance_name in settings.instances.keys() {
+        if !is_crypto_identifier(instance_name) {
+            return Err(CryptoSetupError::InvalidInstanceName {
+                instance: instance_name.clone(),
+            });
+        }
+    }
+
     for (material_name, material) in &settings.materials {
         validate_material(material_name, material, settings.allow_inline_key_material)?;
     }
@@ -2434,6 +2462,73 @@ mod tests {
             Err(CryptoSetupError::UnknownBackend {
                 instance: "docs_payload_v1".to_string(),
                 backend_ref: "missing-backend".to_string(),
+            }),
+        );
+    }
+
+    #[test]
+    fn validate_crypto_settings_rejects_invalid_registry_names() {
+        let invalid_material_settings = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::new(),
+            materials: HashMap::from([(
+                "tenant a/payload-v1".to_string(),
+                CryptoMaterialConfig {
+                    kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                    source: Some("inline".to_string()),
+                    value_b64: Some(BASE64URL_NOPAD.encode(&[1_u8; 32])),
+                    ..CryptoMaterialConfig::default()
+                },
+            )]),
+            backends: HashMap::new(),
+        };
+        assert_eq!(
+            validate_crypto_settings(&invalid_material_settings),
+            Err(CryptoSetupError::InvalidMaterialName {
+                material: "tenant a/payload-v1".to_string(),
+            }),
+        );
+
+        let invalid_backend_settings = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::new(),
+            materials: HashMap::new(),
+            backends: HashMap::from([(
+                "openfhe local".to_string(),
+                CryptoBackendConfig {
+                    kind: "process_pool".to_string(),
+                    program: None,
+                    sha256_b64: None,
+                    size: Some(1),
+                    timeout_ms: Some(5_000),
+                },
+            )]),
+        };
+        assert_eq!(
+            validate_crypto_settings(&invalid_backend_settings),
+            Err(CryptoSetupError::InvalidBackendName {
+                backend: "openfhe local".to_string(),
+            }),
+        );
+
+        let invalid_instance_settings = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::from([(
+                "docs payload v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
+                    materials: HashMap::new(),
+                    backend_ref: None,
+                    options: json!({}),
+                },
+            )]),
+            materials: HashMap::new(),
+            backends: HashMap::new(),
+        };
+        assert_eq!(
+            validate_crypto_settings(&invalid_instance_settings),
+            Err(CryptoSetupError::InvalidInstanceName {
+                instance: "docs payload v1".to_string(),
             }),
         );
     }
