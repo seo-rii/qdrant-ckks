@@ -540,6 +540,21 @@ mod ckks_tests {
         };
         assert!(invalid_resource_key_id.validate_admin_plan().is_err());
 
+        let identical_rotation_resource_keys = CryptoMigrationPlan {
+            from: Active,
+            to: Rotating,
+            target_epoch: 4,
+            active_rk_id: Some("rk/docs/4".to_string()),
+            retired_rk_id: Some("rk/docs/4".to_string()),
+            dry_run: false,
+            checkpoints: Vec::new(),
+        };
+        assert!(
+            identical_rotation_resource_keys
+                .validate_admin_plan()
+                .is_err()
+        );
+
         let complete_initial = CryptoMigrationPlan {
             from: Encrypting,
             to: Active,
@@ -1141,6 +1156,14 @@ impl CryptoMigrationPlan {
         {
             validate_crypto_identifier(rk_id)
                 .map_err(|_| ValidationError::new("invalid_crypto_migration_resource_key"))?;
+        }
+        if self.active_rk_id.is_some()
+            && self.retired_rk_id.is_some()
+            && self.active_rk_id == self.retired_rk_id
+        {
+            return Err(ValidationError::new(
+                "crypto_migration_resource_key_conflict",
+            ));
         }
 
         for checkpoint in &self.checkpoints {
