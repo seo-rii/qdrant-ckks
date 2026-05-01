@@ -80,6 +80,12 @@ pub enum CryptoSetupError {
         instance: String,
         backend_ref: String,
     },
+    #[error("crypto instance {instance} option {option} is invalid: {reason}")]
+    InvalidInstanceOption {
+        instance: String,
+        option: String,
+        reason: String,
+    },
     #[error(transparent)]
     LegacyCkks(#[from] crate::common::ckks::CkksSetupError),
 }
@@ -831,6 +837,71 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                 instance: instance_name.clone(),
                 backend_ref: backend_ref.clone(),
             });
+        }
+
+        if instance.provider == PAYLOAD_AES_GCM_PROVIDER
+            && let Some(retired_materials) = instance.options.get(RETIRED_MATERIALS_OPTION)
+        {
+            let active_material_ref = instance.materials.get(PAYLOAD_SYM_KEY_ROLE);
+            let Some(retired_materials) = retired_materials.as_array() else {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: RETIRED_MATERIALS_OPTION.to_string(),
+                    reason: "expected an array of objects".to_string(),
+                });
+            };
+            let mut seen_retired_material_refs = HashSet::new();
+            for retired_material in retired_materials {
+                let Some(retired_material) = retired_material.as_object() else {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: RETIRED_MATERIALS_OPTION.to_string(),
+                        reason: "expected an array of objects".to_string(),
+                    });
+                };
+                let Some(retired_material_ref) = retired_material
+                    .get(RETIRED_MATERIAL_REF_OPTION)
+                    .and_then(Value::as_str)
+                else {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: RETIRED_MATERIALS_OPTION.to_string(),
+                        reason: "missing material".to_string(),
+                    });
+                };
+                if active_material_ref.is_some_and(|active| active == retired_material_ref) {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: RETIRED_MATERIALS_OPTION.to_string(),
+                        reason: "retired material must not be the active sym_key".to_string(),
+                    });
+                }
+                if !seen_retired_material_refs.insert(retired_material_ref) {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: RETIRED_MATERIALS_OPTION.to_string(),
+                        reason: "duplicate retired material".to_string(),
+                    });
+                }
+                if retired_material
+                    .get(MATERIAL_FINGERPRINT_ID_OPTION)
+                    .and_then(Value::as_str)
+                    .is_none()
+                {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: RETIRED_MATERIALS_OPTION.to_string(),
+                        reason: "missing material_fingerprint_id".to_string(),
+                    });
+                }
+                if !settings.materials.contains_key(retired_material_ref) {
+                    return Err(CryptoSetupError::UnknownMaterial {
+                        instance: instance_name.clone(),
+                        role: RETIRED_MATERIALS_OPTION.to_string(),
+                        material_ref: retired_material_ref.to_string(),
+                    });
+                }
+            }
         }
     }
 
@@ -2329,6 +2400,80 @@ mod tests {
                 backend_ref: "missing-backend".to_string(),
             }),
         );
+    }
+
+    #[test]
+    fn validate_crypto_settings_rejects_invalid_retired_payload_materials() {
+        let mut settings = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::from([(
+                "docs_payload_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: "payload/aes-256-gcm@v1".to_string(),
+                    materials: HashMap::from([(
+                        PAYLOAD_SYM_KEY_ROLE.to_string(),
+                        "tenant-a/payload-v2".to_string(),
+                    )]),
+                    backend_ref: None,
+                    options: json!({
+                        "material_fingerprint_id": "tenant-a/payload@v2",
+                        "retired_materials": [{
+                            "material": "tenant-a/payload-v1",
+                            "material_fingerprint_id": "tenant-a/payload@v1",
+                        }],
+                    }),
+                },
+            )]),
+            materials: HashMap::from([(
+                "tenant-a/payload-v2".to_string(),
+                CryptoMaterialConfig {
+                    kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                    source: Some("inline".to_string()),
+                    value_b64: Some(BASE64URL_NOPAD.encode(&[2_u8; 32])),
+                    ..CryptoMaterialConfig::default()
+                },
+            )]),
+            backends: HashMap::new(),
+        };
+
+        assert_eq!(
+            validate_crypto_settings(&settings),
+            Err(CryptoSetupError::UnknownMaterial {
+                instance: "docs_payload_v1".to_string(),
+                role: RETIRED_MATERIALS_OPTION.to_string(),
+                material_ref: "tenant-a/payload-v1".to_string(),
+            }),
+        );
+
+        settings.materials.insert(
+            "tenant-a/payload-v1".to_string(),
+            CryptoMaterialConfig {
+                kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                source: Some("inline".to_string()),
+                value_b64: Some(BASE64URL_NOPAD.encode(&[1_u8; 32])),
+                ..CryptoMaterialConfig::default()
+            },
+        );
+        validate_crypto_settings(&settings).unwrap();
+
+        settings
+            .instances
+            .get_mut("docs_payload_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                RETIRED_MATERIALS_OPTION.to_string(),
+                json!([{
+                    "material": "tenant-a/payload-v2",
+                    "material_fingerprint_id": "tenant-a/payload@v2",
+                }]),
+            );
+        assert!(matches!(
+            validate_crypto_settings(&settings),
+            Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
     }
 
     #[test]
