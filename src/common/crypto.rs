@@ -869,6 +869,16 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                 reason: format!("unsupported provider {}", instance.provider),
             });
         }
+        if instance.provider == PAYLOAD_CLIENT_AEAD_PROVIDER
+            && (!instance.materials.is_empty() || instance.backend_ref.is_some())
+        {
+            return Err(CryptoSetupError::InvalidInstanceOption {
+                instance: instance_name.clone(),
+                option: "provider".to_string(),
+                reason: "payload/client-aead@v1 must not configure server materials or backend"
+                    .to_string(),
+            });
+        }
         for (role, material_ref) in &instance.materials {
             if !is_crypto_identifier(role) {
                 return Err(CryptoSetupError::InvalidInstanceOption {
@@ -2604,6 +2614,36 @@ mod tests {
         };
         assert!(matches!(
             validate_crypto_settings(&unsupported_provider_settings),
+            Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
+
+        let client_provider_with_server_material_settings = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::from([(
+                "docs_payload_client_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
+                    materials: HashMap::from([(
+                        PAYLOAD_SYM_KEY_ROLE.to_string(),
+                        "tenant-a/payload-v1".to_string(),
+                    )]),
+                    backend_ref: None,
+                    options: json!({}),
+                },
+            )]),
+            materials: HashMap::from([(
+                "tenant-a/payload-v1".to_string(),
+                CryptoMaterialConfig {
+                    kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                    source: Some("inline".to_string()),
+                    value_b64: Some(BASE64URL_NOPAD.encode(&[1_u8; 32])),
+                    ..CryptoMaterialConfig::default()
+                },
+            )]),
+            backends: HashMap::new(),
+        };
+        assert!(matches!(
+            validate_crypto_settings(&client_provider_with_server_material_settings),
             Err(CryptoSetupError::InvalidInstanceOption { .. })
         ));
 
