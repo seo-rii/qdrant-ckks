@@ -2427,7 +2427,7 @@ fn decode_direct_material_key(
     material_name: &str,
     material: &CryptoMaterialConfig,
 ) -> Result<SecretKey, PayloadWriteSetupError> {
-    let encoded = match material.source.as_deref() {
+    let encoded = Zeroizing::new(match material.source.as_deref() {
         Some("env") => {
             let env = material.env.as_deref().ok_or_else(|| {
                 PayloadWriteSetupError::MissingMaterialEnv {
@@ -2479,7 +2479,7 @@ fn decode_direct_material_key(
                 })?
             }
         }
-    };
+    });
 
     let encoded = encoded.trim();
     let decoded = Zeroizing::new(BASE64URL_NOPAD.decode(encoded.as_bytes()).map_err(|_| {
