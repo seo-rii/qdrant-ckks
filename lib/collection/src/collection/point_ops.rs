@@ -8,7 +8,7 @@ use futures::stream::FuturesUnordered;
 use futures::{StreamExt as _, TryFutureExt, TryStreamExt as _, future};
 use itertools::Itertools;
 use qdrant_ckks::{
-    CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadValidationContext,
+    CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadNonceReplayKey, ClientPayloadValidationContext,
     ServerPayloadValidationContext, client_payload_nonce_replay_key,
     is_client_encrypted_payload_value, is_encrypted_payload_value, validate_client_payload_value,
     validate_server_payload_value_metadata,
@@ -535,6 +535,13 @@ impl Collection {
                     }
                     EncryptionSelector::MetadataKeys { .. } => {}
                 }
+            }
+
+            if !seen_client_nonces.is_empty() {
+                self.record_client_payload_nonce_replay_keys(
+                    seen_client_nonces.iter().map(client_nonce_replay_cache_key),
+                )
+                .await?;
             }
         }
 
@@ -1144,6 +1151,13 @@ impl Collection {
 
         Ok(())
     }
+}
+
+fn client_nonce_replay_cache_key(key: &ClientPayloadNonceReplayKey) -> String {
+    format!(
+        "{}\x1f{}\x1f{}\x1f{}",
+        key.key_id, key.rk_id, key.rk_epoch, key.nonce,
+    )
 }
 
 fn filter_touches_encrypted_payload<'a>(

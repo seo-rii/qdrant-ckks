@@ -1946,6 +1946,36 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         .await
         .unwrap();
 
+    let replay_after_valid =
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                id: 3.into(),
+                vector: VectorStructPersisted::from(vec![0.0, 0.0, 1.0, 0.0]),
+                payload: Some(client_payload(
+                    &collection_crypto_id,
+                    "3",
+                    "tenant-a/client-rk-2026-04",
+                )),
+            }]),
+        ));
+    let err = collection
+        .update_from_client(
+            replay_after_valid,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("nonce was already used in this collection")
+    ));
+
     let assert_raw_client_body = |payload: &Payload| {
         let body = payload
             .0

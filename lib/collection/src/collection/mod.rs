@@ -14,7 +14,7 @@ mod snapshots;
 mod state_management;
 mod telemetry;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -60,6 +60,8 @@ use crate::shards::transfer::{ShardTransfer, ShardTransferMethod};
 use crate::shards::{CollectionId, replica_set};
 use crate::telemetry::CollectionsAggregatedTelemetry;
 
+const CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_CAPACITY: usize = 1_000_000;
+
 /// Collection's data is split into several shards.
 pub struct Collection {
     pub(crate) id: CollectionId,
@@ -87,8 +89,55 @@ pub struct Collection {
     optimizer_resource_budget: ResourceBudget,
     // Cached statistics of collection size, may be outdated.
     collection_stats_cache: CollectionSizeStatsCache,
+    client_payload_nonce_replay_cache: Mutex<ClientPayloadNonceReplayCache>,
     // Background tasks to clean shards
     shard_clean_tasks: ShardCleanTasks,
+}
+
+#[derive(Debug)]
+struct ClientPayloadNonceReplayCache {
+    seen: HashSet<String>,
+    order: VecDeque<String>,
+    capacity: usize,
+}
+
+impl Default for ClientPayloadNonceReplayCache {
+    fn default() -> Self {
+        Self {
+            seen: HashSet::new(),
+            order: VecDeque::new(),
+            capacity: CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_CAPACITY,
+        }
+    }
+}
+
+impl ClientPayloadNonceReplayCache {
+    fn record(&mut self, keys: impl IntoIterator<Item = String>) -> bool {
+        let mut batch_seen = HashSet::new();
+        let mut pending = Vec::new();
+
+        for key in keys {
+            if self.seen.contains(&key) || !batch_seen.insert(key.clone()) {
+                return false;
+            }
+            pending.push(key);
+        }
+
+        for key in pending {
+            if self.seen.insert(key.clone()) {
+                self.order.push_back(key);
+            }
+        }
+
+        while self.seen.len() > self.capacity {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            self.seen.remove(&oldest);
+        }
+
+        true
+    }
 }
 
 pub type RequestShardTransfer = Arc<dyn Fn(ShardTransfer) + Send + Sync>;
@@ -198,6 +247,7 @@ impl Collection {
             search_runtime: search_runtime.unwrap_or_else(Handle::current),
             optimizer_resource_budget,
             collection_stats_cache,
+            client_payload_nonce_replay_cache: Mutex::new(ClientPayloadNonceReplayCache::default()),
             shard_clean_tasks: Default::default(),
         })
     }
@@ -315,6 +365,7 @@ impl Collection {
             search_runtime: search_runtime.unwrap_or_else(Handle::current),
             optimizer_resource_budget,
             collection_stats_cache,
+            client_payload_nonce_replay_cache: Mutex::new(ClientPayloadNonceReplayCache::default()),
             shard_clean_tasks: Default::default(),
         }
     }
@@ -353,6 +404,25 @@ impl Collection {
 
     pub async fn uuid(&self) -> Option<uuid::Uuid> {
         self.collection_config.read().await.uuid
+    }
+
+    pub(crate) async fn record_client_payload_nonce_replay_keys(
+        &self,
+        keys: impl IntoIterator<Item = String>,
+    ) -> CollectionResult<()> {
+        let keys = keys.into_iter().collect::<Vec<_>>();
+        if keys.is_empty() {
+            return Ok(());
+        }
+
+        let mut cache = self.client_payload_nonce_replay_cache.lock().await;
+        if !cache.record(keys) {
+            return Err(CollectionError::bad_input(
+                "client encrypted payload nonce was already used in this collection".to_string(),
+            ));
+        }
+
+        Ok(())
     }
 
     pub async fn get_sharding_method_and_keys(&self) -> (ShardingMethod, Vec<ShardKey>) {
