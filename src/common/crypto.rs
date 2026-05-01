@@ -2676,6 +2676,46 @@ mod tests {
             crypto_runtime_capability_fingerprint(&settings),
             "fingerprint must change when resource key lifecycle state changes",
         );
+
+        let state_fingerprint = crypto_runtime_capability_fingerprint(&settings);
+        settings.crypto.materials.insert(
+            "tenant-a/docs-rk-v0".to_string(),
+            CryptoMaterialConfig {
+                kind: WRAPPED_SYMMETRIC_KEY_32_KIND.to_string(),
+                source: Some("wrapped".to_string()),
+                env: None,
+                path: None,
+                value_b64: None,
+                wrapped_by: Some("tenant-a/mk".to_string()),
+                wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
+                nonce: Some(BASE64URL_NOPAD.encode(&[4_u8; 12])),
+                wrapped_key_b64: Some(BASE64URL_NOPAD.encode(&[5_u8; 48])),
+                rk_epoch: Some(2),
+                state: Some(RESOURCE_KEY_STATE_RETIRED.to_string()),
+                scope: Some("collection:docs".to_string()),
+            },
+        );
+        settings
+            .crypto
+            .instances
+            .get_mut("docs_payload_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                RETIRED_MATERIALS_OPTION.to_string(),
+                json!([{
+                    "material": "tenant-a/docs-rk-v0",
+                    "material_fingerprint_id": "tenant-a/docs-rk@v0",
+                }]),
+            );
+
+        assert_ne!(
+            state_fingerprint,
+            crypto_runtime_capability_fingerprint(&settings),
+            "fingerprint must change when retired payload key policy changes",
+        );
     }
 
     #[test]
