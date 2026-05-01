@@ -76,6 +76,8 @@ validation instead of being treated as extension points.
 `payload/aes-256-gcm@v1` must bind a `materials.sym_key` resource key and must
 not configure `backend_ref`; it is an in-process AEAD provider, not an OpenFHE
 bridge client.
+`vector/openfhe-ckks@v1` must bind `materials.sym_key` for vector envelope
+metadata sealing and must configure `backend_ref` for the OpenFHE bridge.
 Runtime crypto materials currently accept only `symmetric_key_32`,
 `wrapping_key_32`, and `wrapped_symmetric_key_32` kinds.
 

@@ -902,6 +902,24 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                 });
             }
         }
+        if matches!(
+            instance.provider.as_str(),
+            PAYLOAD_AES_GCM_PROVIDER | VECTOR_OPENFHE_CKKS_PROVIDER
+        ) && !instance.materials.contains_key(PAYLOAD_SYM_KEY_ROLE)
+        {
+            return Err(CryptoSetupError::InvalidInstanceOption {
+                instance: instance_name.clone(),
+                option: "materials".to_string(),
+                reason: format!("{} must configure materials.sym_key", instance.provider),
+            });
+        }
+        if instance.provider == VECTOR_OPENFHE_CKKS_PROVIDER && instance.backend_ref.is_none() {
+            return Err(CryptoSetupError::InvalidInstanceOption {
+                instance: instance_name.clone(),
+                option: "backend_ref".to_string(),
+                reason: "vector/openfhe-ckks@v1 must configure backend_ref".to_string(),
+            });
+        }
 
         if let Some(backend_ref) = &instance.backend_ref
             && !settings.backends.contains_key(backend_ref)
@@ -2711,6 +2729,58 @@ mod tests {
         };
         assert!(matches!(
             validate_crypto_settings(&invalid_role_settings),
+            Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
+    }
+
+    #[test]
+    fn validate_crypto_settings_requires_provider_bindings() {
+        let payload_without_sym_key = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::from([(
+                "docs_payload_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: PAYLOAD_AES_GCM_PROVIDER.to_string(),
+                    materials: HashMap::new(),
+                    backend_ref: None,
+                    options: json!({}),
+                },
+            )]),
+            materials: HashMap::new(),
+            backends: HashMap::new(),
+        };
+        assert!(matches!(
+            validate_crypto_settings(&payload_without_sym_key),
+            Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
+
+        let vector_without_backend = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::from([(
+                "docs_vector_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: VECTOR_OPENFHE_CKKS_PROVIDER.to_string(),
+                    materials: HashMap::from([(
+                        PAYLOAD_SYM_KEY_ROLE.to_string(),
+                        "tenant-a/vector-v1".to_string(),
+                    )]),
+                    backend_ref: None,
+                    options: json!({}),
+                },
+            )]),
+            materials: HashMap::from([(
+                "tenant-a/vector-v1".to_string(),
+                CryptoMaterialConfig {
+                    kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                    source: Some("inline".to_string()),
+                    value_b64: Some(BASE64URL_NOPAD.encode(&[1_u8; 32])),
+                    ..CryptoMaterialConfig::default()
+                },
+            )]),
+            backends: HashMap::new(),
+        };
+        assert!(matches!(
+            validate_crypto_settings(&vector_without_backend),
             Err(CryptoSetupError::InvalidInstanceOption { .. })
         ));
     }
