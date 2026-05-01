@@ -256,6 +256,41 @@ impl PayloadTextEncryptor {
         self
     }
 
+    pub fn with_retired_resource_key(
+        mut self,
+        key_id: impl Into<String>,
+        resource_key: &SecretKey,
+        material_fingerprint_id: impl Into<String>,
+    ) -> Result<Self, PayloadEncryptionError> {
+        let payload_key = resource_key.derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)?;
+        let retired = AeadCipher::new_with_material_fingerprint(
+            key_id,
+            payload_key,
+            material_fingerprint_id,
+        )?;
+        self.keyring = self.keyring.with_retired(retired);
+        Ok(self)
+    }
+
+    pub fn with_retired_resource_key_metadata(
+        mut self,
+        key_id: impl Into<String>,
+        resource_key: &SecretKey,
+        material_fingerprint_id: impl Into<String>,
+        rk_id: impl Into<String>,
+        rk_epoch: u64,
+    ) -> Result<Self, PayloadEncryptionError> {
+        let payload_key = resource_key.derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)?;
+        let retired = AeadCipher::new_with_material_fingerprint(
+            key_id,
+            payload_key,
+            material_fingerprint_id,
+        )?
+        .with_resource_key_metadata(rk_id, rk_epoch)?;
+        self.keyring = self.keyring.with_retired(retired);
+        Ok(self)
+    }
+
     pub fn encrypt_selected_fields(
         &self,
         point_id: &str,

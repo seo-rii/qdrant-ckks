@@ -7,15 +7,15 @@ use collection::config::{
 };
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_ckks::{
-    AeadCipher, AeadKeyring, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_VECTOR_KEY_DOMAIN,
+    AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_VECTOR_KEY_DOMAIN,
     CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadNonceReplayKey,
     ClientPayloadSignatureVerification, ClientPayloadValidationContext, ExistingPayloadMode,
     LocalMasterKeyProvider, MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER,
-    PAYLOAD_CLIENT_AEAD_PROVIDER, PAYLOAD_FIELD_BINDING, PAYLOAD_TEXT_KEY_DOMAIN,
-    PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
-    RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER,
-    WrappedKeyBlob, client_payload_nonce_replay_key, client_payload_signature_key_id,
-    rewrap_resource_key, validate_client_payload_value,
+    PAYLOAD_CLIENT_AEAD_PROVIDER, PAYLOAD_FIELD_BINDING, PayloadEncryptionError,
+    PayloadEncryptionPolicy, PayloadTextEncryptor, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey,
+    VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER, WrappedKeyBlob,
+    client_payload_nonce_replay_key, client_payload_signature_key_id, rewrap_resource_key,
+    validate_client_payload_value,
 };
 use segment::json_path::JsonPath;
 use segment::types::Payload;
@@ -1172,21 +1172,24 @@ fn generic_payload_write_plan(
                             });
                         }
                     };
-                let active_payload_key = resource_key
-                    .derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)
-                    .map_err(PayloadEncryptionError::from)?;
-                let mut active_cipher = AeadCipher::new_with_material_fingerprint(
-                    key_id,
-                    active_payload_key,
-                    material_fingerprint_id,
-                )
-                .map_err(PayloadEncryptionError::from)?;
-                if let Some(rk_epoch) = material.rk_epoch {
-                    active_cipher = active_cipher
-                        .with_resource_key_metadata(material_ref.clone(), rk_epoch)
-                        .map_err(PayloadEncryptionError::from)?;
-                }
-                let mut keyring = AeadKeyring::new(active_cipher);
+                let mut encryptor = if let Some(rk_epoch) = material.rk_epoch {
+                    PayloadTextEncryptor::new_from_resource_key_with_metadata(
+                        collection_crypto_id,
+                        key_id,
+                        &resource_key,
+                        material_fingerprint_id,
+                        material_ref.clone(),
+                        rk_epoch,
+                    )
+                } else {
+                    PayloadTextEncryptor::new_from_resource_key_with_material_fingerprint(
+                        collection_crypto_id,
+                        key_id,
+                        &resource_key,
+                        material_fingerprint_id,
+                    )
+                }?
+                .with_encryption_epoch(encryption.encryption_epoch);
 
                 if let Some(retired_materials) = instance.options.get(RETIRED_MATERIALS_OPTION) {
                     let Some(retired_materials) = retired_materials.as_array() else {
@@ -1236,29 +1239,23 @@ fn generic_payload_write_plan(
                             retired_material_ref,
                             retired_material_config,
                         )?;
-                        let retired_payload_key = retired_resource_key
-                            .derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)
-                            .map_err(PayloadEncryptionError::from)?;
-                        let mut retired_cipher = AeadCipher::new_with_material_fingerprint(
-                            key_id,
-                            retired_payload_key,
-                            retired_material_fingerprint_id,
-                        )
-                        .map_err(PayloadEncryptionError::from)?;
-                        if let Some(rk_epoch) = retired_material_config.rk_epoch {
-                            retired_cipher = retired_cipher
-                                .with_resource_key_metadata(retired_material_ref, rk_epoch)
-                                .map_err(PayloadEncryptionError::from)?;
-                        }
-                        keyring = keyring.with_retired(retired_cipher);
+                        encryptor = if let Some(rk_epoch) = retired_material_config.rk_epoch {
+                            encryptor.with_retired_resource_key_metadata(
+                                key_id,
+                                &retired_resource_key,
+                                retired_material_fingerprint_id,
+                                retired_material_ref,
+                                rk_epoch,
+                            )
+                        } else {
+                            encryptor.with_retired_resource_key(
+                                key_id,
+                                &retired_resource_key,
+                                retired_material_fingerprint_id,
+                            )
+                        }?;
                     }
                 }
-
-                let encryptor = PayloadTextEncryptor::new_with_derived_keyring_unchecked(
-                    collection_crypto_id,
-                    keyring,
-                )?
-                .with_encryption_epoch(encryption.encryption_epoch);
 
                 rules.push(PayloadWriteRule::ServerEncrypt { encryptor, policy });
             }
