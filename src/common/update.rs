@@ -1410,7 +1410,7 @@ async fn maybe_encrypt_upsert_payloads(
     }
     record_process_client_nonce_replay_cache(
         toc,
-        collection_name,
+        &collection_crypto_id,
         seen_client_nonces,
         &seen_client_nonces_before,
     )
@@ -1560,7 +1560,7 @@ async fn maybe_encrypt_point_payload_update(
         }
         record_process_client_nonce_replay_cache(
             toc,
-            collection_name,
+            &collection_crypto_id,
             seen_client_nonces,
             &seen_client_nonces_before,
         )
@@ -1583,7 +1583,7 @@ async fn maybe_encrypt_point_payload_update(
     .map_err(|err| payload_write_error_to_storage_error(collection_name, err))?;
     record_process_client_nonce_replay_cache(
         toc,
-        collection_name,
+        &collection_crypto_id,
         seen_client_nonces,
         &seen_client_nonces_before,
     )
@@ -1594,12 +1594,12 @@ async fn maybe_encrypt_point_payload_update(
 
 async fn record_process_client_nonce_replay_cache(
     toc: &Arc<TableOfContent>,
-    collection_name: &str,
+    collection_crypto_id: &str,
     seen_client_nonces: &std::collections::HashSet<ClientPayloadNonceReplayKey>,
     seen_client_nonces_before: &std::collections::HashSet<ClientPayloadNonceReplayKey>,
 ) -> Result<(), StorageError> {
     toc.record_client_payload_nonce_replay_keys(
-        collection_name,
+        collection_crypto_id,
         seen_client_nonces
             .difference(seen_client_nonces_before)
             .map(client_nonce_replay_cache_key),
@@ -2920,7 +2920,7 @@ mod tests {
             assert!(matches!(
                 err,
                 StorageError::BadInput { description }
-                    if description.contains("nonce was already used in collection client_docs")
+                    if description.contains("nonce was already used in this collection")
             ));
 
             let err = do_upsert_points(

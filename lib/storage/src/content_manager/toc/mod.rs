@@ -296,12 +296,12 @@ impl TableOfContent {
 
     pub async fn record_client_payload_nonce_replay_keys(
         &self,
-        collection_name: &str,
+        collection_crypto_scope: &str,
         keys: impl IntoIterator<Item = String>,
     ) -> Result<(), StorageError> {
         let scoped_keys = keys
             .into_iter()
-            .map(|key| format!("{collection_name}\x1f{key}"))
+            .map(|key| format!("{collection_crypto_scope}\x1f{key}"))
             .collect::<Vec<_>>();
         if scoped_keys.is_empty() {
             return Ok(());
@@ -309,9 +309,9 @@ impl TableOfContent {
 
         let mut cache = self.client_payload_nonce_replay_cache.lock().await;
         if !cache.record(scoped_keys) {
-            return Err(StorageError::bad_input(format!(
-                "client encrypted payload nonce was already used in collection {collection_name}",
-            )));
+            return Err(StorageError::bad_input(
+                "client encrypted payload nonce was already used in this collection".to_string(),
+            ));
         }
 
         Ok(())
