@@ -850,6 +850,13 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
     }
 
     for (instance_name, instance) in &settings.instances {
+        if !is_crypto_identifier(&instance.provider) {
+            return Err(CryptoSetupError::InvalidInstanceOption {
+                instance: instance_name.clone(),
+                option: "provider".to_string(),
+                reason: format!("invalid provider {}", instance.provider),
+            });
+        }
         for (role, material_ref) in &instance.materials {
             if !is_crypto_identifier(role) {
                 return Err(CryptoSetupError::InvalidInstanceOption {
@@ -2540,6 +2547,25 @@ mod tests {
                 instance: "docs payload v1".to_string(),
             }),
         );
+
+        let invalid_provider_settings = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::from([(
+                "docs_payload_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: "payload client-aead@v1".to_string(),
+                    materials: HashMap::new(),
+                    backend_ref: None,
+                    options: json!({}),
+                },
+            )]),
+            materials: HashMap::new(),
+            backends: HashMap::new(),
+        };
+        assert!(matches!(
+            validate_crypto_settings(&invalid_provider_settings),
+            Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
 
         let invalid_role_settings = CryptoSettings {
             allow_inline_key_material: true,
