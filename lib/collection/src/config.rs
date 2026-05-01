@@ -826,6 +826,10 @@ mod ckks_tests {
         valid_rotation
             .validate_admin_plan_for_config(&current)
             .unwrap();
+        let applied_rotation = valid_rotation.apply_to_config(&current).unwrap();
+        assert_eq!(applied_rotation.migration_state, Rotating);
+        assert_eq!(applied_rotation.encryption_epoch, 4);
+        assert_eq!(applied_rotation.rules, current.rules);
 
         let wrong_decryption_epoch = CryptoMigrationPlan {
             from: Active,
@@ -854,6 +858,12 @@ mod ckks_tests {
         valid_decryption_start
             .validate_admin_plan_for_config(&current)
             .unwrap();
+        let applied_decryption_start = valid_decryption_start.apply_to_config(&current).unwrap();
+        assert_eq!(
+            applied_decryption_start.migration_state,
+            CryptoMigrationState::Decrypting
+        );
+        assert_eq!(applied_decryption_start.encryption_epoch, 3);
 
         let mut rotating_current = current.clone();
         rotating_current.migration_state = Rotating;
@@ -878,6 +888,32 @@ mod ckks_tests {
                 .validate_admin_plan_for_config(&rotating_current)
                 .is_err()
         );
+        assert!(
+            wrong_completion_epoch
+                .apply_to_config(&rotating_current)
+                .is_err()
+        );
+
+        let complete_rotation = CryptoMigrationPlan {
+            from: Rotating,
+            to: Active,
+            target_epoch: 4,
+            active_rk_id: Some("rk/docs/4".to_string()),
+            retired_rk_id: Some("rk/docs/3".to_string()),
+            dry_run: false,
+            checkpoints: vec![CryptoMigrationCheckpoint {
+                shard_id: 0,
+                total_points: 10,
+                processed_points: 10,
+                rewritten_points: 10,
+                status: CryptoMigrationCheckpointStatus::Verified,
+            }],
+        };
+        let applied_completion = complete_rotation
+            .apply_to_config(&rotating_current)
+            .unwrap();
+        assert_eq!(applied_completion.migration_state, Active);
+        assert_eq!(applied_completion.encryption_epoch, 4);
 
         let wrong_current_state = CryptoMigrationPlan {
             from: Rotating,
@@ -1289,6 +1325,28 @@ impl CryptoMigrationPlan {
         }
 
         Ok(())
+    }
+
+    pub fn apply_to_config(
+        &self,
+        current: &CollectionEncryptionConfig,
+    ) -> Result<CollectionEncryptionConfig, ValidationError> {
+        self.validate_admin_plan_for_config(current)?;
+
+        let mut next = current.clone();
+        next.migration_state = self.to;
+
+        if matches!(
+            (self.from, self.to),
+            (
+                CryptoMigrationState::Disabled,
+                CryptoMigrationState::Encrypting
+            ) | (CryptoMigrationState::Active, CryptoMigrationState::Rotating)
+        ) {
+            next.encryption_epoch = self.target_epoch;
+        }
+
+        Ok(next)
     }
 }
 
