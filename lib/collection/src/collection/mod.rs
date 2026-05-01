@@ -1080,7 +1080,8 @@ fn append_client_payload_nonce_replay_cache(path: &Path, keys: &[String]) -> Col
         CollectionError::service_error(format!(
             "failed to sync client payload nonce replay cache {path:?}: {err}",
         ))
-    })
+    })?;
+    sync_client_payload_nonce_replay_cache_parent(path)
 }
 
 fn rewrite_client_payload_nonce_replay_cache(
@@ -1117,7 +1118,30 @@ fn rewrite_client_payload_nonce_replay_cache(
         CollectionError::service_error(format!(
             "failed to replace client payload nonce replay cache {path:?}: {err}",
         ))
+    })?;
+    sync_client_payload_nonce_replay_cache_parent(path)
+}
+
+#[cfg(unix)]
+fn sync_client_payload_nonce_replay_cache_parent(path: &Path) -> CollectionResult<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    let directory = File::open(parent).map_err(|err| {
+        CollectionError::service_error(format!(
+            "failed to open client payload nonce replay cache directory {parent:?}: {err}",
+        ))
+    })?;
+    directory.sync_all().map_err(|err| {
+        CollectionError::service_error(format!(
+            "failed to sync client payload nonce replay cache directory {parent:?}: {err}",
+        ))
     })
+}
+
+#[cfg(not(unix))]
+fn sync_client_payload_nonce_replay_cache_parent(_path: &Path) -> CollectionResult<()> {
+    Ok(())
 }
 
 struct CollectionVersion;
