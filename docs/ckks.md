@@ -69,6 +69,11 @@ numeric path components such as `items[].name`, `items.*.name`, or
 Selector components that collide with reserved envelope markers
 `$qdrant_ckks`, `$qdrant_client_aead`, or `$qdrant_ciphertext` are rejected.
 
+Runtime crypto instances currently accept only these provider IDs:
+`payload/aes-256-gcm@v1`, `payload/client-aead@v1`, and
+`vector/openfhe-ckks@v1`. Unknown provider IDs fail runtime settings
+validation instead of being treated as extension points.
+
 ### Client-side encrypted payloads
 
 Zero-trust client-side payload encryption uses a separate provider from
