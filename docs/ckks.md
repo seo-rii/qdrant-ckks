@@ -356,6 +356,9 @@ crypto:
       sha256_b64: base64url-no-pad-sha256-of-bridge
 ```
 
+Generic OpenFHE backends currently accept only `process` or `process_pool`.
+Any other backend `kind` is rejected during runtime settings validation.
+
 If both collection params and the matching `ckks.collections.<name>` runtime
 entry specify `key_id`, they must match. Otherwise the collection value wins,
 then the collection runtime value, then the global default. This prevents
