@@ -126,10 +126,11 @@ or `backend_ref` is configured. Server-side wrapping keys/RKs belong to
 `payload/aes-256-gcm@v1`; client-side payload envelopes must keep client data
 keys outside the Qdrant process. Startup validation also fails unless
 `key_id` is required and `expected_rk_id`, `min_rk_epoch`, and `max_rk_epoch`
-are set explicitly. `expected_rk_id` must match the collection encryption
-`key_id`. `min_rk_epoch` and `max_rk_epoch` must be identical; broad epoch
-ranges are rejected so a client provider pins exactly one active resource-key
-epoch.
+are set explicitly. If the instance also sets `options.key_id`, it must match
+`expected_rk_id`; at collection binding time `expected_rk_id` must also match
+the collection encryption `key_id`. `min_rk_epoch` and `max_rk_epoch` must be
+identical; broad epoch ranges are rejected so a client provider pins exactly one
+active resource-key epoch.
 
 This provider does not receive plaintext and does not unwrap a data key. The
 client encrypts before insert and Qdrant only validates the envelope schema,

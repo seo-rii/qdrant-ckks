@@ -882,9 +882,11 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
             });
         }
         if instance.provider == PAYLOAD_CLIENT_AEAD_PROVIDER {
-            match instance.options.get("key_id") {
-                None | Some(Value::Null) => {}
-                Some(Value::String(key_id)) if is_crypto_identifier(key_id) => {}
+            let configured_key_id = match instance.options.get("key_id") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(key_id)) if is_crypto_identifier(key_id) => {
+                    Some(key_id.as_str())
+                }
                 Some(_) => {
                     return Err(CryptoSetupError::InvalidInstanceOption {
                         instance: instance_name.clone(),
@@ -892,7 +894,7 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                         reason: "expected a crypto identifier string".to_string(),
                     });
                 }
-            }
+            };
             match instance.options.get(KEY_ID_REQUIRED_OPTION) {
                 None | Some(Value::Null) | Some(Value::Bool(true)) => {}
                 Some(Value::Bool(false)) => {
@@ -910,8 +912,10 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                     });
                 }
             }
-            match instance.options.get(EXPECTED_RK_ID_OPTION) {
-                Some(Value::String(expected_rk_id)) if is_crypto_identifier(expected_rk_id) => {}
+            let expected_rk_id = match instance.options.get(EXPECTED_RK_ID_OPTION) {
+                Some(Value::String(expected_rk_id)) if is_crypto_identifier(expected_rk_id) => {
+                    expected_rk_id.as_str()
+                }
                 Some(Value::String(_)) | Some(_) => {
                     return Err(CryptoSetupError::InvalidInstanceOption {
                         instance: instance_name.clone(),
@@ -926,6 +930,15 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                         reason: "missing expected_rk_id".to_string(),
                     });
                 }
+            };
+            if let Some(configured_key_id) = configured_key_id
+                && configured_key_id != expected_rk_id
+            {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: EXPECTED_RK_ID_OPTION.to_string(),
+                    reason: "expected_rk_id must match key_id when both are configured".to_string(),
+                });
             }
             let min_rk_epoch = match instance.options.get(MIN_RK_EPOCH_OPTION) {
                 Some(Value::Number(min_rk_epoch)) => min_rk_epoch.as_u64(),
@@ -3045,6 +3058,23 @@ mod tests {
             .remove(EXPECTED_RK_ID_OPTION);
         assert!(matches!(
             validate_crypto_settings(&missing_rk_id),
+            Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
+
+        let mut mismatched_rk_id = valid_client_settings.clone();
+        mismatched_rk_id
+            .instances
+            .get_mut("docs_payload_client_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                EXPECTED_RK_ID_OPTION.to_string(),
+                json!("tenant-a/client-rk-v2"),
+            );
+        assert!(matches!(
+            validate_crypto_settings(&mismatched_rk_id),
             Err(CryptoSetupError::InvalidInstanceOption { .. })
         ));
 
