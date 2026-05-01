@@ -163,11 +163,12 @@ does not have a persisted UUID; collection names are not accepted as the
 production crypto identity.
 
 Qdrant rejects duplicate client-side AEAD nonces within a single public write
-request, including `update_batch`, by tracking `(key_id, rk_id, rk_epoch,
-nonce)` while validating envelopes. This is a request-local guard only. A
-persistent replay index is not implemented, so SDKs must generate fresh 96-bit
-CSPRNG nonces and regenerate envelopes on retry instead of replaying failed
-request bodies.
+request, including `update_batch`, and records validated nonces in a
+process-local replay cache keyed by the collection's stable crypto identity and
+`(key_id, rk_id, rk_epoch, nonce)`. This catches replay across later requests on
+the same running node. A disk-persistent or cluster-wide replay index is not
+implemented, so SDKs must still generate fresh 96-bit CSPRNG nonces and
+regenerate envelopes on retry instead of replaying failed request bodies.
 
 ```json
 {
