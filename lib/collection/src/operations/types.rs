@@ -76,10 +76,19 @@ pub enum CollectionStatus {
 
 #[derive(Debug, Default, PartialEq, Eq, Copy, Clone)]
 pub enum CollectionUpdateProvenance {
+    /// Client-originated plaintext operation. Encrypted payload markers are not
+    /// trusted in this mode and must be produced by a runtime transform first.
     #[default]
     ClientPlaintext,
+    /// Internal operation whose server-side `$qdrant_ckks` markers were created
+    /// by the runtime payload encryptor for the current collection config.
     RuntimeEncryptedPayloads,
+    /// Internal operation whose client-side `$qdrant_client_aead` markers were
+    /// already validated by the runtime client-envelope provider. This provenance
+    /// is a trust boundary: callers must not use it for raw client input.
     RuntimeVerifiedClientEnvelopes,
+    /// Internal operation containing both runtime-created server envelopes and
+    /// runtime-verified client envelopes.
     RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes,
 }
 
