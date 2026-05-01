@@ -280,7 +280,11 @@ Wrapped RK material may declare a lifecycle `state`:
 
 - `active` or omitted: the RK can be unwrapped and used for new encryption.
 - `retired`: the RK is read-only and must not be selected for new write plans.
-- `disabled` or `destroyed`: the RK must not be unwrapped by runtime crypto.
+- `disabled`: the RK must not be unwrapped by runtime crypto but may retain
+  wrapped material for an explicit future enable/rollback operation.
+- `destroyed`: the RK must not retain `wrapped_by`, `nonce`, `wrap_algorithm`,
+  or `wrapped_key_b64`; only non-secret identity metadata such as `rk_epoch`,
+  `scope`, and `state` remains for audit/preflight.
 
 Runtime validation includes this non-secret state in the cluster capability
 fingerprint so nodes disagreeing on RK lifecycle cannot silently accept the same

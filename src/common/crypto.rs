@@ -845,6 +845,9 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
         if material.kind != WRAPPED_SYMMETRIC_KEY_32_KIND {
             continue;
         }
+        if wrapped_resource_key_state(material) == RESOURCE_KEY_STATE_DESTROYED {
+            continue;
+        }
 
         let wrapped_by = material.wrapped_by.as_deref().ok_or_else(|| {
             CryptoSetupError::InvalidWrappedMaterial {
@@ -1289,24 +1292,6 @@ fn validate_wrapped_resource_key_material(
         });
     }
 
-    if material.wrapped_by.is_none() {
-        return Err(CryptoSetupError::InvalidWrappedMaterial {
-            material: material_name.to_string(),
-            reason: "missing wrapped_by".to_string(),
-        });
-    }
-    if material.nonce.is_none() {
-        return Err(CryptoSetupError::InvalidWrappedMaterial {
-            material: material_name.to_string(),
-            reason: "missing nonce".to_string(),
-        });
-    }
-    if material.wrapped_key_b64.is_none() {
-        return Err(CryptoSetupError::InvalidWrappedMaterial {
-            material: material_name.to_string(),
-            reason: "missing wrapped_key_b64".to_string(),
-        });
-    }
     if material.rk_epoch.is_none() {
         return Err(CryptoSetupError::InvalidWrappedMaterial {
             material: material_name.to_string(),
@@ -1330,6 +1315,39 @@ fn validate_wrapped_resource_key_material(
                 reason: format!("unsupported state {state}"),
             });
         }
+    }
+
+    if wrapped_resource_key_state(material) == RESOURCE_KEY_STATE_DESTROYED {
+        if material.wrapped_by.is_some()
+            || material.wrap_algorithm.is_some()
+            || material.nonce.is_some()
+            || material.wrapped_key_b64.is_some()
+        {
+            return Err(CryptoSetupError::InvalidWrappedMaterial {
+                material: material_name.to_string(),
+                reason: "destroyed resource keys must not retain wrapped key material".to_string(),
+            });
+        }
+        return Ok(());
+    }
+
+    if material.wrapped_by.is_none() {
+        return Err(CryptoSetupError::InvalidWrappedMaterial {
+            material: material_name.to_string(),
+            reason: "missing wrapped_by".to_string(),
+        });
+    }
+    if material.nonce.is_none() {
+        return Err(CryptoSetupError::InvalidWrappedMaterial {
+            material: material_name.to_string(),
+            reason: "missing nonce".to_string(),
+        });
+    }
+    if material.wrapped_key_b64.is_none() {
+        return Err(CryptoSetupError::InvalidWrappedMaterial {
+            material: material_name.to_string(),
+            reason: "missing wrapped_key_b64".to_string(),
+        });
     }
 
     let algorithm = material
@@ -3742,6 +3760,49 @@ mod tests {
             Err(CryptoSetupError::InvalidWrappedMaterial {
                 material: "tenant-a/payload-rk-v1".to_string(),
                 reason: "missing scope".to_string(),
+            }),
+        );
+    }
+
+    #[test]
+    fn validate_crypto_settings_enforces_destroyed_resource_key_shredding() {
+        let destroyed = CryptoSettings {
+            materials: HashMap::from([(
+                "tenant-a/payload-rk-v1".to_string(),
+                CryptoMaterialConfig {
+                    kind: WRAPPED_SYMMETRIC_KEY_32_KIND.to_string(),
+                    rk_epoch: Some(3),
+                    state: Some(RESOURCE_KEY_STATE_DESTROYED.to_string()),
+                    scope: Some("collection:docs".to_string()),
+                    ..CryptoMaterialConfig::default()
+                },
+            )]),
+            ..CryptoSettings::default()
+        };
+        validate_crypto_settings(&destroyed).unwrap();
+
+        let retained_key_material = CryptoSettings {
+            materials: HashMap::from([(
+                "tenant-a/payload-rk-v1".to_string(),
+                CryptoMaterialConfig {
+                    kind: WRAPPED_SYMMETRIC_KEY_32_KIND.to_string(),
+                    wrapped_by: Some("tenant-a/mk-v1".to_string()),
+                    wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
+                    nonce: Some("nonce".to_string()),
+                    wrapped_key_b64: Some("wrapped".to_string()),
+                    rk_epoch: Some(3),
+                    state: Some(RESOURCE_KEY_STATE_DESTROYED.to_string()),
+                    scope: Some("collection:docs".to_string()),
+                    ..CryptoMaterialConfig::default()
+                },
+            )]),
+            ..CryptoSettings::default()
+        };
+        assert_eq!(
+            validate_crypto_settings(&retained_key_material),
+            Err(CryptoSetupError::InvalidWrappedMaterial {
+                material: "tenant-a/payload-rk-v1".to_string(),
+                reason: "destroyed resource keys must not retain wrapped key material".to_string(),
             }),
         );
     }
