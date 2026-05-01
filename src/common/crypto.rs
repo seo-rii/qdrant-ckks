@@ -1123,6 +1123,7 @@ fn generic_payload_write_plan(
                             instance: rule.instance.clone(),
                         });
                     };
+                    let mut seen_retired_material_refs = HashSet::new();
                     for retired_material in retired_materials {
                         let Some(retired_material) = retired_material.as_object() else {
                             return Err(PayloadWriteSetupError::InvalidRetiredMaterials {
@@ -1137,6 +1138,13 @@ fn generic_payload_write_plan(
                                 instance: rule.instance.clone(),
                             });
                         };
+                        if retired_material_ref == material_ref
+                            || !seen_retired_material_refs.insert(retired_material_ref)
+                        {
+                            return Err(PayloadWriteSetupError::InvalidRetiredMaterials {
+                                instance: rule.instance.clone(),
+                            });
+                        }
                         let Some(retired_material_fingerprint_id) = retired_material
                             .get(MATERIAL_FINGERPRINT_ID_OPTION)
                             .and_then(Value::as_str)
@@ -2985,6 +2993,27 @@ mod tests {
         );
 
         params.encryption.as_mut().unwrap().encryption_epoch = 6;
+        let mut active_as_retired_settings = rotated_settings.clone();
+        active_as_retired_settings
+            .crypto
+            .instances
+            .get_mut("docs_payload_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                RETIRED_MATERIALS_OPTION.to_string(),
+                json!([{
+                    "material": "tenant-a/payload-v2",
+                    "material_fingerprint_id": "tenant-a/payload@v6",
+                }]),
+            );
+        assert!(matches!(
+            payload_write_plan_for_collection(&active_as_retired_settings, "docs", &params),
+            Err(PayloadWriteSetupError::InvalidRetiredMaterials { .. })
+        ));
+
         let rotated_plan = payload_write_plan_for_collection(&rotated_settings, "docs", &params)
             .unwrap()
             .unwrap();
