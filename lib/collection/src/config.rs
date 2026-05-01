@@ -529,6 +529,23 @@ mod ckks_tests {
                 .is_err()
         );
 
+        let missing_completion_epoch = CryptoMigrationPlan {
+            from: Encrypting,
+            to: Active,
+            target_epoch: 0,
+            active_rk_id: Some("rk/docs/3".to_string()),
+            retired_rk_id: None,
+            dry_run: false,
+            checkpoints: vec![CryptoMigrationCheckpoint {
+                shard_id: 0,
+                total_points: 10,
+                processed_points: 10,
+                rewritten_points: 10,
+                status: CryptoMigrationCheckpointStatus::Verified,
+            }],
+        };
+        assert!(missing_completion_epoch.validate_admin_plan().is_err());
+
         let invalid_resource_key_id = CryptoMigrationPlan {
             from: Disabled,
             to: Encrypting,
@@ -1085,22 +1102,7 @@ impl CryptoMigrationPlan {
             return Err(ValidationError::new("invalid_crypto_migration_transition"));
         }
 
-        if matches!(
-            (self.from, self.to),
-            (
-                CryptoMigrationState::Disabled,
-                CryptoMigrationState::Encrypting
-            ) | (CryptoMigrationState::Active, CryptoMigrationState::Rotating)
-                | (
-                    CryptoMigrationState::Active,
-                    CryptoMigrationState::Decrypting
-                )
-                | (
-                    CryptoMigrationState::Decrypting,
-                    CryptoMigrationState::Disabled
-                )
-        ) && self.target_epoch == 0
-        {
+        if self.target_epoch == 0 {
             return Err(ValidationError::new(
                 "missing_crypto_migration_target_epoch",
             ));
