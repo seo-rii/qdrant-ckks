@@ -851,6 +851,13 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
 
     for (instance_name, instance) in &settings.instances {
         for (role, material_ref) in &instance.materials {
+            if !is_crypto_identifier(role) {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: "materials".to_string(),
+                    reason: format!("invalid material role {role}"),
+                });
+            }
             if !settings.materials.contains_key(material_ref) {
                 return Err(CryptoSetupError::UnknownMaterial {
                     instance: instance_name.clone(),
@@ -2533,6 +2540,36 @@ mod tests {
                 instance: "docs payload v1".to_string(),
             }),
         );
+
+        let invalid_role_settings = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::from([(
+                "docs_payload_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: PAYLOAD_AES_GCM_PROVIDER.to_string(),
+                    materials: HashMap::from([(
+                        "sym key".to_string(),
+                        "tenant-a/payload-v1".to_string(),
+                    )]),
+                    backend_ref: None,
+                    options: json!({}),
+                },
+            )]),
+            materials: HashMap::from([(
+                "tenant-a/payload-v1".to_string(),
+                CryptoMaterialConfig {
+                    kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                    source: Some("inline".to_string()),
+                    value_b64: Some(BASE64URL_NOPAD.encode(&[1_u8; 32])),
+                    ..CryptoMaterialConfig::default()
+                },
+            )]),
+            backends: HashMap::new(),
+        };
+        assert!(matches!(
+            validate_crypto_settings(&invalid_role_settings),
+            Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
     }
 
     #[test]
