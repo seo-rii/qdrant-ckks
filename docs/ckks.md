@@ -182,7 +182,7 @@ request bodies.
       "rk_epoch": 3,
       "kdf_domain": "qdrant/client-payload-text/v1",
       "aad": {
-        "collection_id": "collection-uuid-or-legacy-name",
+        "collection_id": "persisted-collection-uuid",
         "point_id": "1",
         "field_path": "body",
         "schema_version": 1
