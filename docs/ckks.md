@@ -281,6 +281,11 @@ rotation still requires a data re-encryption job and should use the explicit
 re-encryption mode rather than normal write-path idempotency. The
 `rk_id`/`rk_epoch` fields are included in AEAD AAD for server-generated payload
 and vector envelopes, so storage-side edits to resource-key identity fail closed.
+During RK rotation, `payload/aes-256-gcm@v1` instances may list old read-only
+keys in `options.retired_materials` as objects containing `material` and
+`material_fingerprint_id`. Normal public writes still use only `materials.sym_key`
+for new encryption, while the admin re-encryption path can decrypt stale
+envelopes with the retired keyring entry and re-seal them with the active RK.
 
 Payload AEAD AAD also binds the stable collection crypto identity, point id, and
 canonical field path. On public writes Qdrant uses the collection UUID and
@@ -314,6 +319,9 @@ crypto:
       options:
         key_id: tenant-a:docs
         material_fingerprint_id: tenant-a/payload@v1
+        retired_materials:
+          - material: tenant-a/payload-v0
+            material_fingerprint_id: tenant-a/payload@v0
   materials:
     tenant-a/mk-v1:
       kind: wrapping_key_32
@@ -325,6 +333,15 @@ crypto:
       wrap_algorithm: AES-256-GCM
       rk_epoch: 3
       state: active
+      scope: collection:docs
+      nonce: base64url-no-pad-96-bit-nonce
+      wrapped_key_b64: base64url-no-pad-wrapped-rk
+    tenant-a/payload-v0:
+      kind: wrapped_symmetric_key_32
+      wrapped_by: tenant-a/mk-v1
+      wrap_algorithm: AES-256-GCM
+      rk_epoch: 2
+      state: retired
       scope: collection:docs
       nonce: base64url-no-pad-96-bit-nonce
       wrapped_key_b64: base64url-no-pad-wrapped-rk

@@ -7,15 +7,15 @@ use collection::config::{
 };
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_ckks::{
-    AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_VECTOR_KEY_DOMAIN,
+    AeadCipher, AeadKeyring, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_VECTOR_KEY_DOMAIN,
     CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadNonceReplayKey,
     ClientPayloadSignatureVerification, ClientPayloadValidationContext, ExistingPayloadMode,
     LocalMasterKeyProvider, MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER,
-    PAYLOAD_CLIENT_AEAD_PROVIDER, PAYLOAD_FIELD_BINDING, PayloadEncryptionError,
-    PayloadEncryptionPolicy, PayloadTextEncryptor, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey,
-    VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER, WrappedKeyBlob,
-    client_payload_nonce_replay_key, client_payload_signature_key_id, rewrap_resource_key,
-    validate_client_payload_value,
+    PAYLOAD_CLIENT_AEAD_PROVIDER, PAYLOAD_FIELD_BINDING, PAYLOAD_TEXT_KEY_DOMAIN,
+    PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
+    RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER,
+    WrappedKeyBlob, client_payload_nonce_replay_key, client_payload_signature_key_id,
+    rewrap_resource_key, validate_client_payload_value,
 };
 use segment::json_path::JsonPath;
 use segment::types::Payload;
@@ -97,6 +97,8 @@ const KEY_ID_REQUIRED_OPTION: &str = "key_id_required";
 const EXPECTED_RK_ID_OPTION: &str = "expected_rk_id";
 const MIN_RK_EPOCH_OPTION: &str = "min_rk_epoch";
 const MAX_RK_EPOCH_OPTION: &str = "max_rk_epoch";
+const RETIRED_MATERIALS_OPTION: &str = "retired_materials";
+const RETIRED_MATERIAL_REF_OPTION: &str = "material";
 const SIGNATURE_PUBLIC_KEY_B64_OPTION: &str = "signature_public_key_b64";
 const SIGNATURE_PUBLIC_KEYS_OPTION: &str = "signature_public_keys";
 const SIGNATURE_KEY_ID_OPTION: &str = "signature_key_id";
@@ -185,6 +187,10 @@ pub enum PayloadWriteSetupError {
     InvalidInstanceMaterialFingerprintId { instance: String },
     #[error("payload crypto instance {instance} must set material_fingerprint_id")]
     MissingMaterialFingerprintId { instance: String },
+    #[error(
+        "payload crypto instance {instance} retired_materials option must be an array of objects with material and material_fingerprint_id"
+    )]
+    InvalidRetiredMaterials { instance: String },
     #[error("collection {collection} payload encryption is missing a key id")]
     MissingKeyId { collection: String },
     #[error(
@@ -1095,23 +1101,84 @@ fn generic_payload_write_plan(
                             });
                         }
                     };
-                let encryptor = if let Some(rk_epoch) = material.rk_epoch {
-                    PayloadTextEncryptor::new_from_resource_key_with_metadata(
-                        collection_crypto_id,
-                        key_id,
-                        &resource_key,
-                        material_fingerprint_id,
-                        material_ref.clone(),
-                        rk_epoch,
-                    )
-                } else {
-                    PayloadTextEncryptor::new_from_resource_key_with_material_fingerprint(
-                        collection_crypto_id,
-                        key_id,
-                        &resource_key,
-                        material_fingerprint_id,
-                    )
-                }?
+                let active_payload_key = resource_key
+                    .derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)
+                    .map_err(PayloadEncryptionError::from)?;
+                let mut active_cipher = AeadCipher::new_with_material_fingerprint(
+                    key_id,
+                    active_payload_key,
+                    material_fingerprint_id,
+                )
+                .map_err(PayloadEncryptionError::from)?;
+                if let Some(rk_epoch) = material.rk_epoch {
+                    active_cipher = active_cipher
+                        .with_resource_key_metadata(material_ref.clone(), rk_epoch)
+                        .map_err(PayloadEncryptionError::from)?;
+                }
+                let mut keyring = AeadKeyring::new(active_cipher);
+
+                if let Some(retired_materials) = instance.options.get(RETIRED_MATERIALS_OPTION) {
+                    let Some(retired_materials) = retired_materials.as_array() else {
+                        return Err(PayloadWriteSetupError::InvalidRetiredMaterials {
+                            instance: rule.instance.clone(),
+                        });
+                    };
+                    for retired_material in retired_materials {
+                        let Some(retired_material) = retired_material.as_object() else {
+                            return Err(PayloadWriteSetupError::InvalidRetiredMaterials {
+                                instance: rule.instance.clone(),
+                            });
+                        };
+                        let Some(retired_material_ref) = retired_material
+                            .get(RETIRED_MATERIAL_REF_OPTION)
+                            .and_then(Value::as_str)
+                        else {
+                            return Err(PayloadWriteSetupError::InvalidRetiredMaterials {
+                                instance: rule.instance.clone(),
+                            });
+                        };
+                        let Some(retired_material_fingerprint_id) = retired_material
+                            .get(MATERIAL_FINGERPRINT_ID_OPTION)
+                            .and_then(Value::as_str)
+                        else {
+                            return Err(PayloadWriteSetupError::InvalidRetiredMaterials {
+                                instance: rule.instance.clone(),
+                            });
+                        };
+                        let retired_material_config = runtime_settings
+                            .materials
+                            .get(retired_material_ref)
+                            .ok_or_else(|| PayloadWriteSetupError::MissingMaterialBinding {
+                                instance: rule.instance.clone(),
+                                role: PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            })?;
+                        let retired_resource_key = decode_retired_resource_key(
+                            runtime_settings,
+                            retired_material_ref,
+                            retired_material_config,
+                        )?;
+                        let retired_payload_key = retired_resource_key
+                            .derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)
+                            .map_err(PayloadEncryptionError::from)?;
+                        let mut retired_cipher = AeadCipher::new_with_material_fingerprint(
+                            key_id,
+                            retired_payload_key,
+                            retired_material_fingerprint_id,
+                        )
+                        .map_err(PayloadEncryptionError::from)?;
+                        if let Some(rk_epoch) = retired_material_config.rk_epoch {
+                            retired_cipher = retired_cipher
+                                .with_resource_key_metadata(retired_material_ref, rk_epoch)
+                                .map_err(PayloadEncryptionError::from)?;
+                        }
+                        keyring = keyring.with_retired(retired_cipher);
+                    }
+                }
+
+                let encryptor = PayloadTextEncryptor::new_with_derived_keyring_unchecked(
+                    collection_crypto_id,
+                    keyring,
+                )?
                 .with_encryption_epoch(encryption.encryption_epoch);
 
                 rules.push(PayloadWriteRule::ServerEncrypt { encryptor, policy });
@@ -1667,21 +1734,62 @@ fn decode_resource_key(
     }
 }
 
+fn decode_retired_resource_key(
+    runtime_settings: &CryptoSettings,
+    material_name: &str,
+    material: &CryptoMaterialConfig,
+) -> Result<SecretKey, PayloadWriteSetupError> {
+    match material.kind.as_str() {
+        SYMMETRIC_KEY_32_KIND => decode_direct_material_key(material_name, material),
+        WRAPPED_SYMMETRIC_KEY_32_KIND => decode_wrapped_resource_key_for_state(
+            runtime_settings,
+            material_name,
+            material,
+            RESOURCE_KEY_STATE_RETIRED,
+        ),
+        kind => Err(PayloadWriteSetupError::UnsupportedMaterialKind {
+            material: material_name.to_string(),
+            kind: kind.to_string(),
+        }),
+    }
+}
+
 fn decode_wrapped_resource_key(
     runtime_settings: &CryptoSettings,
     material_name: &str,
     material: &CryptoMaterialConfig,
 ) -> Result<SecretKey, PayloadWriteSetupError> {
-    match wrapped_resource_key_state(material) {
-        RESOURCE_KEY_STATE_ACTIVE => {}
-        RESOURCE_KEY_STATE_RETIRED => {
+    decode_wrapped_resource_key_for_state(
+        runtime_settings,
+        material_name,
+        material,
+        RESOURCE_KEY_STATE_ACTIVE,
+    )
+}
+
+fn decode_wrapped_resource_key_for_state(
+    runtime_settings: &CryptoSettings,
+    material_name: &str,
+    material: &CryptoMaterialConfig,
+    expected_state: &str,
+) -> Result<SecretKey, PayloadWriteSetupError> {
+    match (wrapped_resource_key_state(material), expected_state) {
+        (state, expected) if state == expected => {}
+        (RESOURCE_KEY_STATE_ACTIVE, RESOURCE_KEY_STATE_RETIRED) => {
+            return Err(PayloadWriteSetupError::InvalidWrappedMaterial {
+                material: material_name.to_string(),
+                reason: "active resource key material cannot be used as retired decryption key"
+                    .to_string(),
+            });
+        }
+        (RESOURCE_KEY_STATE_RETIRED, RESOURCE_KEY_STATE_ACTIVE) => {
             return Err(PayloadWriteSetupError::InvalidWrappedMaterial {
                 material: material_name.to_string(),
                 reason: "retired resource key material cannot be used for active encryption"
                     .to_string(),
             });
         }
-        RESOURCE_KEY_STATE_DISABLED | RESOURCE_KEY_STATE_DESTROYED => {
+        (RESOURCE_KEY_STATE_DISABLED | RESOURCE_KEY_STATE_DESTROYED, _) => {
             return Err(PayloadWriteSetupError::InvalidWrappedMaterial {
                 material: material_name.to_string(),
                 reason: format!(
@@ -1690,7 +1798,7 @@ fn decode_wrapped_resource_key(
                 ),
             });
         }
-        state => {
+        (state, _) => {
             return Err(PayloadWriteSetupError::InvalidWrappedMaterial {
                 material: material_name.to_string(),
                 reason: format!("unsupported state {state}"),
@@ -2842,8 +2950,42 @@ mod tests {
         );
         assert_eq!(plan.encrypt_payload("point-1", &mut payload).unwrap(), 1);
 
+        let mut rotated_settings = settings.clone();
+        rotated_settings.crypto.materials.insert(
+            "tenant-a/payload-v2".to_string(),
+            CryptoMaterialConfig {
+                kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                source: Some("inline".to_string()),
+                env: None,
+                path: None,
+                value_b64: Some(BASE64URL_NOPAD.encode(&[8u8; 32])),
+                ..CryptoMaterialConfig::default()
+            },
+        );
+        let rotated_instance = rotated_settings
+            .crypto
+            .instances
+            .get_mut("docs_payload_v1")
+            .unwrap();
+        rotated_instance.materials.insert(
+            PAYLOAD_SYM_KEY_ROLE.to_string(),
+            "tenant-a/payload-v2".to_string(),
+        );
+        let options = rotated_instance.options.as_object_mut().unwrap();
+        options.insert(
+            MATERIAL_FINGERPRINT_ID_OPTION.to_string(),
+            json!("tenant-a/payload@v6"),
+        );
+        options.insert(
+            RETIRED_MATERIALS_OPTION.to_string(),
+            json!([{
+                "material": "tenant-a/payload-v1",
+                "material_fingerprint_id": "tenant-a/payload@v5",
+            }]),
+        );
+
         params.encryption.as_mut().unwrap().encryption_epoch = 6;
-        let rotated_plan = payload_write_plan_for_collection(&settings, "docs", &params)
+        let rotated_plan = payload_write_plan_for_collection(&rotated_settings, "docs", &params)
             .unwrap()
             .unwrap();
         assert!(matches!(
@@ -2867,6 +3009,16 @@ mod tests {
                 .and_then(|marker| marker.get("encryption_epoch"))
                 .and_then(|epoch| epoch.as_u64()),
             Some(6),
+        );
+        assert_eq!(
+            payload
+                .0
+                .get("body")
+                .and_then(|body| body.get("$qdrant_ckks"))
+                .and_then(|marker| marker.get("envelope"))
+                .and_then(|envelope| envelope.get("material_fingerprint"))
+                .and_then(|fingerprint| fingerprint.as_str()),
+            Some("tenant-a/payload@v6"),
         );
         assert_eq!(
             rotated_plan
