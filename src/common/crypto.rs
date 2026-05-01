@@ -913,6 +913,22 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                 reason: format!("{} must configure materials.sym_key", instance.provider),
             });
         }
+        if matches!(
+            instance.provider.as_str(),
+            PAYLOAD_AES_GCM_PROVIDER | VECTOR_OPENFHE_CKKS_PROVIDER
+        ) && let Some(active_material_ref) = instance.materials.get(PAYLOAD_SYM_KEY_ROLE)
+            && let Some(active_material) = settings.materials.get(active_material_ref)
+            && active_material.kind == WRAPPED_SYMMETRIC_KEY_32_KIND
+            && wrapped_resource_key_state(active_material) != RESOURCE_KEY_STATE_ACTIVE
+        {
+            return Err(CryptoSetupError::InvalidInstanceOption {
+                instance: instance_name.clone(),
+                option: "materials".to_string(),
+                reason: format!(
+                    "active sym_key material {active_material_ref} must have state active"
+                ),
+            });
+        }
         if instance.provider == VECTOR_OPENFHE_CKKS_PROVIDER && instance.backend_ref.is_none() {
             return Err(CryptoSetupError::InvalidInstanceOption {
                 instance: instance_name.clone(),
@@ -2788,6 +2804,54 @@ mod tests {
         };
         assert!(matches!(
             validate_crypto_settings(&payload_without_fingerprint),
+            Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
+
+        let payload_with_retired_active_key = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::from([(
+                "docs_payload_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: PAYLOAD_AES_GCM_PROVIDER.to_string(),
+                    materials: HashMap::from([(
+                        PAYLOAD_SYM_KEY_ROLE.to_string(),
+                        "tenant-a/payload-v1".to_string(),
+                    )]),
+                    backend_ref: None,
+                    options: json!({
+                        MATERIAL_FINGERPRINT_ID_OPTION: "tenant-a/payload@v1",
+                    }),
+                },
+            )]),
+            materials: HashMap::from([
+                (
+                    "tenant-a/mk-v1".to_string(),
+                    CryptoMaterialConfig {
+                        kind: WRAPPING_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[9_u8; 32])),
+                        ..CryptoMaterialConfig::default()
+                    },
+                ),
+                (
+                    "tenant-a/payload-v1".to_string(),
+                    CryptoMaterialConfig {
+                        kind: WRAPPED_SYMMETRIC_KEY_32_KIND.to_string(),
+                        wrapped_by: Some("tenant-a/mk-v1".to_string()),
+                        wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
+                        nonce: Some(BASE64URL_NOPAD.encode(&[3_u8; 12])),
+                        wrapped_key_b64: Some(BASE64URL_NOPAD.encode(&[4_u8; 48])),
+                        rk_epoch: Some(1),
+                        state: Some(RESOURCE_KEY_STATE_RETIRED.to_string()),
+                        scope: Some("collection:docs".to_string()),
+                        ..CryptoMaterialConfig::default()
+                    },
+                ),
+            ]),
+            backends: HashMap::new(),
+        };
+        assert!(matches!(
+            validate_crypto_settings(&payload_with_retired_active_key),
             Err(CryptoSetupError::InvalidInstanceOption { .. })
         ));
 

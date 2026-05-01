@@ -283,6 +283,9 @@ Wrapped RK material may declare a lifecycle `state`:
 Runtime validation includes this non-secret state in the cluster capability
 fingerprint so nodes disagreeing on RK lifecycle cannot silently accept the same
 collection plan.
+Provider `materials.sym_key` bindings for new server-side payload/vector writes
+must reference an `active` wrapped RK; retired keys are accepted only through the
+explicit `retired_materials` read-only rotation list.
 
 Data envelopes record the runtime `key_id`, material fingerprint, and, for
 wrapped RK material, the `rk_id` plus `rk_epoch` used for the RK-derived subkey.
