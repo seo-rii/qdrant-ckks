@@ -839,6 +839,28 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
             });
         }
 
+        if matches!(
+            instance.provider.as_str(),
+            PAYLOAD_AES_GCM_PROVIDER | VECTOR_OPENFHE_CKKS_PROVIDER
+        ) && let Some(material_fingerprint_id) =
+            instance.options.get(MATERIAL_FINGERPRINT_ID_OPTION)
+        {
+            let Some(material_fingerprint_id) = material_fingerprint_id.as_str() else {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: MATERIAL_FINGERPRINT_ID_OPTION.to_string(),
+                    reason: "expected a string".to_string(),
+                });
+            };
+            if !is_crypto_identifier(material_fingerprint_id) {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: MATERIAL_FINGERPRINT_ID_OPTION.to_string(),
+                    reason: "invalid material_fingerprint_id".to_string(),
+                });
+            }
+        }
+
         if instance.provider == PAYLOAD_AES_GCM_PROVIDER
             && let Some(retired_materials) = instance.options.get(RETIRED_MATERIALS_OPTION)
         {
@@ -2468,6 +2490,34 @@ mod tests {
                 ..CryptoMaterialConfig::default()
             },
         );
+        validate_crypto_settings(&settings).unwrap();
+
+        settings
+            .instances
+            .get_mut("docs_payload_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                MATERIAL_FINGERPRINT_ID_OPTION.to_string(),
+                json!("tenant a/payload@v2"),
+            );
+        assert!(matches!(
+            validate_crypto_settings(&settings),
+            Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
+        settings
+            .instances
+            .get_mut("docs_payload_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                MATERIAL_FINGERPRINT_ID_OPTION.to_string(),
+                json!("tenant-a/payload@v2"),
+            );
         validate_crypto_settings(&settings).unwrap();
 
         settings.materials.insert(
