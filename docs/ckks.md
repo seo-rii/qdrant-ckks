@@ -368,7 +368,9 @@ Initial encryption and rotation plans must also carry syntactically valid
 resource-key ids so a migration cannot mark a collection active without a
 traceable RK lineage. Rotation plans reject identical active and retired RK ids;
 rotation must introduce a distinct active RK before the old RK becomes
-read-only. `retired_rk_id` is only valid on rotation transitions.
+read-only. `retired_rk_id` is only valid on rotation transitions. Completion
+transitions cannot be marked as `dry_run`, so a dry-run preflight cannot be
+reused as the operation that marks encrypted data verified or decrypted.
 Read paths currently return stored encrypted markers as raw payload values.
 There is no `decrypt_payload` response option, RBAC capability, or automatic
 server-side payload decryption policy yet; adding decrypted responses requires

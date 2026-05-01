@@ -540,6 +540,23 @@ mod ckks_tests {
                 .is_err()
         );
 
+        let dry_run_initial_completion = CryptoMigrationPlan {
+            from: Encrypting,
+            to: Active,
+            target_epoch: 3,
+            active_rk_id: Some("rk/docs/3".to_string()),
+            retired_rk_id: None,
+            dry_run: true,
+            checkpoints: vec![CryptoMigrationCheckpoint {
+                shard_id: 0,
+                total_points: 10,
+                processed_points: 10,
+                rewritten_points: 10,
+                status: CryptoMigrationCheckpointStatus::Verified,
+            }],
+        };
+        assert!(dry_run_initial_completion.validate_admin_plan().is_err());
+
         let missing_completion_epoch = CryptoMigrationPlan {
             from: Encrypting,
             to: Active,
@@ -1168,6 +1185,12 @@ impl CryptoMigrationPlan {
                     CryptoMigrationState::Disabled
                 )
         );
+
+        if self.dry_run && requires_verified_completion {
+            return Err(ValidationError::new(
+                "crypto_migration_completion_cannot_be_dry_run",
+            ));
+        }
 
         for rk_id in [&self.active_rk_id, &self.retired_rk_id]
             .into_iter()
