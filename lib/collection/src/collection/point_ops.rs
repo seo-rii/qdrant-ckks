@@ -539,7 +539,9 @@ impl Collection {
 
             if !seen_client_nonces.is_empty() {
                 self.record_client_payload_nonce_replay_keys(
-                    seen_client_nonces.iter().map(client_nonce_replay_cache_key),
+                    seen_client_nonces
+                        .iter()
+                        .map(|key| client_nonce_replay_cache_key(&collection_crypto_id, key)),
                 )
                 .await?;
             }
@@ -1153,10 +1155,13 @@ impl Collection {
     }
 }
 
-fn client_nonce_replay_cache_key(key: &ClientPayloadNonceReplayKey) -> String {
+fn client_nonce_replay_cache_key(
+    collection_crypto_id: &str,
+    key: &ClientPayloadNonceReplayKey,
+) -> String {
     format!(
-        "{}\x1f{}\x1f{}\x1f{}",
-        key.key_id, key.rk_id, key.rk_epoch, key.nonce,
+        "{}\x1f{}\x1f{}\x1f{}\x1f{}",
+        collection_crypto_id, key.key_id, key.rk_id, key.rk_epoch, key.nonce,
     )
 }
 
