@@ -64,6 +64,7 @@ use crate::telemetry::CollectionsAggregatedTelemetry;
 
 const CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_CAPACITY: usize = 1_000_000;
 const CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE: &str = "client_payload_nonce_replay.cache";
+const CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_ENTRY_MAX_BYTES: usize = 512;
 
 /// Collection's data is split into several shards.
 pub struct Collection {
@@ -135,6 +136,11 @@ impl ClientPayloadNonceReplayCache {
                 ))
             })?;
             if !key.is_empty() {
+                if key.len() > CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_ENTRY_MAX_BYTES {
+                    return Err(CollectionError::service_error(format!(
+                        "client payload nonce replay cache {cache_path:?} contains oversized entry",
+                    )));
+                }
                 cache.insert_loaded(key);
             }
         }
@@ -1119,5 +1125,27 @@ struct CollectionVersion;
 impl StorageVersion for CollectionVersion {
     fn current_raw() -> &'static str {
         env!("CARGO_PKG_VERSION")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_payload_nonce_replay_cache_rejects_oversized_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_path = dir.path().join(CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE);
+        std::fs::write(
+            &cache_path,
+            format!(
+                "{}\n",
+                "x".repeat(CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_ENTRY_MAX_BYTES + 1)
+            ),
+        )
+        .unwrap();
+
+        let err = ClientPayloadNonceReplayCache::load(dir.path()).unwrap_err();
+        assert!(format!("{err:?}").contains("oversized entry"));
     }
 }
