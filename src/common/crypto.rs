@@ -879,6 +879,13 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                     .to_string(),
             });
         }
+        if instance.provider == PAYLOAD_AES_GCM_PROVIDER && instance.backend_ref.is_some() {
+            return Err(CryptoSetupError::InvalidInstanceOption {
+                instance: instance_name.clone(),
+                option: "backend_ref".to_string(),
+                reason: "payload/aes-256-gcm@v1 must not configure backend_ref".to_string(),
+            });
+        }
         for (role, material_ref) in &instance.materials {
             if !is_crypto_identifier(role) {
                 return Err(CryptoSetupError::InvalidInstanceOption {
@@ -2470,7 +2477,7 @@ mod tests {
             instances: HashMap::from([(
                 "docs_payload_v1".to_string(),
                 CryptoInstanceConfig {
-                    provider: "payload/aes-256-gcm@v1".to_string(),
+                    provider: VECTOR_OPENFHE_CKKS_PROVIDER.to_string(),
                     materials: HashMap::from([(
                         "sym_key".to_string(),
                         "tenant-a/payload-v1".to_string(),
@@ -2644,6 +2651,36 @@ mod tests {
         };
         assert!(matches!(
             validate_crypto_settings(&client_provider_with_server_material_settings),
+            Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
+
+        let payload_provider_with_backend_settings = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::from([(
+                "docs_payload_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: PAYLOAD_AES_GCM_PROVIDER.to_string(),
+                    materials: HashMap::from([(
+                        PAYLOAD_SYM_KEY_ROLE.to_string(),
+                        "tenant-a/payload-v1".to_string(),
+                    )]),
+                    backend_ref: Some("openfhe_local".to_string()),
+                    options: json!({}),
+                },
+            )]),
+            materials: HashMap::from([(
+                "tenant-a/payload-v1".to_string(),
+                CryptoMaterialConfig {
+                    kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                    source: Some("inline".to_string()),
+                    value_b64: Some(BASE64URL_NOPAD.encode(&[1_u8; 32])),
+                    ..CryptoMaterialConfig::default()
+                },
+            )]),
+            backends: HashMap::new(),
+        };
+        assert!(matches!(
+            validate_crypto_settings(&payload_provider_with_backend_settings),
             Err(CryptoSetupError::InvalidInstanceOption { .. })
         ));
 
