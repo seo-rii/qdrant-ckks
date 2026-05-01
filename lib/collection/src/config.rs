@@ -480,6 +480,17 @@ mod ckks_tests {
         };
         assert!(missing_decryption_rk.validate_admin_plan().is_err());
 
+        let unexpected_retired_rk = CryptoMigrationPlan {
+            from: Disabled,
+            to: Encrypting,
+            target_epoch: 3,
+            active_rk_id: Some("rk/docs/3".to_string()),
+            retired_rk_id: Some("rk/docs/2".to_string()),
+            dry_run: false,
+            checkpoints: Vec::new(),
+        };
+        assert!(unexpected_retired_rk.validate_admin_plan().is_err());
+
         let valid_start = CryptoMigrationPlan {
             from: Disabled,
             to: Encrypting,
@@ -1131,13 +1142,19 @@ impl CryptoMigrationPlan {
             return Err(ValidationError::new("missing_crypto_migration_active_rk"));
         }
 
-        if matches!(
+        let is_rotation_transition = matches!(
             (self.from, self.to),
             (CryptoMigrationState::Active, CryptoMigrationState::Rotating)
                 | (CryptoMigrationState::Rotating, CryptoMigrationState::Active)
-        ) && self.retired_rk_id.as_deref().is_none_or(str::is_empty)
-        {
-            return Err(ValidationError::new("missing_crypto_migration_retired_rk"));
+        );
+        if is_rotation_transition {
+            if self.retired_rk_id.as_deref().is_none_or(str::is_empty) {
+                return Err(ValidationError::new("missing_crypto_migration_retired_rk"));
+            }
+        } else if self.retired_rk_id.is_some() {
+            return Err(ValidationError::new(
+                "unexpected_crypto_migration_retired_rk",
+            ));
         }
 
         let requires_verified_completion = matches!(
