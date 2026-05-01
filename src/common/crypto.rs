@@ -857,6 +857,16 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                 reason: format!("invalid provider {}", instance.provider),
             });
         }
+        if !matches!(
+            instance.provider.as_str(),
+            PAYLOAD_AES_GCM_PROVIDER | PAYLOAD_CLIENT_AEAD_PROVIDER | VECTOR_OPENFHE_CKKS_PROVIDER
+        ) {
+            return Err(CryptoSetupError::InvalidInstanceOption {
+                instance: instance_name.clone(),
+                option: "provider".to_string(),
+                reason: format!("unsupported provider {}", instance.provider),
+            });
+        }
         for (role, material_ref) in &instance.materials {
             if !is_crypto_identifier(role) {
                 return Err(CryptoSetupError::InvalidInstanceOption {
@@ -2564,6 +2574,25 @@ mod tests {
         };
         assert!(matches!(
             validate_crypto_settings(&invalid_provider_settings),
+            Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
+
+        let unsupported_provider_settings = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::from([(
+                "docs_payload_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: "payload/unknown@v1".to_string(),
+                    materials: HashMap::new(),
+                    backend_ref: None,
+                    options: json!({}),
+                },
+            )]),
+            materials: HashMap::new(),
+            backends: HashMap::new(),
+        };
+        assert!(matches!(
+            validate_crypto_settings(&unsupported_provider_settings),
             Err(CryptoSetupError::InvalidInstanceOption { .. })
         ));
 
