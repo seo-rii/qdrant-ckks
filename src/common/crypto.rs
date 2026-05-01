@@ -5998,6 +5998,38 @@ mod tests {
     }
 
     #[test]
+    fn validate_collection_crypto_runtime_rejects_metadata_selectors() {
+        let settings = Settings::new(None).unwrap();
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "metadata_conf".to_string(),
+                    selector: EncryptionSelector::MetadataKeys {
+                        keys: vec!["tenant_id".to_string()],
+                    },
+                    instance: "docs_metadata_v1".to_string(),
+                    binding: Some("metadata-value/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = validate_collection_crypto_runtime(&settings, "docs", &params)
+            .expect_err("metadata selectors are reserved and must fail schema validation");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("collection docs crypto config is invalid")
+                    && description.contains("unsupported_encryption_selector")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
     fn validate_recovered_collection_crypto_runtime_rejects_invalid_crypto_selectors() {
         let settings = Settings::new(None).unwrap();
         let params = CollectionParams {
