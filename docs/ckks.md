@@ -164,11 +164,13 @@ production crypto identity.
 
 Qdrant rejects duplicate client-side AEAD nonces within a single public write
 request, including `update_batch`, and records validated nonces in a
-process-local replay cache keyed by the collection's stable crypto identity and
-`(key_id, rk_id, rk_epoch, nonce)`. This catches replay across later requests on
-the same running node. A disk-persistent or cluster-wide replay index is not
-implemented, so SDKs must still generate fresh 96-bit CSPRNG nonces and
-regenerate envelopes on retry instead of replaying failed request bodies.
+collection-local replay cache keyed by the collection's stable crypto identity
+and `(key_id, rk_id, rk_epoch, nonce)`. The cache is persisted under the
+collection directory and loaded on collection restart, so replay is caught
+across later requests and same-node reloads. A cluster-wide replay index and
+existing-data backfill are not implemented, so SDKs must still generate fresh
+96-bit CSPRNG nonces and regenerate envelopes on retry instead of replaying
+failed request bodies.
 
 ```json
 {
