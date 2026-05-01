@@ -73,11 +73,12 @@ Runtime crypto instances currently accept only these provider IDs:
 `payload/aes-256-gcm@v1`, `payload/client-aead@v1`, and
 `vector/openfhe-ckks@v1`. Unknown provider IDs fail runtime settings
 validation instead of being treated as extension points.
-`payload/aes-256-gcm@v1` must bind a `materials.sym_key` resource key and must
-not configure `backend_ref`; it is an in-process AEAD provider, not an OpenFHE
-bridge client.
+`payload/aes-256-gcm@v1` must bind a `materials.sym_key` resource key and set
+an explicit `options.material_fingerprint_id`; it must not configure
+`backend_ref`; it is an in-process AEAD provider, not an OpenFHE bridge client.
 `vector/openfhe-ckks@v1` must bind `materials.sym_key` for vector envelope
-metadata sealing and must configure `backend_ref` for the OpenFHE bridge.
+metadata sealing, set `options.material_fingerprint_id`, and configure
+`backend_ref` for the OpenFHE bridge.
 Runtime crypto materials currently accept only `symmetric_key_32`,
 `wrapping_key_32`, and `wrapped_symmetric_key_32` kinds.
 

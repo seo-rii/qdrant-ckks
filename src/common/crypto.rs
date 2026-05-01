@@ -933,9 +933,16 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
         if matches!(
             instance.provider.as_str(),
             PAYLOAD_AES_GCM_PROVIDER | VECTOR_OPENFHE_CKKS_PROVIDER
-        ) && let Some(material_fingerprint_id) =
-            instance.options.get(MATERIAL_FINGERPRINT_ID_OPTION)
-        {
+        ) {
+            let Some(material_fingerprint_id) =
+                instance.options.get(MATERIAL_FINGERPRINT_ID_OPTION)
+            else {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: MATERIAL_FINGERPRINT_ID_OPTION.to_string(),
+                    reason: "missing material_fingerprint_id".to_string(),
+                });
+            };
             let Some(material_fingerprint_id) = material_fingerprint_id.as_str() else {
                 return Err(CryptoSetupError::InvalidInstanceOption {
                     instance: instance_name.clone(),
@@ -2751,6 +2758,36 @@ mod tests {
         };
         assert!(matches!(
             validate_crypto_settings(&payload_without_sym_key),
+            Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
+
+        let payload_without_fingerprint = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::from([(
+                "docs_payload_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: PAYLOAD_AES_GCM_PROVIDER.to_string(),
+                    materials: HashMap::from([(
+                        PAYLOAD_SYM_KEY_ROLE.to_string(),
+                        "tenant-a/payload-v1".to_string(),
+                    )]),
+                    backend_ref: None,
+                    options: json!({}),
+                },
+            )]),
+            materials: HashMap::from([(
+                "tenant-a/payload-v1".to_string(),
+                CryptoMaterialConfig {
+                    kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                    source: Some("inline".to_string()),
+                    value_b64: Some(BASE64URL_NOPAD.encode(&[1_u8; 32])),
+                    ..CryptoMaterialConfig::default()
+                },
+            )]),
+            backends: HashMap::new(),
+        };
+        assert!(matches!(
+            validate_crypto_settings(&payload_without_fingerprint),
             Err(CryptoSetupError::InvalidInstanceOption { .. })
         ));
 
