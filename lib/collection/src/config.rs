@@ -831,6 +831,19 @@ mod ckks_tests {
         assert_eq!(applied_rotation.encryption_epoch, 4);
         assert_eq!(applied_rotation.rules, current.rules);
 
+        let dry_run_rotation = CryptoMigrationPlan {
+            dry_run: true,
+            ..valid_rotation.clone()
+        };
+        dry_run_rotation
+            .validate_admin_plan_for_config(&current)
+            .unwrap();
+        assert_eq!(
+            dry_run_rotation.apply_to_config(&current).unwrap(),
+            current,
+            "dry-run migration plans must validate without mutating collection config",
+        );
+
         let wrong_decryption_epoch = CryptoMigrationPlan {
             from: Active,
             to: CryptoMigrationState::Decrypting,
@@ -1332,6 +1345,9 @@ impl CryptoMigrationPlan {
         current: &CollectionEncryptionConfig,
     ) -> Result<CollectionEncryptionConfig, ValidationError> {
         self.validate_admin_plan_for_config(current)?;
+        if self.dry_run {
+            return Ok(current.clone());
+        }
 
         let mut next = current.clone();
         next.migration_state = self.to;
