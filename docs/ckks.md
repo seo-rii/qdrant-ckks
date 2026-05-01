@@ -493,10 +493,10 @@ The bridge reads newline-delimited JSON requests from stdin and writes one
 newline-delimited JSON response per request to stdout. The backend reuses the
 same child process while the bridge stays healthy and respawns it if the worker
 exits between requests.
-The subprocess backend still enforces a timeout and caps stdout/stderr
-collection so a hung or noisy bridge cannot block Qdrant indefinitely or force
-unbounded memory growth. Returned errors do not include the request body or
-bridge stderr.
+The subprocess backend still enforces a positive `timeout_ms` and caps
+stdout/stderr collection so a hung or noisy bridge cannot block Qdrant
+indefinitely or force unbounded memory growth. Returned errors do not include
+the request body or bridge stderr.
 
 The OpenFHE bridge is part of the trusted computing base because it receives
 plaintext embeddings before producing CKKS ciphertext. Runtime configuration

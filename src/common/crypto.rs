@@ -69,6 +69,8 @@ pub enum CryptoSetupError {
     InvalidBackendProgram { backend: String, program: String },
     #[error("crypto backend {backend} size is invalid: {reason}")]
     InvalidBackendSize { backend: String, reason: String },
+    #[error("crypto backend {backend} timeout is invalid: {reason}")]
+    InvalidBackendTimeout { backend: String, reason: String },
     #[error(
         "crypto instance {instance} references unknown material {material_ref} for role {role}"
     )]
@@ -1360,6 +1362,13 @@ fn validate_backend(
         backend: backend_name.to_string(),
         program: program.to_string(),
     })?;
+
+    if backend.timeout_ms == Some(0) {
+        return Err(CryptoSetupError::InvalidBackendTimeout {
+            backend: backend_name.to_string(),
+            reason: "timeout_ms must be at least 1".to_string(),
+        });
+    }
 
     Ok(())
 }
@@ -3796,6 +3805,31 @@ mod tests {
             Err(CryptoSetupError::InvalidBackendSize {
                 backend: "openfhe_local".to_string(),
                 reason: "process backend size must be omitted or 1".to_string(),
+            }),
+        );
+    }
+
+    #[test]
+    fn validate_backend_rejects_zero_timeout() {
+        let program = std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        assert_eq!(
+            validate_backend(
+                "openfhe_local",
+                &CryptoBackendConfig {
+                    kind: "process".to_string(),
+                    program: Some(program),
+                    sha256_b64: None,
+                    size: None,
+                    timeout_ms: Some(0),
+                },
+            ),
+            Err(CryptoSetupError::InvalidBackendTimeout {
+                backend: "openfhe_local".to_string(),
+                reason: "timeout_ms must be at least 1".to_string(),
             }),
         );
     }
