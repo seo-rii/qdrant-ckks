@@ -596,6 +596,11 @@ pub fn validate_create_collection_crypto_runtime(
         ckks: create_collection.ckks.clone(),
         ..CollectionParams::empty()
     };
+    params.validate().map_err(|err| {
+        StorageError::bad_input(format!(
+            "collection {collection_name} crypto config is invalid: {err}"
+        ))
+    })?;
     validate_collection_crypto_runtime(settings, collection_name, &params)
 }
 
@@ -2558,6 +2563,27 @@ mod tests {
             quantization_config: None,
             strict_mode_config: None,
             uuid,
+            metadata: None,
+        }
+    }
+
+    fn create_collection_with_params(params: CollectionParams) -> CreateCollection {
+        CreateCollection {
+            vectors: params.vectors,
+            sparse_vectors: params.sparse_vectors,
+            hnsw_config: None,
+            wal_config: None,
+            optimizers_config: None,
+            shard_number: None,
+            on_disk_payload: None,
+            replication_factor: None,
+            write_consistency_factor: None,
+            quantization_config: None,
+            sharding_method: None,
+            encryption: params.encryption,
+            ckks: params.ckks,
+            strict_mode_config: None,
+            uuid: None,
             metadata: None,
         }
     }
@@ -5901,6 +5927,64 @@ mod tests {
     }
 
     #[test]
+    fn validate_create_collection_crypto_runtime_rejects_invalid_crypto_selectors() {
+        let settings = Settings::new(None).unwrap();
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "embedding_conf".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["embedding".to_string()],
+                    },
+                    instance: "docs_vector_v1".to_string(),
+                    binding: Some("vector-envelope/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = validate_create_collection_crypto_runtime(
+            &settings,
+            "docs",
+            &create_collection_with_params(params),
+        )
+        .expect_err("create-time vector selector must fail schema validation");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("collection docs crypto config is invalid")
+                    && description.contains("unsupported_encryption_selector")),
+            "unexpected error: {err:?}",
+        );
+
+        let legacy_params = CollectionParams {
+            ckks: Some(CkksCollectionConfig {
+                enabled: true,
+                key_id: Some("tenant-a:docs".to_string()),
+                payload_text_fields: Vec::new(),
+                vector_names: vec!["embedding".to_string()],
+            }),
+            ..CollectionParams::empty()
+        };
+        let err = validate_create_collection_crypto_runtime(
+            &settings,
+            "docs",
+            &create_collection_with_params(legacy_params),
+        )
+        .expect_err("create-time legacy vector selector must fail schema validation");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("collection docs crypto config is invalid")
+                    && description.contains("unsupported_ckks_vector_selector")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
     fn validate_recovered_collection_crypto_runtime_rejects_invalid_crypto_selectors() {
         let settings = Settings::new(None).unwrap();
         let params = CollectionParams {
@@ -6421,7 +6505,10 @@ mod tests {
                         provider: VECTOR_OPENFHE_CKKS_PROVIDER.to_string(),
                         materials: HashMap::new(),
                         backend_ref: Some("openfhe_local".to_string()),
-                        options: json!({ "key_id": "tenant-a:docs" }),
+                        options: json!({
+                            "key_id": "tenant-a:docs",
+                            "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                        }),
                     },
                 )]),
                 materials: HashMap::new(),
