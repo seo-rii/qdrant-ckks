@@ -601,10 +601,23 @@ pub fn validate_create_collection_crypto_runtime(
             "collection {collection_name} crypto config is invalid: {err}"
         ))
     })?;
-    validate_collection_crypto_runtime(settings, collection_name, &params)
+    validate_collection_crypto_runtime_inner(settings, collection_name, &params)
 }
 
 pub fn validate_collection_crypto_runtime(
+    settings: &Settings,
+    collection_name: &str,
+    params: &CollectionParams,
+) -> Result<(), StorageError> {
+    params.validate().map_err(|err| {
+        StorageError::bad_input(format!(
+            "collection {collection_name} crypto config is invalid: {err}"
+        ))
+    })?;
+    validate_collection_crypto_runtime_inner(settings, collection_name, params)
+}
+
+fn validate_collection_crypto_runtime_inner(
     settings: &Settings,
     collection_name: &str,
     params: &CollectionParams,
@@ -5894,7 +5907,7 @@ mod tests {
             ..CollectionParams::empty()
         };
 
-        validate_collection_crypto_runtime(&settings, "docs", &params).unwrap();
+        validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap();
     }
 
     #[test]
@@ -5919,7 +5932,7 @@ mod tests {
             ..CollectionParams::empty()
         };
 
-        let err = validate_collection_crypto_runtime(&settings, "docs", &params).unwrap_err();
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
         assert!(
             matches!(err, StorageError::BadInput { ref description } if description.contains("unknown payload crypto instance docs_payload_v1")),
             "unexpected error: {err:?}",
@@ -6098,7 +6111,7 @@ mod tests {
             ..CollectionParams::empty()
         };
 
-        let err = validate_collection_crypto_runtime(&settings, "docs", &params).unwrap_err();
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
         assert!(
             matches!(err, StorageError::BadInput { ref description } if description.contains("unknown crypto instance docs_vector_v1")),
             "unexpected error: {err:?}",
@@ -6127,7 +6140,7 @@ mod tests {
             ..CollectionParams::empty()
         };
 
-        let err = validate_collection_crypto_runtime(&settings, "docs", &params).unwrap_err();
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
         assert!(
             matches!(err, StorageError::BadInput { ref description }
                 if description.contains("vector rule embedding_conf must use binding")
@@ -6226,7 +6239,7 @@ mod tests {
             ..CollectionParams::empty()
         };
 
-        validate_collection_crypto_runtime(&settings, "docs", &params).unwrap();
+        validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap();
     }
 
     #[test]
@@ -6280,7 +6293,7 @@ mod tests {
             ..CollectionParams::empty()
         };
 
-        let err = validate_collection_crypto_runtime(&settings, "docs", &params).unwrap_err();
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
         assert!(
             matches!(err, StorageError::BadInput { description } if description.contains(VECTOR_OPENFHE_CKKS_PROVIDER))
         );
@@ -6350,7 +6363,7 @@ mod tests {
             ..CollectionParams::empty()
         };
 
-        let err = validate_collection_crypto_runtime(&settings, "docs", &params).unwrap_err();
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
         assert!(
             matches!(err, StorageError::BadInput { description } if description.contains("not allowlisted"))
         );
@@ -6419,7 +6432,7 @@ mod tests {
             ..CollectionParams::empty()
         };
 
-        let err = validate_collection_crypto_runtime(&settings, "docs", &params).unwrap_err();
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
         assert!(
             matches!(err, StorageError::BadInput { description } if description.contains("must set allowlisted profile"))
         );
@@ -6488,7 +6501,7 @@ mod tests {
             ..CollectionParams::empty()
         };
 
-        let err = validate_collection_crypto_runtime(&settings, "docs", &params).unwrap_err();
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
         assert!(
             matches!(err, StorageError::BadInput { description } if description.contains("must set material_fingerprint_id"))
         );
@@ -6544,7 +6557,7 @@ mod tests {
             ..CollectionParams::empty()
         };
 
-        let err = validate_collection_crypto_runtime(&settings, "docs", &params).unwrap_err();
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
         assert!(
             matches!(err, StorageError::BadInput { description } if description.contains("metadata key material binding"))
         );
