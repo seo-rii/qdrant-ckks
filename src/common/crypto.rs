@@ -563,6 +563,7 @@ pub fn payload_write_plan_for_collection_with_crypto_id(
         let Some((encryptor, policy)) = crate::common::ckks::payload_text_encryptor_for_collection(
             &settings.ckks,
             collection_name,
+            collection_crypto_id,
             Some(ckks),
         )?
         else {
@@ -570,7 +571,7 @@ pub fn payload_write_plan_for_collection_with_crypto_id(
         };
 
         return Ok(Some(PayloadWritePlan {
-            collection_crypto_id: collection_name.to_string(),
+            collection_crypto_id: collection_crypto_id.to_string(),
             rules: vec![PayloadWriteRule::ServerEncrypt { encryptor, policy }],
         }));
     }
@@ -2501,6 +2502,7 @@ fn validate_legacy_collection_crypto_runtime(
     if !collection_config.payload_text_fields.is_empty() {
         crate::common::ckks::payload_text_encryptor_for_collection(
             runtime_config,
+            collection_name,
             collection_name,
             Some(collection_config),
         )
@@ -5824,6 +5826,64 @@ mod tests {
 
         assert_eq!(plan.encrypt_payload("point-1", &mut payload).unwrap(), 1);
         assert!(is_encrypted_payload_value(payload.0.get("body").unwrap()));
+    }
+
+    #[test]
+    fn legacy_payload_write_plan_uses_explicit_crypto_collection_id() {
+        let settings = Settings {
+            ckks: CkksConfig {
+                enabled: true,
+                allow_inline_key_material: true,
+                key_id: Some("tenant-a:docs".to_string()),
+                resource_key_b64: Some(BASE64URL_NOPAD.encode(&[5u8; 32])),
+                ..CkksConfig::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            ckks: Some(CkksCollectionConfig {
+                enabled: true,
+                key_id: Some("tenant-a:docs".to_string()),
+                payload_text_fields: vec!["body".to_string()],
+                vector_names: Vec::new(),
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let plan = payload_write_plan_for_collection_with_crypto_id(
+            &settings,
+            "docs",
+            "crypto-docs-uuid",
+            &params,
+        )
+        .unwrap()
+        .unwrap();
+        let mut payload = segment::types::Payload(
+            json!({ "body": "legacy stable id secret" })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+
+        assert_eq!(plan.encrypt_payload("point-1", &mut payload).unwrap(), 1);
+        let stable_id_encryptor = PayloadTextEncryptor::new_from_resource_key(
+            "crypto-docs-uuid",
+            "tenant-a:docs",
+            &SecretKey::from_bytes([5u8; 32]),
+        )
+        .unwrap();
+        let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
+
+        assert_eq!(
+            stable_id_encryptor
+                .decrypt_selected_fields("point-1", &mut payload.0, &policy)
+                .unwrap(),
+            1,
+        );
+        assert_eq!(
+            payload.0.get("body").and_then(Value::as_str),
+            Some("legacy stable id secret"),
+        );
     }
 
     #[test]

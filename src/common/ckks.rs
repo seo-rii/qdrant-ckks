@@ -43,6 +43,7 @@ pub enum CkksSetupError {
 pub fn payload_text_encryptor_for_collection(
     runtime_config: &CkksConfig,
     collection: &str,
+    collection_crypto_id: &str,
     collection_config: Option<&CkksCollectionConfig>,
 ) -> Result<Option<(PayloadTextEncryptor, PayloadEncryptionPolicy)>, CkksSetupError> {
     if !runtime_config.enabled {
@@ -107,7 +108,8 @@ pub fn payload_text_encryptor_for_collection(
     }
     let master_key = decode_master_key(master_key_b64)?;
     let policy = PayloadEncryptionPolicy::new(collection_config.payload_text_fields.clone())?;
-    let encryptor = PayloadTextEncryptor::new_from_resource_key(collection, key_id, &master_key)?;
+    let encryptor =
+        PayloadTextEncryptor::new_from_resource_key(collection_crypto_id, key_id, &master_key)?;
 
     Ok(Some((encryptor, policy)))
 }
@@ -362,7 +364,8 @@ mod tests {
     use crate::settings::CkksCollectionKeyConfig;
 
     fn setup_err(config: &CkksConfig, collection_config: &CkksCollectionConfig) -> CkksSetupError {
-        match payload_text_encryptor_for_collection(config, "docs", Some(collection_config)) {
+        match payload_text_encryptor_for_collection(config, "docs", "docs", Some(collection_config))
+        {
             Ok(_) => panic!("expected ckks setup to fail"),
             Err(err) => err,
         }
@@ -383,6 +386,7 @@ mod tests {
             payload_text_encryptor_for_collection(
                 &CkksConfig::default(),
                 "docs",
+                "docs",
                 Some(&enabled_collection_config()),
             )
             .unwrap()
@@ -394,13 +398,14 @@ mod tests {
             ..CkksConfig::default()
         };
         assert!(
-            payload_text_encryptor_for_collection(&config, "docs", None)
+            payload_text_encryptor_for_collection(&config, "docs", "docs", None)
                 .unwrap()
                 .is_none(),
         );
         assert!(
             payload_text_encryptor_for_collection(
                 &config,
+                "docs",
                 "docs",
                 Some(&CkksCollectionConfig::default()),
             )
@@ -494,9 +499,14 @@ mod tests {
         };
 
         assert!(
-            payload_text_encryptor_for_collection(&config, "docs", Some(&collection_config))
-                .unwrap()
-                .is_some(),
+            payload_text_encryptor_for_collection(
+                &config,
+                "docs",
+                "docs",
+                Some(&collection_config)
+            )
+            .unwrap()
+            .is_some(),
         );
         validate_runtime_config(&config).unwrap();
 
@@ -622,10 +632,13 @@ mod tests {
         assert!(!debug.contains(&encoded_key));
         assert!(debug.contains("redacted"));
 
-        let Some((encryptor, policy)) =
-            payload_text_encryptor_for_collection(&config, "docs", Some(&collection_config))
-                .unwrap()
-        else {
+        let Some((encryptor, policy)) = payload_text_encryptor_for_collection(
+            &config,
+            "docs",
+            "docs",
+            Some(&collection_config),
+        )
+        .unwrap() else {
             panic!("enabled collection config must build an encryptor");
         };
         let mut payload = match json!({ "body": "secret body" }) {
