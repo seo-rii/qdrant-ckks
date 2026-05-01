@@ -894,11 +894,22 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                         reason: "missing material_fingerprint_id".to_string(),
                     });
                 }
-                if !settings.materials.contains_key(retired_material_ref) {
+                let Some(retired_material_config) = settings.materials.get(retired_material_ref)
+                else {
                     return Err(CryptoSetupError::UnknownMaterial {
                         instance: instance_name.clone(),
                         role: RETIRED_MATERIALS_OPTION.to_string(),
                         material_ref: retired_material_ref.to_string(),
+                    });
+                };
+                if retired_material_config.kind == WRAPPED_SYMMETRIC_KEY_32_KIND
+                    && wrapped_resource_key_state(retired_material_config)
+                        != RESOURCE_KEY_STATE_RETIRED
+                {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: RETIRED_MATERIALS_OPTION.to_string(),
+                        reason: "wrapped retired material must have state retired".to_string(),
                     });
                 }
             }
@@ -2451,6 +2462,39 @@ mod tests {
                 ..CryptoMaterialConfig::default()
             },
         );
+        validate_crypto_settings(&settings).unwrap();
+
+        settings.materials.insert(
+            "tenant-a/mk".to_string(),
+            CryptoMaterialConfig {
+                kind: WRAPPING_KEY_32_KIND.to_string(),
+                source: Some("inline".to_string()),
+                value_b64: Some(BASE64URL_NOPAD.encode(&[9_u8; 32])),
+                ..CryptoMaterialConfig::default()
+            },
+        );
+        settings.materials.insert(
+            "tenant-a/payload-v1".to_string(),
+            CryptoMaterialConfig {
+                kind: WRAPPED_SYMMETRIC_KEY_32_KIND.to_string(),
+                wrapped_by: Some("tenant-a/mk".to_string()),
+                wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
+                nonce: Some(BASE64URL_NOPAD.encode(&[3_u8; 12])),
+                wrapped_key_b64: Some(BASE64URL_NOPAD.encode(&[4_u8; 48])),
+                rk_epoch: Some(1),
+                scope: Some("collection:docs".to_string()),
+                ..CryptoMaterialConfig::default()
+            },
+        );
+        assert!(matches!(
+            validate_crypto_settings(&settings),
+            Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
+        settings
+            .materials
+            .get_mut("tenant-a/payload-v1")
+            .unwrap()
+            .state = Some(RESOURCE_KEY_STATE_RETIRED.to_string());
         validate_crypto_settings(&settings).unwrap();
 
         settings
