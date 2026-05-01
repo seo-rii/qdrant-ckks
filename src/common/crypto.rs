@@ -883,15 +883,21 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                         reason: "duplicate retired material".to_string(),
                     });
                 }
-                if retired_material
+                let Some(retired_material_fingerprint_id) = retired_material
                     .get(MATERIAL_FINGERPRINT_ID_OPTION)
                     .and_then(Value::as_str)
-                    .is_none()
-                {
+                else {
                     return Err(CryptoSetupError::InvalidInstanceOption {
                         instance: instance_name.clone(),
                         option: RETIRED_MATERIALS_OPTION.to_string(),
                         reason: "missing material_fingerprint_id".to_string(),
+                    });
+                };
+                if !is_crypto_identifier(retired_material_fingerprint_id) {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: RETIRED_MATERIALS_OPTION.to_string(),
+                        reason: "invalid material_fingerprint_id".to_string(),
                     });
                 }
                 let Some(retired_material_config) = settings.materials.get(retired_material_ref)
@@ -2495,6 +2501,46 @@ mod tests {
             .get_mut("tenant-a/payload-v1")
             .unwrap()
             .state = Some(RESOURCE_KEY_STATE_RETIRED.to_string());
+        validate_crypto_settings(&settings).unwrap();
+
+        settings
+            .instances
+            .get_mut("docs_payload_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .get_mut(RETIRED_MATERIALS_OPTION)
+            .unwrap()
+            .as_array_mut()
+            .unwrap()[0]
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                MATERIAL_FINGERPRINT_ID_OPTION.to_string(),
+                json!("tenant a/payload@v1"),
+            );
+        assert!(matches!(
+            validate_crypto_settings(&settings),
+            Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
+        settings
+            .instances
+            .get_mut("docs_payload_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .get_mut(RETIRED_MATERIALS_OPTION)
+            .unwrap()
+            .as_array_mut()
+            .unwrap()[0]
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                MATERIAL_FINGERPRINT_ID_OPTION.to_string(),
+                json!("tenant-a/payload@v1"),
+            );
         validate_crypto_settings(&settings).unwrap();
 
         settings
