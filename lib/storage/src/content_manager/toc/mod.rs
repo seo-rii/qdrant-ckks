@@ -11,7 +11,7 @@ mod temp_directories;
 pub mod transfer;
 
 use std::cmp::max;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -55,6 +55,7 @@ use crate::types::StorageConfig;
 pub const ALIASES_PATH: &str = "aliases";
 pub const COLLECTIONS_DIR: &str = "collections";
 pub const FULL_SNAPSHOT_FILE_NAME: &str = "full-snapshot";
+const CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_CAPACITY: usize = 1_000_000;
 
 /// How long to wait till deleted collection is released from previous operations
 pub const COLLECTION_DELETE_WAIT_TIMEOUT: Duration = Duration::from_secs(60 * 10); // 10 mins
@@ -91,8 +92,55 @@ pub struct TableOfContent {
     collection_create_lock: Mutex<()>,
     /// Aggregation of all hardware measurements for each alias or collection config.
     collection_hw_metrics: DashMap<CollectionId, Arc<HwSharedDrain>>,
+    client_payload_nonce_replay_cache: Mutex<ClientPayloadNonceReplayCache>,
     /// Collector for various telemetry/metrics.
     telemetry: TocTelemetryCollector,
+}
+
+#[derive(Debug)]
+struct ClientPayloadNonceReplayCache {
+    seen: HashSet<String>,
+    order: VecDeque<String>,
+    capacity: usize,
+}
+
+impl Default for ClientPayloadNonceReplayCache {
+    fn default() -> Self {
+        Self {
+            seen: HashSet::new(),
+            order: VecDeque::new(),
+            capacity: CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_CAPACITY,
+        }
+    }
+}
+
+impl ClientPayloadNonceReplayCache {
+    fn record(&mut self, keys: impl IntoIterator<Item = String>) -> bool {
+        let mut batch_seen = HashSet::new();
+        let mut pending = Vec::new();
+
+        for key in keys {
+            if self.seen.contains(&key) || !batch_seen.insert(key.clone()) {
+                return false;
+            }
+            pending.push(key);
+        }
+
+        for key in pending {
+            if self.seen.insert(key.clone()) {
+                self.order.push_back(key);
+            }
+        }
+
+        while self.seen.len() > self.capacity {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            self.seen.remove(&oldest);
+        }
+
+        true
+    }
 }
 
 impl TableOfContent {
@@ -241,8 +289,32 @@ impl TableOfContent {
             update_rate_limiter: rate_limiter,
             collection_create_lock: Default::default(),
             collection_hw_metrics: DashMap::new(),
+            client_payload_nonce_replay_cache: Mutex::new(ClientPayloadNonceReplayCache::default()),
             telemetry,
         }
+    }
+
+    pub async fn record_client_payload_nonce_replay_keys(
+        &self,
+        collection_name: &str,
+        keys: impl IntoIterator<Item = String>,
+    ) -> Result<(), StorageError> {
+        let scoped_keys = keys
+            .into_iter()
+            .map(|key| format!("{collection_name}\x1f{key}"))
+            .collect::<Vec<_>>();
+        if scoped_keys.is_empty() {
+            return Ok(());
+        }
+
+        let mut cache = self.client_payload_nonce_replay_cache.lock().await;
+        if !cache.record(scoped_keys) {
+            return Err(StorageError::bad_input(format!(
+                "client encrypted payload nonce was already used in collection {collection_name}",
+            )));
+        }
+
+        Ok(())
     }
 
     /// Return `true` if service is working in distributed mode.

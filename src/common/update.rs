@@ -1376,6 +1376,7 @@ async fn maybe_encrypt_upsert_payloads(
     };
     let mut local_seen_client_nonces = std::collections::HashSet::new();
     let seen_client_nonces = client_nonce_replay_cache.unwrap_or(&mut local_seen_client_nonces);
+    let seen_client_nonces_before = seen_client_nonces.clone();
 
     match &mut operation {
         PointInsertOperations::PointsList(list) => {
@@ -1407,6 +1408,13 @@ async fn maybe_encrypt_upsert_payloads(
             }
         }
     }
+    record_process_client_nonce_replay_cache(
+        toc,
+        collection_name,
+        seen_client_nonces,
+        &seen_client_nonces_before,
+    )
+    .await?;
 
     Ok((operation, update_provenance))
 }
@@ -1486,6 +1494,7 @@ async fn maybe_encrypt_point_payload_update(
     };
     let mut local_seen_client_nonces = std::collections::HashSet::new();
     let seen_client_nonces = client_nonce_replay_cache.unwrap_or(&mut local_seen_client_nonces);
+    let seen_client_nonces_before = seen_client_nonces.clone();
 
     let touches_encrypted_payload =
         plan.touches_selected_fields(&operation.payload, operation.key.as_ref());
@@ -1549,6 +1558,13 @@ async fn maybe_encrypt_point_payload_update(
                 key: None,
             });
         }
+        record_process_client_nonce_replay_cache(
+            toc,
+            collection_name,
+            seen_client_nonces,
+            &seen_client_nonces_before,
+        )
+        .await?;
         return Ok((
             PayloadUpdatePlan::Fanout(encrypted_operations),
             update_provenance,
@@ -1565,8 +1581,37 @@ async fn maybe_encrypt_point_payload_update(
         &mut *seen_client_nonces,
     )
     .map_err(|err| payload_write_error_to_storage_error(collection_name, err))?;
+    record_process_client_nonce_replay_cache(
+        toc,
+        collection_name,
+        seen_client_nonces,
+        &seen_client_nonces_before,
+    )
+    .await?;
 
     Ok((PayloadUpdatePlan::Single(operation), update_provenance))
+}
+
+async fn record_process_client_nonce_replay_cache(
+    toc: &Arc<TableOfContent>,
+    collection_name: &str,
+    seen_client_nonces: &std::collections::HashSet<ClientPayloadNonceReplayKey>,
+    seen_client_nonces_before: &std::collections::HashSet<ClientPayloadNonceReplayKey>,
+) -> Result<(), StorageError> {
+    toc.record_client_payload_nonce_replay_keys(
+        collection_name,
+        seen_client_nonces
+            .difference(seen_client_nonces_before)
+            .map(client_nonce_replay_cache_key),
+    )
+    .await
+}
+
+fn client_nonce_replay_cache_key(key: &ClientPayloadNonceReplayKey) -> String {
+    format!(
+        "{}\x1f{}\x1f{}\x1f{}",
+        key.key_id, key.rk_id, key.rk_epoch, key.nonce,
+    )
 }
 
 async fn ensure_payload_runtime_available_for_upsert(
@@ -2840,6 +2885,43 @@ mod tests {
                 .get("body")
                 .unwrap();
             assert!(is_client_encrypted_payload_value(body));
+
+            let err = do_upsert_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "client_docs".to_string(),
+                PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                    points: vec![api::rest::PointStruct {
+                        id: 13.into(),
+                        vector: api::rest::VectorStruct::Single(vec![0.4, 0.4]),
+                        payload: Some(segment::types::Payload(
+                            json!({ "body": signed_client_body(&client_docs_uuid_string, "13") })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        )),
+                    }],
+                    shard_key: None,
+                    update_filter: None,
+                    update_mode: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                Some(&client_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("nonce was already used in collection client_docs")
+            ));
 
             let err = do_upsert_points(
                 UncheckedTocProvider::new_unchecked(&toc),
