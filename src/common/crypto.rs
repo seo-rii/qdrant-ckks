@@ -86,6 +86,8 @@ pub enum CryptoSetupError {
     InvalidMaterialName { material: String },
     #[error("crypto backend name {backend} is invalid")]
     InvalidBackendName { backend: String },
+    #[error("crypto backend {backend} uses unsupported kind {kind}")]
+    UnsupportedBackendKind { backend: String, kind: String },
     #[error("crypto instance {instance} option {option} is invalid: {reason}")]
     InvalidInstanceOption {
         instance: String,
@@ -1149,25 +1151,25 @@ fn validate_backend(
                 });
             }
         }
-        _ => {}
-    }
-
-    if matches!(backend.kind.as_str(), "process" | "process_pool") {
-        let Some(program) = backend.program.as_deref() else {
-            return Err(CryptoSetupError::MissingBackendProgram {
+        _ => {
+            return Err(CryptoSetupError::UnsupportedBackendKind {
                 backend: backend_name.to_string(),
                 kind: backend.kind.clone(),
             });
-        };
-        crate::common::ckks::validate_bridge_path_with_sha256(
-            program,
-            backend.sha256_b64.as_deref(),
-        )
-        .map_err(|_| CryptoSetupError::InvalidBackendProgram {
-            backend: backend_name.to_string(),
-            program: program.to_string(),
-        })?;
+        }
     }
+
+    let Some(program) = backend.program.as_deref() else {
+        return Err(CryptoSetupError::MissingBackendProgram {
+            backend: backend_name.to_string(),
+            kind: backend.kind.clone(),
+        });
+    };
+    crate::common::ckks::validate_bridge_path_with_sha256(program, backend.sha256_b64.as_deref())
+        .map_err(|_| CryptoSetupError::InvalidBackendProgram {
+        backend: backend_name.to_string(),
+        program: program.to_string(),
+    })?;
 
     Ok(())
 }
@@ -3188,6 +3190,23 @@ mod tests {
             Err(CryptoSetupError::InvalidBackendProgram {
                 backend: "openfhe_local".to_string(),
                 program: "relative-openfhe-bridge".to_string(),
+            }),
+        );
+
+        assert_eq!(
+            validate_backend(
+                "openfhe_local",
+                &CryptoBackendConfig {
+                    kind: "shell".to_string(),
+                    program: Some("/usr/local/bin/openfhe-bridge".to_string()),
+                    sha256_b64: None,
+                    size: None,
+                    timeout_ms: Some(5_000),
+                },
+            ),
+            Err(CryptoSetupError::UnsupportedBackendKind {
+                backend: "openfhe_local".to_string(),
+                kind: "shell".to_string(),
             }),
         );
     }
