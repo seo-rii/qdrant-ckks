@@ -15,6 +15,8 @@ mod state_management;
 mod telemetry;
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -61,6 +63,7 @@ use crate::shards::{CollectionId, replica_set};
 use crate::telemetry::CollectionsAggregatedTelemetry;
 
 const CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_CAPACITY: usize = 1_000_000;
+const CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE: &str = "client_payload_nonce_replay.cache";
 
 /// Collection's data is split into several shards.
 pub struct Collection {
@@ -112,31 +115,75 @@ impl Default for ClientPayloadNonceReplayCache {
 }
 
 impl ClientPayloadNonceReplayCache {
-    fn record(&mut self, keys: impl IntoIterator<Item = String>) -> bool {
+    fn load(path: &Path) -> CollectionResult<Self> {
+        let cache_path = path.join(CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE);
+        let file = match File::open(&cache_path) {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(err) => {
+                return Err(CollectionError::service_error(format!(
+                    "failed to open client payload nonce replay cache {cache_path:?}: {err}",
+                )));
+            }
+        };
+
+        let mut cache = Self::default();
+        for line in BufReader::new(file).lines() {
+            let key = line.map_err(|err| {
+                CollectionError::service_error(format!(
+                    "failed to read client payload nonce replay cache {cache_path:?}: {err}",
+                ))
+            })?;
+            if !key.is_empty() {
+                cache.insert_loaded(key);
+            }
+        }
+
+        Ok(cache)
+    }
+
+    fn pending_keys(&self, keys: impl IntoIterator<Item = String>) -> Option<Vec<String>> {
         let mut batch_seen = HashSet::new();
         let mut pending = Vec::new();
 
         for key in keys {
             if self.seen.contains(&key) || !batch_seen.insert(key.clone()) {
-                return false;
+                return None;
             }
             pending.push(key);
         }
 
+        Some(pending)
+    }
+
+    fn insert_pending(&mut self, pending: Vec<String>) -> bool {
         for key in pending {
             if self.seen.insert(key.clone()) {
                 self.order.push_back(key);
             }
         }
 
+        self.evict_oldest()
+    }
+
+    fn insert_loaded(&mut self, key: String) {
+        if self.seen.insert(key.clone()) {
+            self.order.push_back(key);
+            self.evict_oldest();
+        }
+    }
+
+    fn evict_oldest(&mut self) -> bool {
+        let mut evicted = false;
         while self.seen.len() > self.capacity {
             let Some(oldest) = self.order.pop_front() else {
                 break;
             };
             self.seen.remove(&oldest);
+            evicted = true;
         }
 
-        true
+        evicted
     }
 }
 
@@ -365,7 +412,11 @@ impl Collection {
             search_runtime: search_runtime.unwrap_or_else(Handle::current),
             optimizer_resource_budget,
             collection_stats_cache,
-            client_payload_nonce_replay_cache: Mutex::new(ClientPayloadNonceReplayCache::default()),
+            client_payload_nonce_replay_cache: Mutex::new(
+                ClientPayloadNonceReplayCache::load(path).unwrap_or_else(|err| {
+                    panic!("can't load client payload nonce replay cache: {err}")
+                }),
+            ),
             shard_clean_tasks: Default::default(),
         }
     }
@@ -416,10 +467,16 @@ impl Collection {
         }
 
         let mut cache = self.client_payload_nonce_replay_cache.lock().await;
-        if !cache.record(keys) {
+        let Some(pending) = cache.pending_keys(keys) else {
             return Err(CollectionError::bad_input(
                 "client encrypted payload nonce was already used in this collection".to_string(),
             ));
+        };
+
+        let cache_path = self.path.join(CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE);
+        append_client_payload_nonce_replay_cache(&cache_path, &pending)?;
+        if cache.insert_pending(pending) {
+            rewrite_client_payload_nonce_replay_cache(&cache_path, &cache.order)?;
         }
 
         Ok(())
@@ -987,6 +1044,64 @@ impl Collection {
             .get_or_update_cache(|| Self::estimate_collection_size_stats(&self.shards_holder))
             .await
     }
+}
+
+fn append_client_payload_nonce_replay_cache(path: &Path, keys: &[String]) -> CollectionResult<()> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|err| {
+            CollectionError::service_error(format!(
+                "failed to open client payload nonce replay cache {path:?}: {err}",
+            ))
+        })?;
+
+    for key in keys {
+        writeln!(file, "{key}").map_err(|err| {
+            CollectionError::service_error(format!(
+                "failed to write client payload nonce replay cache {path:?}: {err}",
+            ))
+        })?;
+    }
+
+    file.flush().map_err(|err| {
+        CollectionError::service_error(format!(
+            "failed to flush client payload nonce replay cache {path:?}: {err}",
+        ))
+    })
+}
+
+fn rewrite_client_payload_nonce_replay_cache(
+    path: &Path,
+    keys: &VecDeque<String>,
+) -> CollectionResult<()> {
+    let temp_path = path.with_extension("tmp");
+    let mut file = File::create(&temp_path).map_err(|err| {
+        CollectionError::service_error(format!(
+            "failed to create client payload nonce replay cache {temp_path:?}: {err}",
+        ))
+    })?;
+
+    for key in keys {
+        writeln!(file, "{key}").map_err(|err| {
+            CollectionError::service_error(format!(
+                "failed to write client payload nonce replay cache {temp_path:?}: {err}",
+            ))
+        })?;
+    }
+
+    file.flush().map_err(|err| {
+        CollectionError::service_error(format!(
+            "failed to flush client payload nonce replay cache {temp_path:?}: {err}",
+        ))
+    })?;
+
+    std::fs::rename(&temp_path, path).map_err(|err| {
+        CollectionError::service_error(format!(
+            "failed to replace client payload nonce replay cache {path:?}: {err}",
+        ))
+    })
 }
 
 struct CollectionVersion;
