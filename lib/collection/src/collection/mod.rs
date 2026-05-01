@@ -1069,6 +1069,11 @@ fn append_client_payload_nonce_replay_cache(path: &Path, keys: &[String]) -> Col
         CollectionError::service_error(format!(
             "failed to flush client payload nonce replay cache {path:?}: {err}",
         ))
+    })?;
+    file.sync_all().map_err(|err| {
+        CollectionError::service_error(format!(
+            "failed to sync client payload nonce replay cache {path:?}: {err}",
+        ))
     })
 }
 
@@ -1094,6 +1099,11 @@ fn rewrite_client_payload_nonce_replay_cache(
     file.flush().map_err(|err| {
         CollectionError::service_error(format!(
             "failed to flush client payload nonce replay cache {temp_path:?}: {err}",
+        ))
+    })?;
+    file.sync_all().map_err(|err| {
+        CollectionError::service_error(format!(
+            "failed to sync client payload nonce replay cache {temp_path:?}: {err}",
         ))
     })?;
 
