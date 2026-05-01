@@ -4,12 +4,11 @@ The `sec` branch adds a small `qdrant-ckks` workspace crate for encrypted
 payload text and OpenFHE CKKS vector ciphertext envelopes.
 
 Current scope is encrypted storage plumbing, not CKKS-native vector search.
-Payload text encryption happens before storage, and CKKS vectors are wrapped as
-ciphertext envelopes, but this branch does not add encrypted query vectors,
-homomorphic scoring, score decryption, or an HNSW-compatible ciphertext search
-executor. Collections that enable CKKS vectors must treat that path as
-at-rest/envelope protection unless a separate plaintext or surrogate search path
-is explicitly configured.
+Payload text encryption happens before storage. CKKS vector envelope primitives
+exist for bridge/runtime experimentation, but collection-level CKKS vector
+selectors are rejected until ciphertext storage/search semantics are
+implemented. This branch does not add encrypted query vectors, homomorphic
+scoring, score decryption, or an HNSW-compatible ciphertext search executor.
 
 Unsupported search/index features for CKKS ciphertext vectors in this branch:
 
@@ -230,7 +229,9 @@ outside Qdrant:
   with a different client key/HKDF domain. Plain Qdrant payload indexes remain
   unsupported for encrypted fields.
 
-Collection params enable encryption and select fields/vectors per collection:
+Legacy collection params can select payload fields. `vector_names` remains shown
+only as a legacy/future shape; current collection validation rejects CKKS vector
+selectors until an encrypted-vector storage path exists:
 
 ```yaml
 params:
@@ -313,9 +314,12 @@ The wrapped RK AES-GCM AAD is a length-prefixed tuple of `qdrant-sec`, `v1`,
 and `AES-256-GCM`. Changing the material reference, epoch, scope, or wrapping MK
 therefore requires rewrapping the RK.
 
-In the generic `crypto` control plane, vector rules must bind both the OpenFHE
-process backend and a `sym_key` metadata key material. The bridge encrypts the
-embedding, while the `sym_key` protects the stored vector envelope metadata:
+The generic `crypto` control plane can define reserved
+`vector/openfhe-ckks@v1` runtime instances for tests and future migration work.
+If collection vector rules are re-enabled, those rules must bind both the
+OpenFHE process backend and a `sym_key` metadata key material. The bridge
+encrypts the embedding, while the `sym_key` protects the stored vector envelope
+metadata:
 
 ```yaml
 crypto:
