@@ -124,7 +124,7 @@ params:
 `payload/client-aead@v1` fails runtime validation if `materials` is non-empty
 or `backend_ref` is configured. Server-side wrapping keys/RKs belong to
 `payload/aes-256-gcm@v1`; client-side payload envelopes must keep client data
-keys outside the Qdrant process. It also fails validation unless
+keys outside the Qdrant process. Startup validation also fails unless
 `key_id` is required and `expected_rk_id`, `min_rk_epoch`, and `max_rk_epoch`
 are set explicitly. `expected_rk_id` must match the collection encryption
 `key_id`. `min_rk_epoch` and `max_rk_epoch` must be identical; broad epoch

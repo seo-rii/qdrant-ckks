@@ -879,6 +879,103 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                     .to_string(),
             });
         }
+        if instance.provider == PAYLOAD_CLIENT_AEAD_PROVIDER {
+            match instance.options.get("key_id") {
+                None | Some(Value::Null) => {}
+                Some(Value::String(key_id)) if is_crypto_identifier(key_id) => {}
+                Some(_) => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: "key_id".to_string(),
+                        reason: "expected a crypto identifier string".to_string(),
+                    });
+                }
+            }
+            match instance.options.get(KEY_ID_REQUIRED_OPTION) {
+                None | Some(Value::Null) | Some(Value::Bool(true)) => {}
+                Some(Value::Bool(false)) => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: KEY_ID_REQUIRED_OPTION.to_string(),
+                        reason: "payload/client-aead@v1 must require key_id".to_string(),
+                    });
+                }
+                Some(_) => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: KEY_ID_REQUIRED_OPTION.to_string(),
+                        reason: "expected a boolean".to_string(),
+                    });
+                }
+            }
+            match instance.options.get(EXPECTED_RK_ID_OPTION) {
+                Some(Value::String(expected_rk_id)) if is_crypto_identifier(expected_rk_id) => {}
+                Some(Value::String(_)) | Some(_) => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: EXPECTED_RK_ID_OPTION.to_string(),
+                        reason: "expected a crypto identifier string".to_string(),
+                    });
+                }
+                None => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: EXPECTED_RK_ID_OPTION.to_string(),
+                        reason: "missing expected_rk_id".to_string(),
+                    });
+                }
+            }
+            let min_rk_epoch = match instance.options.get(MIN_RK_EPOCH_OPTION) {
+                Some(Value::Number(min_rk_epoch)) => min_rk_epoch.as_u64(),
+                Some(_) => None,
+                None => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: MIN_RK_EPOCH_OPTION.to_string(),
+                        reason: "missing min_rk_epoch".to_string(),
+                    });
+                }
+            };
+            let Some(min_rk_epoch) = min_rk_epoch else {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: MIN_RK_EPOCH_OPTION.to_string(),
+                    reason: "expected an unsigned integer".to_string(),
+                });
+            };
+            let max_rk_epoch = match instance.options.get(MAX_RK_EPOCH_OPTION) {
+                Some(Value::Number(max_rk_epoch)) => max_rk_epoch.as_u64(),
+                Some(_) => None,
+                None => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: MAX_RK_EPOCH_OPTION.to_string(),
+                        reason: "missing max_rk_epoch".to_string(),
+                    });
+                }
+            };
+            let Some(max_rk_epoch) = max_rk_epoch else {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: MAX_RK_EPOCH_OPTION.to_string(),
+                    reason: "expected an unsigned integer".to_string(),
+                });
+            };
+            if min_rk_epoch != max_rk_epoch {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: MAX_RK_EPOCH_OPTION.to_string(),
+                    reason: "client payload provider must pin one active rk_epoch".to_string(),
+                });
+            }
+            client_payload_signature_verifier(instance, instance_name).map_err(|err| {
+                CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: "signature".to_string(),
+                    reason: err.to_string(),
+                }
+            })?;
+        }
         if instance.provider == PAYLOAD_AES_GCM_PROVIDER && instance.backend_ref.is_some() {
             return Err(CryptoSetupError::InvalidInstanceOption {
                 instance: instance_name.clone(),
@@ -2819,7 +2916,7 @@ mod tests {
                     )]),
                     backend_ref: None,
                     options: json!({
-                        MATERIAL_FINGERPRINT_ID_OPTION: "tenant-a/payload@v1",
+                        "material_fingerprint_id": "tenant-a/payload@v1",
                     }),
                 },
             )]),
@@ -2882,6 +2979,91 @@ mod tests {
         };
         assert!(matches!(
             validate_crypto_settings(&vector_without_backend),
+            Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
+    }
+
+    #[test]
+    fn validate_crypto_settings_requires_client_provider_policy() {
+        let valid_client_options = json!({
+            "key_id": "tenant-a/client-rk-v1",
+            "key_id_required": true,
+            "expected_rk_id": "tenant-a/client-rk-v1",
+            "min_rk_epoch": 3,
+            "max_rk_epoch": 3,
+            "signature_public_keys": {
+                "tenant-a/client-signing-v1": BASE64URL_NOPAD.encode(&[7_u8; 32]),
+            },
+        });
+        let valid_client_settings = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::from([(
+                "docs_payload_client_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
+                    materials: HashMap::new(),
+                    backend_ref: None,
+                    options: valid_client_options.clone(),
+                },
+            )]),
+            materials: HashMap::new(),
+            backends: HashMap::new(),
+        };
+        validate_crypto_settings(&valid_client_settings).unwrap();
+
+        let mut key_id_not_required = valid_client_settings.clone();
+        key_id_not_required
+            .instances
+            .get_mut("docs_payload_client_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(KEY_ID_REQUIRED_OPTION.to_string(), json!(false));
+        assert!(matches!(
+            validate_crypto_settings(&key_id_not_required),
+            Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
+
+        let mut missing_rk_id = valid_client_settings.clone();
+        missing_rk_id
+            .instances
+            .get_mut("docs_payload_client_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .remove(EXPECTED_RK_ID_OPTION);
+        assert!(matches!(
+            validate_crypto_settings(&missing_rk_id),
+            Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
+
+        let mut broad_epoch = valid_client_settings.clone();
+        broad_epoch
+            .instances
+            .get_mut("docs_payload_client_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(MAX_RK_EPOCH_OPTION.to_string(), json!(4));
+        assert!(matches!(
+            validate_crypto_settings(&broad_epoch),
+            Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
+
+        let mut missing_signature = valid_client_settings;
+        missing_signature
+            .instances
+            .get_mut("docs_payload_client_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .remove(SIGNATURE_PUBLIC_KEYS_OPTION);
+        assert!(matches!(
+            validate_crypto_settings(&missing_signature),
             Err(CryptoSetupError::InvalidInstanceOption { .. })
         ));
     }
