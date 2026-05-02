@@ -254,6 +254,12 @@ pub enum PayloadWriteSetupError {
     MissingInlineMaterial { material: String },
     #[error("payload crypto material {material} file {path} could not be read")]
     UnreadableMaterialFile { material: String, path: String },
+    #[error("payload crypto material {material} file {path} is invalid: {reason}")]
+    InvalidMaterialFileSource {
+        material: String,
+        path: String,
+        reason: String,
+    },
     #[error("payload crypto material {material} must be base64url without padding")]
     InvalidMaterialEncoding { material: String },
     #[error("payload crypto material {material} must decode to exactly 32 bytes")]
@@ -2555,6 +2561,7 @@ fn decode_direct_material_key(
                     material: material_name.to_string(),
                 }
             })?;
+            validate_material_file_source_for_payload_read(material_name, path)?;
             fs::read_to_string(path).map_err(|_| {
                 PayloadWriteSetupError::UnreadableMaterialFile {
                     material: material_name.to_string(),
@@ -2574,6 +2581,7 @@ fn decode_direct_material_key(
                     env: env.to_string(),
                 })?
             } else if let Some(path) = material.path.as_deref() {
+                validate_material_file_source_for_payload_read(material_name, path)?;
                 fs::read_to_string(path).map_err(|_| {
                     PayloadWriteSetupError::UnreadableMaterialFile {
                         material: material_name.to_string(),
@@ -2600,6 +2608,27 @@ fn decode_direct_material_key(
         PayloadWriteSetupError::InvalidMaterialLength {
             material: material_name.to_string(),
         }
+    })
+}
+
+fn validate_material_file_source_for_payload_read(
+    material_name: &str,
+    path: &str,
+) -> Result<(), PayloadWriteSetupError> {
+    validate_material_file_source(material_name, path).map_err(|err| match err {
+        CryptoSetupError::InvalidMaterialFileSource {
+            material,
+            path,
+            reason,
+        } => PayloadWriteSetupError::InvalidMaterialFileSource {
+            material,
+            path,
+            reason,
+        },
+        err => PayloadWriteSetupError::UnreadableMaterialFile {
+            material: material_name.to_string(),
+            path: format!("{path}: {err}"),
+        },
     })
 }
 
@@ -3856,6 +3885,52 @@ mod tests {
                 validate_material("tenant-a/payload-v1", &file_material, false),
                 Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
                     if reason.contains("parent directory")
+            ));
+        }
+    }
+
+    #[test]
+    fn decode_direct_material_key_revalidates_file_source() {
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-material-read-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let key_path = dir.path().join("payload.key");
+        std::fs::write(&key_path, BASE64URL_NOPAD.encode(&[9u8; 32])).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut dir_permissions = std::fs::metadata(dir.path()).unwrap().permissions();
+            dir_permissions.set_mode(0o700);
+            std::fs::set_permissions(dir.path(), dir_permissions).unwrap();
+
+            let mut permissions = std::fs::metadata(&key_path).unwrap().permissions();
+            permissions.set_mode(0o600);
+            std::fs::set_permissions(&key_path, permissions).unwrap();
+        }
+
+        let file_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("file".to_string()),
+            path: Some(key_path.to_string_lossy().to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        decode_direct_material_key("tenant-a/payload-v1", &file_material).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut permissions = std::fs::metadata(&key_path).unwrap().permissions();
+            permissions.set_mode(0o644);
+            std::fs::set_permissions(&key_path, permissions).unwrap();
+
+            assert!(matches!(
+                decode_direct_material_key("tenant-a/payload-v1", &file_material),
+                Err(PayloadWriteSetupError::InvalidMaterialFileSource { reason, .. })
+                    if reason.contains("group/world")
             ));
         }
     }
