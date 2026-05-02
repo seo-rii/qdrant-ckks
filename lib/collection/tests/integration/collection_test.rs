@@ -66,6 +66,13 @@ use crate::common::{
     new_local_collection, simple_collection_fixture,
 };
 
+fn runtime_verified_client_envelopes() -> CollectionUpdateProvenance {
+    // SAFETY: these integration tests intentionally exercise the collection
+    // guard after constructing fixtures that represent runtime-verified client
+    // envelopes, including malformed variants for negative assertions.
+    unsafe { CollectionUpdateProvenance::runtime_verified_client_envelopes_unchecked() }
+}
+
 fn payload_encryption_config() -> CollectionEncryptionConfig {
     CollectionEncryptionConfig {
         version: 1,
@@ -1798,7 +1805,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes,
+            runtime_verified_client_envelopes(),
         )
         .await
         .unwrap_err();
@@ -1829,7 +1836,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes,
+            runtime_verified_client_envelopes(),
         )
         .await
         .unwrap_err();
@@ -1861,7 +1868,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes,
+            runtime_verified_client_envelopes(),
         )
         .await
         .unwrap_err();
@@ -1905,7 +1912,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes,
+            runtime_verified_client_envelopes(),
         )
         .await
         .unwrap_err();
@@ -1946,7 +1953,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes,
+            runtime_verified_client_envelopes(),
         )
         .await
         .unwrap_err();
@@ -1976,7 +1983,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes,
+            runtime_verified_client_envelopes(),
         )
         .await
         .unwrap();
@@ -2001,7 +2008,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes,
+            runtime_verified_client_envelopes(),
         )
         .await
         .unwrap_err();
@@ -2141,7 +2148,7 @@ async fn client_encrypted_payload_nonce_replay_survives_collection_reload() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes,
+            runtime_verified_client_envelopes(),
         )
         .await
         .unwrap();
@@ -2166,7 +2173,7 @@ async fn client_encrypted_payload_nonce_replay_survives_collection_reload() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes,
+            runtime_verified_client_envelopes(),
         )
         .await
         .unwrap_err();

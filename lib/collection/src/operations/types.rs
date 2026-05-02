@@ -84,28 +84,70 @@ pub enum CollectionUpdateProvenance {
     /// by the runtime payload encryptor for the current collection config.
     RuntimeEncryptedPayloads,
     /// Internal operation whose client-side `$qdrant_client_aead` markers were
-    /// already validated by the runtime client-envelope provider. This provenance
-    /// is a trust boundary: callers must not use it for raw client input.
-    RuntimeVerifiedClientEnvelopes,
+    /// already validated by the runtime client-envelope provider.
+    RuntimeVerifiedClientEnvelopes(RuntimeVerifiedClientEnvelopes),
     /// Internal operation containing both runtime-created server envelopes and
     /// runtime-verified client envelopes.
-    RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes,
+    RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(RuntimeVerifiedClientEnvelopes),
+}
+
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+pub struct RuntimeVerifiedClientEnvelopes {
+    _private: (),
+}
+
+impl RuntimeVerifiedClientEnvelopes {
+    /// # Safety
+    ///
+    /// The caller must ensure every client-side `$qdrant_client_aead` marker in
+    /// the operation was verified by the runtime client-envelope provider,
+    /// including Ed25519 signature verification and nonce replay checks. This
+    /// token must never be created for raw client input.
+    pub unsafe fn new_unchecked() -> Self {
+        Self { _private: () }
+    }
 }
 
 impl CollectionUpdateProvenance {
+    /// # Safety
+    ///
+    /// The caller must ensure every client-side `$qdrant_client_aead` marker in
+    /// the operation was verified by the runtime client-envelope provider,
+    /// including Ed25519 signature verification and nonce replay checks. This
+    /// provenance must never be used for raw client input.
+    pub unsafe fn runtime_verified_client_envelopes_unchecked() -> Self {
+        // SAFETY: The caller upholds the runtime verification invariant.
+        Self::RuntimeVerifiedClientEnvelopes(unsafe {
+            RuntimeVerifiedClientEnvelopes::new_unchecked()
+        })
+    }
+
+    /// # Safety
+    ///
+    /// The caller must ensure every server-side envelope was created by the
+    /// runtime payload encryptor and every client-side envelope was verified by
+    /// the runtime client-envelope provider. This provenance must never be used
+    /// for raw client input.
+    pub unsafe fn runtime_encrypted_payloads_and_verified_client_envelopes_unchecked() -> Self {
+        // SAFETY: The caller upholds the runtime verification invariant.
+        Self::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(unsafe {
+            RuntimeVerifiedClientEnvelopes::new_unchecked()
+        })
+    }
+
     pub const fn allows_server_envelopes(self) -> bool {
         matches!(
             self,
             Self::RuntimeEncryptedPayloads
-                | Self::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes
+                | Self::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(_)
         )
     }
 
     pub const fn allows_client_envelopes(self) -> bool {
         matches!(
             self,
-            Self::RuntimeVerifiedClientEnvelopes
-                | Self::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes
+            Self::RuntimeVerifiedClientEnvelopes(_)
+                | Self::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(_)
         )
     }
 }

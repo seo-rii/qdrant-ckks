@@ -1367,11 +1367,19 @@ async fn maybe_encrypt_upsert_payloads(
         plan.has_server_encrypt_rules(),
         plan.has_client_envelope_rules(),
     ) {
-        (true, true) => {
-            CollectionUpdateProvenance::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes
-        }
+        // SAFETY: `plan.encrypt_payload_with_replay_cache` below validates
+        // every client envelope with the runtime provider before the operation
+        // is passed to collection storage.
+        (true, true) => unsafe {
+            CollectionUpdateProvenance::runtime_encrypted_payloads_and_verified_client_envelopes_unchecked()
+        },
         (true, false) => CollectionUpdateProvenance::RuntimeEncryptedPayloads,
-        (false, true) => CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes,
+        // SAFETY: `plan.encrypt_payload_with_replay_cache` below validates
+        // every client envelope with the runtime provider before the operation
+        // is passed to collection storage.
+        (false, true) => unsafe {
+            CollectionUpdateProvenance::runtime_verified_client_envelopes_unchecked()
+        },
         (false, false) => CollectionUpdateProvenance::ClientPlaintext,
     };
     let mut local_seen_client_nonces = std::collections::HashSet::new();
@@ -1485,11 +1493,19 @@ async fn maybe_encrypt_point_payload_update(
         plan.has_server_encrypt_rules(),
         plan.has_client_envelope_rules(),
     ) {
-        (true, true) => {
-            CollectionUpdateProvenance::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes
-        }
+        // SAFETY: `plan.encrypt_payload_with_replay_cache` below validates
+        // every client envelope with the runtime provider before the operation
+        // is passed to collection storage.
+        (true, true) => unsafe {
+            CollectionUpdateProvenance::runtime_encrypted_payloads_and_verified_client_envelopes_unchecked()
+        },
         (true, false) => CollectionUpdateProvenance::RuntimeEncryptedPayloads,
-        (false, true) => CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes,
+        // SAFETY: `plan.encrypt_payload_with_replay_cache` below validates
+        // every client envelope with the runtime provider before the operation
+        // is passed to collection storage.
+        (false, true) => unsafe {
+            CollectionUpdateProvenance::runtime_verified_client_envelopes_unchecked()
+        },
         (false, false) => CollectionUpdateProvenance::ClientPlaintext,
     };
     let mut local_seen_client_nonces = std::collections::HashSet::new();
