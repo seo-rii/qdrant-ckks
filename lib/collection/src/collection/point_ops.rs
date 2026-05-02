@@ -10,7 +10,8 @@ use itertools::Itertools;
 use qdrant_ckks::{
     CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadNonceReplayKey, ClientPayloadValidationContext,
     ServerPayloadValidationContext, client_payload_nonce_replay_key,
-    is_client_encrypted_payload_value, is_encrypted_payload_value, validate_client_payload_value,
+    client_payload_verified_envelope_key, is_client_encrypted_payload_value,
+    is_encrypted_payload_value, validate_client_payload_value,
     validate_server_payload_value_metadata,
 };
 use segment::data_types::order_by::{Direction, OrderBy};
@@ -260,7 +261,19 @@ impl Collection {
                         continue;
                     }
                     if allow_client_envelope && is_client_encrypted_payload_value(value) {
-                        if !update_provenance.allows_client_envelopes() {
+                        let Some(verified_envelope_key) =
+                            client_payload_verified_envelope_key(value, encrypted_path_str)
+                                .map_err(|err| {
+                                    CollectionError::bad_input(format!(
+                                        "client encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: {err}",
+                                    ))
+                                })?
+                        else {
+                            return Err(CollectionError::bad_input(format!(
+                                "client encrypted payload marker for field '{encrypted_path_str}' requires runtime envelope verification before collection write",
+                            )));
+                        };
+                        if !update_provenance.allows_client_envelope_key(&verified_envelope_key) {
                             return Err(CollectionError::bad_input(format!(
                                 "client encrypted payload marker for field '{encrypted_path_str}' requires runtime envelope verification before collection write",
                             )));

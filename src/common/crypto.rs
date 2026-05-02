@@ -11,13 +11,13 @@ use data_encoding::BASE64URL_NOPAD;
 use qdrant_ckks::{
     AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_VECTOR_KEY_DOMAIN,
     CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadNonceReplayKey,
-    ClientPayloadSignatureVerification, ClientPayloadValidationContext, ExistingPayloadMode,
-    LocalMasterKeyProvider, MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER,
-    PAYLOAD_CLIENT_AEAD_PROVIDER, PAYLOAD_FIELD_BINDING, PayloadEncryptionError,
-    PayloadEncryptionPolicy, PayloadTextEncryptor, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey,
-    VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER, WrappedKeyBlob,
-    client_payload_nonce_replay_key, client_payload_signature_key_id, rewrap_resource_key,
-    validate_client_payload_value,
+    ClientPayloadSignatureVerification, ClientPayloadValidationContext,
+    ClientPayloadVerifiedEnvelopeKey, ExistingPayloadMode, LocalMasterKeyProvider,
+    MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER,
+    PAYLOAD_FIELD_BINDING, PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
+    RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER,
+    WrappedKeyBlob, client_payload_nonce_replay_key, client_payload_signature_key_id,
+    client_payload_verified_envelope_key, rewrap_resource_key, validate_client_payload_value,
 };
 use segment::json_path::JsonPath;
 use segment::types::Payload;
@@ -328,6 +328,11 @@ pub struct PayloadWritePlan {
     rules: Vec<PayloadWriteRule>,
 }
 
+pub(crate) struct PayloadWriteOutcome {
+    pub changed: usize,
+    pub verified_client_envelope_keys: HashSet<ClientPayloadVerifiedEnvelopeKey>,
+}
+
 impl PayloadWritePlan {
     pub fn has_server_encrypt_rules(&self) -> bool {
         self.rules
@@ -363,12 +368,24 @@ impl PayloadWritePlan {
         payload: &mut Payload,
         seen_client_nonces: &mut HashSet<ClientPayloadNonceReplayKey>,
     ) -> Result<usize, PayloadWriteSetupError> {
-        let mut encrypted = 0;
+        Ok(self
+            .process_payload_with_replay_cache(point_id, payload, seen_client_nonces)?
+            .changed)
+    }
+
+    pub(crate) fn process_payload_with_replay_cache(
+        &self,
+        point_id: &str,
+        payload: &mut Payload,
+        seen_client_nonces: &mut HashSet<ClientPayloadNonceReplayKey>,
+    ) -> Result<PayloadWriteOutcome, PayloadWriteSetupError> {
+        let mut changed = 0;
+        let mut verified_client_envelope_keys = HashSet::new();
 
         for rule in &self.rules {
             match rule {
                 PayloadWriteRule::ServerEncrypt { encryptor, policy } => {
-                    encrypted += encryptor.encrypt_selected_fields_with_mode(
+                    changed += encryptor.encrypt_selected_fields_with_mode(
                         point_id,
                         &mut payload.0,
                         policy,
@@ -411,6 +428,16 @@ impl PayloadWritePlan {
                                     signature_verification,
                                 },
                             )?;
+                            let Some(verified_envelope_key) =
+                                client_payload_verified_envelope_key(value, field)?
+                            else {
+                                return Err(PayloadWriteSetupError::Payload(
+                                    PayloadEncryptionError::ExpectedEncryptedEnvelope {
+                                        field: field.clone(),
+                                        found: "object",
+                                    },
+                                ));
+                            };
                             let Some(nonce_replay_key) =
                                 client_payload_nonce_replay_key(value, field)?
                             else {
@@ -426,14 +453,18 @@ impl PayloadWritePlan {
                                     PayloadEncryptionError::ClientNonceReplay,
                                 ));
                             }
-                            encrypted += 1;
+                            verified_client_envelope_keys.insert(verified_envelope_key);
+                            changed += 1;
                         }
                     }
                 }
             }
         }
 
-        Ok(encrypted)
+        Ok(PayloadWriteOutcome {
+            changed,
+            verified_client_envelope_keys,
+        })
     }
 
     #[cfg_attr(

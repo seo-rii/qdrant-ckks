@@ -2,6 +2,7 @@ use data_encoding::BASE64URL_NOPAD;
 use ring::signature::{ED25519, UnparsedPublicKey};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::aead::{
@@ -171,6 +172,18 @@ pub struct ClientPayloadNonceReplayKey {
     pub rk_id: String,
     pub rk_epoch: u64,
     pub nonce: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ClientPayloadVerifiedEnvelopeKey {
+    pub collection_id: String,
+    pub point_id: String,
+    pub field_path: String,
+    pub key_id: String,
+    pub rk_id: String,
+    pub rk_epoch: u64,
+    pub nonce: String,
+    pub ciphertext_sha256_b64: String,
 }
 
 impl PayloadTextEncryptor {
@@ -614,6 +627,40 @@ pub fn validate_client_payload_value(
     )?;
 
     Ok(())
+}
+
+pub fn client_payload_verified_envelope_key(
+    value: &Value,
+    field_path: &str,
+) -> Result<Option<ClientPayloadVerifiedEnvelopeKey>, PayloadEncryptionError> {
+    let Some(envelope) = extract_client_envelope(value, field_path)? else {
+        return Ok(None);
+    };
+    let Some(key_id) = envelope.key_id else {
+        return Ok(None);
+    };
+    let Some(rk_id) = envelope.rk_id else {
+        return Ok(None);
+    };
+    let Some(rk_epoch) = envelope.rk_epoch else {
+        return Ok(None);
+    };
+    let ciphertext = BASE64URL_NOPAD
+        .decode(envelope.ciphertext.as_bytes())
+        .map_err(|_| PayloadEncryptionError::MalformedEnvelope(field_path.to_string()))?;
+    let ciphertext_digest = Sha256::digest(&ciphertext);
+    let ciphertext_sha256_b64 = BASE64URL_NOPAD.encode(ciphertext_digest.as_ref());
+
+    Ok(Some(ClientPayloadVerifiedEnvelopeKey {
+        collection_id: envelope.aad.collection_id,
+        point_id: envelope.aad.point_id,
+        field_path: envelope.aad.field_path,
+        key_id,
+        rk_id,
+        rk_epoch,
+        nonce: envelope.nonce,
+        ciphertext_sha256_b64,
+    }))
 }
 
 pub fn client_payload_signature_message(

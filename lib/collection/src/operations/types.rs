@@ -1,9 +1,10 @@
 use std::backtrace::Backtrace;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error as _;
 use std::fmt::{Debug, Write as _};
 use std::iter;
 use std::num::NonZeroU64;
+use std::sync::Arc;
 use std::time::{Duration, SystemTimeError};
 
 use api::grpc::transport_channel_pool::RequestError;
@@ -18,6 +19,7 @@ use common::types::ScoreType;
 use common::validation::validate_range_generic;
 use common::{defaults, save_on_disk};
 use issues::IssueRecord;
+use qdrant_ckks::ClientPayloadVerifiedEnvelopeKey;
 use schemars::JsonSchema;
 use segment::common::anonymize::Anonymize;
 use segment::common::operation_error::{CancelledError, OperationError};
@@ -74,7 +76,7 @@ pub enum CollectionStatus {
     Red,
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Copy, Clone)]
+#[derive(Debug, Default, PartialEq, Eq, Clone)]
 pub enum CollectionUpdateProvenance {
     /// Client-originated plaintext operation. Encrypted payload markers are not
     /// trusted in this mode and must be produced by a runtime transform first.
@@ -91,9 +93,9 @@ pub enum CollectionUpdateProvenance {
     RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(RuntimeVerifiedClientEnvelopes),
 }
 
-#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct RuntimeVerifiedClientEnvelopes {
-    _private: (),
+    verified_envelope_keys: Arc<HashSet<ClientPayloadVerifiedEnvelopeKey>>,
 }
 
 impl RuntimeVerifiedClientEnvelopes {
@@ -103,8 +105,16 @@ impl RuntimeVerifiedClientEnvelopes {
     /// the operation was verified by the runtime client-envelope provider,
     /// including Ed25519 signature verification and nonce replay checks. This
     /// token must never be created for raw client input.
-    pub unsafe fn new_unchecked() -> Self {
-        Self { _private: () }
+    pub unsafe fn new_unchecked(
+        verified_envelope_keys: impl IntoIterator<Item = ClientPayloadVerifiedEnvelopeKey>,
+    ) -> Self {
+        Self {
+            verified_envelope_keys: Arc::new(verified_envelope_keys.into_iter().collect()),
+        }
+    }
+
+    pub fn contains(&self, verified_envelope_key: &ClientPayloadVerifiedEnvelopeKey) -> bool {
+        self.verified_envelope_keys.contains(verified_envelope_key)
     }
 }
 
@@ -115,10 +125,12 @@ impl CollectionUpdateProvenance {
     /// the operation was verified by the runtime client-envelope provider,
     /// including Ed25519 signature verification and nonce replay checks. This
     /// provenance must never be used for raw client input.
-    pub unsafe fn runtime_verified_client_envelopes_unchecked() -> Self {
+    pub unsafe fn runtime_verified_client_envelopes_unchecked(
+        verified_envelope_keys: impl IntoIterator<Item = ClientPayloadVerifiedEnvelopeKey>,
+    ) -> Self {
         // SAFETY: The caller upholds the runtime verification invariant.
         Self::RuntimeVerifiedClientEnvelopes(unsafe {
-            RuntimeVerifiedClientEnvelopes::new_unchecked()
+            RuntimeVerifiedClientEnvelopes::new_unchecked(verified_envelope_keys)
         })
     }
 
@@ -128,14 +140,16 @@ impl CollectionUpdateProvenance {
     /// runtime payload encryptor and every client-side envelope was verified by
     /// the runtime client-envelope provider. This provenance must never be used
     /// for raw client input.
-    pub unsafe fn runtime_encrypted_payloads_and_verified_client_envelopes_unchecked() -> Self {
+    pub unsafe fn runtime_encrypted_payloads_and_verified_client_envelopes_unchecked(
+        verified_envelope_keys: impl IntoIterator<Item = ClientPayloadVerifiedEnvelopeKey>,
+    ) -> Self {
         // SAFETY: The caller upholds the runtime verification invariant.
         Self::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(unsafe {
-            RuntimeVerifiedClientEnvelopes::new_unchecked()
+            RuntimeVerifiedClientEnvelopes::new_unchecked(verified_envelope_keys)
         })
     }
 
-    pub const fn allows_server_envelopes(self) -> bool {
+    pub const fn allows_server_envelopes(&self) -> bool {
         matches!(
             self,
             Self::RuntimeEncryptedPayloads
@@ -143,12 +157,17 @@ impl CollectionUpdateProvenance {
         )
     }
 
-    pub const fn allows_client_envelopes(self) -> bool {
-        matches!(
-            self,
-            Self::RuntimeVerifiedClientEnvelopes(_)
-                | Self::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(_)
-        )
+    pub fn allows_client_envelope_key(
+        &self,
+        verified_envelope_key: &ClientPayloadVerifiedEnvelopeKey,
+    ) -> bool {
+        match self {
+            Self::RuntimeVerifiedClientEnvelopes(verified)
+            | Self::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(verified) => {
+                verified.contains(verified_envelope_key)
+            }
+            Self::ClientPlaintext | Self::RuntimeEncryptedPayloads => false,
+        }
     }
 }
 

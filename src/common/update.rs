@@ -14,7 +14,9 @@ use collection::operations::vector_ops::*;
 use collection::operations::verification::*;
 use collection::shards::shard::ShardId;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
-use qdrant_ckks::{ClientPayloadNonceReplayKey, PayloadEncryptionError};
+use qdrant_ckks::{
+    ClientPayloadNonceReplayKey, ClientPayloadVerifiedEnvelopeKey, PayloadEncryptionError,
+};
 use schemars::JsonSchema;
 use segment::json_path::JsonPath;
 use segment::types::{Filter, PayloadFieldSchema, PayloadKeyType, StrictModeConfig};
@@ -689,7 +691,7 @@ async fn do_set_payload_with_replay_cache(
                 shard_key,
                 auth.clone(),
                 hw_measurement_acc.clone(),
-                update_provenance,
+                update_provenance.clone(),
             )
             .await?,
         );
@@ -784,7 +786,7 @@ async fn do_overwrite_payload_with_replay_cache(
                 shard_key,
                 auth.clone(),
                 hw_measurement_acc.clone(),
-                update_provenance,
+                update_provenance.clone(),
             )
             .await?,
         );
@@ -1363,39 +1365,25 @@ async fn maybe_encrypt_upsert_payloads(
     else {
         return Ok((operation, CollectionUpdateProvenance::ClientPlaintext));
     };
-    let update_provenance = match (
-        plan.has_server_encrypt_rules(),
-        plan.has_client_envelope_rules(),
-    ) {
-        // SAFETY: `plan.encrypt_payload_with_replay_cache` below validates
-        // every client envelope with the runtime provider before the operation
-        // is passed to collection storage.
-        (true, true) => unsafe {
-            CollectionUpdateProvenance::runtime_encrypted_payloads_and_verified_client_envelopes_unchecked()
-        },
-        (true, false) => CollectionUpdateProvenance::RuntimeEncryptedPayloads,
-        // SAFETY: `plan.encrypt_payload_with_replay_cache` below validates
-        // every client envelope with the runtime provider before the operation
-        // is passed to collection storage.
-        (false, true) => unsafe {
-            CollectionUpdateProvenance::runtime_verified_client_envelopes_unchecked()
-        },
-        (false, false) => CollectionUpdateProvenance::ClientPlaintext,
-    };
     let mut local_seen_client_nonces = std::collections::HashSet::new();
     let seen_client_nonces = client_nonce_replay_cache.unwrap_or(&mut local_seen_client_nonces);
     let seen_client_nonces_before = seen_client_nonces.clone();
+    let mut verified_client_envelope_keys = std::collections::HashSet::new();
 
     match &mut operation {
         PointInsertOperations::PointsList(list) => {
             for point in &mut list.points {
                 if let Some(payload) = &mut point.payload {
-                    plan.encrypt_payload_with_replay_cache(
-                        &point.id.to_string(),
-                        payload,
-                        &mut *seen_client_nonces,
-                    )
-                    .map_err(|err| payload_write_error_to_storage_error(collection_name, err))?;
+                    let outcome = plan
+                        .process_payload_with_replay_cache(
+                            &point.id.to_string(),
+                            payload,
+                            &mut *seen_client_nonces,
+                        )
+                        .map_err(|err| {
+                            payload_write_error_to_storage_error(collection_name, err)
+                        })?;
+                    verified_client_envelope_keys.extend(outcome.verified_client_envelope_keys);
                 }
             }
         }
@@ -1403,19 +1391,25 @@ async fn maybe_encrypt_upsert_payloads(
             if let Some(payloads) = batch.batch.payloads.as_mut() {
                 for (point_id, payload) in batch.batch.ids.iter().zip(payloads.iter_mut()) {
                     if let Some(payload) = payload {
-                        plan.encrypt_payload_with_replay_cache(
-                            &point_id.to_string(),
-                            payload,
-                            &mut *seen_client_nonces,
-                        )
-                        .map_err(|err| {
-                            payload_write_error_to_storage_error(collection_name, err)
-                        })?;
+                        let outcome = plan
+                            .process_payload_with_replay_cache(
+                                &point_id.to_string(),
+                                payload,
+                                &mut *seen_client_nonces,
+                            )
+                            .map_err(|err| {
+                                payload_write_error_to_storage_error(collection_name, err)
+                            })?;
+                        verified_client_envelope_keys.extend(outcome.verified_client_envelope_keys);
                     }
                 }
             }
         }
     }
+    let update_provenance = payload_update_provenance(
+        plan.has_server_encrypt_rules(),
+        verified_client_envelope_keys,
+    );
     record_process_client_nonce_replay_cache(
         toc,
         &collection_crypto_id,
@@ -1489,25 +1483,6 @@ async fn maybe_encrypt_point_payload_update(
             CollectionUpdateProvenance::ClientPlaintext,
         ));
     };
-    let update_provenance = match (
-        plan.has_server_encrypt_rules(),
-        plan.has_client_envelope_rules(),
-    ) {
-        // SAFETY: `plan.encrypt_payload_with_replay_cache` below validates
-        // every client envelope with the runtime provider before the operation
-        // is passed to collection storage.
-        (true, true) => unsafe {
-            CollectionUpdateProvenance::runtime_encrypted_payloads_and_verified_client_envelopes_unchecked()
-        },
-        (true, false) => CollectionUpdateProvenance::RuntimeEncryptedPayloads,
-        // SAFETY: `plan.encrypt_payload_with_replay_cache` below validates
-        // every client envelope with the runtime provider before the operation
-        // is passed to collection storage.
-        (false, true) => unsafe {
-            CollectionUpdateProvenance::runtime_verified_client_envelopes_unchecked()
-        },
-        (false, false) => CollectionUpdateProvenance::ClientPlaintext,
-    };
     let mut local_seen_client_nonces = std::collections::HashSet::new();
     let seen_client_nonces = client_nonce_replay_cache.unwrap_or(&mut local_seen_client_nonces);
     let seen_client_nonces_before = seen_client_nonces.clone();
@@ -1521,7 +1496,10 @@ async fn maybe_encrypt_point_payload_update(
                 "{operation_name} with a filter cannot update encrypted payload fields in collection {collection_name}; use point-specific upsert/set_payload so encryption can bind AAD to each point id",
             )));
         }
-        return Ok((PayloadUpdatePlan::Single(operation), update_provenance));
+        return Ok((
+            PayloadUpdatePlan::Single(operation),
+            CollectionUpdateProvenance::ClientPlaintext,
+        ));
     }
 
     if operation.key.is_some() {
@@ -1530,7 +1508,10 @@ async fn maybe_encrypt_point_payload_update(
                 "{operation_name} with a key path cannot update encrypted payload fields in collection {collection_name}; use a full point-specific payload update so the selected encrypted fields can be sealed with their canonical field paths",
             )));
         }
-        return Ok((PayloadUpdatePlan::Single(operation), update_provenance));
+        return Ok((
+            PayloadUpdatePlan::Single(operation),
+            CollectionUpdateProvenance::ClientPlaintext,
+        ));
     }
 
     let Some(points) = operation.points.as_ref() else {
@@ -1539,7 +1520,10 @@ async fn maybe_encrypt_point_payload_update(
                 "{operation_name} cannot update encrypted payload fields without point ids in collection {collection_name}; send point-specific updates so encryption can bind AAD to each point id",
             )));
         }
-        return Ok((PayloadUpdatePlan::Single(operation), update_provenance));
+        return Ok((
+            PayloadUpdatePlan::Single(operation),
+            CollectionUpdateProvenance::ClientPlaintext,
+        ));
     };
 
     if points.is_empty() {
@@ -1548,7 +1532,10 @@ async fn maybe_encrypt_point_payload_update(
                 "{operation_name} cannot update encrypted payload fields without point ids in collection {collection_name}; send point-specific updates so encryption can bind AAD to each point id",
             )));
         }
-        return Ok((PayloadUpdatePlan::Single(operation), update_provenance));
+        return Ok((
+            PayloadUpdatePlan::Single(operation),
+            CollectionUpdateProvenance::ClientPlaintext,
+        ));
     }
 
     if points.len() > 1 && touches_encrypted_payload {
@@ -1583,20 +1570,28 @@ async fn maybe_encrypt_point_payload_update(
         .await?;
         return Ok((
             PayloadUpdatePlan::Fanout(encrypted_operations),
-            update_provenance,
+            CollectionUpdateProvenance::RuntimeEncryptedPayloads,
         ));
     }
 
     let Some(point_id) = points.first() else {
-        return Ok((PayloadUpdatePlan::Single(operation), update_provenance));
+        return Ok((
+            PayloadUpdatePlan::Single(operation),
+            CollectionUpdateProvenance::ClientPlaintext,
+        ));
     };
 
-    plan.encrypt_payload_with_replay_cache(
-        &point_id.to_string(),
-        &mut operation.payload,
-        &mut *seen_client_nonces,
-    )
-    .map_err(|err| payload_write_error_to_storage_error(collection_name, err))?;
+    let outcome = plan
+        .process_payload_with_replay_cache(
+            &point_id.to_string(),
+            &mut operation.payload,
+            &mut *seen_client_nonces,
+        )
+        .map_err(|err| payload_write_error_to_storage_error(collection_name, err))?;
+    let update_provenance = payload_update_provenance(
+        plan.has_server_encrypt_rules(),
+        outcome.verified_client_envelope_keys,
+    );
     record_process_client_nonce_replay_cache(
         toc,
         &collection_crypto_id,
@@ -1606,6 +1601,34 @@ async fn maybe_encrypt_point_payload_update(
     .await?;
 
     Ok((PayloadUpdatePlan::Single(operation), update_provenance))
+}
+
+fn payload_update_provenance(
+    has_server_encrypt_rules: bool,
+    verified_client_envelope_keys: std::collections::HashSet<ClientPayloadVerifiedEnvelopeKey>,
+) -> CollectionUpdateProvenance {
+    match (
+        has_server_encrypt_rules,
+        verified_client_envelope_keys.is_empty(),
+    ) {
+        // SAFETY: the keys are emitted only after the payload write plan
+        // validates each corresponding client envelope with the configured
+        // runtime provider, including Ed25519 signature verification.
+        (true, false) => unsafe {
+            CollectionUpdateProvenance::runtime_encrypted_payloads_and_verified_client_envelopes_unchecked(
+                verified_client_envelope_keys,
+            )
+        },
+        (true, true) => CollectionUpdateProvenance::RuntimeEncryptedPayloads,
+        // SAFETY: same as above; there are no server-created envelopes in this
+        // operation, but all client envelopes covered by the keys were verified.
+        (false, false) => unsafe {
+            CollectionUpdateProvenance::runtime_verified_client_envelopes_unchecked(
+                verified_client_envelope_keys,
+            )
+        },
+        (false, true) => CollectionUpdateProvenance::ClientPlaintext,
+    }
 }
 
 async fn record_process_client_nonce_replay_cache(

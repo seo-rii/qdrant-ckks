@@ -471,7 +471,7 @@ impl TableOfContent {
                     ordering,
                     Some(shard_key),
                     hw_measurement_acc.clone(),
-                    update_provenance,
+                    update_provenance.clone(),
                 )
             })
             .collect();

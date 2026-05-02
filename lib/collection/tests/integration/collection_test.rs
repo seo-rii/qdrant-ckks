@@ -46,7 +46,8 @@ use itertools::Itertools;
 use qdrant_ckks::{
     AeadCipher, CLIENT_ENCRYPTED_PAYLOAD_MARKER, CLIENT_PAYLOAD_ENVELOPE_BINDING,
     ENCRYPTED_PAYLOAD_MARKER, PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionPolicy,
-    PayloadTextEncryptor, SecretKey, is_client_encrypted_payload_value, is_encrypted_payload_value,
+    PayloadTextEncryptor, SecretKey, client_payload_verified_envelope_key,
+    is_client_encrypted_payload_value, is_encrypted_payload_value,
 };
 use segment::data_types::facets::FacetParams;
 use segment::data_types::order_by::{Direction, OrderBy, OrderByInterface};
@@ -66,11 +67,51 @@ use crate::common::{
     new_local_collection, simple_collection_fixture,
 };
 
-fn runtime_verified_client_envelopes() -> CollectionUpdateProvenance {
+fn runtime_verified_client_envelopes_for_operation(
+    operation: &CollectionUpdateOperations,
+) -> CollectionUpdateProvenance {
+    let mut verified_envelope_keys = Vec::new();
+    let mut collect_payload = |payload: &Payload| {
+        let Some(value) = payload
+            .0
+            .get("document")
+            .and_then(|document| document.get("body"))
+        else {
+            return;
+        };
+        if let Some(key) = client_payload_verified_envelope_key(value, "document.body").unwrap() {
+            verified_envelope_keys.push(key);
+        }
+    };
+
+    match operation {
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::PointsList(points),
+        )) => {
+            for point in points {
+                if let Some(payload) = &point.payload {
+                    collect_payload(payload);
+                }
+            }
+        }
+        CollectionUpdateOperations::PointOperation(PointOperations::SyncPoints(operation)) => {
+            for point in &operation.points {
+                if let Some(payload) = &point.payload {
+                    collect_payload(payload);
+                }
+            }
+        }
+        _ => {}
+    }
+
     // SAFETY: these integration tests intentionally exercise the collection
     // guard after constructing fixtures that represent runtime-verified client
     // envelopes, including malformed variants for negative assertions.
-    unsafe { CollectionUpdateProvenance::runtime_verified_client_envelopes_unchecked() }
+    unsafe {
+        CollectionUpdateProvenance::runtime_verified_client_envelopes_unchecked(
+            verified_envelope_keys,
+        )
+    }
 }
 
 fn payload_encryption_config() -> CollectionEncryptionConfig {
@@ -1799,13 +1840,13 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         ));
     let err = collection
         .update_from_client(
-            wrong_collection_marker,
+            wrong_collection_marker.clone(),
             true.into(),
             None,
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            runtime_verified_client_envelopes(),
+            runtime_verified_client_envelopes_for_operation(&wrong_collection_marker),
         )
         .await
         .unwrap_err();
@@ -1830,13 +1871,13 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         ));
     let err = collection
         .update_from_client(
-            wrong_rk_marker,
+            wrong_rk_marker.clone(),
             true.into(),
             None,
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            runtime_verified_client_envelopes(),
+            runtime_verified_client_envelopes_for_operation(&wrong_rk_marker),
         )
         .await
         .unwrap_err();
@@ -1862,13 +1903,13 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         ));
     let err = collection
         .update_from_client(
-            wrong_epoch_marker,
+            wrong_epoch_marker.clone(),
             true.into(),
             None,
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            runtime_verified_client_envelopes(),
+            runtime_verified_client_envelopes_for_operation(&wrong_epoch_marker),
         )
         .await
         .unwrap_err();
@@ -1906,13 +1947,13 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         ));
     let err = collection
         .update_from_client(
-            unsigned_marker,
+            unsigned_marker.clone(),
             true.into(),
             None,
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            runtime_verified_client_envelopes(),
+            runtime_verified_client_envelopes_for_operation(&unsigned_marker),
         )
         .await
         .unwrap_err();
@@ -1947,13 +1988,13 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
     ));
     let err = collection
         .update_from_client(
-            replay_marker,
+            replay_marker.clone(),
             true.into(),
             None,
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            runtime_verified_client_envelopes(),
+            runtime_verified_client_envelopes_for_operation(&replay_marker),
         )
         .await
         .unwrap_err();
@@ -1977,13 +2018,13 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
     ));
     collection
         .update_from_client(
-            valid_marker,
+            valid_marker.clone(),
             true.into(),
             None,
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            runtime_verified_client_envelopes(),
+            runtime_verified_client_envelopes_for_operation(&valid_marker),
         )
         .await
         .unwrap();
@@ -2002,13 +2043,13 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         ));
     let err = collection
         .update_from_client(
-            replay_after_valid,
+            replay_after_valid.clone(),
             true.into(),
             None,
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            runtime_verified_client_envelopes(),
+            runtime_verified_client_envelopes_for_operation(&replay_after_valid),
         )
         .await
         .unwrap_err();
@@ -2142,13 +2183,13 @@ async fn client_encrypted_payload_nonce_replay_survives_collection_reload() {
     ));
     collection
         .update_from_client(
-            valid_marker,
+            valid_marker.clone(),
             true.into(),
             None,
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            runtime_verified_client_envelopes(),
+            runtime_verified_client_envelopes_for_operation(&valid_marker),
         )
         .await
         .unwrap();
@@ -2167,13 +2208,13 @@ async fn client_encrypted_payload_nonce_replay_survives_collection_reload() {
     ));
     let err = collection
         .update_from_client(
-            replay_marker,
+            replay_marker.clone(),
             true.into(),
             None,
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            runtime_verified_client_envelopes(),
+            runtime_verified_client_envelopes_for_operation(&replay_marker),
         )
         .await
         .unwrap_err();
