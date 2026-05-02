@@ -789,14 +789,23 @@ impl CommandOpenFheBackend {
 fn configure_bridge_command_sandbox(command: &mut Command) {
     // This is not a full sandbox, but it prevents the bridge process from
     // gaining privileges through setuid binaries or file capabilities after
-    // Qdrant has already validated the executable path and ownership.
+    // Qdrant has already validated the executable path and ownership. It also
+    // disables core dumps for the plaintext-bearing bridge process.
     unsafe {
         command.pre_exec(|| {
             let result = nix::libc::prctl(nix::libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
-            if result == 0 {
-                Ok(())
-            } else {
+            if result != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let core_limit = nix::libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            let result = nix::libc::setrlimit(nix::libc::RLIMIT_CORE, &core_limit);
+            if result != 0 {
                 Err(io::Error::last_os_error())
+            } else {
+                Ok(())
             }
         });
     }

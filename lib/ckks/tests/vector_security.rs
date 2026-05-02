@@ -564,6 +564,10 @@ if [[ "$(awk '/^NoNewPrivs:/ { print $2 }' /proc/self/status)" != "1" ]]; then
   printf 'no_new_privs was not set\n' >&2
   exit 17
 fi
+if [[ "$(ulimit -c)" != "0" ]]; then
+  printf 'core dumps were not disabled\n' >&2
+  exit 19
+fi
 IFS= read -r _request
 printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
 "#,

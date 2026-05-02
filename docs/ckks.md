@@ -548,7 +548,10 @@ on Unix, and requires the binary plus every parent directory to be owned by root
 or the Qdrant process user. Set `sha256_b64` in generic backends or
 `openfhe_bridge_sha256_b64` in legacy CKKS runtime settings to pin the expected
 bridge binary digest. Treat any bridge path change as privileged code execution
-under the Qdrant service account.
+under the Qdrant service account. On Linux, the checked bridge spawn path also
+sets `no_new_privs` and `RLIMIT_CORE=0` so the plaintext-bearing bridge cannot
+gain extra privileges through setuid/file-capability execution and does not
+produce normal core dumps.
 
 Request fields:
 
