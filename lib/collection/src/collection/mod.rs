@@ -1070,15 +1070,34 @@ impl Collection {
 }
 
 fn append_client_payload_nonce_replay_cache(path: &Path, keys: &[String]) -> CollectionResult<()> {
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(|err| {
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).map_err(|err| {
+        CollectionError::service_error(format!(
+            "failed to open client payload nonce replay cache {path:?}: {err}",
+        ))
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let permissions = file.metadata().map_err(|err| {
             CollectionError::service_error(format!(
-                "failed to open client payload nonce replay cache {path:?}: {err}",
+                "failed to inspect client payload nonce replay cache {path:?}: {err}",
             ))
         })?;
+        if permissions.permissions().mode() & 0o077 != 0 {
+            return Err(CollectionError::service_error(format!(
+                "client payload nonce replay cache {path:?} must not be group/world accessible",
+            )));
+        }
+    }
 
     for key in keys {
         writeln!(file, "{key}").map_err(|err| {
@@ -1106,11 +1125,34 @@ fn rewrite_client_payload_nonce_replay_cache(
     keys: &VecDeque<String>,
 ) -> CollectionResult<()> {
     let temp_path = path.with_extension("tmp");
-    let mut file = File::create(&temp_path).map_err(|err| {
+    let mut options = OpenOptions::new();
+    options.create(true).write(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temp_path).map_err(|err| {
         CollectionError::service_error(format!(
             "failed to create client payload nonce replay cache {temp_path:?}: {err}",
         ))
     })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let permissions = file.metadata().map_err(|err| {
+            CollectionError::service_error(format!(
+                "failed to inspect client payload nonce replay cache {temp_path:?}: {err}",
+            ))
+        })?;
+        if permissions.permissions().mode() & 0o077 != 0 {
+            return Err(CollectionError::service_error(format!(
+                "client payload nonce replay cache {temp_path:?} must not be group/world accessible",
+            )));
+        }
+    }
 
     for key in keys {
         writeln!(file, "{key}").map_err(|err| {
@@ -1188,5 +1230,28 @@ mod tests {
 
         let err = ClientPayloadNonceReplayCache::load(dir.path()).unwrap_err();
         assert!(format!("{err:?}").contains("oversized entry"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_payload_nonce_replay_cache_files_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let cache_path = dir.path().join(CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE);
+
+        append_client_payload_nonce_replay_cache(&cache_path, &["nonce-a".to_string()]).unwrap();
+        assert_eq!(
+            std::fs::metadata(&cache_path).unwrap().permissions().mode() & 0o077,
+            0,
+        );
+
+        let mut keys = VecDeque::new();
+        keys.push_back("nonce-b".to_string());
+        rewrite_client_payload_nonce_replay_cache(&cache_path, &keys).unwrap();
+        assert_eq!(
+            std::fs::metadata(&cache_path).unwrap().permissions().mode() & 0o077,
+            0,
+        );
     }
 }
