@@ -323,8 +323,12 @@ wrapped RK material, the `rk_id` plus `rk_epoch` used for the RK-derived subkey.
 They do not reference the MK directly, so MK rotation can rewrap the stored RK
 manifest without rewriting payload/vector envelopes. The low-level
 `rewrap_resource_key` helper implements that primitive by unwrapping the RK with
-the old MK/AAD and immediately wrapping the same RK with the new MK/AAD. RK
-rotation still requires a data re-encryption job and should use the explicit
+the old MK/AAD and immediately wrapping the same RK with the new MK/AAD. The
+runtime `rewrap_runtime_resource_key_materials_by_master_key` helper batches
+that primitive for every `active` or `retired` wrapped RK that references the
+old MK, preserving each RK's epoch, scope, and lifecycle state. `disabled` and
+`destroyed` RK records are not implicitly unwrapped during MK rotation.
+RK rotation still requires a data re-encryption job and should use the explicit
 re-encryption mode rather than normal write-path idempotency. The
 `rk_id`/`rk_epoch` fields are included in AEAD AAD for server-generated payload
 and vector envelopes, so storage-side edits to resource-key identity fail closed.

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::Path;
@@ -2513,6 +2513,57 @@ pub fn rewrap_runtime_resource_key_material(
     rewrapped_material.wrapped_key_b64 = Some(rewrapped.wrapped_key);
 
     Ok(rewrapped_material)
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "reserved for the admin MK rotation operation that rewraps all active/retired resource keys for one wrapping key"
+    )
+)]
+pub fn rewrap_runtime_resource_key_materials_by_master_key(
+    runtime_settings: &CryptoSettings,
+    old_wrapped_by: &str,
+    new_wrapped_by: &str,
+) -> Result<HashMap<String, CryptoMaterialConfig>, PayloadWriteSetupError> {
+    if old_wrapped_by == new_wrapped_by {
+        return Err(PayloadWriteSetupError::InvalidWrappedMaterial {
+            material: old_wrapped_by.to_string(),
+            reason: "old and new wrapping key material must differ".to_string(),
+        });
+    }
+
+    let mut rewrapped = HashMap::new();
+    for (material_name, material) in &runtime_settings.materials {
+        if material.kind == WRAPPED_SYMMETRIC_KEY_32_KIND
+            && material.wrapped_by.as_deref() == Some(old_wrapped_by)
+            && matches!(
+                wrapped_resource_key_state(material),
+                RESOURCE_KEY_STATE_ACTIVE | RESOURCE_KEY_STATE_RETIRED
+            )
+        {
+            rewrapped.insert(
+                material_name.clone(),
+                rewrap_runtime_resource_key_material(
+                    runtime_settings,
+                    material_name,
+                    new_wrapped_by,
+                )?,
+            );
+        }
+    }
+
+    if rewrapped.is_empty() {
+        return Err(PayloadWriteSetupError::InvalidWrappedMaterial {
+            material: old_wrapped_by.to_string(),
+            reason:
+                "no active or retired wrapped resource keys reference this wrapping key material"
+                    .to_string(),
+        });
+    }
+
+    Ok(rewrapped)
 }
 
 fn resource_key_wrap_aad(
@@ -6151,6 +6202,267 @@ mod tests {
         assert_eq!(
             payload.0.get("body").and_then(Value::as_str),
             Some("mk rotation keeps data key"),
+        );
+    }
+
+    #[test]
+    fn runtime_resource_key_batch_rewrap_updates_active_and_retired_keys_only() {
+        let old_mk_material = "tenant-a/mk-v1";
+        let new_mk_material = "tenant-a/mk-v2";
+        let other_mk_material = "tenant-a/mk-v3";
+        let active_rk_material = "tenant-a/payload-rk-v3";
+        let retired_rk_material = "tenant-a/payload-rk-v2";
+        let unrelated_rk_material = "tenant-a/other-rk-v1";
+        let destroyed_rk_material = "tenant-a/destroyed-rk-v1";
+        let wrap_resource_key_config =
+            |rk_material: &str,
+             rk_secret: [u8; 32],
+             rk_epoch: u64,
+             scope: &str,
+             wrapped_by: &str,
+             mk_secret: [u8; 32],
+             state: Option<&str>| {
+                let mut config = CryptoMaterialConfig {
+                    kind: WRAPPED_SYMMETRIC_KEY_32_KIND.to_string(),
+                    wrapped_by: Some(wrapped_by.to_string()),
+                    wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
+                    rk_epoch: Some(rk_epoch),
+                    scope: Some(scope.to_string()),
+                    state: state.map(ToString::to_string),
+                    ..CryptoMaterialConfig::default()
+                };
+                let aad = resource_key_wrap_aad(
+                    rk_material,
+                    &config,
+                    wrapped_by,
+                    RESOURCE_KEY_WRAP_ALGORITHM,
+                );
+                let wrapped =
+                    LocalMasterKeyProvider::new(wrapped_by, SecretKey::from_bytes(mk_secret))
+                        .unwrap()
+                        .wrap_resource_key(&SecretKey::from_bytes(rk_secret), &aad)
+                        .unwrap();
+                config.nonce = Some(wrapped.nonce);
+                config.wrapped_key_b64 = Some(wrapped.wrapped_key);
+                config
+            };
+        let active_rk_config = wrap_resource_key_config(
+            active_rk_material,
+            [92u8; 32],
+            3,
+            "collection:docs",
+            old_mk_material,
+            [91u8; 32],
+            None,
+        );
+        let retired_rk_config = wrap_resource_key_config(
+            retired_rk_material,
+            [94u8; 32],
+            2,
+            "collection:docs",
+            old_mk_material,
+            [91u8; 32],
+            Some(RESOURCE_KEY_STATE_RETIRED),
+        );
+        let unrelated_rk_config = wrap_resource_key_config(
+            unrelated_rk_material,
+            [96u8; 32],
+            1,
+            "collection:other",
+            other_mk_material,
+            [95u8; 32],
+            None,
+        );
+        let destroyed_rk_config = CryptoMaterialConfig {
+            kind: WRAPPED_SYMMETRIC_KEY_32_KIND.to_string(),
+            rk_epoch: Some(1),
+            scope: Some("collection:docs".to_string()),
+            state: Some(RESOURCE_KEY_STATE_DESTROYED.to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        let runtime_settings = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::new(),
+            materials: HashMap::from([
+                (
+                    old_mk_material.to_string(),
+                    CryptoMaterialConfig {
+                        kind: WRAPPING_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[91u8; 32])),
+                        ..CryptoMaterialConfig::default()
+                    },
+                ),
+                (
+                    new_mk_material.to_string(),
+                    CryptoMaterialConfig {
+                        kind: WRAPPING_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[93u8; 32])),
+                        ..CryptoMaterialConfig::default()
+                    },
+                ),
+                (
+                    other_mk_material.to_string(),
+                    CryptoMaterialConfig {
+                        kind: WRAPPING_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[95u8; 32])),
+                        ..CryptoMaterialConfig::default()
+                    },
+                ),
+                (active_rk_material.to_string(), active_rk_config),
+                (retired_rk_material.to_string(), retired_rk_config),
+                (unrelated_rk_material.to_string(), unrelated_rk_config),
+                (destroyed_rk_material.to_string(), destroyed_rk_config),
+            ]),
+            backends: HashMap::new(),
+        };
+        let old_active_resource_key = decode_wrapped_resource_key(
+            &runtime_settings,
+            active_rk_material,
+            runtime_settings.materials.get(active_rk_material).unwrap(),
+        )
+        .unwrap();
+        let old_retired_resource_key = decode_wrapped_resource_key_for_state(
+            &runtime_settings,
+            retired_rk_material,
+            runtime_settings.materials.get(retired_rk_material).unwrap(),
+            RESOURCE_KEY_STATE_RETIRED,
+        )
+        .unwrap();
+        let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
+        let mut active_payload = segment::types::Payload(
+            json!({ "body": "active mk rotation batch" })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        PayloadTextEncryptor::new_from_resource_key_with_metadata(
+            "docs",
+            "tenant-a:docs",
+            &old_active_resource_key,
+            "tenant-a/payload-rk@v3",
+            active_rk_material,
+            3,
+        )
+        .unwrap()
+        .encrypt_selected_fields("point-1", &mut active_payload.0, &policy)
+        .unwrap();
+        let mut retired_payload = segment::types::Payload(
+            json!({ "body": "retired mk rotation batch" })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        PayloadTextEncryptor::new_from_resource_key_with_metadata(
+            "docs",
+            "tenant-a:docs",
+            &old_retired_resource_key,
+            "tenant-a/payload-rk@v2",
+            retired_rk_material,
+            2,
+        )
+        .unwrap()
+        .encrypt_selected_fields("point-2", &mut retired_payload.0, &policy)
+        .unwrap();
+
+        let rewrapped = rewrap_runtime_resource_key_materials_by_master_key(
+            &runtime_settings,
+            old_mk_material,
+            new_mk_material,
+        )
+        .unwrap();
+
+        assert_eq!(rewrapped.len(), 2);
+        assert!(rewrapped.contains_key(active_rk_material));
+        assert!(rewrapped.contains_key(retired_rk_material));
+        assert!(!rewrapped.contains_key(unrelated_rk_material));
+        assert!(!rewrapped.contains_key(destroyed_rk_material));
+        assert_eq!(
+            rewrapped
+                .get(active_rk_material)
+                .unwrap()
+                .wrapped_by
+                .as_deref(),
+            Some(new_mk_material),
+        );
+        assert_eq!(
+            rewrapped
+                .get(retired_rk_material)
+                .unwrap()
+                .wrapped_by
+                .as_deref(),
+            Some(new_mk_material),
+        );
+        assert_eq!(
+            rewrapped.get(retired_rk_material).unwrap().state.as_deref(),
+            Some(RESOURCE_KEY_STATE_RETIRED),
+        );
+        assert_eq!(rewrapped.get(active_rk_material).unwrap().rk_epoch, Some(3));
+        assert_eq!(
+            rewrapped.get(retired_rk_material).unwrap().rk_epoch,
+            Some(2),
+        );
+
+        let mut rewrapped_settings = runtime_settings.clone();
+        for (material_name, material) in rewrapped {
+            rewrapped_settings.materials.insert(material_name, material);
+        }
+        let new_active_resource_key = decode_wrapped_resource_key(
+            &rewrapped_settings,
+            active_rk_material,
+            rewrapped_settings
+                .materials
+                .get(active_rk_material)
+                .unwrap(),
+        )
+        .unwrap();
+        let new_retired_resource_key = decode_wrapped_resource_key_for_state(
+            &rewrapped_settings,
+            retired_rk_material,
+            rewrapped_settings
+                .materials
+                .get(retired_rk_material)
+                .unwrap(),
+            RESOURCE_KEY_STATE_RETIRED,
+        )
+        .unwrap();
+        assert_eq!(
+            PayloadTextEncryptor::new_from_resource_key_with_metadata(
+                "docs",
+                "tenant-a:docs",
+                &new_active_resource_key,
+                "tenant-a/payload-rk@v3",
+                active_rk_material,
+                3,
+            )
+            .unwrap()
+            .decrypt_selected_fields("point-1", &mut active_payload.0, &policy)
+            .unwrap(),
+            1,
+        );
+        assert_eq!(
+            PayloadTextEncryptor::new_from_resource_key_with_metadata(
+                "docs",
+                "tenant-a:docs",
+                &new_retired_resource_key,
+                "tenant-a/payload-rk@v2",
+                retired_rk_material,
+                2,
+            )
+            .unwrap()
+            .decrypt_selected_fields("point-2", &mut retired_payload.0, &policy)
+            .unwrap(),
+            1,
+        );
+        assert_eq!(
+            active_payload.0.get("body").and_then(Value::as_str),
+            Some("active mk rotation batch"),
+        );
+        assert_eq!(
+            retired_payload.0.get("body").and_then(Value::as_str),
+            Some("retired mk rotation batch"),
         );
     }
 
