@@ -1707,7 +1707,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
             .await;
     let collection_crypto_id = collection.config_snapshot().await.uuid.unwrap().to_string();
 
-    let client_payload = |collection_id: &str, point_id: &str, rk_id: &str| {
+    let client_payload_with_epoch = |collection_id: &str, point_id: &str, rk_id: &str, rk_epoch| {
         Payload(
             serde_json::json!({
                 "document": {
@@ -1718,7 +1718,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
                             "algorithm": "AES-256-GCM",
                             "key_id": "tenant-a/client-rk-2026-04",
                             "rk_id": rk_id,
-                            "rk_epoch": 3,
+                            "rk_epoch": rk_epoch,
                             "kdf_domain": "qdrant/client-payload-text/v1",
                             "aad": {
                                 "collection_id": collection_id,
@@ -1741,6 +1741,9 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
             .unwrap()
             .clone(),
         )
+    };
+    let client_payload = |collection_id: &str, point_id: &str, rk_id: &str| {
+        client_payload_with_epoch(collection_id, point_id, rk_id, 3)
     };
 
     let unverified_sync_marker = CollectionUpdateOperations::PointOperation(
@@ -1835,6 +1838,38 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         CollectionError::BadInput { description }
             if description.contains("client encrypted payload marker")
                 && description.contains("resource key id does not match")
+    ));
+
+    let wrong_epoch_marker =
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                id: 1.into(),
+                vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                payload: Some(client_payload_with_epoch(
+                    &collection_crypto_id,
+                    "1",
+                    "tenant-a/client-rk-2026-04",
+                    2,
+                )),
+            }]),
+        ));
+    let err = collection
+        .update_from_client(
+            wrong_epoch_marker,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::RuntimeVerifiedClientEnvelopes,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("client encrypted payload marker")
+                && description.contains("resource key epoch")
     ));
 
     let mut unsigned_payload =
