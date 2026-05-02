@@ -283,8 +283,7 @@ enum PayloadWriteRule {
         min_rk_epoch: Option<u64>,
         max_rk_epoch: Option<u64>,
         key_id_required: bool,
-        signature_required: bool,
-        signature_verifier: Option<ClientPayloadSignatureVerifier>,
+        signature_verifier: ClientPayloadSignatureVerifier,
     },
 }
 
@@ -399,7 +398,6 @@ impl PayloadWritePlan {
                     min_rk_epoch,
                     max_rk_epoch,
                     key_id_required,
-                    signature_required,
                     signature_verifier,
                 } => {
                     for field in policy.fields() {
@@ -409,10 +407,8 @@ impl PayloadWritePlan {
                             )
                         })?;
                         for value in encrypted_path.value_get(&payload.0) {
-                            let signature_verification = signature_verifier
-                                .as_ref()
-                                .map(|verifier| verifier.verification_for_value(value, field))
-                                .transpose()?;
+                            let signature_verification =
+                                signature_verifier.verification_for_value(value, field)?;
                             validate_client_payload_value(
                                 value,
                                 ClientPayloadValidationContext {
@@ -424,8 +420,8 @@ impl PayloadWritePlan {
                                     min_rk_epoch: *min_rk_epoch,
                                     max_rk_epoch: *max_rk_epoch,
                                     key_id_required: *key_id_required,
-                                    signature_required: *signature_required,
-                                    signature_verification,
+                                    signature_required: true,
+                                    signature_verification: Some(signature_verification),
                                 },
                             )?;
                             let Some(verified_envelope_key) =
@@ -498,7 +494,6 @@ impl PayloadWritePlan {
                     min_rk_epoch,
                     max_rk_epoch,
                     key_id_required,
-                    signature_required,
                     signature_verifier,
                 } => {
                     for field in policy.fields() {
@@ -508,10 +503,8 @@ impl PayloadWritePlan {
                             )
                         })?;
                         for value in encrypted_path.value_get(&payload.0) {
-                            let signature_verification = signature_verifier
-                                .as_ref()
-                                .map(|verifier| verifier.verification_for_value(value, field))
-                                .transpose()?;
+                            let signature_verification =
+                                signature_verifier.verification_for_value(value, field)?;
                             validate_client_payload_value(
                                 value,
                                 ClientPayloadValidationContext {
@@ -523,8 +516,8 @@ impl PayloadWritePlan {
                                     min_rk_epoch: *min_rk_epoch,
                                     max_rk_epoch: *max_rk_epoch,
                                     key_id_required: *key_id_required,
-                                    signature_required: *signature_required,
-                                    signature_verification,
+                                    signature_required: true,
+                                    signature_verification: Some(signature_verification),
                                 },
                             )?;
                         }
@@ -1838,7 +1831,7 @@ fn generic_payload_write_plan(
                         instance: rule.instance.clone(),
                     });
                 }
-                let (signature_required, signature_verifier) =
+                let signature_verifier =
                     client_payload_signature_verifier(instance, &rule.instance)?;
                 rules.push(PayloadWriteRule::ClientEnvelope {
                     policy,
@@ -1847,7 +1840,6 @@ fn generic_payload_write_plan(
                     min_rk_epoch,
                     max_rk_epoch,
                     key_id_required,
-                    signature_required,
                     signature_verifier,
                 });
             }
@@ -1874,7 +1866,7 @@ fn generic_payload_write_plan(
 fn client_payload_signature_verifier(
     instance: &CryptoInstanceConfig,
     instance_id: &str,
-) -> Result<(bool, Option<ClientPayloadSignatureVerifier>), PayloadWriteSetupError> {
+) -> Result<ClientPayloadSignatureVerifier, PayloadWriteSetupError> {
     let signature_key_id = match instance.options.get(SIGNATURE_KEY_ID_OPTION) {
         None | Some(Value::Null) => None,
         Some(Value::String(value)) if is_crypto_identifier(value) => Some(value.as_str()),
@@ -1950,10 +1942,7 @@ fn client_payload_signature_verifier(
             public_keys.insert(key_id.clone(), public_key);
         }
 
-        return Ok((
-            true,
-            Some(ClientPayloadSignatureVerifier::Registry(public_keys)),
-        ));
+        return Ok(ClientPayloadSignatureVerifier::Registry(public_keys));
     }
 
     match (signature_key_id, signature_public_key) {
@@ -1979,13 +1968,10 @@ fn client_payload_signature_verifier(
                     instance: instance_id.to_string(),
                 });
             }
-            Ok((
-                true,
-                Some(ClientPayloadSignatureVerifier::Single {
-                    key_id: key_id.to_string(),
-                    public_key,
-                }),
-            ))
+            Ok(ClientPayloadSignatureVerifier::Single {
+                key_id: key_id.to_string(),
+                public_key,
+            })
         }
     }
 }
