@@ -1611,22 +1611,15 @@ fn payload_update_provenance(
         has_server_encrypt_rules,
         verified_client_envelope_keys.is_empty(),
     ) {
-        // SAFETY: the keys are emitted only after the payload write plan
-        // validates each corresponding client envelope with the configured
-        // runtime provider, including Ed25519 signature verification.
-        (true, false) => unsafe {
-            CollectionUpdateProvenance::runtime_encrypted_payloads_and_verified_client_envelopes_unchecked(
+        (true, false) => {
+            CollectionUpdateProvenance::runtime_encrypted_payloads_and_verified_client_envelopes(
                 verified_client_envelope_keys,
             )
-        },
+        }
         (true, true) => CollectionUpdateProvenance::RuntimeEncryptedPayloads,
-        // SAFETY: same as above; there are no server-created envelopes in this
-        // operation, but all client envelopes covered by the keys were verified.
-        (false, false) => unsafe {
-            CollectionUpdateProvenance::runtime_verified_client_envelopes_unchecked(
-                verified_client_envelope_keys,
-            )
-        },
+        (false, false) => CollectionUpdateProvenance::runtime_verified_client_envelopes(
+            verified_client_envelope_keys,
+        ),
         (false, true) => CollectionUpdateProvenance::ClientPlaintext,
     }
 }
@@ -1647,10 +1640,7 @@ async fn record_process_client_nonce_replay_cache(
 }
 
 fn client_nonce_replay_cache_key(key: &ClientPayloadNonceReplayKey) -> String {
-    format!(
-        "{}\x1f{}\x1f{}\x1f{}",
-        key.key_id, key.rk_id, key.rk_epoch, key.nonce,
-    )
+    key.cache_key()
 }
 
 async fn ensure_payload_runtime_available_for_upsert(

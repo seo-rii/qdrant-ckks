@@ -168,24 +168,48 @@ pub struct ClientPayloadSignatureVerification<'a> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ClientPayloadNonceReplayKey {
-    pub key_id: String,
-    pub rk_id: String,
-    pub rk_epoch: u64,
-    pub nonce: String,
+    key_id: String,
+    rk_id: String,
+    rk_epoch: u64,
+    nonce: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ClientPayloadEnvelopeKey {
+    collection_id: String,
+    point_id: String,
+    field_path: String,
+    key_id: String,
+    rk_id: String,
+    rk_epoch: u64,
+    nonce: String,
+    ciphertext_sha256_b64: String,
+    signature_key_id: String,
+    signature_sha256_b64: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ClientPayloadVerifiedEnvelopeKey {
-    pub collection_id: String,
-    pub point_id: String,
-    pub field_path: String,
-    pub key_id: String,
-    pub rk_id: String,
-    pub rk_epoch: u64,
-    pub nonce: String,
-    pub ciphertext_sha256_b64: String,
-    pub signature_key_id: String,
-    pub signature_sha256_b64: String,
+    envelope_key: ClientPayloadEnvelopeKey,
+}
+
+impl ClientPayloadNonceReplayKey {
+    pub fn cache_key(&self) -> String {
+        format!(
+            "{}\x1f{}\x1f{}\x1f{}",
+            self.key_id, self.rk_id, self.rk_epoch, self.nonce,
+        )
+    }
+
+    pub fn cache_key_for_collection(&self, collection_crypto_id: &str) -> String {
+        format!("{}\x1f{}", collection_crypto_id, self.cache_key())
+    }
+}
+
+impl ClientPayloadVerifiedEnvelopeKey {
+    pub fn envelope_key(&self) -> &ClientPayloadEnvelopeKey {
+        &self.envelope_key
+    }
 }
 
 impl PayloadTextEncryptor {
@@ -631,10 +655,29 @@ pub fn validate_client_payload_value(
     Ok(())
 }
 
-pub fn client_payload_verified_envelope_key(
+pub fn validate_client_payload_value_for_runtime(
+    value: &Value,
+    context: ClientPayloadValidationContext<'_>,
+) -> Result<ClientPayloadVerifiedEnvelopeKey, PayloadEncryptionError> {
+    if context.signature_verification.is_none() {
+        return Err(PayloadEncryptionError::InvalidClientSignature);
+    }
+    validate_client_payload_value(value, context)?;
+    let envelope_key =
+        client_payload_envelope_key(value, context.field_path)?.ok_or_else(|| {
+            PayloadEncryptionError::ExpectedEncryptedEnvelope {
+                field: context.field_path.to_string(),
+                found: json_type_name(value),
+            }
+        })?;
+
+    Ok(ClientPayloadVerifiedEnvelopeKey { envelope_key })
+}
+
+pub fn client_payload_envelope_key(
     value: &Value,
     field_path: &str,
-) -> Result<Option<ClientPayloadVerifiedEnvelopeKey>, PayloadEncryptionError> {
+) -> Result<Option<ClientPayloadEnvelopeKey>, PayloadEncryptionError> {
     let Some(envelope) = extract_client_envelope(value, field_path)? else {
         return Ok(None);
     };
@@ -661,7 +704,7 @@ pub fn client_payload_verified_envelope_key(
     let signature_digest = Sha256::digest(&signature_bytes);
     let signature_sha256_b64 = BASE64URL_NOPAD.encode(signature_digest.as_ref());
 
-    Ok(Some(ClientPayloadVerifiedEnvelopeKey {
+    Ok(Some(ClientPayloadEnvelopeKey {
         collection_id: envelope.aad.collection_id,
         point_id: envelope.aad.point_id,
         field_path: envelope.aad.field_path,

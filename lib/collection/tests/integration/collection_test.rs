@@ -41,14 +41,18 @@ use collection::recommendations::recommend_by;
 use collection::shards::replica_set::replica_set_state::{ReplicaSetState, ReplicaState};
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use common::types::{DetailsLevel, TelemetryDetail};
+use data_encoding::BASE64URL_NOPAD;
 use fs_err::{self as fs, File};
 use itertools::Itertools;
 use qdrant_ckks::{
     AeadCipher, CLIENT_ENCRYPTED_PAYLOAD_MARKER, CLIENT_PAYLOAD_ENVELOPE_BINDING,
-    ENCRYPTED_PAYLOAD_MARKER, PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionPolicy,
-    PayloadTextEncryptor, SecretKey, client_payload_verified_envelope_key,
-    is_client_encrypted_payload_value, is_encrypted_payload_value,
+    ClientPayloadSignatureVerification, ClientPayloadValidationContext, ENCRYPTED_PAYLOAD_MARKER,
+    PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
+    client_payload_signature_message, is_client_encrypted_payload_value,
+    is_encrypted_payload_value, validate_client_payload_value_for_runtime,
 };
+use ring::rand::SystemRandom;
+use ring::signature::{Ed25519KeyPair, KeyPair};
 use segment::data_types::facets::FacetParams;
 use segment::data_types::order_by::{Direction, OrderBy, OrderByInterface};
 use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, VectorInternal, VectorStructInternal};
@@ -69,9 +73,11 @@ use crate::common::{
 
 fn runtime_verified_client_envelopes_for_operation(
     operation: &CollectionUpdateOperations,
+    collection_crypto_id: &str,
+    public_key: &[u8],
 ) -> CollectionUpdateProvenance {
     let mut verified_envelope_keys = Vec::new();
-    let mut collect_payload = |payload: &Payload| {
+    let mut collect_payload = |point_id: &PointIdType, payload: &Payload| {
         let Some(value) = payload
             .0
             .get("document")
@@ -79,9 +85,26 @@ fn runtime_verified_client_envelopes_for_operation(
         else {
             return;
         };
-        if let Some(key) = client_payload_verified_envelope_key(value, "document.body").unwrap() {
-            verified_envelope_keys.push(key);
-        }
+        let key = validate_client_payload_value_for_runtime(
+            value,
+            ClientPayloadValidationContext {
+                collection_id: collection_crypto_id,
+                point_id: &point_id.to_string(),
+                field_path: "document.body",
+                expected_key_id: Some("tenant-a/client-rk-2026-04"),
+                expected_rk_id: Some("tenant-a/client-rk-2026-04"),
+                min_rk_epoch: Some(3),
+                max_rk_epoch: Some(3),
+                key_id_required: true,
+                signature_required: true,
+                signature_verification: Some(ClientPayloadSignatureVerification {
+                    expected_key_id: "tenant-a/client-signing-v1",
+                    public_key,
+                }),
+            },
+        )
+        .unwrap();
+        verified_envelope_keys.push(key);
     };
 
     match operation {
@@ -90,28 +113,46 @@ fn runtime_verified_client_envelopes_for_operation(
         )) => {
             for point in points {
                 if let Some(payload) = &point.payload {
-                    collect_payload(payload);
+                    collect_payload(&point.id, payload);
                 }
             }
         }
         CollectionUpdateOperations::PointOperation(PointOperations::SyncPoints(operation)) => {
             for point in &operation.points {
                 if let Some(payload) = &point.payload {
-                    collect_payload(payload);
+                    collect_payload(&point.id, payload);
                 }
             }
         }
         _ => {}
     }
 
-    // SAFETY: these integration tests intentionally exercise the collection
-    // guard after constructing fixtures that represent runtime-verified client
-    // envelopes, including malformed variants for negative assertions.
-    unsafe {
-        CollectionUpdateProvenance::runtime_verified_client_envelopes_unchecked(
-            verified_envelope_keys,
-        )
-    }
+    CollectionUpdateProvenance::runtime_verified_client_envelopes(verified_envelope_keys)
+}
+
+fn sign_client_payload(payload: &mut Payload, key_pair: &Ed25519KeyPair) {
+    let value = payload
+        .0
+        .get_mut("document")
+        .and_then(|document| document.get_mut("body"))
+        .expect("client payload fixture must contain document.body");
+    let message = client_payload_signature_message(value, "document.body").unwrap();
+    let signature = key_pair.sign(&message);
+    value
+        .as_object_mut()
+        .unwrap()
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut("signature")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert(
+            "sig".to_string(),
+            serde_json::Value::String(BASE64URL_NOPAD.encode(signature.as_ref())),
+        );
 }
 
 fn payload_encryption_config() -> CollectionEncryptionConfig {
@@ -1754,9 +1795,13 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         encrypted_collection_fixture(collection_dir.path(), 1, client_payload_encryption_config())
             .await;
     let collection_crypto_id = collection.config_snapshot().await.uuid.unwrap().to_string();
+    let rng = SystemRandom::new();
+    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+    let public_key = key_pair.public_key().as_ref().to_vec();
 
     let client_payload_with_epoch = |collection_id: &str, point_id: &str, rk_id: &str, rk_epoch| {
-        Payload(
+        let mut payload = Payload(
             serde_json::json!({
                 "document": {
                     "body": {
@@ -1788,7 +1833,9 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
             .as_object()
             .unwrap()
             .clone(),
-        )
+        );
+        sign_client_payload(&mut payload, &key_pair);
+        payload
     };
     let client_payload = |collection_id: &str, point_id: &str, rk_id: &str| {
         client_payload_with_epoch(collection_id, point_id, rk_id, 3)
@@ -1826,38 +1873,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
                 && description.contains("requires runtime envelope verification")
     ));
 
-    let wrong_collection_marker =
-        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
-            PointInsertOperationsInternal::from(vec![PointStructPersisted {
-                id: 1.into(),
-                vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
-                payload: Some(client_payload(
-                    "wrong-collection",
-                    "1",
-                    "tenant-a/client-rk-2026-04",
-                )),
-            }]),
-        ));
-    let err = collection
-        .update_from_client(
-            wrong_collection_marker.clone(),
-            true.into(),
-            None,
-            WriteOrdering::default(),
-            None,
-            HwMeasurementAcc::new(),
-            runtime_verified_client_envelopes_for_operation(&wrong_collection_marker),
-        )
-        .await
-        .unwrap_err();
-    assert!(matches!(
-        err,
-        CollectionError::BadInput { description }
-            if description.contains("client encrypted payload marker")
-                && description.contains("collection_id")
-    ));
-
-    let wrong_rk_marker =
+    let mut wrong_collection_marker =
         CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
             PointInsertOperationsInternal::from(vec![PointStructPersisted {
                 id: 1.into(),
@@ -1865,19 +1881,54 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
                 payload: Some(client_payload(
                     &collection_crypto_id,
                     "1",
-                    "tenant-a/old-client-rk",
+                    "tenant-a/client-rk-2026-04",
                 )),
             }]),
         ));
+    let wrong_collection_provenance = runtime_verified_client_envelopes_for_operation(
+        &wrong_collection_marker,
+        &collection_crypto_id,
+        &public_key,
+    );
+    if let CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+        PointInsertOperationsInternal::PointsList(points),
+    )) = &mut wrong_collection_marker
+    {
+        points[0]
+            .payload
+            .as_mut()
+            .unwrap()
+            .0
+            .get_mut("document")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .get_mut("body")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .get_mut("aad")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                "collection_id".to_string(),
+                serde_json::Value::String("wrong-collection".to_string()),
+            );
+    }
     let err = collection
         .update_from_client(
-            wrong_rk_marker.clone(),
+            wrong_collection_marker,
             true.into(),
             None,
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            runtime_verified_client_envelopes_for_operation(&wrong_rk_marker),
+            wrong_collection_provenance,
         )
         .await
         .unwrap_err();
@@ -1885,10 +1936,72 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         err,
         CollectionError::BadInput { description }
             if description.contains("client encrypted payload marker")
-                && description.contains("resource key id does not match")
+                && description.contains("requires runtime envelope verification")
     ));
 
-    let wrong_epoch_marker =
+    let mut wrong_rk_marker =
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                id: 1.into(),
+                vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                payload: Some(client_payload(
+                    &collection_crypto_id,
+                    "1",
+                    "tenant-a/client-rk-2026-04",
+                )),
+            }]),
+        ));
+    let wrong_rk_provenance = runtime_verified_client_envelopes_for_operation(
+        &wrong_rk_marker,
+        &collection_crypto_id,
+        &public_key,
+    );
+    if let CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+        PointInsertOperationsInternal::PointsList(points),
+    )) = &mut wrong_rk_marker
+    {
+        points[0]
+            .payload
+            .as_mut()
+            .unwrap()
+            .0
+            .get_mut("document")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .get_mut("body")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                "rk_id".to_string(),
+                serde_json::Value::String("tenant-a/old-client-rk".to_string()),
+            );
+    }
+    let err = collection
+        .update_from_client(
+            wrong_rk_marker,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            wrong_rk_provenance,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("client encrypted payload marker")
+                && description.contains("requires runtime envelope verification")
+    ));
+
+    let mut wrong_epoch_marker =
         CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
             PointInsertOperationsInternal::from(vec![PointStructPersisted {
                 id: 1.into(),
@@ -1897,19 +2010,50 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
                     &collection_crypto_id,
                     "1",
                     "tenant-a/client-rk-2026-04",
-                    2,
+                    3,
                 )),
             }]),
         ));
+    let wrong_epoch_provenance = runtime_verified_client_envelopes_for_operation(
+        &wrong_epoch_marker,
+        &collection_crypto_id,
+        &public_key,
+    );
+    if let CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+        PointInsertOperationsInternal::PointsList(points),
+    )) = &mut wrong_epoch_marker
+    {
+        points[0]
+            .payload
+            .as_mut()
+            .unwrap()
+            .0
+            .get_mut("document")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .get_mut("body")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                "rk_epoch".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(2)),
+            );
+    }
     let err = collection
         .update_from_client(
-            wrong_epoch_marker.clone(),
+            wrong_epoch_marker,
             true.into(),
             None,
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            runtime_verified_client_envelopes_for_operation(&wrong_epoch_marker),
+            wrong_epoch_provenance,
         )
         .await
         .unwrap_err();
@@ -1917,11 +2061,24 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         err,
         CollectionError::BadInput { description }
             if description.contains("client encrypted payload marker")
-                && description.contains("resource key epoch")
+                && description.contains("requires runtime envelope verification")
     ));
 
     let mut unsigned_payload =
         client_payload(&collection_crypto_id, "1", "tenant-a/client-rk-2026-04");
+    let unsigned_marker_for_provenance =
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                id: 1.into(),
+                vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                payload: Some(unsigned_payload.clone()),
+            }]),
+        ));
+    let unsigned_provenance = runtime_verified_client_envelopes_for_operation(
+        &unsigned_marker_for_provenance,
+        &collection_crypto_id,
+        &public_key,
+    );
     unsigned_payload
         .0
         .get_mut("document")
@@ -1953,7 +2110,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            runtime_verified_client_envelopes_for_operation(&unsigned_marker),
+            unsigned_provenance,
         )
         .await
         .unwrap_err();
@@ -1976,8 +2133,11 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
                 )),
             }]),
         ));
-    let signature_tamper_provenance =
-        runtime_verified_client_envelopes_for_operation(&signature_tamper_marker);
+    let signature_tamper_provenance = runtime_verified_client_envelopes_for_operation(
+        &signature_tamper_marker,
+        &collection_crypto_id,
+        &public_key,
+    );
     if let CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
         PointInsertOperationsInternal::PointsList(points),
     )) = &mut signature_tamper_marker
@@ -2059,7 +2219,11 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            runtime_verified_client_envelopes_for_operation(&replay_marker),
+            runtime_verified_client_envelopes_for_operation(
+                &replay_marker,
+                &collection_crypto_id,
+                &public_key,
+            ),
         )
         .await
         .unwrap_err();
@@ -2089,7 +2253,11 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            runtime_verified_client_envelopes_for_operation(&valid_marker),
+            runtime_verified_client_envelopes_for_operation(
+                &valid_marker,
+                &collection_crypto_id,
+                &public_key,
+            ),
         )
         .await
         .unwrap();
@@ -2114,7 +2282,11 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            runtime_verified_client_envelopes_for_operation(&replay_after_valid),
+            runtime_verified_client_envelopes_for_operation(
+                &replay_after_valid,
+                &collection_crypto_id,
+                &public_key,
+            ),
         )
         .await
         .unwrap_err();
@@ -2202,9 +2374,13 @@ async fn client_encrypted_payload_nonce_replay_survives_collection_reload() {
     let collection =
         encrypted_collection_fixture(&collection_path, 1, client_payload_encryption_config()).await;
     let collection_crypto_id = collection.config_snapshot().await.uuid.unwrap().to_string();
+    let rng = SystemRandom::new();
+    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+    let public_key = key_pair.public_key().as_ref().to_vec();
 
     let client_payload = |point_id: &str| {
-        Payload(
+        let mut payload = Payload(
             serde_json::json!({
                 "document": {
                     "body": {
@@ -2236,7 +2412,9 @@ async fn client_encrypted_payload_nonce_replay_survives_collection_reload() {
             .as_object()
             .unwrap()
             .clone(),
-        )
+        );
+        sign_client_payload(&mut payload, &key_pair);
+        payload
     };
 
     let valid_marker = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
@@ -2254,7 +2432,11 @@ async fn client_encrypted_payload_nonce_replay_survives_collection_reload() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            runtime_verified_client_envelopes_for_operation(&valid_marker),
+            runtime_verified_client_envelopes_for_operation(
+                &valid_marker,
+                &collection_crypto_id,
+                &public_key,
+            ),
         )
         .await
         .unwrap();
@@ -2279,7 +2461,11 @@ async fn client_encrypted_payload_nonce_replay_survives_collection_reload() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            runtime_verified_client_envelopes_for_operation(&replay_marker),
+            runtime_verified_client_envelopes_for_operation(
+                &replay_marker,
+                &collection_crypto_id,
+                &public_key,
+            ),
         )
         .await
         .unwrap_err();

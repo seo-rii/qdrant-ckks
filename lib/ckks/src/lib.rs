@@ -27,15 +27,14 @@ pub use control_plane::{
 };
 pub use openfhe::CommandOpenFheBackend;
 pub use payload::{
-    CLIENT_ENCRYPTED_PAYLOAD_MARKER, ClientPayloadNonceReplayKey,
+    CLIENT_ENCRYPTED_PAYLOAD_MARKER, ClientPayloadEnvelopeKey, ClientPayloadNonceReplayKey,
     ClientPayloadSignatureVerification, ClientPayloadValidationContext,
     ClientPayloadVerifiedEnvelopeKey, ENCRYPTED_PAYLOAD_MARKER, ExistingPayloadMode,
     PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
-    ServerPayloadValidationContext, client_payload_nonce_replay_key,
+    ServerPayloadValidationContext, client_payload_envelope_key, client_payload_nonce_replay_key,
     client_payload_signature_key_id, client_payload_signature_message,
-    client_payload_verified_envelope_key, is_client_encrypted_payload_value,
-    is_encrypted_payload_value, validate_client_payload_value,
-    validate_server_payload_value_metadata,
+    is_client_encrypted_payload_value, is_encrypted_payload_value, validate_client_payload_value,
+    validate_client_payload_value_for_runtime, validate_server_payload_value_metadata,
 };
 pub use vector::{
     CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_SCHEME, CkksBatchEncryptionInput,

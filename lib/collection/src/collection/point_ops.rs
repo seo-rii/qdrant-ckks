@@ -9,9 +9,8 @@ use futures::{StreamExt as _, TryFutureExt, TryStreamExt as _, future};
 use itertools::Itertools;
 use qdrant_ckks::{
     CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadNonceReplayKey, ClientPayloadValidationContext,
-    ServerPayloadValidationContext, client_payload_nonce_replay_key,
-    client_payload_verified_envelope_key, is_client_encrypted_payload_value,
-    is_encrypted_payload_value, validate_client_payload_value,
+    ServerPayloadValidationContext, client_payload_envelope_key, client_payload_nonce_replay_key,
+    is_client_encrypted_payload_value, is_encrypted_payload_value, validate_client_payload_value,
     validate_server_payload_value_metadata,
 };
 use segment::data_types::order_by::{Direction, OrderBy};
@@ -261,8 +260,8 @@ impl Collection {
                         continue;
                     }
                     if allow_client_envelope && is_client_encrypted_payload_value(value) {
-                        let Some(verified_envelope_key) =
-                            client_payload_verified_envelope_key(value, encrypted_path_str)
+                        let Some(envelope_key) =
+                            client_payload_envelope_key(value, encrypted_path_str)
                                 .map_err(|err| {
                                     CollectionError::bad_input(format!(
                                         "client encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: {err}",
@@ -273,7 +272,7 @@ impl Collection {
                                 "client encrypted payload marker for field '{encrypted_path_str}' requires runtime envelope verification before collection write",
                             )));
                         };
-                        if !update_provenance.allows_client_envelope_key(&verified_envelope_key) {
+                        if !update_provenance.allows_client_envelope_key(&envelope_key) {
                             return Err(CollectionError::bad_input(format!(
                                 "client encrypted payload marker for field '{encrypted_path_str}' requires runtime envelope verification before collection write",
                             )));
@@ -1172,10 +1171,7 @@ fn client_nonce_replay_cache_key(
     collection_crypto_id: &str,
     key: &ClientPayloadNonceReplayKey,
 ) -> String {
-    format!(
-        "{}\x1f{}\x1f{}\x1f{}\x1f{}",
-        collection_crypto_id, key.key_id, key.rk_id, key.rk_epoch, key.nonce,
-    )
+    key.cache_key_for_collection(collection_crypto_id)
 }
 
 fn filter_touches_encrypted_payload<'a>(

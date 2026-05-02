@@ -20,8 +20,10 @@ staging = ["shard/staging"]
 
 [dev-dependencies]
 criterion = { workspace = true }
+data-encoding = { workspace = true }
 fs-err = { workspace = true, features = ["debug"] }
 proptest = { workspace = true }
+ring = { workspace = true }
 rstest = { workspace = true }
 tar = { workspace = true }
 approx = "0.5.1"

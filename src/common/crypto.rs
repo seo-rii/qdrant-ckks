@@ -17,7 +17,7 @@ use qdrant_ckks::{
     PAYLOAD_FIELD_BINDING, PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
     RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER,
     WrappedKeyBlob, client_payload_nonce_replay_key, client_payload_signature_key_id,
-    client_payload_verified_envelope_key, rewrap_resource_key, validate_client_payload_value,
+    rewrap_resource_key, validate_client_payload_value_for_runtime,
 };
 use segment::json_path::JsonPath;
 use segment::types::Payload;
@@ -409,7 +409,7 @@ impl PayloadWritePlan {
                         for value in encrypted_path.value_get(&payload.0) {
                             let signature_verification =
                                 signature_verifier.verification_for_value(value, field)?;
-                            validate_client_payload_value(
+                            let verified_envelope_key = validate_client_payload_value_for_runtime(
                                 value,
                                 ClientPayloadValidationContext {
                                     collection_id: &self.collection_crypto_id,
@@ -424,16 +424,6 @@ impl PayloadWritePlan {
                                     signature_verification: Some(signature_verification),
                                 },
                             )?;
-                            let Some(verified_envelope_key) =
-                                client_payload_verified_envelope_key(value, field)?
-                            else {
-                                return Err(PayloadWriteSetupError::Payload(
-                                    PayloadEncryptionError::ExpectedEncryptedEnvelope {
-                                        field: field.clone(),
-                                        found: "object",
-                                    },
-                                ));
-                            };
                             let Some(nonce_replay_key) =
                                 client_payload_nonce_replay_key(value, field)?
                             else {
@@ -505,7 +495,7 @@ impl PayloadWritePlan {
                         for value in encrypted_path.value_get(&payload.0) {
                             let signature_verification =
                                 signature_verifier.verification_for_value(value, field)?;
-                            validate_client_payload_value(
+                            validate_client_payload_value_for_runtime(
                                 value,
                                 ClientPayloadValidationContext {
                                     collection_id: &self.collection_crypto_id,
