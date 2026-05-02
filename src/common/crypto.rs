@@ -527,13 +527,7 @@ impl PayloadWriteRule {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "test helper; production callers use the crypto-id aware payload write plan builder"
-    )
-)]
+#[cfg(test)]
 pub fn payload_write_plan_for_collection(
     settings: &Settings,
     collection_name: &str,
