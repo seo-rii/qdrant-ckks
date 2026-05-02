@@ -141,6 +141,12 @@ impl ClientPayloadNonceReplayCache {
                         "client payload nonce replay cache {cache_path:?} contains oversized entry",
                     )));
                 }
+                qdrant_ckks::ClientPayloadNonceReplayKey::validate_cache_key_for_collection(&key)
+                    .map_err(|err| {
+                        CollectionError::service_error(format!(
+                            "client payload nonce replay cache {cache_path:?} contains malformed entry: {err}",
+                        ))
+                    })?;
                 cache.insert_loaded(key);
             }
         }
@@ -1230,6 +1236,16 @@ mod tests {
 
         let err = ClientPayloadNonceReplayCache::load(dir.path()).unwrap_err();
         assert!(format!("{err:?}").contains("oversized entry"));
+    }
+
+    #[test]
+    fn client_payload_nonce_replay_cache_rejects_malformed_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_path = dir.path().join(CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE);
+        std::fs::write(&cache_path, "not-a-valid-cache-key\n").unwrap();
+
+        let err = ClientPayloadNonceReplayCache::load(dir.path()).unwrap_err();
+        assert!(format!("{err:?}").contains("malformed entry"));
     }
 
     #[cfg(unix)]

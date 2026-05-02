@@ -55,6 +55,8 @@ pub enum PayloadEncryptionError {
     ClientResourceKeyEpochMismatch,
     #[error("payload field client envelope nonce was already used in this write request")]
     ClientNonceReplay,
+    #[error("client payload nonce replay cache key is malformed")]
+    MalformedClientNonceReplayCacheKey,
     #[error("payload field client envelope signature is missing")]
     MissingClientSignature,
     #[error("payload field client envelope signature key id does not match policy")]
@@ -203,6 +205,49 @@ impl ClientPayloadNonceReplayKey {
 
     pub fn cache_key_for_collection(&self, collection_crypto_id: &str) -> String {
         format!("{}\x1f{}", collection_crypto_id, self.cache_key())
+    }
+
+    pub fn validate_cache_key_for_collection(
+        cache_key: &str,
+    ) -> Result<(), PayloadEncryptionError> {
+        let mut parts = cache_key.split('\x1f');
+        let Some(collection_crypto_id) = parts.next() else {
+            return Err(PayloadEncryptionError::MalformedClientNonceReplayCacheKey);
+        };
+        let Some(key_id) = parts.next() else {
+            return Err(PayloadEncryptionError::MalformedClientNonceReplayCacheKey);
+        };
+        let Some(rk_id) = parts.next() else {
+            return Err(PayloadEncryptionError::MalformedClientNonceReplayCacheKey);
+        };
+        let Some(rk_epoch) = parts.next() else {
+            return Err(PayloadEncryptionError::MalformedClientNonceReplayCacheKey);
+        };
+        let Some(nonce) = parts.next() else {
+            return Err(PayloadEncryptionError::MalformedClientNonceReplayCacheKey);
+        };
+        if parts.next().is_some()
+            || collection_crypto_id.is_empty()
+            || key_id.is_empty()
+            || rk_id.is_empty()
+            || rk_epoch.is_empty()
+            || nonce.is_empty()
+        {
+            return Err(PayloadEncryptionError::MalformedClientNonceReplayCacheKey);
+        }
+        validate_resource_key_id(key_id)?;
+        validate_resource_key_id(rk_id)?;
+        rk_epoch
+            .parse::<u64>()
+            .map_err(|_| PayloadEncryptionError::MalformedClientNonceReplayCacheKey)?;
+        let nonce = BASE64URL_NOPAD
+            .decode(nonce.as_bytes())
+            .map_err(|_| PayloadEncryptionError::MalformedClientNonceReplayCacheKey)?;
+        if nonce.len() != 12 {
+            return Err(PayloadEncryptionError::MalformedClientNonceReplayCacheKey);
+        }
+
+        Ok(())
     }
 }
 
