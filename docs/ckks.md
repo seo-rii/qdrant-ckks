@@ -109,7 +109,9 @@ params:
     version: 1
     key_id: tenant-a/client-rk-2026-04
     crypto_schema_version: 1
-    encryption_epoch: 0
+    # For client-envelope bindings, this is the pinned active client RK epoch
+    # that the collection guard rechecks before storage.
+    encryption_epoch: 3
     migration_state: active
     rules:
       - id: body_client_conf
@@ -130,6 +132,10 @@ are set explicitly. If the instance also sets `options.key_id`, it must match
 the collection encryption `key_id`. `min_rk_epoch` and `max_rk_epoch` must be
 identical; broad epoch ranges are rejected so a client provider pins exactly one
 active resource-key epoch.
+For collection rules bound to `client-payload-envelope/v1`, `encryption_epoch`
+must be non-zero and match that active client RK epoch. The collection write
+guard uses it as a second fail-closed check even after the public runtime write
+plan has verified the envelope.
 
 This provider does not receive plaintext and does not unwrap a data key. The
 client encrypts before insert and Qdrant only validates the envelope schema,

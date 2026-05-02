@@ -223,7 +223,7 @@ mod ckks_tests {
                 version: 1,
                 key_id: Some("tenant-a/client-rk-2026-04@v3".to_string()),
                 crypto_schema_version: 1,
-                encryption_epoch: 0,
+                encryption_epoch: 3,
                 migration_state: CryptoMigrationState::Active,
                 rules: vec![EncryptionRuleRef {
                     id: "body_client_conf".to_string(),
@@ -238,6 +238,28 @@ mod ckks_tests {
         };
 
         params.validate().unwrap();
+
+        let missing_epoch = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/client-rk-2026-04@v3".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_client_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_client_v1".to_string(),
+                    binding: Some("client-payload-envelope/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = missing_epoch.validate().unwrap_err();
+        assert!(format!("{err:?}").contains("client_payload_envelope_requires_rk_epoch"));
 
         let invalid = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
@@ -1542,6 +1564,15 @@ fn validate_collection_encryption_config(
     }) {
         return Err(validator::ValidationError::new(
             "client_payload_envelope_requires_key_id",
+        ));
+    }
+
+    if config.rules.iter().any(|rule| {
+        rule.binding.as_deref() == Some("client-payload-envelope/v1")
+            && config.encryption_epoch == 0
+    }) {
+        return Err(validator::ValidationError::new(
+            "client_payload_envelope_requires_rk_epoch",
         ));
     }
 

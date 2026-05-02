@@ -89,7 +89,7 @@ fn client_payload_encryption_config() -> CollectionEncryptionConfig {
         version: 1,
         key_id: Some("tenant-a/client-rk-2026-04".to_string()),
         crypto_schema_version: 1,
-        encryption_epoch: 0,
+        encryption_epoch: 3,
         migration_state: CryptoMigrationState::Active,
         rules: vec![EncryptionRuleRef {
             id: "document_body_client".to_string(),

@@ -2758,7 +2758,7 @@ mod tests {
                         "schema_version": 1
                     },
                     "nonce": "AAAAAAAAAAAAAAAA",
-                    "ciphertext": "AQID",
+                    "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA",
                     "signature": {
                         "alg": "ed25519",
                         "key_id": signing_key_id,
@@ -4711,7 +4711,7 @@ mod tests {
                             "schema_version": 1
                         },
                         "nonce": "AAAAAAAAAAAAAAAA",
-                        "ciphertext": "AQID"
+                        "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA"
                     }
                 }
             })
@@ -5449,7 +5449,7 @@ mod tests {
                         "schema_version": 1
                     },
                     "nonce": "AAAAAAAAAAAAAAAA",
-                    "ciphertext": "AQID",
+                    "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA",
                     "signature": {
                         "alg": "ed25519",
                         "key_id": "tenant-a/client-signing-v1",
@@ -5531,7 +5531,10 @@ mod tests {
             .unwrap()
             .as_object_mut()
             .unwrap()
-            .insert("ciphertext".to_string(), Value::String("BAUG".to_string()));
+            .insert(
+                "ciphertext".to_string(),
+                Value::String("AQEBAQEBAQEBAQEBAQEBAQ".to_string()),
+            );
         let mut tampered_payload = payload_from_envelope(tampered_envelope);
 
         assert!(matches!(
@@ -5569,7 +5572,7 @@ mod tests {
                         "schema_version": 1
                     },
                     "nonce": "AAAAAAAAAAAAAAAA",
-                    "ciphertext": "AQID",
+                    "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA",
                     "signature": {
                         "alg": "ed25519",
                         "key_id": "tenant-a/client-signing-v2",
