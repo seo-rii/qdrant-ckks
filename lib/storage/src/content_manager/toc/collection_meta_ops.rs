@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use collection::collection_state;
-use collection::config::ShardingMethod;
+use collection::config::{CollectionParams, ShardingMethod};
 use collection::events::{CollectionDeletedEvent, IndexCreatedEvent};
 use collection::shards::collection_shard_distribution::CollectionShardDistribution;
 use collection::shards::replica_set::replica_set_state::ReplicaState;
@@ -414,6 +414,14 @@ impl TableOfContent {
 
         match transfer_operation {
             ShardTransferOperations::Start(transfer) => {
+                let collection_config = collection.config_snapshot().await;
+                if collection_params_require_crypto_runtime_transfer_parity(
+                    &collection_config.params,
+                ) {
+                    return Err(StorageError::bad_input(
+                        "encrypted collection shard transfer requires crypto runtime capability parity enforcement; automatic shard transfer is disabled until cluster parity checks are wired",
+                    ));
+                }
                 let collection_state::State {
                     shards,
                     transfers,
@@ -713,5 +721,65 @@ impl TableOfContent {
             .drop_payload_index(operation.field_name)
             .await?;
         Ok(())
+    }
+}
+
+fn collection_params_require_crypto_runtime_transfer_parity(params: &CollectionParams) -> bool {
+    params.encryption.is_some()
+        || params
+            .ckks
+            .as_ref()
+            .is_some_and(|ckks| ckks.enabled || !ckks.payload_text_fields.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use collection::config::{
+        CkksCollectionConfig, CollectionEncryptionConfig, CollectionParams, CryptoMigrationState,
+        EncryptionRuleRef, EncryptionSelector,
+    };
+
+    use super::collection_params_require_crypto_runtime_transfer_parity;
+
+    #[test]
+    fn encrypted_collection_requires_transfer_parity_enforcement() {
+        assert!(!collection_params_require_crypto_runtime_transfer_parity(
+            &CollectionParams::empty()
+        ));
+
+        let generic = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/payload".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        assert!(collection_params_require_crypto_runtime_transfer_parity(
+            &generic
+        ));
+
+        let legacy = CollectionParams {
+            ckks: Some(CkksCollectionConfig {
+                enabled: true,
+                key_id: Some("tenant-a:docs".to_string()),
+                payload_text_fields: vec!["body".to_string()],
+                vector_names: Vec::new(),
+            }),
+            ..CollectionParams::empty()
+        };
+        assert!(collection_params_require_crypto_runtime_transfer_parity(
+            &legacy
+        ));
     }
 }
