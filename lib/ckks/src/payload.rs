@@ -184,6 +184,8 @@ pub struct ClientPayloadVerifiedEnvelopeKey {
     pub rk_epoch: u64,
     pub nonce: String,
     pub ciphertext_sha256_b64: String,
+    pub signature_key_id: String,
+    pub signature_sha256_b64: String,
 }
 
 impl PayloadTextEncryptor {
@@ -645,11 +647,19 @@ pub fn client_payload_verified_envelope_key(
     let Some(rk_epoch) = envelope.rk_epoch else {
         return Ok(None);
     };
+    let Some(signature) = envelope.signature else {
+        return Ok(None);
+    };
     let ciphertext = BASE64URL_NOPAD
         .decode(envelope.ciphertext.as_bytes())
         .map_err(|_| PayloadEncryptionError::MalformedEnvelope(field_path.to_string()))?;
     let ciphertext_digest = Sha256::digest(&ciphertext);
     let ciphertext_sha256_b64 = BASE64URL_NOPAD.encode(ciphertext_digest.as_ref());
+    let signature_bytes = BASE64URL_NOPAD
+        .decode(signature.sig.as_bytes())
+        .map_err(|_| PayloadEncryptionError::MalformedEnvelope(field_path.to_string()))?;
+    let signature_digest = Sha256::digest(&signature_bytes);
+    let signature_sha256_b64 = BASE64URL_NOPAD.encode(signature_digest.as_ref());
 
     Ok(Some(ClientPayloadVerifiedEnvelopeKey {
         collection_id: envelope.aad.collection_id,
@@ -660,6 +670,8 @@ pub fn client_payload_verified_envelope_key(
         rk_epoch,
         nonce: envelope.nonce,
         ciphertext_sha256_b64,
+        signature_key_id: signature.key_id,
+        signature_sha256_b64,
     }))
 }
 

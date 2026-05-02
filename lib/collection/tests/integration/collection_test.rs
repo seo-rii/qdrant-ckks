@@ -1961,7 +1961,72 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         err,
         CollectionError::BadInput { description }
             if description.contains("client encrypted payload marker")
-                && description.contains("signature is missing")
+                && description.contains("requires runtime envelope verification")
+    ));
+
+    let mut signature_tamper_marker =
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                id: 1.into(),
+                vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                payload: Some(client_payload(
+                    &collection_crypto_id,
+                    "1",
+                    "tenant-a/client-rk-2026-04",
+                )),
+            }]),
+        ));
+    let signature_tamper_provenance =
+        runtime_verified_client_envelopes_for_operation(&signature_tamper_marker);
+    if let CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+        PointInsertOperationsInternal::PointsList(points),
+    )) = &mut signature_tamper_marker
+    {
+        let signature_value = points[0]
+            .payload
+            .as_mut()
+            .unwrap()
+            .0
+            .get_mut("document")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .get_mut("body")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .get_mut("signature")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .get_mut("sig")
+            .unwrap();
+        let serde_json::Value::String(signature) = signature_value else {
+            panic!("client signature fixture must contain string sig");
+        };
+        signature.replace_range(0..1, "B");
+    }
+    let err = collection
+        .update_from_client(
+            signature_tamper_marker,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            signature_tamper_provenance,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("client encrypted payload marker")
+                && description.contains("requires runtime envelope verification")
     ));
 
     let replay_marker = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
