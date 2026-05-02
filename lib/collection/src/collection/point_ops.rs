@@ -314,7 +314,7 @@ impl Collection {
                         };
                         if !seen_client_nonces.insert(nonce_replay_key) {
                             return Err(CollectionError::bad_input(format!(
-                                "client encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: payload field client envelope nonce was already used in this write request",
+                                "client encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: payload field client envelope nonce was already used in this write request; regenerate the client-side envelope with a fresh nonce before retrying",
                             )));
                         }
                         continue;

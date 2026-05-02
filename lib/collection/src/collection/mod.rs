@@ -475,7 +475,7 @@ impl Collection {
         let mut cache = self.client_payload_nonce_replay_cache.lock().await;
         let Some(pending) = cache.pending_keys(keys) else {
             return Err(CollectionError::bad_input(
-                "client encrypted payload nonce was already used in this collection".to_string(),
+                "client encrypted payload nonce was already used in this collection; regenerate the client-side envelope with a fresh nonce before retrying".to_string(),
             ));
         };
 
