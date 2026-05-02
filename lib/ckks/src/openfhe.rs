@@ -1,5 +1,7 @@
 use std::io::{self, BufReader, Read, Write};
 use std::num::NonZeroUsize;
+#[cfg(target_os = "linux")]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -663,11 +665,15 @@ impl CommandOpenFheBackend {
             }
         }
 
-        let mut child = Command::new(&self.program)
+        let mut command = Command::new(&self.program);
+        command
             .args(&self.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        configure_bridge_command_sandbox(&mut command);
+
+        let mut child = command
             .spawn()
             .map_err(|err| CkksError::Backend(format!("failed to start OpenFHE bridge: {err}")))?;
         let stdin = child
@@ -778,6 +784,26 @@ impl CommandOpenFheBackend {
         Ok(())
     }
 }
+
+#[cfg(target_os = "linux")]
+fn configure_bridge_command_sandbox(command: &mut Command) {
+    // This is not a full sandbox, but it prevents the bridge process from
+    // gaining privileges through setuid binaries or file capabilities after
+    // Qdrant has already validated the executable path and ownership.
+    unsafe {
+        command.pre_exec(|| {
+            let result = nix::libc::prctl(nix::libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+            if result == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        });
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn configure_bridge_command_sandbox(_command: &mut Command) {}
 
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]

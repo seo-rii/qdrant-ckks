@@ -408,6 +408,10 @@ crypto:
 
 Generic OpenFHE backends currently accept only `process` or `process_pool`.
 Any other backend `kind` is rejected during runtime settings validation.
+On Linux, Qdrant sets `no_new_privs` immediately before spawning the configured
+bridge process. This is not a complete sandbox, but it prevents privilege gain
+through setuid binaries or file capabilities after bridge path, ownership, mode,
+parent directory, and optional SHA-256 pin checks have passed.
 
 If both collection params and the matching `ckks.collections.<name>` runtime
 entry specify `key_id`, they must match. Otherwise the collection value wins,

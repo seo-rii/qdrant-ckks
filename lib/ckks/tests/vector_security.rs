@@ -546,6 +546,49 @@ printf '{"version":1,"ciphertext":"cmVwbGFjZWQtY2lwaGVy"}\n'
     );
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn command_openfhe_backend_sets_no_new_privs_before_spawn() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::Builder::new()
+        .prefix("openfhe-no-new-privs")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let script_path = dir.path().join("checked-openfhe-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$(awk '/^NoNewPrivs:/ { print $2 }' /proc/self/status)" != "1" ]]; then
+  printf 'no_new_privs was not set\n' >&2
+  exit 17
+fi
+IFS= read -r _request
+printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new_checked(&script_path).unwrap();
+    let encryptor = CkksVectorEncryptor::new(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+
+    let encrypted = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0])
+        .unwrap();
+    assert_eq!(encrypted.version, 1);
+}
+
 #[cfg(unix)]
 #[test]
 fn command_openfhe_backend_uses_bridge_protocol() {
