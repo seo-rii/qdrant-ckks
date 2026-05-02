@@ -3853,6 +3853,84 @@ mod tests {
     }
 
     #[test]
+    fn crypto_runtime_capability_fingerprint_tracks_client_verifier_policy() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                instances: HashMap::from([(
+                    "docs_client_payload_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a:docs",
+                            EXPECTED_RK_ID_OPTION: "tenant-a:docs",
+                            MIN_RK_EPOCH_OPTION: 3,
+                            MAX_RK_EPOCH_OPTION: 3,
+                            SIGNATURE_KEY_ID_OPTION: "tenant-a:signing-v1",
+                            SIGNATURE_PUBLIC_KEY_B64_OPTION: BASE64URL_NOPAD.encode(&[11_u8; 32]),
+                        }),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let fingerprint = crypto_runtime_capability_fingerprint(&settings);
+
+        let mut peer_with_different_verifier = settings.clone();
+        peer_with_different_verifier
+            .crypto
+            .instances
+            .get_mut("docs_client_payload_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                SIGNATURE_PUBLIC_KEY_B64_OPTION.to_string(),
+                json!(BASE64URL_NOPAD.encode(&[12_u8; 32])),
+            );
+        assert_ne!(
+            fingerprint,
+            crypto_runtime_capability_fingerprint(&peer_with_different_verifier),
+            "client verifier public key drift must change the parity fingerprint",
+        );
+
+        let mut peer_with_different_epoch = settings.clone();
+        peer_with_different_epoch
+            .crypto
+            .instances
+            .get_mut("docs_client_payload_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(MAX_RK_EPOCH_OPTION.to_string(), json!(4));
+        assert_ne!(
+            fingerprint,
+            crypto_runtime_capability_fingerprint(&peer_with_different_epoch),
+            "client RK epoch policy drift must change the parity fingerprint",
+        );
+
+        let mut peer_with_different_rk = settings.clone();
+        peer_with_different_rk
+            .crypto
+            .instances
+            .get_mut("docs_client_payload_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(EXPECTED_RK_ID_OPTION.to_string(), json!("tenant-a:docs-v2"));
+        assert_ne!(
+            fingerprint,
+            crypto_runtime_capability_fingerprint(&peer_with_different_rk),
+            "client expected RK id drift must change the parity fingerprint",
+        );
+    }
+
+    #[test]
     fn validate_crypto_settings_rejects_invalid_material_source_shapes() {
         assert_eq!(
             validate_material(
