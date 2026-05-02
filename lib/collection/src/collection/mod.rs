@@ -786,6 +786,14 @@ impl Collection {
         on_convert_to_listener: ChangePeerState,
         on_convert_from_listener: ChangePeerState,
     ) -> CollectionResult<()> {
+        let encrypted_collection = self
+            .collection_config
+            .read()
+            .await
+            .params
+            .effective_encryption()
+            .is_some();
+
         // Check for disabled replicas
         let shard_holder = self.shards_holder.read().await;
 
@@ -879,6 +887,15 @@ impl Collection {
             // Don't recover replicas if not dead
             let is_dead = this_peer_state == Some(Dead);
             if !is_dead {
+                continue;
+            }
+
+            if encrypted_collection {
+                log::warn!(
+                    "Skipping automatic shard transfer recovery for encrypted collection {} shard {shard_id}: \
+                     cluster crypto runtime parity enforcement is not wired yet",
+                    self.name(),
+                );
                 continue;
             }
 
