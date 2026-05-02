@@ -568,6 +568,10 @@ if [[ "$(ulimit -c)" != "0" ]]; then
   printf 'core dumps were not disabled\n' >&2
   exit 19
 fi
+if [[ -n "${QDRANT__CRYPTO__BRIDGE_ENV_SECRET_FOR_TEST:-}" ]]; then
+  printf 'qdrant crypto secret env leaked to bridge\n' >&2
+  exit 20
+fi
 IFS= read -r _request
 printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
 "#,
@@ -577,6 +581,12 @@ printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
+    unsafe {
+        std::env::set_var(
+            "QDRANT__CRYPTO__BRIDGE_ENV_SECRET_FOR_TEST",
+            "must-not-reach-bridge",
+        );
+    }
     let backend = CommandOpenFheBackend::new_checked(&script_path).unwrap();
     let encryptor = CkksVectorEncryptor::new(
         "tenant-a:ckks",
@@ -587,9 +597,11 @@ printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
     )
     .unwrap();
 
-    let encrypted = encryptor
-        .encrypt("docs", "point-1", &public_material(), &[1.0])
-        .unwrap();
+    let encrypted = encryptor.encrypt("docs", "point-1", &public_material(), &[1.0]);
+    unsafe {
+        std::env::remove_var("QDRANT__CRYPTO__BRIDGE_ENV_SECRET_FOR_TEST");
+    }
+    let encrypted = encrypted.unwrap();
     assert_eq!(encrypted.version, 1);
 }
 

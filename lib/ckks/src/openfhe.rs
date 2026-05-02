@@ -671,6 +671,16 @@ impl CommandOpenFheBackend {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        for (name, _) in std::env::vars_os() {
+            let name_string = name.to_string_lossy();
+            if name_string.starts_with("QDRANT__CRYPTO")
+                || name_string.starts_with("QDRANT_CRYPTO")
+                || name_string.starts_with("QDRANT__CKKS")
+                || name_string.starts_with("QDRANT_CKKS")
+            {
+                command.env_remove(name);
+            }
+        }
         configure_bridge_command_sandbox(&mut command);
 
         let mut child = command
