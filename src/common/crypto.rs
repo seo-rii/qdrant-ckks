@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 
 use collection::config::{
@@ -2561,13 +2562,7 @@ fn decode_direct_material_key(
                     material: material_name.to_string(),
                 }
             })?;
-            validate_material_file_source_for_payload_read(material_name, path)?;
-            fs::read_to_string(path).map_err(|_| {
-                PayloadWriteSetupError::UnreadableMaterialFile {
-                    material: material_name.to_string(),
-                    path: path.to_string(),
-                }
-            })?
+            read_material_file_to_string(material_name, path)?
         }
         Some("inline") => material.value_b64.clone().ok_or_else(|| {
             PayloadWriteSetupError::MissingInlineMaterial {
@@ -2581,13 +2576,7 @@ fn decode_direct_material_key(
                     env: env.to_string(),
                 })?
             } else if let Some(path) = material.path.as_deref() {
-                validate_material_file_source_for_payload_read(material_name, path)?;
-                fs::read_to_string(path).map_err(|_| {
-                    PayloadWriteSetupError::UnreadableMaterialFile {
-                        material: material_name.to_string(),
-                        path: path.to_string(),
-                    }
-                })?
+                read_material_file_to_string(material_name, path)?
             } else {
                 material.value_b64.clone().ok_or_else(|| {
                     PayloadWriteSetupError::MissingInlineMaterial {
@@ -2609,6 +2598,78 @@ fn decode_direct_material_key(
             material: material_name.to_string(),
         }
     })
+}
+
+fn read_material_file_to_string(
+    material_name: &str,
+    path: &str,
+) -> Result<String, PayloadWriteSetupError> {
+    validate_material_file_source_for_payload_read(material_name, path)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+
+        let mut file = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+            .open(path)
+            .map_err(|_| PayloadWriteSetupError::UnreadableMaterialFile {
+                material: material_name.to_string(),
+                path: path.to_string(),
+            })?;
+        let metadata =
+            file.metadata()
+                .map_err(|_| PayloadWriteSetupError::UnreadableMaterialFile {
+                    material: material_name.to_string(),
+                    path: path.to_string(),
+                })?;
+        if !metadata.is_file() {
+            return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: path.to_string(),
+                reason: "opened path must be a regular file".to_string(),
+            });
+        }
+
+        unsafe extern "C" {
+            fn geteuid() -> u32;
+        }
+
+        let effective_uid = unsafe { geteuid() };
+        let owner = metadata.uid();
+        if owner != 0 && owner != effective_uid {
+            return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: path.to_string(),
+                reason: "opened file must be owned by root or the qdrant process user".to_string(),
+            });
+        }
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: path.to_string(),
+                reason: "opened file must not be group/world accessible".to_string(),
+            });
+        }
+
+        let mut encoded = String::new();
+        file.read_to_string(&mut encoded).map_err(|_| {
+            PayloadWriteSetupError::UnreadableMaterialFile {
+                material: material_name.to_string(),
+                path: path.to_string(),
+            }
+        })?;
+        Ok(encoded)
+    }
+
+    #[cfg(not(unix))]
+    {
+        fs::read_to_string(path).map_err(|_| PayloadWriteSetupError::UnreadableMaterialFile {
+            material: material_name.to_string(),
+            path: path.to_string(),
+        })
+    }
 }
 
 fn validate_material_file_source_for_payload_read(
@@ -3933,6 +3994,42 @@ mod tests {
                     if reason.contains("group/world")
             ));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn decode_direct_material_key_rejects_symlink_file_source() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-material-symlink-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let target_path = dir.path().join("payload.key.target");
+        let symlink_path = dir.path().join("payload.key");
+        std::fs::write(&target_path, BASE64URL_NOPAD.encode(&[9u8; 32])).unwrap();
+        symlink(&target_path, &symlink_path).unwrap();
+
+        let mut dir_permissions = std::fs::metadata(dir.path()).unwrap().permissions();
+        dir_permissions.set_mode(0o700);
+        std::fs::set_permissions(dir.path(), dir_permissions).unwrap();
+
+        let mut permissions = std::fs::metadata(&target_path).unwrap().permissions();
+        permissions.set_mode(0o600);
+        std::fs::set_permissions(&target_path, permissions).unwrap();
+
+        let file_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("file".to_string()),
+            path: Some(symlink_path.to_string_lossy().to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        assert!(matches!(
+            decode_direct_material_key("tenant-a/payload-v1", &file_material),
+            Err(PayloadWriteSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("non-symlink")
+        ));
     }
 
     #[test]
