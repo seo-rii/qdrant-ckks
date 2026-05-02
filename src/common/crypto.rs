@@ -1317,7 +1317,22 @@ fn validate_material_file_source(material_name: &str, path: &str) -> Result<(), 
 
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        unsafe extern "C" {
+            fn geteuid() -> u32;
+        }
+
+        let effective_uid = unsafe { geteuid() };
+
+        let owner = link_metadata.uid();
+        if owner != 0 && owner != effective_uid {
+            return Err(CryptoSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: path.to_string(),
+                reason: "must be owned by root or the qdrant process user".to_string(),
+            });
+        }
 
         if link_metadata.permissions().mode() & 0o077 != 0 {
             return Err(CryptoSetupError::InvalidMaterialFileSource {
@@ -1325,6 +1340,52 @@ fn validate_material_file_source(material_name: &str, path: &str) -> Result<(), 
                 path: path.to_string(),
                 reason: "must not be group/world accessible".to_string(),
             });
+        }
+
+        let mut parent = material_path.parent();
+        while let Some(directory) = parent {
+            let directory_metadata = fs::symlink_metadata(directory).map_err(|err| {
+                CryptoSetupError::InvalidMaterialFileSource {
+                    material: material_name.to_string(),
+                    path: path.to_string(),
+                    reason: format!(
+                        "failed to inspect parent directory {}: {err}",
+                        directory.display()
+                    ),
+                }
+            })?;
+            if directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir() {
+                return Err(CryptoSetupError::InvalidMaterialFileSource {
+                    material: material_name.to_string(),
+                    path: path.to_string(),
+                    reason: format!(
+                        "parent path must be a regular directory: {}",
+                        directory.display()
+                    ),
+                });
+            }
+            if directory_metadata.permissions().mode() & 0o022 != 0 {
+                return Err(CryptoSetupError::InvalidMaterialFileSource {
+                    material: material_name.to_string(),
+                    path: path.to_string(),
+                    reason: format!(
+                        "parent directory must not be group/world-writable: {}",
+                        directory.display()
+                    ),
+                });
+            }
+            let owner = directory_metadata.uid();
+            if owner != 0 && owner != effective_uid {
+                return Err(CryptoSetupError::InvalidMaterialFileSource {
+                    material: material_name.to_string(),
+                    path: path.to_string(),
+                    reason: format!(
+                        "parent directory must be owned by root or the qdrant process user: {}",
+                        directory.display()
+                    ),
+                });
+            }
+            parent = directory.parent();
         }
     }
 
@@ -3736,12 +3797,19 @@ mod tests {
 
     #[test]
     fn validate_crypto_settings_validates_material_file_source() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-material-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
         let key_path = dir.path().join("payload.key");
         std::fs::write(&key_path, BASE64URL_NOPAD.encode(&[7u8; 32])).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+
+            let mut dir_permissions = std::fs::metadata(dir.path()).unwrap().permissions();
+            dir_permissions.set_mode(0o700);
+            std::fs::set_permissions(dir.path(), dir_permissions).unwrap();
 
             let mut permissions = std::fs::metadata(&key_path).unwrap().permissions();
             permissions.set_mode(0o600);
@@ -3782,6 +3850,18 @@ mod tests {
                 validate_material("tenant-a/payload-v1", &file_material, false),
                 Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
                     if reason.contains("group/world")
+            ));
+
+            let mut permissions = std::fs::metadata(&key_path).unwrap().permissions();
+            permissions.set_mode(0o600);
+            std::fs::set_permissions(&key_path, permissions).unwrap();
+            let mut dir_permissions = std::fs::metadata(dir.path()).unwrap().permissions();
+            dir_permissions.set_mode(0o722);
+            std::fs::set_permissions(dir.path(), dir_permissions).unwrap();
+            assert!(matches!(
+                validate_material("tenant-a/payload-v1", &file_material, false),
+                Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                    if reason.contains("parent directory")
             ));
         }
     }

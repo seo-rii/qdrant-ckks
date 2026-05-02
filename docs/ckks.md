@@ -281,8 +281,10 @@ The generic `crypto` control plane supports a safer MK/RK hierarchy:
 
 When a material uses `source: file`, the path must be absolute and point to a
 regular non-symlink file. On Unix, qdrant-sec rejects group/world-accessible key
-files so file-backed MK/RK material is not accidentally exposed through broad
-filesystem permissions.
+files and rejects group/world-writable parent directories. The file and each
+parent directory must be owned by root or the qdrant process user so file-backed
+MK/RK material is not accidentally exposed or swapped through broad filesystem
+permissions.
 
 Wrapped RK material may declare a lifecycle `state`:
 
