@@ -296,6 +296,17 @@ pub async fn do_update_collection_cluster(
         .get_collection(&collection_pass)
         .await?;
 
+    let collection_state = collection.state().await;
+    reject_encrypted_cluster_data_movement(
+        &collection_name,
+        collection_state
+            .config
+            .params
+            .effective_encryption()
+            .is_some(),
+        &operation,
+    )?;
+
     match operation {
         ClusterOperations::MoveShard(MoveShardOperation { move_shard }) => {
             // validate shard to move
@@ -508,7 +519,7 @@ pub async fn do_update_collection_cluster(
             // If placement suggested:
             // - Peers exist
 
-            let state = collection.state().await;
+            let state = collection_state;
 
             match state.config.params.sharding_method.unwrap_or_default() {
                 ShardingMethod::Auto => {
@@ -692,8 +703,6 @@ pub async fn do_update_collection_cluster(
 
             // Assign random UUID if not specified by user before processing operation on all peers
             let uuid = uuid.unwrap_or_else(Uuid::new_v4);
-
-            let collection_state = collection.state().await;
 
             if let Some(shard_key) = &shard_key
                 && !collection_state.shards_key_mapping.contains_key(shard_key)
@@ -976,6 +985,33 @@ pub async fn do_update_collection_cluster(
     }
 }
 
+fn reject_encrypted_cluster_data_movement(
+    collection_name: &str,
+    encrypted_collection: bool,
+    operation: &ClusterOperations,
+) -> Result<(), StorageError> {
+    if !encrypted_collection {
+        return Ok(());
+    }
+
+    let operation_name = match operation {
+        ClusterOperations::MoveShard(_) => "move_shard",
+        ClusterOperations::ReplicateShard(_) => "replicate_shard",
+        ClusterOperations::ReplicatePoints(_) => "replicate_points",
+        ClusterOperations::RestartTransfer(_) => "restart_transfer",
+        ClusterOperations::StartResharding(_) => "start_resharding",
+        _ => return Ok(()),
+    };
+
+    Err(StorageError::BadRequest {
+        description: format!(
+            "cannot run {operation_name} on encrypted collection {collection_name}: \
+             cluster crypto runtime parity enforcement is not wired yet, so encrypted shard \
+             transfer and replication fail closed",
+        ),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -1018,5 +1054,39 @@ mod tests {
         for shard_placement in placement {
             assert_eq!(shard_placement.len(), 5);
         }
+    }
+
+    #[test]
+    fn encrypted_cluster_data_movement_fails_closed() {
+        let operation = ClusterOperations::ReplicateShard(ReplicateShardOperation {
+            replicate_shard: collection::operations::cluster_ops::ReplicateShard {
+                shard_id: 1,
+                from_peer_id: 1,
+                to_peer_id: 2,
+                method: None,
+                to_shard_id: None,
+            },
+        });
+
+        let err = reject_encrypted_cluster_data_movement("docs", true, &operation)
+            .expect_err("encrypted shard replication must fail closed");
+
+        assert!(matches!(err, StorageError::BadRequest { .. }));
+        assert!(err.to_string().contains("crypto runtime parity"));
+    }
+
+    #[test]
+    fn encrypted_cluster_non_data_movement_is_not_blocked_by_crypto_guard() {
+        let operation = ClusterOperations::AbortTransfer(AbortTransferOperation {
+            abort_transfer: collection::operations::cluster_ops::AbortShardTransfer {
+                shard_id: 1,
+                from_peer_id: 1,
+                to_peer_id: 2,
+                to_shard_id: None,
+            },
+        });
+
+        reject_encrypted_cluster_data_movement("docs", true, &operation)
+            .expect("abort must remain available for cleanup");
     }
 }
