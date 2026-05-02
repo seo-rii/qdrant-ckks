@@ -2262,6 +2262,74 @@ mod tests {
                         && description.contains("required")
             ));
 
+            let err = do_set_payload(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "docs".to_string(),
+                SetPayload {
+                    payload: segment::types::Payload(
+                        json!({ "body": "missing runtime set secret" })
+                            .as_object()
+                            .unwrap()
+                            .clone(),
+                    ),
+                    points: Some(vec![99.into()]),
+                    filter: None,
+                    shard_key: None,
+                    key: None,
+                },
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("payload encryption runtime")
+                        && description.contains("required")
+            ));
+
+            let err = do_overwrite_payload(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "docs".to_string(),
+                SetPayload {
+                    payload: segment::types::Payload(
+                        json!({ "body": "missing runtime overwrite secret" })
+                            .as_object()
+                            .unwrap()
+                            .clone(),
+                    ),
+                    points: Some(vec![99.into()]),
+                    filter: None,
+                    shard_key: None,
+                    key: None,
+                },
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("payload encryption runtime")
+                        && description.contains("required")
+            ));
+
             let operation = PointInsertOperations::PointsList(api::rest::schema::PointsList {
                 points: vec![api::rest::PointStruct {
                     id: 1.into(),
