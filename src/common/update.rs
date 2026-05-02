@@ -14,7 +14,7 @@ use collection::operations::vector_ops::*;
 use collection::operations::verification::*;
 use collection::shards::shard::ShardId;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
-use qdrant_ckks::ClientPayloadNonceReplayKey;
+use qdrant_ckks::{ClientPayloadNonceReplayKey, PayloadEncryptionError};
 use schemars::JsonSchema;
 use segment::json_path::JsonPath;
 use segment::types::{Filter, PayloadFieldSchema, PayloadKeyType, StrictModeConfig};
@@ -1718,6 +1718,11 @@ fn payload_write_error_to_storage_error(
     err: PayloadWriteSetupError,
 ) -> StorageError {
     match err {
+        PayloadWriteSetupError::Payload(PayloadEncryptionError::ClientNonceReplay) => {
+            StorageError::bad_input(format!(
+                "failed to encrypt payload for collection {collection_name}: client envelope nonce was already used; regenerate the client-side envelope with a fresh nonce before retrying",
+            ))
+        }
         PayloadWriteSetupError::Payload(payload_err) => StorageError::bad_input(format!(
             "failed to encrypt payload for collection {collection_name}: {payload_err}",
         )),
@@ -2757,7 +2762,7 @@ mod tests {
                                     version: 1,
                                     key_id: Some("tenant-a/client-rk-2026-04".to_string()),
                                     crypto_schema_version: 1,
-                                    encryption_epoch: 0,
+                                    encryption_epoch: 3,
                                     migration_state: CryptoMigrationState::Active,
                                     rules: vec![EncryptionRuleRef {
                                         id: "body_client_conf".to_string(),
@@ -2804,7 +2809,7 @@ mod tests {
                                     version: 1,
                                     key_id: Some("tenant-a/client-rk-2026-04".to_string()),
                                     crypto_schema_version: 1,
-                                    encryption_epoch: 0,
+                                    encryption_epoch: 3,
                                     migration_state: CryptoMigrationState::Active,
                                     rules: vec![EncryptionRuleRef {
                                         id: "body_client_conf".to_string(),

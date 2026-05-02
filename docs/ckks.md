@@ -176,7 +176,9 @@ collection directory and loaded on collection restart, so replay is caught
 across later requests and same-node reloads. A cluster-wide replay index and
 existing-data backfill are not implemented, so SDKs must still generate fresh
 96-bit CSPRNG nonces and regenerate envelopes on retry instead of replaying
-failed request bodies.
+failed request bodies. Nonces are recorded before shard storage is attempted so
+the policy fails secure; if a write returns an error after envelope validation,
+clients must build a new envelope with a new nonce before retrying.
 
 ```json
 {
