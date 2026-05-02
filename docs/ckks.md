@@ -217,11 +217,18 @@ AES-GCM tag or decrypt responses; clients or SDKs must decrypt returned
 envelopes. Client envelopes must include `rk_id`, `rk_epoch`, and
 `kdf_domain: qdrant/client-payload-text/v1` so resource-key identity is explicit
 even though Qdrant cannot unwrap the client key. The Ed25519 signature covers the
-client envelope header, AAD,
-nonce, ciphertext, signature algorithm, and signature key id. Blind-index query
-integration is not implemented yet. Exact-match search requires a future client
-blind-index field, and range, geo, or full-text search over client ciphertext
-remains unsupported.
+client envelope header, AAD, nonce, ciphertext, signature algorithm, and
+signature key id.
+
+Storage does not trust marker shape alone. Public write plans must validate the
+client envelope and produce a runtime-verified proof keyed by collection id,
+point id, field path, key id, `rk_id`, `rk_epoch`, nonce, ciphertext digest, and
+signature digest. The collection write guard recomputes that identity from the
+stored marker and accepts the write only when it matches the runtime proof.
+
+Blind-index query integration is not implemented yet. Exact-match search
+requires a future client blind-index field, and range, geo, or full-text search
+over client ciphertext remains unsupported.
 
 SDKs that implement this mode must do all cryptographic data-key operations
 outside Qdrant:
