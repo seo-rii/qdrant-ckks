@@ -1098,6 +1098,42 @@ mod ckks_tests {
     }
 
     #[test]
+    fn collection_params_rejects_generic_and_legacy_encryption_together() {
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ckks: Some(CkksCollectionConfig {
+                enabled: true,
+                key_id: Some("tenant-a:docs".to_string()),
+                payload_text_fields: vec!["body".to_string()],
+                vector_names: Vec::new(),
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = params
+            .validate()
+            .expect_err("generic and legacy collection encryption sections must conflict");
+        assert!(
+            err.to_string()
+                .contains("conflicting_collection_encryption_sections")
+        );
+    }
+
+    #[test]
     fn encryption_config_rejects_metadata_selector_until_transport_support_exists() {
         let params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
