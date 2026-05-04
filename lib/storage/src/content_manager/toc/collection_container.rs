@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use collection::collection::Collection;
 use collection::collection_state;
+use collection::config::CollectionParams;
 use collection::shards::CollectionId;
 use collection::shards::collection_shard_distribution::CollectionShardDistribution;
 use collection::shards::replica_set::replica_set_state::ReplicaState;
@@ -109,6 +110,70 @@ impl CollectionContainer for TableOfContent {
     }
 }
 
+fn collection_params_bind_crypto_identity(params: &CollectionParams) -> bool {
+    params.effective_encryption().is_some()
+}
+
+fn encrypted_uuid_mismatch_requires_fail_closed(
+    existing_params: &CollectionParams,
+    snapshot_params: &CollectionParams,
+) -> bool {
+    collection_params_bind_crypto_identity(existing_params)
+        || collection_params_bind_crypto_identity(snapshot_params)
+}
+
+#[cfg(test)]
+mod tests {
+    use collection::config::{CkksCollectionConfig, CollectionParams};
+
+    use super::{
+        collection_params_bind_crypto_identity, encrypted_uuid_mismatch_requires_fail_closed,
+    };
+
+    #[test]
+    fn collection_params_bind_crypto_identity_for_encrypted_configs() {
+        assert!(!collection_params_bind_crypto_identity(
+            &CollectionParams::empty()
+        ));
+
+        let encrypted = CollectionParams {
+            ckks: Some(CkksCollectionConfig {
+                enabled: true,
+                key_id: Some("tenant-a:docs".to_string()),
+                payload_text_fields: vec!["body".to_string()],
+                vector_names: Vec::new(),
+            }),
+            ..CollectionParams::empty()
+        };
+
+        assert!(collection_params_bind_crypto_identity(&encrypted));
+    }
+
+    #[test]
+    fn encrypted_uuid_mismatch_requires_fail_closed_for_encrypted_configs() {
+        let plaintext = CollectionParams::empty();
+        let encrypted = CollectionParams {
+            ckks: Some(CkksCollectionConfig {
+                enabled: true,
+                key_id: Some("tenant-a:docs".to_string()),
+                payload_text_fields: vec!["body".to_string()],
+                vector_names: Vec::new(),
+            }),
+            ..CollectionParams::empty()
+        };
+
+        assert!(!encrypted_uuid_mismatch_requires_fail_closed(
+            &plaintext, &plaintext,
+        ));
+        assert!(encrypted_uuid_mismatch_requires_fail_closed(
+            &encrypted, &plaintext,
+        ));
+        assert!(encrypted_uuid_mismatch_requires_fail_closed(
+            &plaintext, &encrypted,
+        ));
+    }
+}
+
 impl TableOfContent {
     fn collections_snapshot_sync(&self) -> consensus_manager::CollectionsSnapshot {
         self.general_runtime.block_on(self.collections_snapshot())
@@ -134,9 +199,22 @@ impl TableOfContent {
 
             for (id, state) in &data.collections {
                 if let Some(collection) = collections.get(id) {
-                    let collection_uuid = collection.uuid().await;
+                    let collection_config = collection.config_snapshot().await;
+                    let collection_uuid = collection_config.uuid;
 
                     let recreate_collection = if collection_uuid != state.config.uuid {
+                        if encrypted_uuid_mismatch_requires_fail_closed(
+                            &collection_config.params,
+                            &state.config.params,
+                        ) {
+                            return Err(StorageError::service_error(format!(
+                                "encrypted collection {id} UUID mismatch while applying Raft snapshot: \
+                                 existing collection UUID: {collection_uuid:?}, \
+                                 Raft snapshot collection UUID: {:?}; refusing encrypted collection rebind",
+                                state.config.uuid,
+                            )));
+                        }
+
                         log::warn!(
                             "Recreating collection {id}, because collection UUID is different: \
                              existing collection UUID: {collection_uuid:?}, \
