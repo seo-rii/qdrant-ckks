@@ -53,7 +53,9 @@ pub enum PayloadEncryptionError {
     ClientResourceKeyIdMismatch,
     #[error("payload field client envelope resource key epoch is outside policy")]
     ClientResourceKeyEpochMismatch,
-    #[error("payload field client envelope nonce was already used in this write request")]
+    #[error(
+        "payload field client envelope nonce was already used; regenerate the client-side envelope with a fresh nonce before retrying"
+    )]
     ClientNonceReplay,
     #[error("client payload nonce replay cache key is malformed")]
     MalformedClientNonceReplayCacheKey,
