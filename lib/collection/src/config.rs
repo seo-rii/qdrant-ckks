@@ -900,6 +900,19 @@ mod ckks_tests {
         );
         assert_eq!(applied_decryption_start.encryption_epoch, 3);
 
+        let dry_run_decryption_start = CryptoMigrationPlan {
+            dry_run: true,
+            ..valid_decryption_start
+        };
+        dry_run_decryption_start
+            .validate_admin_plan_for_config(&current)
+            .unwrap();
+        assert_eq!(
+            dry_run_decryption_start.apply_to_config(&current).unwrap(),
+            current,
+            "dry-run decryption migration plans must validate without mutating collection config",
+        );
+
         let mut rotating_current = current.clone();
         rotating_current.migration_state = Rotating;
         rotating_current.encryption_epoch = 4;
