@@ -1832,6 +1832,19 @@ mod tests {
         settings
     }
 
+    #[test]
+    fn client_nonce_replay_error_tells_clients_to_regenerate_envelope() {
+        let err = payload_write_error_to_storage_error(
+            "docs",
+            PayloadWriteSetupError::Payload(PayloadEncryptionError::ClientNonceReplay),
+        );
+
+        let message = err.to_string();
+        assert!(message.contains("client envelope nonce was already used"));
+        assert!(message.contains("regenerate the client-side envelope"));
+        assert!(message.contains("fresh nonce before retrying"));
+    }
+
     fn encrypted_params() -> CollectionParams {
         CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
