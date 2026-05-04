@@ -235,8 +235,10 @@ impl ClientPayloadNonceReplayKey {
         {
             return Err(PayloadEncryptionError::MalformedClientNonceReplayCacheKey);
         }
-        validate_resource_key_id(key_id)?;
-        validate_resource_key_id(rk_id)?;
+        validate_resource_key_id(key_id)
+            .map_err(|_| PayloadEncryptionError::MalformedClientNonceReplayCacheKey)?;
+        validate_resource_key_id(rk_id)
+            .map_err(|_| PayloadEncryptionError::MalformedClientNonceReplayCacheKey)?;
         rk_epoch
             .parse::<u64>()
             .map_err(|_| PayloadEncryptionError::MalformedClientNonceReplayCacheKey)?;

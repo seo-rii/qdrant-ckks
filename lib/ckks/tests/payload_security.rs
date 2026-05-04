@@ -1,12 +1,13 @@
 use data_encoding::BASE64URL_NOPAD;
 use proptest::prelude::*;
 use qdrant_ckks::{
-    AeadCipher, AeadKeyring, CLIENT_ENCRYPTED_PAYLOAD_MARKER, ClientPayloadSignatureVerification,
-    ClientPayloadValidationContext, ENCRYPTED_PAYLOAD_MARKER, EncryptionError, ExistingPayloadMode,
-    PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
-    ServerPayloadValidationContext, client_payload_nonce_replay_key,
-    client_payload_signature_key_id, client_payload_signature_message,
-    is_client_encrypted_payload_value, is_encrypted_payload_value, validate_client_payload_value,
+    AeadCipher, AeadKeyring, CLIENT_ENCRYPTED_PAYLOAD_MARKER, ClientPayloadNonceReplayKey,
+    ClientPayloadSignatureVerification, ClientPayloadValidationContext, ENCRYPTED_PAYLOAD_MARKER,
+    EncryptionError, ExistingPayloadMode, PayloadEncryptionError, PayloadEncryptionPolicy,
+    PayloadTextEncryptor, SecretKey, ServerPayloadValidationContext,
+    client_payload_nonce_replay_key, client_payload_signature_key_id,
+    client_payload_signature_message, is_client_encrypted_payload_value,
+    is_encrypted_payload_value, validate_client_payload_value,
     validate_server_payload_value_metadata,
 };
 use ring::rand::SystemRandom;
@@ -401,6 +402,33 @@ fn client_payload_envelope_enforces_resource_key_policy() {
         ),
         Ok(()),
     );
+}
+
+#[test]
+fn client_payload_nonce_replay_cache_key_validation_rejects_malformed_entries() {
+    let key = client_payload_nonce_replay_key(&client_envelope("point-1", "body"), "body")
+        .unwrap()
+        .unwrap();
+    let valid = key.cache_key_for_collection("crypto-collection-uuid");
+
+    ClientPayloadNonceReplayKey::validate_cache_key_for_collection(&valid).unwrap();
+
+    for malformed in [
+        "",
+        "not-a-cache-key",
+        "\x1ftenant-a/client-rk-2026-04\x1ftenant-a/client-rk-2026-04\x1f3\x1fAAAAAAAAAAAAAAAA",
+        "crypto-collection-uuid\x1fnot valid\x1ftenant-a/client-rk-2026-04\x1f3\x1fAAAAAAAAAAAAAAAA",
+        "crypto-collection-uuid\x1ftenant-a/client-rk-2026-04\x1fnot valid\x1f3\x1fAAAAAAAAAAAAAAAA",
+        "crypto-collection-uuid\x1ftenant-a/client-rk-2026-04\x1ftenant-a/client-rk-2026-04\x1fnot-an-epoch\x1fAAAAAAAAAAAAAAAA",
+        "crypto-collection-uuid\x1ftenant-a/client-rk-2026-04\x1ftenant-a/client-rk-2026-04\x1f3\x1fnot-valid-base64!",
+        "crypto-collection-uuid\x1ftenant-a/client-rk-2026-04\x1ftenant-a/client-rk-2026-04\x1f3\x1fAQID",
+        "crypto-collection-uuid\x1ftenant-a/client-rk-2026-04\x1ftenant-a/client-rk-2026-04\x1f3\x1fAAAAAAAAAAAAAAAA\x1fextra",
+    ] {
+        assert_eq!(
+            ClientPayloadNonceReplayKey::validate_cache_key_for_collection(malformed),
+            Err(PayloadEncryptionError::MalformedClientNonceReplayCacheKey),
+        );
+    }
 }
 
 #[test]
