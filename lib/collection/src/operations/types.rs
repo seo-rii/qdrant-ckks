@@ -84,13 +84,24 @@ pub enum CollectionUpdateProvenance {
     ClientPlaintext,
     /// Internal operation whose server-side `$qdrant_ckks` markers were created
     /// by the runtime payload encryptor for the current collection config.
-    RuntimeEncryptedPayloads,
+    RuntimeEncryptedPayloads(RuntimeEncryptedPayloads),
     /// Internal operation whose client-side `$qdrant_client_aead` markers were
     /// already validated by the runtime client-envelope provider.
     RuntimeVerifiedClientEnvelopes(RuntimeVerifiedClientEnvelopes),
     /// Internal operation containing both runtime-created server envelopes and
     /// runtime-verified client envelopes.
     RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(RuntimeVerifiedClientEnvelopes),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct RuntimeEncryptedPayloads {
+    _private: (),
+}
+
+impl RuntimeEncryptedPayloads {
+    fn from_runtime_transform() -> Self {
+        Self { _private: () }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -118,6 +129,10 @@ impl RuntimeVerifiedClientEnvelopes {
 }
 
 impl CollectionUpdateProvenance {
+    pub fn runtime_encrypted_payloads() -> Self {
+        Self::RuntimeEncryptedPayloads(RuntimeEncryptedPayloads::from_runtime_transform())
+    }
+
     pub fn runtime_verified_client_envelopes(
         verified_envelope_keys: impl IntoIterator<Item = ClientPayloadVerifiedEnvelopeKey>,
     ) -> Self {
@@ -137,7 +152,7 @@ impl CollectionUpdateProvenance {
     pub const fn allows_server_envelopes(&self) -> bool {
         matches!(
             self,
-            Self::RuntimeEncryptedPayloads
+            Self::RuntimeEncryptedPayloads(_)
                 | Self::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(_)
         )
     }
@@ -148,7 +163,7 @@ impl CollectionUpdateProvenance {
             | Self::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(verified) => {
                 verified.contains(envelope_key)
             }
-            Self::ClientPlaintext | Self::RuntimeEncryptedPayloads => false,
+            Self::ClientPlaintext | Self::RuntimeEncryptedPayloads(_) => false,
         }
     }
 }

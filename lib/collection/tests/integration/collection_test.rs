@@ -1662,7 +1662,7 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::RuntimeEncryptedPayloads,
+            CollectionUpdateProvenance::runtime_encrypted_payloads(),
         )
         .await
         .unwrap_err();
@@ -1724,7 +1724,7 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::RuntimeEncryptedPayloads,
+            CollectionUpdateProvenance::runtime_encrypted_payloads(),
         )
         .await
         .unwrap_err();
@@ -2521,7 +2521,7 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::RuntimeEncryptedPayloads,
+            CollectionUpdateProvenance::runtime_encrypted_payloads(),
         )
         .await
         .unwrap();

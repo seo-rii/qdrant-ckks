@@ -1570,7 +1570,7 @@ async fn maybe_encrypt_point_payload_update(
         .await?;
         return Ok((
             PayloadUpdatePlan::Fanout(encrypted_operations),
-            CollectionUpdateProvenance::RuntimeEncryptedPayloads,
+            CollectionUpdateProvenance::runtime_encrypted_payloads(),
         ));
     }
 
@@ -1616,7 +1616,7 @@ fn payload_update_provenance(
                 verified_client_envelope_keys,
             )
         }
-        (true, true) => CollectionUpdateProvenance::RuntimeEncryptedPayloads,
+        (true, true) => CollectionUpdateProvenance::runtime_encrypted_payloads(),
         (false, false) => CollectionUpdateProvenance::runtime_verified_client_envelopes(
             verified_client_envelope_keys,
         ),
