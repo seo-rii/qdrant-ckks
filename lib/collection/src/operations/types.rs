@@ -90,7 +90,10 @@ pub enum CollectionUpdateProvenance {
     RuntimeVerifiedClientEnvelopes(RuntimeVerifiedClientEnvelopes),
     /// Internal operation containing both runtime-created server envelopes and
     /// runtime-verified client envelopes.
-    RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(RuntimeVerifiedClientEnvelopes),
+    RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(
+        RuntimeEncryptedPayloads,
+        RuntimeVerifiedClientEnvelopes,
+    ),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -145,6 +148,7 @@ impl CollectionUpdateProvenance {
         verified_envelope_keys: impl IntoIterator<Item = ClientPayloadVerifiedEnvelopeKey>,
     ) -> Self {
         Self::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(
+            RuntimeEncryptedPayloads::from_runtime_transform(),
             RuntimeVerifiedClientEnvelopes::from_verified(verified_envelope_keys),
         )
     }
@@ -153,14 +157,14 @@ impl CollectionUpdateProvenance {
         matches!(
             self,
             Self::RuntimeEncryptedPayloads(_)
-                | Self::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(_)
+                | Self::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(_, _)
         )
     }
 
     pub fn allows_client_envelope_key(&self, envelope_key: &ClientPayloadEnvelopeKey) -> bool {
         match self {
             Self::RuntimeVerifiedClientEnvelopes(verified)
-            | Self::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(verified) => {
+            | Self::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(_, verified) => {
                 verified.contains(envelope_key)
             }
             Self::ClientPlaintext | Self::RuntimeEncryptedPayloads(_) => false,
