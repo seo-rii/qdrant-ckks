@@ -342,12 +342,7 @@ fn validate_bridge_program_sha256_b64(
         )));
     }
 
-    let bytes = std::fs::read(path).map_err(|err| {
-        CkksError::Backend(format!(
-            "failed to read OpenFHE bridge program {} for sha256 pinning: {err}",
-            path.display(),
-        ))
-    })?;
+    let bytes = read_bridge_program_for_sha256(path)?;
     let actual = Sha256::digest(&bytes);
     if actual[..] != expected[..] {
         return Err(CkksError::Backend(format!(
@@ -357,6 +352,54 @@ fn validate_bridge_program_sha256_b64(
     }
 
     Ok(())
+}
+
+#[cfg(unix)]
+fn read_bridge_program_for_sha256(path: &Path) -> Result<Vec<u8>, CkksError> {
+    use std::fs::OpenOptions;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|err| {
+            CkksError::Backend(format!(
+                "failed to open OpenFHE bridge program {} for sha256 pinning: {err}",
+                path.display(),
+            ))
+        })?;
+    let metadata = file.metadata().map_err(|err| {
+        CkksError::Backend(format!(
+            "failed to inspect OpenFHE bridge program {} for sha256 pinning: {err}",
+            path.display(),
+        ))
+    })?;
+    if !metadata.is_file() {
+        return Err(CkksError::Backend(format!(
+            "OpenFHE bridge program must remain a regular file while hashing sha256 pin: {}",
+            path.display(),
+        )));
+    }
+
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|err| {
+        CkksError::Backend(format!(
+            "failed to read OpenFHE bridge program {} for sha256 pinning: {err}",
+            path.display(),
+        ))
+    })?;
+    Ok(bytes)
+}
+
+#[cfg(not(unix))]
+fn read_bridge_program_for_sha256(path: &Path) -> Result<Vec<u8>, CkksError> {
+    std::fs::read(path).map_err(|err| {
+        CkksError::Backend(format!(
+            "failed to read OpenFHE bridge program {} for sha256 pinning: {err}",
+            path.display(),
+        ))
+    })
 }
 
 impl Drop for CommandOpenFheBackend {
