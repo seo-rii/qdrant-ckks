@@ -549,7 +549,7 @@ impl PayloadWriteRule {
 }
 
 #[cfg(test)]
-pub fn payload_write_plan_for_collection(
+pub(crate) fn payload_write_plan_for_collection(
     settings: &Settings,
     collection_name: &str,
     params: &CollectionParams,
