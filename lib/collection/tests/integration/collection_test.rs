@@ -7,6 +7,7 @@ use api::rest::SearchRequestInternal;
 use collection::collection::distance_matrix::CollectionSearchMatrixRequest;
 use collection::config::{
     CkksCollectionConfig, CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams,
+    CryptoMigrationCheckpoint, CryptoMigrationCheckpointStatus, CryptoMigrationPlan,
     CryptoMigrationState, EncryptionRuleRef, EncryptionSelector, WalConfig,
 };
 use collection::discovery::discover;
@@ -1086,6 +1087,95 @@ async fn encrypted_payload_field_rejects_recovered_payload_index_schema() {
                 && description.contains("document.body")
                 && description.contains("blind index")
     ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn crypto_migration_plan_updates_collection_config_through_admin_path() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
+
+    let start_rotation = CryptoMigrationPlan {
+        from: CryptoMigrationState::Active,
+        to: CryptoMigrationState::Rotating,
+        target_epoch: 1,
+        active_rk_id: Some("tenant-a/payload-rk-v2".to_string()),
+        retired_rk_id: Some("tenant-a/payload-rk-v1".to_string()),
+        dry_run: true,
+        checkpoints: Vec::new(),
+    };
+
+    collection
+        .apply_crypto_migration_plan(&start_rotation)
+        .await
+        .unwrap();
+    let dry_run_config = collection.config_snapshot().await;
+    let dry_run_encryption = dry_run_config.params.encryption.unwrap();
+    assert_eq!(
+        dry_run_encryption.migration_state,
+        CryptoMigrationState::Active
+    );
+    assert_eq!(dry_run_encryption.encryption_epoch, 0);
+
+    let mut start_rotation = start_rotation;
+    start_rotation.dry_run = false;
+    collection
+        .apply_crypto_migration_plan(&start_rotation)
+        .await
+        .unwrap();
+    let rotating_config = collection.config_snapshot().await;
+    let rotating_encryption = rotating_config.params.encryption.unwrap();
+    assert_eq!(
+        rotating_encryption.migration_state,
+        CryptoMigrationState::Rotating
+    );
+    assert_eq!(rotating_encryption.encryption_epoch, 1);
+
+    let stale_start = CryptoMigrationPlan {
+        from: CryptoMigrationState::Active,
+        to: CryptoMigrationState::Rotating,
+        target_epoch: 2,
+        active_rk_id: Some("tenant-a/payload-rk-v3".to_string()),
+        retired_rk_id: Some("tenant-a/payload-rk-v2".to_string()),
+        dry_run: false,
+        checkpoints: Vec::new(),
+    };
+    let err = collection
+        .apply_crypto_migration_plan(&stale_start)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("crypto_migration_current_state_mismatch")
+    ));
+
+    let complete_rotation = CryptoMigrationPlan {
+        from: CryptoMigrationState::Rotating,
+        to: CryptoMigrationState::Active,
+        target_epoch: 1,
+        active_rk_id: Some("tenant-a/payload-rk-v2".to_string()),
+        retired_rk_id: Some("tenant-a/payload-rk-v1".to_string()),
+        dry_run: false,
+        checkpoints: vec![CryptoMigrationCheckpoint {
+            shard_id: 0,
+            total_points: 1,
+            processed_points: 1,
+            rewritten_points: 1,
+            status: CryptoMigrationCheckpointStatus::Verified,
+        }],
+    };
+    collection
+        .apply_crypto_migration_plan(&complete_rotation)
+        .await
+        .unwrap();
+    let active_config = collection.config_snapshot().await;
+    let active_encryption = active_config.params.encryption.unwrap();
+    assert_eq!(
+        active_encryption.migration_state,
+        CryptoMigrationState::Active
+    );
+    assert_eq!(active_encryption.encryption_epoch, 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
