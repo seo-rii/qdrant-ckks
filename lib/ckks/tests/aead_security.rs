@@ -3,7 +3,7 @@ use proptest::prelude::*;
 use qdrant_ckks::{
     AeadCipher, AeadKeyring, CKKS_VECTOR_KEY_DOMAIN, EncryptionContext, EncryptionError,
     LocalMasterKeyProvider, MasterKeyProvider, PAYLOAD_TEXT_KEY_DOMAIN,
-    RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, rewrap_resource_key,
+    RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, WrappedKeyBlob, rewrap_resource_key,
 };
 
 fn fixed_cipher() -> AeadCipher {
@@ -179,6 +179,23 @@ fn local_master_key_provider_wraps_resource_key_with_aad() {
         provider.unwrap_resource_key(&wrapped, b"wrong aad").err(),
         Some(EncryptionError::OpenFailed),
     );
+}
+
+#[test]
+fn wrapped_resource_key_rejects_unknown_metadata_fields() {
+    let provider =
+        LocalMasterKeyProvider::new("tenant-a/mk@v1", SecretKey::from_bytes([55u8; 32])).unwrap();
+    let wrapped = provider
+        .wrap_resource_key(&SecretKey::from_bytes([77u8; 32]), b"aad")
+        .unwrap();
+    let mut value = serde_json::to_value(wrapped).unwrap();
+
+    value
+        .as_object_mut()
+        .unwrap()
+        .insert("unexpected_header".to_string(), serde_json::json!(true));
+
+    assert!(serde_json::from_value::<WrappedKeyBlob>(value).is_err());
 }
 
 #[test]
