@@ -9,13 +9,21 @@ use collection::operations::shard_selector_internal::ShardSelectorInternal;
 use collection::operations::types::*;
 use collection::operations::universal_query::collection_query::*;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
-use segment::types::ScoredPoint;
+use qdrant_sec::{
+    ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD, EncryptedCkksVector,
+};
+use segment::data_types::vectors::{Named, VectorInternal};
+use segment::types::{ScoredPoint, WithPayloadInterface, WithVector};
+use shard::query::query_enum::QueryEnum;
 use shard::retrieve::record_internal::RecordInternal;
 use shard::scroll::ScrollRequestInternal;
 use shard::search::CoreSearchRequestBatch;
 use storage::content_manager::errors::StorageError;
 use storage::content_manager::toc::TableOfContent;
-use storage::rbac::Auth;
+use storage::rbac::{AccessRequirements, Auth};
+
+use crate::common::crypto::vector_write_plan_for_collection_with_crypto_id;
+use crate::settings::Settings;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn do_core_search_points(
@@ -27,6 +35,7 @@ pub async fn do_core_search_points(
     auth: Auth,
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Vec<ScoredPoint>, StorageError> {
     let batch_res = do_core_search_batch_points(
         toc,
@@ -39,6 +48,7 @@ pub async fn do_core_search_points(
         auth,
         timeout,
         hw_measurement_acc,
+        runtime_settings,
     )
     .await?;
     batch_res
@@ -55,6 +65,7 @@ pub async fn do_search_batch_points(
     auth: Auth,
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Vec<Vec<ScoredPoint>>, StorageError> {
     let requests = batch_requests::<
         (CoreSearchRequest, ShardSelectorInternal),
@@ -77,7 +88,8 @@ pub async fn do_search_batch_points(
                 searches: core_requests,
             };
 
-            let req = toc.core_search_batch(
+            let req = do_core_search_batch_points(
+                toc,
                 collection_name,
                 core_batch,
                 read_consistency,
@@ -85,6 +97,7 @@ pub async fn do_search_batch_points(
                 auth.clone(),
                 timeout,
                 hw_measurement_acc.clone(),
+                runtime_settings,
             );
             res.push(req);
             Ok(())
@@ -106,7 +119,25 @@ pub async fn do_core_search_batch_points(
     auth: Auth,
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Vec<Vec<ScoredPoint>>, StorageError> {
+    if let Some(settings) = runtime_settings
+        && let Some(results) = try_ckks_vector_search_batch_points(
+            toc,
+            collection_name,
+            &request,
+            read_consistency,
+            &shard_selection,
+            &auth,
+            timeout,
+            hw_measurement_acc.clone(),
+            settings,
+        )
+        .await?
+    {
+        return Ok(results);
+    }
+
     toc.core_search_batch(
         collection_name,
         request,
@@ -117,6 +148,250 @@ pub async fn do_core_search_batch_points(
         hw_measurement_acc,
     )
     .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn try_ckks_vector_search_batch_points(
+    toc: &TableOfContent,
+    collection_name: &str,
+    request: &CoreSearchRequestBatch,
+    read_consistency: Option<ReadConsistency>,
+    shard_selection: &ShardSelectorInternal,
+    auth: &Auth,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: &Settings,
+) -> Result<Option<Vec<Vec<ScoredPoint>>>, StorageError> {
+    if request.searches.is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+
+    let collection_pass = auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new(),
+        "ckks_vector_search",
+    )?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let config = collection.config_snapshot().await;
+    let collection_crypto_id = config.stable_crypto_id(collection_name)?;
+    let Some(plan) = vector_write_plan_for_collection_with_crypto_id(
+        runtime_settings,
+        collection_name,
+        &collection_crypto_id,
+        &config.params,
+    )?
+    else {
+        return Ok(None);
+    };
+
+    let mut has_encrypted_search = false;
+    let mut has_plain_search = false;
+    for search in &request.searches {
+        if plan.contains_vector_name(search.query.get_vector_name()) {
+            has_encrypted_search = true;
+        } else {
+            has_plain_search = true;
+        }
+    }
+
+    if !has_encrypted_search {
+        return Ok(None);
+    }
+    if has_plain_search {
+        return Err(StorageError::bad_input(
+            "cannot mix CKKS encrypted vector search with plaintext vector search in the same batch",
+        ));
+    }
+
+    let mut results = Vec::with_capacity(request.searches.len());
+    for search in &request.searches {
+        results.push(
+            ckks_vector_search_points(
+                &collection,
+                collection_name,
+                search,
+                &plan,
+                read_consistency,
+                shard_selection,
+                timeout,
+                hw_measurement_acc.clone(),
+            )
+            .await?,
+        );
+    }
+
+    Ok(Some(results))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn ckks_vector_search_points(
+    collection: &collection::collection::Collection,
+    collection_name: &str,
+    search: &CoreSearchRequest,
+    plan: &crate::common::crypto::VectorWritePlan,
+    read_consistency: Option<ReadConsistency>,
+    shard_selection: &ShardSelectorInternal,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+) -> Result<Vec<ScoredPoint>, StorageError> {
+    let QueryEnum::Nearest(named_query) = &search.query else {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{}' only supports nearest-neighbor dense query search; recommend, discover, context, and MMR over CKKS ciphertext are not implemented",
+            search.query.get_vector_name(),
+        )));
+    };
+    let VectorInternal::Dense(query_values) = &named_query.query else {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{}' only supports dense query vectors",
+            named_query.get_name(),
+        )));
+    };
+    let vector_name = named_query.get_name();
+    let with_vector = search.with_vector.clone().unwrap_or_default();
+    if with_vector.is_enabled() {
+        return Err(StorageError::bad_input(format!(
+            "cannot return encrypted vector '{vector_name}'; CKKS vector ciphertext read path returns payload sidecar only",
+        )));
+    }
+
+    let mut next_offset = None;
+    let mut scored = Vec::new();
+    const BATCH_SIZE: usize = 512;
+
+    loop {
+        let scroll_result = collection
+            .scroll_by(
+                ScrollRequestInternal {
+                    offset: next_offset,
+                    limit: Some(BATCH_SIZE),
+                    filter: search.filter.clone(),
+                    with_payload: Some(WithPayloadInterface::Bool(true)),
+                    with_vector: WithVector::Bool(false),
+                    order_by: None,
+                },
+                read_consistency,
+                shard_selection,
+                timeout,
+                hw_measurement_acc.clone(),
+            )
+            .await?;
+
+        for record in scroll_result.points {
+            let Some(payload) = record.payload.as_ref() else {
+                continue;
+            };
+            let Some(encrypted) = encrypted_vector_from_payload(payload, vector_name)? else {
+                continue;
+            };
+            let score = plan
+                .score_plaintext_query(
+                    collection_name,
+                    &record.id.to_string(),
+                    vector_name,
+                    &encrypted,
+                    query_values,
+                )?
+                .ok_or_else(|| {
+                    StorageError::service_error(format!(
+                        "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
+                    ))
+                })?;
+            if search
+                .score_threshold
+                .is_some_and(|threshold| score < threshold)
+            {
+                continue;
+            }
+            scored.push(ScoredPoint {
+                id: record.id,
+                version: 0,
+                score,
+                payload: None,
+                vector: None,
+                shard_key: record.shard_key,
+                order_value: None,
+            });
+        }
+
+        let Some(offset) = scroll_result.next_page_offset else {
+            break;
+        };
+        next_offset = Some(offset);
+    }
+
+    scored.sort_unstable_by(|a, b| b.cmp(a));
+    scored.dedup_by(|a, b| a.id == b.id);
+    let mut top = scored
+        .into_iter()
+        .skip(search.offset)
+        .take(search.limit)
+        .collect::<Vec<_>>();
+
+    let with_payload = search
+        .with_payload
+        .clone()
+        .unwrap_or(WithPayloadInterface::Bool(false));
+    if top.is_empty() || (!with_payload.is_required() && !with_vector.is_enabled()) {
+        return Ok(top);
+    }
+
+    let records = collection
+        .retrieve(
+            PointRequestInternal {
+                ids: top.iter().map(|point| point.id).collect(),
+                with_payload: Some(with_payload),
+                with_vector,
+            },
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc,
+        )
+        .await?;
+    let mut records_by_id = records
+        .into_iter()
+        .map(|record| (record.id, record))
+        .collect::<std::collections::HashMap<_, _>>();
+    for point in &mut top {
+        if let Some(record) = records_by_id.remove(&point.id) {
+            point.payload = record.payload;
+            point.vector = record.vector;
+            point.shard_key = record.shard_key.or_else(|| point.shard_key.clone());
+        }
+    }
+
+    Ok(top)
+}
+
+fn encrypted_vector_from_payload(
+    payload: &segment::types::Payload,
+    vector_name: &str,
+) -> Result<Option<EncryptedCkksVector>, StorageError> {
+    let Some(sidecar) = payload
+        .0
+        .get(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Ok(None);
+    };
+    let Some(value) = sidecar.get(vector_name) else {
+        return Ok(None);
+    };
+    let Some(marker) = value
+        .as_object()
+        .and_then(|object| object.get(ENCRYPTED_CKKS_VECTOR_MARKER))
+    else {
+        return Err(StorageError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' is malformed",
+        )));
+    };
+    serde_json::from_value(marker.clone())
+        .map(Some)
+        .map_err(|err| {
+            StorageError::service_error(format!(
+                "stored CKKS vector sidecar entry '{vector_name}' failed to parse: {err}",
+            ))
+        })
 }
 
 #[allow(clippy::too_many_arguments)]

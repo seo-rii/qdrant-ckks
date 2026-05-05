@@ -14,11 +14,11 @@ use qdrant_sec::{
     CLIENT_PAYLOAD_ENVELOPE_BINDING, CkksParameters, CkksPublicMaterial, CkksVectorEncryptor,
     ClientPayloadNonceReplayKey, ClientPayloadSignatureVerification,
     ClientPayloadValidationContext, ClientPayloadVerifiedEnvelopeKey, CommandOpenFheBackend,
-    ExistingPayloadMode, LocalMasterKeyProvider, MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER,
-    PAYLOAD_CLIENT_AEAD_PROVIDER, PAYLOAD_FIELD_BINDING, PayloadEncryptionError,
-    PayloadEncryptionPolicy, PayloadTextEncryptor, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey,
-    VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER, WrappedKeyBlob,
-    client_payload_nonce_replay_key, client_payload_signature_key_id,
+    EncryptedCkksVector, ExistingPayloadMode, LocalMasterKeyProvider, MasterKeyProvider,
+    PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER, PAYLOAD_FIELD_BINDING,
+    PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
+    RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER,
+    WrappedKeyBlob, client_payload_nonce_replay_key, client_payload_signature_key_id,
     encrypted_ckks_vector_payload_value, rewrap_resource_key,
     validate_client_payload_value_for_runtime,
 };
@@ -689,6 +689,49 @@ impl VectorWritePlan {
             ))
         })
         .map(Some)
+    }
+
+    pub fn score_plaintext_query(
+        &self,
+        collection_name: &str,
+        point_id: &str,
+        vector_name: &str,
+        encrypted: &EncryptedCkksVector,
+        query_values: &[f32],
+    ) -> Result<Option<f32>, StorageError> {
+        let Some(rule) = self
+            .rules
+            .iter()
+            .find(|rule| rule.vector_name == vector_name)
+        else {
+            return Ok(None);
+        };
+        let query_values = query_values
+            .iter()
+            .map(|value| *value as f64)
+            .collect::<Vec<_>>();
+        let score = rule
+            .encryptor
+            .score_plaintext_query(
+                collection_name,
+                point_id,
+                &rule.public_material,
+                encrypted,
+                query_values.as_slice(),
+            )
+            .map_err(|err| {
+                StorageError::service_error(format!(
+                    "CKKS vector plaintext-query scoring failed for vector '{vector_name}' in collection {collection_name}: {err}",
+                ))
+            })?;
+        let score = score as f32;
+        if !score.is_finite() {
+            return Err(StorageError::service_error(format!(
+                "CKKS vector plaintext-query scoring returned non-finite score for vector '{vector_name}' in collection {collection_name}",
+            )));
+        }
+
+        Ok(Some(score))
     }
 }
 

@@ -20,7 +20,7 @@ use crate::actix::helpers::{
 use crate::common::query::{
     do_core_search_points, do_search_batch_points, do_search_point_groups, do_search_points_matrix,
 };
-use crate::settings::ServiceConfig;
+use crate::settings::{ServiceConfig, Settings};
 
 #[post("/collections/{collection_name}/points/search")]
 async fn search_points(
@@ -29,6 +29,7 @@ async fn search_points(
     request: Json<SearchRequest>,
     params: Query<ReadParams>,
     service_config: web::Data<ServiceConfig>,
+    settings: web::Data<Settings>,
     ActixAuth(auth): ActixAuth,
 ) -> HttpResponse {
     let SearchRequest {
@@ -72,6 +73,7 @@ async fn search_points(
         auth,
         params.timeout(),
         request_hw_counter.get_counter(),
+        Some(settings.get_ref()),
     )
     .await
     .map(|scored_points| {
@@ -91,6 +93,7 @@ async fn batch_search_points(
     request: Json<SearchRequestBatch>,
     params: Query<ReadParams>,
     service_config: web::Data<ServiceConfig>,
+    settings: web::Data<Settings>,
     ActixAuth(auth): ActixAuth,
 ) -> HttpResponse {
     let pass = match check_strict_mode(
@@ -142,6 +145,7 @@ async fn batch_search_points(
         auth,
         params.timeout(),
         request_hw_counter.get_counter(),
+        Some(settings.get_ref()),
     )
     .await
     .map(|batch_scored_points| {

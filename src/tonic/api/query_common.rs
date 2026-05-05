@@ -38,6 +38,7 @@ use crate::common::inference::query_requests_grpc::{
 };
 use crate::common::query::*;
 use crate::common::strict_mode::*;
+use crate::settings::Settings;
 
 pub(crate) fn convert_shard_selector_for_read(
     shard_id_selector: Option<ShardId>,
@@ -64,6 +65,7 @@ pub async fn search(
     shard_selection: Option<ShardId>,
     auth: Auth,
     hw_measurement_acc: RequestHwCounter,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Response<SearchResponse>, Status> {
     let SearchPoints {
         collection_name,
@@ -126,6 +128,7 @@ pub async fn search(
         auth,
         timeout.map(Duration::from_secs),
         hw_measurement_acc.get_counter(),
+        runtime_settings,
     )
     .await?;
 
@@ -149,6 +152,7 @@ pub async fn core_search_batch(
     auth: Auth,
     timeout: Option<Duration>,
     request_hw_counter: RequestHwCounter,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Response<SearchBatchResponse>, Status> {
     let toc = toc_provider
         .check_strict_mode_batch(
@@ -172,6 +176,7 @@ pub async fn core_search_batch(
         auth,
         timeout,
         request_hw_counter.get_counter(),
+        runtime_settings,
     )
     .await?;
 

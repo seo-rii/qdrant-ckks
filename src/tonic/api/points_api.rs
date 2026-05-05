@@ -360,6 +360,7 @@ impl Points for PointsService {
             None,
             auth,
             hw_metrics,
+            Some(&self.settings),
         )
         .await?;
 
@@ -405,6 +406,7 @@ impl Points for PointsService {
             auth,
             timeout,
             hw_metrics,
+            Some(&self.settings),
         )
         .await?;
 

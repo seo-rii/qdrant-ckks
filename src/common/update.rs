@@ -2340,7 +2340,7 @@ mod tests {
     use ring::rand::SystemRandom;
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
-    use segment::types::{Condition, Distance, FieldCondition, WithPayloadInterface};
+    use segment::types::{Condition, Distance, FieldCondition, WithPayloadInterface, WithVector};
     use serde_json::json;
     use storage::content_manager::collection_meta_ops::{
         CollectionMetaOperations, CreateCollectionOperation,
@@ -2402,10 +2402,26 @@ mod tests {
 set -euo pipefail
 IFS= read -r request
 case "$request" in
-  *'"scheme":"openfhe-ckks"'*) ;;
+  *'"operation":"score_plaintext_query"'*'"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"'*)
+    printf '{"version":1,"score":9.0}\n'
+    ;;
+  *'"operation":"score_plaintext_query"'*'"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"'*)
+    printf '{"version":1,"score":4.0}\n'
+    ;;
+  *'"operation":"score_plaintext_query"'*)
+    printf '{"version":1,"score":1.0}\n'
+    ;;
+  *'"scheme":"openfhe-ckks"'*'"point_id":"1"'*)
+    printf '{"version":1,"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"}\n'
+    ;;
+  *'"scheme":"openfhe-ckks"'*'"point_id":"2"'*)
+    printf '{"version":1,"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"}\n'
+    ;;
+  *'"scheme":"openfhe-ckks"'*)
+    printf '{"version":1,"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ"}\n'
+    ;;
   *) exit 7 ;;
 esac
-printf '{"version":1,"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ"}\n'
 "#,
         )
         .unwrap();
@@ -2881,6 +2897,10 @@ printf '{"version":1,"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ"}\n'
                         id: 1.into(),
                         vector: api::rest::VectorStruct::Single(vec![0.7, -0.25]),
                         payload: None,
+                    }, api::rest::PointStruct {
+                        id: 2.into(),
+                        vector: api::rest::VectorStruct::Single(vec![0.1, 0.2]),
+                        payload: None,
                     }],
                     shard_key: None,
                     update_filter: None,
@@ -2929,6 +2949,33 @@ printf '{"version":1,"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ"}\n'
             let serialized_vector_payload = serde_json::to_string(&retrieved[0].payload).unwrap();
             assert!(!serialized_vector_payload.contains("0.7"));
             assert!(!serialized_vector_payload.contains("-0.25"));
+
+            let search_result = crate::common::query::do_core_search_points(
+                &toc,
+                "vector_docs",
+                SearchRequestInternal {
+                    vector: vec![0.0, 0.0].into(),
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    score_threshold: None,
+                }
+                .into(),
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(search_result.len(), 1);
+            assert_eq!(search_result[0].id, 1.into());
+            assert_eq!(search_result[0].score, 9.0);
 
             let err = do_upsert_points(
                 UncheckedTocProvider::new_unchecked(&toc),
