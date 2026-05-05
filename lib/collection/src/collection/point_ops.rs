@@ -278,7 +278,9 @@ impl Collection {
                             )));
                         }
                         let Some(point_id) = point_id else {
-                            return Ok(true);
+                            return Err(CollectionError::bad_input(format!(
+                                "client encrypted payload marker for field '{encrypted_path_str}' requires point-specific runtime envelope verification before collection write",
+                            )));
                         };
                         validate_client_payload_value(
                                 value,
