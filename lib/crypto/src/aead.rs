@@ -271,10 +271,12 @@ pub(crate) fn validate_encrypted_envelope_metadata(
     if !envelope.material_fingerprint.is_empty() {
         validate_material_fingerprint_id(&envelope.material_fingerprint)?;
     }
-    if !envelope.rk_id.is_empty() {
-        validate_resource_key_id(&envelope.rk_id)?;
-    } else if envelope.rk_epoch.is_some() {
-        return Err(EncryptionError::InvalidResourceKeyId);
+    match (!envelope.rk_id.is_empty(), envelope.rk_epoch) {
+        (true, Some(_)) => validate_resource_key_id(&envelope.rk_id)?,
+        (true, None) | (false, Some(_)) => {
+            return Err(EncryptionError::InvalidResourceKeyId);
+        }
+        (false, None) => {}
     }
 
     let nonce = BASE64URL_NOPAD
@@ -525,6 +527,9 @@ impl AeadCipher {
         {
             return Ok(false);
         }
+        if !self.rk_id.is_empty() && (envelope.rk_id.is_empty() || envelope.rk_epoch.is_none()) {
+            return Ok(false);
+        }
         if !envelope.rk_id.is_empty() {
             validate_resource_key_id(&envelope.rk_id)?;
             if self.rk_id != envelope.rk_id {
@@ -616,6 +621,9 @@ impl AeadCipher {
             && envelope.material_fingerprint != self.material_fingerprint
         {
             return Err(EncryptionError::MaterialFingerprintMismatch);
+        }
+        if !self.rk_id.is_empty() && (envelope.rk_id.is_empty() || envelope.rk_epoch.is_none()) {
+            return Err(EncryptionError::KeyMismatch);
         }
         if !envelope.rk_id.is_empty() {
             validate_resource_key_id(&envelope.rk_id)?;

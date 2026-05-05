@@ -425,7 +425,7 @@ fn envelope_records_and_authenticates_resource_key_metadata() {
 }
 
 #[test]
-fn resource_key_metadata_preserves_legacy_envelope_decrypt() {
+fn resource_key_metadata_rejects_legacy_envelope_without_rk_metadata() {
     let context = payload_context("42");
     let legacy_cipher = AeadCipher::new_with_material_fingerprint(
         "tenant-a:payload",
@@ -447,8 +447,8 @@ fn resource_key_metadata_preserves_legacy_envelope_decrypt() {
     .unwrap();
 
     assert_eq!(
-        tagged_cipher.decrypt(&envelope, context).unwrap(),
-        b"legacy envelope",
+        tagged_cipher.decrypt(&envelope, context),
+        Err(EncryptionError::KeyMismatch),
     );
 }
 
