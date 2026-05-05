@@ -14,9 +14,9 @@ use storage::content_manager::alias_mapping::AliasPersistence;
 use storage::content_manager::snapshots::SnapshotConfig;
 use storage::content_manager::toc::{ALIASES_PATH, COLLECTIONS_DIR};
 
-use crate::common::crypto::{
-    validate_recovered_collection_crypto_config, validate_recovered_collection_crypto_runtime,
-};
+use crate::common::crypto::validate_recovered_collection_crypto_config;
+#[cfg(test)]
+use crate::common::crypto::validate_recovered_collection_crypto_runtime;
 use crate::settings::Settings;
 
 /// Recover snapshots from the given arguments
@@ -179,6 +179,7 @@ fn validate_restored_collection_crypto_runtime(
     )
 }
 
+#[cfg(test)]
 fn validate_restored_collection_crypto_params(
     settings: &Settings,
     collection_name: &str,
