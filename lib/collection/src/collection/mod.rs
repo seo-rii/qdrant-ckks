@@ -1456,6 +1456,24 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn client_payload_nonce_replay_cache_load_rejects_group_world_accessible_files() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let cache_path = dir.path().join(CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE);
+        std::fs::write(
+            &cache_path,
+            "collection-uuid\x1ftenant-a/key\x1ftenant-a/rk\x1f1\x1fAAAAAAAAAAAAAAAA\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&cache_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let err = ClientPayloadNonceReplayCache::load(dir.path()).unwrap_err();
+        assert!(format!("{err:?}").contains("must not be group/world accessible"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn client_payload_nonce_replay_cache_rejects_symlink_paths() {
         use std::os::unix::fs::symlink;
 
