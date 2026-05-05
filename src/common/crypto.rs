@@ -7394,6 +7394,24 @@ mod tests {
         };
 
         validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap();
+
+        let mut settings_with_extra_vector_role = settings.clone();
+        settings_with_extra_vector_role
+            .crypto
+            .instances
+            .get_mut("docs_vector_v1")
+            .unwrap()
+            .materials
+            .insert("payload_key".to_string(), "tenant-a/vector-v1".to_string());
+        let err = validate_collection_crypto_runtime_inner(
+            &settings_with_extra_vector_role,
+            "docs",
+            &params,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, StorageError::BadInput { description } if description.contains("unsupported material role payload_key"))
+        );
     }
 
     #[test]
