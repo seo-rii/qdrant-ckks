@@ -3,7 +3,7 @@
 이 문서는 `RISK_REGISTER.md`의 대형 작업을 구현 순서대로 정리한다. 작은 방어 패치는 이미 별도 커밋으로 일부 처리됐고, 여기서는 설계, migration, 테스트 인프라, 구조 변경이 필요한 작업만 다룬다.
 
 기준 브랜치: `sec`
-작성일: 2026-04-24
+최종 갱신: 2026-05-05
 
 ## 작업 원칙
 
@@ -12,6 +12,30 @@
 - collection config 변경, key lifecycle, snapshot/replication 동작은 문서와 테스트 없이 코드만 바꾸지 않는다.
 - legacy `params.ckks`는 boundary adapter로만 남기고, 내부 구현은 generic `params.encryption` 기준으로 수렴시킨다.
 - `RISK_REGISTER.md`는 추적 문서이고 커밋 대상이 아니다.
+
+## 현재 상태 요약
+
+완료되었거나 현재 브랜치에서 fail-closed로 고정된 영역:
+
+- Payload server-side encrypt-before-storage는 public upsert/set/overwrite/batch ingress에 연결되어 있다.
+- Client-side zero-trust payload insert는 `$qdrant_client_aead`, mandatory Ed25519 signature, stable crypto identity, RK id/epoch/kdf-domain policy, request/process/collection-local persisted nonce replay cache를 사용한다.
+- Server/client payload envelope provenance는 direct enum variant 조립 없이 safe constructor와 runtime-verified envelope key proof를 통해 collection write guard로 전달된다.
+- Generic MK/RK material, wrapped RK, explicit opaque `material_fingerprint_id`, `rk_id`/`rk_epoch` envelope metadata, retired-material decrypt path, MK rewrap primitive가 들어가 있다.
+- Public params diff와 direct config validation은 encryption/ckks mutation을 migration path 밖에서 거부한다.
+- `ApplyCryptoMigration` meta operation과 migration plan validation/apply primitive가 있으며, dry-run은 config를 변경하지 않는다.
+- Payload index/filter/order/group/formula/facet 및 encrypted vector write/search/recommend/discover/query/matrix paths는 unsupported 상태에서 fail-closed 된다.
+- Snapshot/restore preflight, shard-transfer/replication/resharding start, dead-replica recovery source selection, readiness gate는 encrypted collection의 runtime crypto parity mismatch를 fail-closed 한다.
+- OpenFHE bridge path/hash validation, parent-dir checks, env secret stripping, timeout/stdout/stderr malicious-behavior coverage, worker pool, batch protocol이 들어가 있다.
+
+남은 대형 작업:
+
+- CKKS encrypted vector storage/search 자체 구현: sidecar/custom segment/surrogate-vector 중 하나를 선택해야 하며, 현재는 의도적으로 unsupported다.
+- Background migration/re-encrypt job: plan/state primitive는 있지만 point scan, checkpoint resume, verification, rollback, old-key disable/destroy job은 아직 없다.
+- Cluster-wide client nonce replay ledger: request/process/collection-local/reload cache는 있지만 consensus-backed global ledger는 없다.
+- Blind index: client-side exact-match search를 위한 token provider/query integration은 아직 없다.
+- Decrypt/RBAC read mode: 현재 retrieve/scroll/search/export는 raw envelope 반환이며 `decrypted`/`redacted` 권한 모델은 없다.
+- KMS/Vault/Unix socket key providers: local/env/file/fd/wrapped material 기반은 있지만 external KMS lifecycle은 future work다.
+- Broader distributed integration: current unit/integration coverage는 많지만 multi-node parity/restore/replay ledger e2e는 남아 있다.
 
 ## Phase 0: 기준선 고정
 
