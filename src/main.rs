@@ -428,6 +428,9 @@ fn main() -> anyhow::Result<()> {
             toc_arc.clone(),
             propose_operation_sender.unwrap(),
             storage_path,
+            collection::operations::types::PeerMetadata::current_with_crypto_runtime_capability_fingerprint(
+                Some(crate::common::crypto::crypto_runtime_capability_fingerprint(&settings)),
+            ),
         )
         .expect("initialize consensus manager")
         .into();

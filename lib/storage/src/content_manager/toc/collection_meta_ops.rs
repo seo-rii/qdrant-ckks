@@ -1,11 +1,13 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use collection::collection_state;
 use collection::config::{CollectionParams, ShardingMethod};
 use collection::events::{CollectionDeletedEvent, IndexCreatedEvent};
+use collection::operations::types::PeerMetadata;
 use collection::shards::collection_shard_distribution::CollectionShardDistribution;
 use collection::shards::replica_set::replica_set_state::ReplicaState;
+use collection::shards::shard::PeerId;
 use collection::shards::transfer::ShardTransfer;
 use collection::shards::{CollectionId, transfer};
 use common::counter::hardware_accumulator::HwMeasurementAcc;
@@ -440,9 +442,13 @@ impl TableOfContent {
                 if collection_params_require_crypto_runtime_transfer_parity(
                     &collection_config.params,
                 ) {
-                    return Err(StorageError::bad_input(
-                        "encrypted collection shard transfer requires crypto runtime capability parity enforcement; automatic shard transfer is disabled until cluster parity checks are wired",
-                    ));
+                    validate_encrypted_transfer_crypto_runtime_parity(
+                        &collection_id,
+                        self.this_peer_id,
+                        transfer.from,
+                        transfer.to,
+                        &self.channel_service.id_to_metadata.read(),
+                    )?;
                 }
                 let collection_state::State {
                     shards,
@@ -754,14 +760,60 @@ fn collection_params_require_crypto_runtime_transfer_parity(params: &CollectionP
             .is_some_and(|ckks| ckks.enabled || !ckks.payload_text_fields.is_empty())
 }
 
+fn validate_encrypted_transfer_crypto_runtime_parity(
+    collection_id: &str,
+    local_peer_id: PeerId,
+    from_peer_id: PeerId,
+    to_peer_id: PeerId,
+    peer_metadata_by_id: &HashMap<PeerId, PeerMetadata>,
+) -> Result<(), StorageError> {
+    let Some(local_fingerprint) = peer_metadata_by_id
+        .get(&local_peer_id)
+        .and_then(PeerMetadata::crypto_runtime_capability_fingerprint)
+    else {
+        return Err(StorageError::bad_input(format!(
+            "encrypted collection shard transfer for {collection_id} requires local peer \
+             {local_peer_id} crypto runtime capability metadata",
+        )));
+    };
+
+    for peer_id in [from_peer_id, to_peer_id, local_peer_id] {
+        let Some(peer_fingerprint) = peer_metadata_by_id
+            .get(&peer_id)
+            .and_then(PeerMetadata::crypto_runtime_capability_fingerprint)
+        else {
+            return Err(StorageError::bad_input(format!(
+                "encrypted collection shard transfer for {collection_id} requires peer \
+                 {peer_id} crypto runtime capability metadata",
+            )));
+        };
+
+        if peer_fingerprint != local_fingerprint {
+            return Err(StorageError::bad_input(format!(
+                "encrypted collection shard transfer for {collection_id} detected crypto \
+                 runtime parity mismatch for peer {peer_id}",
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use collection::config::{
         CkksCollectionConfig, CollectionEncryptionConfig, CollectionParams, CryptoMigrationState,
         EncryptionRuleRef, EncryptionSelector,
     };
+    use collection::operations::types::PeerMetadata;
+    use collection::shards::shard::PeerId;
 
-    use super::collection_params_require_crypto_runtime_transfer_parity;
+    use super::{
+        collection_params_require_crypto_runtime_transfer_parity,
+        validate_encrypted_transfer_crypto_runtime_parity,
+    };
 
     #[test]
     fn encrypted_collection_requires_transfer_parity_enforcement() {
@@ -803,5 +855,41 @@ mod tests {
         assert!(collection_params_require_crypto_runtime_transfer_parity(
             &legacy
         ));
+    }
+
+    #[test]
+    fn encrypted_transfer_requires_matching_crypto_runtime_peer_metadata() {
+        let mut metadata = HashMap::<PeerId, PeerMetadata>::new();
+        metadata.insert(
+            1,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-a".to_string(),
+            )),
+        );
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-a".to_string(),
+            )),
+        );
+        metadata.insert(
+            3,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-a".to_string(),
+            )),
+        );
+
+        validate_encrypted_transfer_crypto_runtime_parity("docs", 1, 2, 3, &metadata)
+            .expect("matching peer metadata should allow encrypted transfer");
+
+        metadata.insert(
+            3,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-b".to_string(),
+            )),
+        );
+        let err = validate_encrypted_transfer_crypto_runtime_parity("docs", 1, 2, 3, &metadata)
+            .expect_err("mismatched peer metadata must fail closed");
+        assert!(err.to_string().contains("crypto runtime parity mismatch"));
     }
 }

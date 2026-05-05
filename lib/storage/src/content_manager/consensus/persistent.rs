@@ -311,11 +311,11 @@ impl Persistent {
         self.peer_metadata_by_id.read().clone()
     }
 
-    pub fn is_our_metadata_outdated(&self) -> bool {
+    pub fn is_our_metadata_outdated(&self, current_metadata: &PeerMetadata) -> bool {
         self.peer_metadata_by_id
             .read()
             .get(&self.this_peer_id())
-            .is_none_or(|metadata| metadata.is_different_version())
+            .is_none_or(|metadata| metadata.is_different_from(current_metadata))
     }
 
     pub fn this_peer_id(&self) -> PeerId {

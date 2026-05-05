@@ -19,6 +19,7 @@ use collection::operations::shard_selector_internal::ShardSelectorInternal;
 use collection::operations::snapshot_ops::SnapshotDescription;
 use collection::operations::types::{
     AliasDescription, CollectionClusterInfo, CollectionInfo, CollectionsAliasesResponse,
+    PeerMetadata,
 };
 use collection::operations::verification::new_unchecked_verification_pass;
 use collection::shards::replica_set;
@@ -297,7 +298,8 @@ pub async fn do_update_collection_cluster(
         .await?;
 
     let collection_state = collection.state().await;
-    reject_encrypted_cluster_data_movement(
+    let peer_metadata_by_id = consensus_state.persistent.read().peer_metadata_by_id();
+    validate_encrypted_cluster_data_movement_parity(
         &collection_name,
         collection_state
             .config
@@ -305,6 +307,9 @@ pub async fn do_update_collection_cluster(
             .effective_encryption()
             .is_some(),
         &operation,
+        consensus_state.persistent.read().this_peer_id(),
+        &get_all_peer_ids(),
+        &peer_metadata_by_id,
     )?;
 
     match operation {
@@ -985,31 +990,83 @@ pub async fn do_update_collection_cluster(
     }
 }
 
-fn reject_encrypted_cluster_data_movement(
+fn validate_encrypted_cluster_data_movement_parity(
     collection_name: &str,
     encrypted_collection: bool,
     operation: &ClusterOperations,
+    local_peer_id: PeerId,
+    all_peer_ids: &[PeerId],
+    peer_metadata_by_id: &HashMap<PeerId, PeerMetadata>,
 ) -> Result<(), StorageError> {
     if !encrypted_collection {
         return Ok(());
     }
 
-    let operation_name = match operation {
-        ClusterOperations::MoveShard(_) => "move_shard",
-        ClusterOperations::ReplicateShard(_) => "replicate_shard",
-        ClusterOperations::ReplicatePoints(_) => "replicate_points",
-        ClusterOperations::RestartTransfer(_) => "restart_transfer",
-        ClusterOperations::StartResharding(_) => "start_resharding",
+    let (operation_name, peer_ids): (&str, Vec<PeerId>) = match operation {
+        ClusterOperations::MoveShard(op) => (
+            "move_shard",
+            vec![op.move_shard.from_peer_id, op.move_shard.to_peer_id],
+        ),
+        ClusterOperations::ReplicateShard(op) => (
+            "replicate_shard",
+            vec![
+                op.replicate_shard.from_peer_id,
+                op.replicate_shard.to_peer_id,
+            ],
+        ),
+        ClusterOperations::ReplicatePoints(_) => ("replicate_points", all_peer_ids.to_vec()),
+        ClusterOperations::RestartTransfer(op) => (
+            "restart_transfer",
+            vec![
+                op.restart_transfer.from_peer_id,
+                op.restart_transfer.to_peer_id,
+            ],
+        ),
+        ClusterOperations::StartResharding(op) => (
+            "start_resharding",
+            op.start_resharding
+                .peer_id
+                .map_or_else(|| all_peer_ids.to_vec(), |peer_id| vec![peer_id]),
+        ),
         _ => return Ok(()),
     };
 
-    Err(StorageError::BadRequest {
-        description: format!(
-            "cannot run {operation_name} on encrypted collection {collection_name}: \
-             cluster crypto runtime parity enforcement is not wired yet, so encrypted shard \
-             transfer and replication fail closed",
-        ),
-    })
+    let Some(local_fingerprint) = peer_metadata_by_id
+        .get(&local_peer_id)
+        .and_then(PeerMetadata::crypto_runtime_capability_fingerprint)
+    else {
+        return Err(StorageError::BadRequest {
+            description: format!(
+                "cannot run {operation_name} on encrypted collection {collection_name}: \
+                     local peer {local_peer_id} has not published crypto runtime capability metadata",
+            ),
+        });
+    };
+
+    for peer_id in peer_ids.into_iter().chain(std::iter::once(local_peer_id)) {
+        let Some(peer_fingerprint) = peer_metadata_by_id
+            .get(&peer_id)
+            .and_then(PeerMetadata::crypto_runtime_capability_fingerprint)
+        else {
+            return Err(StorageError::BadRequest {
+                description: format!(
+                    "cannot run {operation_name} on encrypted collection {collection_name}: \
+                     peer {peer_id} has not published crypto runtime capability metadata",
+                ),
+            });
+        };
+
+        if peer_fingerprint != local_fingerprint {
+            return Err(StorageError::BadRequest {
+                description: format!(
+                    "cannot run {operation_name} on encrypted collection {collection_name}: \
+                     crypto runtime parity mismatch for peer {peer_id}",
+                ),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1057,7 +1114,7 @@ mod tests {
     }
 
     #[test]
-    fn encrypted_cluster_data_movement_fails_closed() {
+    fn encrypted_cluster_data_movement_requires_crypto_runtime_parity() {
         let operation = ClusterOperations::ReplicateShard(ReplicateShardOperation {
             replicate_shard: collection::operations::cluster_ops::ReplicateShard {
                 shard_id: 1,
@@ -1068,11 +1125,49 @@ mod tests {
             },
         });
 
-        let err = reject_encrypted_cluster_data_movement("docs", true, &operation)
-            .expect_err("encrypted shard replication must fail closed");
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            1,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "local-fingerprint".to_string(),
+            )),
+        );
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "different-fingerprint".to_string(),
+            )),
+        );
+
+        let err = validate_encrypted_cluster_data_movement_parity(
+            "docs",
+            true,
+            &operation,
+            1,
+            &[1, 2],
+            &metadata,
+        )
+        .expect_err("encrypted shard replication must fail closed on mismatched parity");
 
         assert!(matches!(err, StorageError::BadRequest { .. }));
         assert!(err.to_string().contains("crypto runtime parity"));
+        assert!(err.to_string().contains("mismatch"));
+
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "local-fingerprint".to_string(),
+            )),
+        );
+        validate_encrypted_cluster_data_movement_parity(
+            "docs",
+            true,
+            &operation,
+            1,
+            &[1, 2],
+            &metadata,
+        )
+        .expect("matching crypto runtime parity should allow encrypted movement");
     }
 
     #[test]
@@ -1086,7 +1181,14 @@ mod tests {
             },
         });
 
-        reject_encrypted_cluster_data_movement("docs", true, &operation)
-            .expect("abort must remain available for cleanup");
+        validate_encrypted_cluster_data_movement_parity(
+            "docs",
+            true,
+            &operation,
+            1,
+            &[],
+            &HashMap::new(),
+        )
+        .expect("abort must remain available for cleanup");
     }
 }

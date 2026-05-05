@@ -43,7 +43,9 @@ use crate::config::{CollectionConfigInternal, ShardingMethod};
 use crate::operations::OperationWithClockTag;
 use crate::operations::config_diff::{DiffConfig, OptimizersConfigDiff};
 use crate::operations::shared_storage_config::SharedStorageConfig;
-use crate::operations::types::{CollectionError, CollectionResult, NodeType, OptimizersStatus};
+use crate::operations::types::{
+    CollectionError, CollectionResult, NodeType, OptimizersStatus, PeerMetadata,
+};
 use crate::optimizers_builder::OptimizersConfig;
 use crate::shards::channel_service::ChannelService;
 use crate::shards::collection_shard_distribution::CollectionShardDistribution;
@@ -896,15 +898,6 @@ impl Collection {
                 continue;
             }
 
-            if encrypted_collection {
-                log::warn!(
-                    "Skipping automatic shard transfer recovery for encrypted collection {} shard {shard_id}: \
-                     cluster crypto runtime parity enforcement is not wired yet",
-                    self.name(),
-                );
-                continue;
-            }
-
             // Try to find dead replicas with no active transfers
             let transfers = shard_holder.get_transfers(|_| true);
 
@@ -939,6 +932,27 @@ impl Collection {
             //
             // `active_shards` includes `Active` and `ReshardingScaleDown` replicas!
             for replica_id in replica_set.active_shards(true) {
+                if encrypted_collection {
+                    let parity_result = {
+                        let peer_metadata_by_id = self.channel_service.id_to_metadata.read();
+                        validate_encrypted_automatic_transfer_crypto_runtime_parity(
+                            self.name(),
+                            shard_id,
+                            replica_id,
+                            this_peer_id,
+                            &peer_metadata_by_id,
+                        )
+                    };
+                    if let Err(err) = parity_result {
+                        log::warn!(
+                            "Skipping automatic shard transfer recovery for encrypted collection {} shard {shard_id} \
+                             from peer {replica_id} to peer {this_peer_id}: {err}",
+                            self.name(),
+                        );
+                        continue;
+                    }
+                }
+
                 let transfer = ShardTransfer {
                     from: replica_id,
                     to: this_peer_id,
@@ -1209,6 +1223,43 @@ fn sync_client_payload_nonce_replay_cache_parent(_path: &Path) -> CollectionResu
     Ok(())
 }
 
+fn validate_encrypted_automatic_transfer_crypto_runtime_parity(
+    collection_name: &str,
+    shard_id: ShardId,
+    from_peer_id: PeerId,
+    to_peer_id: PeerId,
+    peer_metadata_by_id: &HashMap<PeerId, PeerMetadata>,
+) -> CollectionResult<()> {
+    let from_fingerprint = peer_metadata_by_id
+        .get(&from_peer_id)
+        .and_then(PeerMetadata::crypto_runtime_capability_fingerprint)
+        .ok_or_else(|| {
+            CollectionError::bad_input(format!(
+                "automatic shard transfer recovery for encrypted collection {collection_name} shard {shard_id} \
+                 requires crypto runtime capability metadata for source peer {from_peer_id}",
+            ))
+        })?;
+    let to_fingerprint = peer_metadata_by_id
+        .get(&to_peer_id)
+        .and_then(PeerMetadata::crypto_runtime_capability_fingerprint)
+        .ok_or_else(|| {
+            CollectionError::bad_input(format!(
+                "automatic shard transfer recovery for encrypted collection {collection_name} shard {shard_id} \
+                 requires crypto runtime capability metadata for target peer {to_peer_id}",
+            ))
+        })?;
+
+    if from_fingerprint != to_fingerprint {
+        return Err(CollectionError::bad_input(format!(
+            "automatic shard transfer recovery for encrypted collection {collection_name} shard {shard_id} \
+             requires matching crypto runtime capability fingerprints for source peer {from_peer_id} \
+             and target peer {to_peer_id}",
+        )));
+    }
+
+    Ok(())
+}
+
 struct CollectionVersion;
 
 impl StorageVersion for CollectionVersion {
@@ -1246,6 +1297,41 @@ mod tests {
 
         let err = ClientPayloadNonceReplayCache::load(dir.path()).unwrap_err();
         assert!(format!("{err:?}").contains("malformed entry"));
+    }
+
+    #[test]
+    fn encrypted_automatic_transfer_requires_matching_crypto_runtime_peer_metadata() {
+        let mut metadata = HashMap::<PeerId, PeerMetadata>::new();
+        let err =
+            validate_encrypted_automatic_transfer_crypto_runtime_parity("docs", 0, 1, 2, &metadata)
+                .unwrap_err();
+        assert!(format!("{err:?}").contains("source peer 1"));
+
+        metadata.insert(
+            1,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-a".to_string(),
+            )),
+        );
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-b".to_string(),
+            )),
+        );
+        let err =
+            validate_encrypted_automatic_transfer_crypto_runtime_parity("docs", 0, 1, 2, &metadata)
+                .unwrap_err();
+        assert!(format!("{err:?}").contains("matching crypto runtime"));
+
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-a".to_string(),
+            )),
+        );
+        validate_encrypted_automatic_transfer_crypto_runtime_parity("docs", 0, 1, 2, &metadata)
+            .unwrap();
     }
 
     #[cfg(unix)]

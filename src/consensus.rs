@@ -1501,6 +1501,9 @@ mod tests {
             toc_arc.clone(),
             operation_sender,
             storage_path,
+            collection::operations::types::PeerMetadata::current_with_crypto_runtime_capability_fingerprint(
+                Some(crate::common::crypto::crypto_runtime_capability_fingerprint(&settings)),
+            ),
         )
         .expect("initialize consensus manager")
         .into();

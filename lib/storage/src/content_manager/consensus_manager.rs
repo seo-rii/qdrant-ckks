@@ -100,6 +100,8 @@ pub struct ConsensusManager<C: CollectionContainer> {
     consensus_thread_status: RwLock<ConsensusThreadStatus>,
     /// Consensus thread errors, changed by the consensus thread
     message_send_failures: RwLock<HashMap<String, MessageSendErrors>>,
+    /// Local peer metadata proposed to consensus for cluster capability checks.
+    current_peer_metadata: PeerMetadata,
     /// Last time we attempted to update the peer metadata
     next_peer_metadata_update_attempt: Mutex<Instant>,
 }
@@ -110,6 +112,7 @@ impl<C: CollectionContainer> ConsensusManager<C> {
         toc: Arc<C>,
         propose_sender: OperationSender,
         storage_path: &Path,
+        current_peer_metadata: PeerMetadata,
     ) -> Result<Self, StorageError> {
         let mut wal = ConsensusOpWal::new(storage_path);
 
@@ -144,6 +147,7 @@ impl<C: CollectionContainer> ConsensusManager<C> {
                 last_update: Utc::now(),
             }),
             message_send_failures: Default::default(),
+            current_peer_metadata,
             next_peer_metadata_update_attempt: Mutex::new(Instant::now()),
         })
     }
@@ -870,7 +874,11 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             return;
         }
 
-        if !self.persistent.read().is_our_metadata_outdated() {
+        if !self
+            .persistent
+            .read()
+            .is_our_metadata_outdated(&self.current_peer_metadata)
+        {
             return;
         }
 
@@ -879,7 +887,7 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             .propose_sender
             .send(ConsensusOperations::UpdatePeerMetadata {
                 peer_id: self.this_peer_id(),
-                metadata: PeerMetadata::current(),
+                metadata: self.current_peer_metadata.clone(),
             });
         if let Err(err) = result {
             log::error!("Failed to propose consensus peer metadata update for this peer: {err}");
@@ -1146,6 +1154,7 @@ pub fn raft_error_other(e: impl std::error::Error) -> raft::Error {
 mod tests {
     use std::sync::{Arc, mpsc};
 
+    use collection::operations::types::PeerMetadata;
     use collection::shards::shard::PeerId;
     use proptest::prelude::*;
     use raft::eraftpb::{
@@ -1310,6 +1319,7 @@ mod tests {
             Arc::new(NoCollections),
             OperationSender::new(sender),
             path,
+            PeerMetadata::current(),
         )
         .expect("initialize consensus manager");
         let mem_storage = MemStorage::new();

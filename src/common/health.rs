@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::future::{self, Future};
 use std::sync::Arc;
 use std::sync::atomic::{self, AtomicBool};
@@ -8,8 +8,9 @@ use std::{panic, thread};
 use api::grpc::qdrant::qdrant_internal_client::QdrantInternalClient;
 use api::grpc::qdrant::{GetConsensusCommitRequest, GetConsensusCommitResponse};
 use api::grpc::transport_channel_pool::{self, TransportChannelPool};
+use collection::operations::types::PeerMetadata;
 use collection::shards::CollectionId;
-use collection::shards::shard::ShardId;
+use collection::shards::shard::{PeerId, ShardId};
 use common::defaults;
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt as _, StreamExt as _, TryStreamExt as _};
@@ -199,6 +200,19 @@ impl Task {
             unhealthy_shards.retain(|shard| current_unhealthy_shards.contains(shard));
         }
 
+        while self.has_encrypted_collections().await {
+            let mismatched_peers = self.crypto_runtime_capability_mismatched_peers();
+            if mismatched_peers.is_empty() {
+                break;
+            }
+
+            log::warn!(
+                "Waiting before marking node ready because encrypted collections require matching \
+                 crypto runtime capability metadata for all cluster peers; mismatched peers: {mismatched_peers:?}",
+            );
+            self.check_ready_signal.notified().await;
+        }
+
         self.set_ready();
     }
 
@@ -336,6 +350,34 @@ impl Task {
         unhealthy_shards
     }
 
+    async fn has_encrypted_collections(&self) -> bool {
+        let collections = self
+            .toc
+            .all_collections(&Access::full("For health check"))
+            .await;
+
+        for collection_pass in &collections {
+            let state = match self.toc.get_collection(collection_pass).await {
+                Ok(collection) => collection.state().await,
+                Err(_) => continue,
+            };
+
+            if state.config.params.effective_encryption().is_some() {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn crypto_runtime_capability_mismatched_peers(&self) -> Vec<PeerId> {
+        let persistent = self.consensus_state.persistent.read();
+        crypto_runtime_capability_mismatched_peers(
+            persistent.this_peer_id(),
+            &persistent.peer_metadata_by_id(),
+        )
+    }
+
     fn set_ready(&self) {
         self.is_ready.store(true, atomic::Ordering::Relaxed);
         self.is_ready_signal.notify_waiters();
@@ -364,6 +406,30 @@ type GetConsensusCommitResult = Result<
     transport_channel_pool::RequestError<tonic::Status>,
 >;
 
+fn crypto_runtime_capability_mismatched_peers(
+    local_peer_id: PeerId,
+    peer_metadata_by_id: &HashMap<PeerId, PeerMetadata>,
+) -> Vec<PeerId> {
+    let local_fingerprint = peer_metadata_by_id
+        .get(&local_peer_id)
+        .and_then(PeerMetadata::crypto_runtime_capability_fingerprint);
+    let mut mismatches: Vec<_> = (!peer_metadata_by_id.contains_key(&local_peer_id))
+        .then_some(local_peer_id)
+        .into_iter()
+        .chain(
+            peer_metadata_by_id
+                .iter()
+                .filter_map(|(peer_id, metadata)| {
+                    let peer_fingerprint = metadata.crypto_runtime_capability_fingerprint();
+                    (local_fingerprint.is_none() || peer_fingerprint != local_fingerprint)
+                        .then_some(*peer_id)
+                }),
+        )
+        .collect();
+    mismatches.sort_unstable();
+    mismatches
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 struct Shard {
     collection: CollectionId,
@@ -376,5 +442,55 @@ impl Shard {
             collection: collection.into(),
             shard,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crypto_runtime_health_mismatch_requires_all_peer_fingerprints_to_match() {
+        let mut metadata = HashMap::new();
+        assert_eq!(
+            crypto_runtime_capability_mismatched_peers(1, &metadata),
+            vec![1],
+        );
+
+        metadata.insert(
+            1,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-a".to_string(),
+            )),
+        );
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-a".to_string(),
+            )),
+        );
+        assert!(crypto_runtime_capability_mismatched_peers(1, &metadata).is_empty());
+
+        metadata.insert(
+            3,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-b".to_string(),
+            )),
+        );
+        assert_eq!(
+            crypto_runtime_capability_mismatched_peers(1, &metadata),
+            vec![3],
+        );
+
+        metadata.insert(4, PeerMetadata::current());
+        assert_eq!(
+            crypto_runtime_capability_mismatched_peers(1, &metadata),
+            vec![3, 4],
+        );
+
+        assert_eq!(
+            crypto_runtime_capability_mismatched_peers(4, &metadata),
+            vec![1, 2, 3, 4],
+        );
     }
 }

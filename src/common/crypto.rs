@@ -803,11 +803,8 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
     BASE64URL_NOPAD.encode(&digest)
 }
 
-#[expect(
-    dead_code,
-    reason = "cluster-wide crypto runtime parity enforcement is staged behind encrypted shard-transfer fail-closed guards"
-)]
-pub fn validate_crypto_runtime_capability_parity<'a>(
+#[cfg(test)]
+fn validate_crypto_runtime_capability_parity<'a>(
     settings: &Settings,
     peer_fingerprints: impl IntoIterator<Item = (&'a str, &'a str)>,
 ) -> Result<(), StorageError> {

@@ -2008,17 +2008,40 @@ pub struct PeerMetadata {
     /// Peer Qdrant version
     #[schemars(schema_with = "String::json_schema")]
     pub(crate) version: Version,
+    /// Non-secret digest of the crypto runtime capability policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) crypto_runtime_capability_fingerprint: Option<String>,
 }
 
 impl PeerMetadata {
     pub fn current() -> Self {
         Self {
             version: defaults::QDRANT_VERSION.clone(),
+            crypto_runtime_capability_fingerprint: None,
+        }
+    }
+
+    pub fn current_with_crypto_runtime_capability_fingerprint(
+        crypto_runtime_capability_fingerprint: Option<String>,
+    ) -> Self {
+        Self {
+            version: defaults::QDRANT_VERSION.clone(),
+            crypto_runtime_capability_fingerprint,
         }
     }
 
     /// Whether this metadata has a different version than our current Qdrant instance.
     pub fn is_different_version(&self) -> bool {
         self.version != *defaults::QDRANT_VERSION
+    }
+
+    pub fn is_different_from(&self, current: &Self) -> bool {
+        self.version != current.version
+            || self.crypto_runtime_capability_fingerprint
+                != current.crypto_runtime_capability_fingerprint
+    }
+
+    pub fn crypto_runtime_capability_fingerprint(&self) -> Option<&str> {
+        self.crypto_runtime_capability_fingerprint.as_deref()
     }
 }
