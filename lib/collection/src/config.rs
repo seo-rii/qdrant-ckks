@@ -356,7 +356,7 @@ mod ckks_tests {
     }
 
     #[test]
-    fn encryption_config_rejects_vector_names_until_storage_support_exists() {
+    fn encryption_config_allows_vector_names_for_sidecar_storage() {
         let params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
@@ -376,8 +376,7 @@ mod ckks_tests {
             ..CollectionParams::empty()
         };
 
-        let err = params.validate().unwrap_err();
-        assert!(format!("{err:?}").contains("unsupported_encryption_selector"));
+        params.validate().unwrap();
     }
 
     #[test]
