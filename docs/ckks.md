@@ -350,10 +350,12 @@ MK/RK material is not accidentally exposed or swapped through broad filesystem
 permissions.
 When a material uses `source: fd`, the `fd` must reference an already-open Unix
 file descriptor containing the base64url-no-pad 32-byte material. Qdrant
-duplicates the descriptor before reading so the original descriptor is not
-closed by material loading. FD-backed material avoids storing the secret or a
-secret file path in config, but operators must still provide the descriptor at
-the beginning of the encoded material and keep cluster runtime parity aligned.
+marks the descriptor close-on-exec during validation and duplicates it with
+close-on-exec before reading, so the original descriptor is not closed by
+material loading and secret descriptors are not inherited by bridge child
+processes. FD-backed material avoids storing the secret or a secret file path in
+config, but operators must still provide the descriptor at the beginning of the
+encoded material and keep cluster runtime parity aligned.
 
 Wrapped RK material may declare a lifecycle `state`:
 
