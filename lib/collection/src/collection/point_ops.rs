@@ -121,8 +121,34 @@ impl Collection {
                     let Some(payload) = record.payload.as_ref() else {
                         continue;
                     };
+                    let point_id = record.id.to_string();
                     for (encrypted_path, encrypted_json_path) in &encrypted_paths {
                         for value in encrypted_json_path.value_get(&payload.0) {
+                            let envelope_key =
+                                match client_payload_envelope_key(value, encrypted_path).map_err(
+                                    |err| {
+                                        CollectionError::service_error(format!(
+                                            "stored client encrypted payload marker for field '{encrypted_path}' is invalid for nonce replay cache backfill: {err}",
+                                        ))
+                                    },
+                                )? {
+                                    Some(envelope_key) => envelope_key,
+                                    None if is_client_encrypted_payload_value(value) => {
+                                        return Err(CollectionError::service_error(format!(
+                                            "stored client encrypted payload marker for field '{encrypted_path}' is incomplete for nonce replay cache backfill",
+                                        )));
+                                    }
+                                    None => continue,
+                                };
+                            if !envelope_key.matches_binding(
+                                &collection_crypto_id,
+                                &point_id,
+                                encrypted_path,
+                            ) {
+                                return Err(CollectionError::service_error(format!(
+                                    "stored client encrypted payload marker for field '{encrypted_path}' has AAD that does not match collection, point, and field binding; refuse to load replay cache backfill",
+                                )));
+                            }
                             let Some(key) =
                                 client_payload_nonce_replay_key(value, encrypted_path).map_err(
                                     |err| {
