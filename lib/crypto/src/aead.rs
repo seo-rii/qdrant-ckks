@@ -5,7 +5,6 @@ use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
 use ring::hkdf;
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -454,19 +453,6 @@ impl MasterKeyProvider for LocalMasterKeyProvider {
 }
 
 impl AeadCipher {
-    pub fn new(key_id: impl Into<String>, key: SecretKey) -> Result<Self, EncryptionError> {
-        let key_id = key_id.into();
-        validate_key_id(&key_id)?;
-        let material_fingerprint = key.material_fingerprint();
-        Ok(Self {
-            key_id,
-            material_fingerprint,
-            rk_id: String::new(),
-            rk_epoch: None,
-            key,
-        })
-    }
-
     pub fn new_with_material_fingerprint(
         key_id: impl Into<String>,
         key: SecretKey,
@@ -741,15 +727,6 @@ impl AeadKeyring {
         }
 
         Err(EncryptionError::KeyMismatch)
-    }
-}
-
-impl SecretKey {
-    fn material_fingerprint(&self) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(b"qdrant-crypto-aead-material-fingerprint-v1");
-        hasher.update(self.as_bytes());
-        BASE64URL_NOPAD.encode(&hasher.finalize())
     }
 }
 

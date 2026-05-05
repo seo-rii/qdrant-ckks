@@ -1697,7 +1697,12 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
 
     let wrong_key_encryptor = PayloadTextEncryptor::new_with_derived_cipher_unchecked(
         "docs",
-        AeadCipher::new("tenant-a:other", SecretKey::from_bytes([7u8; 32])).unwrap(),
+        AeadCipher::new_with_material_fingerprint(
+            "tenant-a:other",
+            SecretKey::from_bytes([7u8; 32]),
+            "tenant-a/other@v1",
+        )
+        .unwrap(),
     )
     .unwrap();
     let mut wrong_key_payload: Payload =
@@ -1767,7 +1772,12 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
 
     let valid_key_encryptor = PayloadTextEncryptor::new_with_derived_cipher_unchecked(
         "docs",
-        AeadCipher::new("tenant-a:docs", SecretKey::from_bytes([8u8; 32])).unwrap(),
+        AeadCipher::new_with_material_fingerprint(
+            "tenant-a:docs",
+            SecretKey::from_bytes([8u8; 32]),
+            "tenant-a/docs@v1",
+        )
+        .unwrap(),
     )
     .unwrap();
     let mut malformed_header_payload: Payload =
@@ -2842,7 +2852,12 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
         .unwrap();
     let encryptor = PayloadTextEncryptor::new_with_derived_cipher_unchecked(
         "test",
-        AeadCipher::new("tenant-a:docs", metadata_key).unwrap(),
+        AeadCipher::new_with_material_fingerprint(
+            "tenant-a:docs",
+            metadata_key,
+            "tenant-a/docs@v1",
+        )
+        .unwrap(),
     )
     .unwrap();
     let policy = PayloadEncryptionPolicy::new(vec!["document.body".to_string()]).unwrap();

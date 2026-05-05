@@ -15,7 +15,12 @@ use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::{Map, Value, json};
 
 fn encryptor() -> PayloadTextEncryptor {
-    let cipher = AeadCipher::new("tenant-a:payload", SecretKey::from_bytes([11u8; 32])).unwrap();
+    let cipher = AeadCipher::new_with_material_fingerprint(
+        "tenant-a:payload",
+        SecretKey::from_bytes([11u8; 32]),
+        "tenant-a/payload@v1",
+    )
+    .unwrap();
     PayloadTextEncryptor::new_with_derived_cipher_unchecked("docs", cipher).unwrap()
 }
 
@@ -951,8 +956,12 @@ fn payload_outer_metadata_tampering_fails_authentication() {
 #[test]
 fn payload_decrypt_accepts_retired_key_but_new_writes_use_active_key() {
     let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
-    let old_cipher =
-        AeadCipher::new("tenant-a:payload-old", SecretKey::from_bytes([11u8; 32])).unwrap();
+    let old_cipher = AeadCipher::new_with_material_fingerprint(
+        "tenant-a:payload-old",
+        SecretKey::from_bytes([11u8; 32]),
+        "tenant-a/payload-old@v1",
+    )
+    .unwrap();
     let old_encryptor =
         PayloadTextEncryptor::new_with_derived_cipher_unchecked("docs", old_cipher).unwrap();
     let mut old_payload = object(json!({ "body": "rotation protected" }));
@@ -962,10 +971,20 @@ fn payload_decrypt_accepts_retired_key_but_new_writes_use_active_key() {
         .unwrap();
 
     let keyring = AeadKeyring::new(
-        AeadCipher::new("tenant-a:payload-new", SecretKey::from_bytes([12u8; 32])).unwrap(),
+        AeadCipher::new_with_material_fingerprint(
+            "tenant-a:payload-new",
+            SecretKey::from_bytes([12u8; 32]),
+            "tenant-a/payload-new@v1",
+        )
+        .unwrap(),
     )
     .with_retired(
-        AeadCipher::new("tenant-a:payload-old", SecretKey::from_bytes([11u8; 32])).unwrap(),
+        AeadCipher::new_with_material_fingerprint(
+            "tenant-a:payload-old",
+            SecretKey::from_bytes([11u8; 32]),
+            "tenant-a/payload-old@v1",
+        )
+        .unwrap(),
     );
     let rotated_encryptor =
         PayloadTextEncryptor::new_with_derived_keyring_unchecked("docs", keyring).unwrap();

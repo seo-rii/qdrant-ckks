@@ -272,15 +272,6 @@ impl ClientPayloadEnvelopeKey {
 }
 
 impl PayloadTextEncryptor {
-    pub fn new_from_resource_key(
-        collection: impl Into<String>,
-        key_id: impl Into<String>,
-        resource_key: &SecretKey,
-    ) -> Result<Self, PayloadEncryptionError> {
-        let payload_key = resource_key.derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)?;
-        Self::new_with_derived_cipher_unchecked(collection, AeadCipher::new(key_id, payload_key)?)
-    }
-
     pub fn new_from_resource_key_with_material_fingerprint(
         collection: impl Into<String>,
         key_id: impl Into<String>,

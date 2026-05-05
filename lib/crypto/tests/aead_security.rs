@@ -7,7 +7,16 @@ use qdrant_crypto::{
 };
 
 fn fixed_cipher() -> AeadCipher {
-    AeadCipher::new("tenant-a:primary", SecretKey::from_bytes([7u8; 32])).unwrap()
+    test_cipher("tenant-a:primary", 7, "tenant-a/primary@v1")
+}
+
+fn test_cipher(key_id: &str, key_byte: u8, material_fingerprint: &str) -> AeadCipher {
+    AeadCipher::new_with_material_fingerprint(
+        key_id,
+        SecretKey::from_bytes([key_byte; 32]),
+        material_fingerprint,
+    )
+    .unwrap()
 }
 
 fn payload_context<'a>(point_id: &'a str) -> EncryptionContext<'a> {
@@ -103,8 +112,7 @@ fn envelope_metadata_is_rejected_before_decryption() {
 #[test]
 fn envelope_material_fingerprint_must_match_active_key() {
     let cipher = fixed_cipher();
-    let other_cipher =
-        AeadCipher::new("tenant-a:primary", SecretKey::from_bytes([8u8; 32])).unwrap();
+    let other_cipher = test_cipher("tenant-a:primary", 8, "tenant-a/other@v1");
     let envelope = cipher.encrypt(b"metadata", payload_context("42")).unwrap();
 
     assert_eq!(
@@ -142,9 +150,10 @@ fn local_master_key_provider_wraps_resource_key_with_aad() {
     let provider =
         LocalMasterKeyProvider::new("tenant-a/mk@v1", SecretKey::from_bytes([55u8; 32])).unwrap();
     let resource_key = SecretKey::from_bytes([77u8; 32]);
-    let payload_cipher = AeadCipher::new(
+    let payload_cipher = AeadCipher::new_with_material_fingerprint(
         "tenant-a:payload",
         resource_key.derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN).unwrap(),
+        "tenant-a/payload@v1",
     )
     .unwrap();
     let context = payload_context("42");
@@ -162,9 +171,10 @@ fn local_master_key_provider_wraps_resource_key_with_aad() {
             .unwrap()
             .unwrap_resource_key(&wrapped, aad)
             .unwrap();
-    let unwrapped_cipher = AeadCipher::new(
+    let unwrapped_cipher = AeadCipher::new_with_material_fingerprint(
         "tenant-a:payload",
         unwrapped.derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN).unwrap(),
+        "tenant-a/payload@v1",
     )
     .unwrap();
 
@@ -207,9 +217,10 @@ fn rewrap_resource_key_rotates_master_key_without_reencrypting_data() {
     let old_aad = b"qdrant-sec\x00resource-key-wrap\x00docs-rk-v1\x00mk-v1";
     let new_aad = b"qdrant-sec\x00resource-key-wrap\x00docs-rk-v1\x00mk-v2";
     let resource_key = SecretKey::from_bytes([77u8; 32]);
-    let payload_cipher = AeadCipher::new(
+    let payload_cipher = AeadCipher::new_with_material_fingerprint(
         "tenant-a:payload",
         resource_key.derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN).unwrap(),
+        "tenant-a/payload@v1",
     )
     .unwrap();
     let context = payload_context("42");
@@ -241,11 +252,12 @@ fn rewrap_resource_key_rotates_master_key_without_reencrypting_data() {
     let rewrapped_resource_key = new_provider
         .unwrap_resource_key(&new_wrapped, new_aad)
         .unwrap();
-    let rewrapped_payload_cipher = AeadCipher::new(
+    let rewrapped_payload_cipher = AeadCipher::new_with_material_fingerprint(
         "tenant-a:payload",
         rewrapped_resource_key
             .derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)
             .unwrap(),
+        "tenant-a/payload@v1",
     )
     .unwrap();
     assert_eq!(
@@ -297,12 +309,13 @@ fn stripping_material_fingerprint_breaks_authentication() {
 #[test]
 fn keyring_encrypts_with_active_key_and_decrypts_retired_key() {
     let context = payload_context("42");
-    let retired_cipher =
-        AeadCipher::new("tenant-a:payload-old", SecretKey::from_bytes([9u8; 32])).unwrap();
+    let retired_cipher = test_cipher("tenant-a:payload-old", 9, "tenant-a/payload-old@v1");
     let retired_envelope = retired_cipher.encrypt(b"before rotation", context).unwrap();
-    let keyring = AeadKeyring::new(
-        AeadCipher::new("tenant-a:payload-new", SecretKey::from_bytes([10u8; 32])).unwrap(),
-    )
+    let keyring = AeadKeyring::new(test_cipher(
+        "tenant-a:payload-new",
+        10,
+        "tenant-a/payload-new@v1",
+    ))
     .with_retired(retired_cipher);
 
     assert_eq!(
@@ -331,13 +344,10 @@ fn keyring_encrypts_with_active_key_and_decrypts_retired_key() {
 #[test]
 fn keyring_requires_matching_fingerprint_before_decrypt() {
     let context = payload_context("42");
-    let envelope = AeadCipher::new("tenant-a:payload", SecretKey::from_bytes([31u8; 32]))
-        .unwrap()
+    let envelope = test_cipher("tenant-a:payload", 31, "tenant-a/payload@old")
         .encrypt(b"not in this keyring", context)
         .unwrap();
-    let keyring = AeadKeyring::new(
-        AeadCipher::new("tenant-a:payload", SecretKey::from_bytes([32u8; 32])).unwrap(),
-    );
+    let keyring = AeadKeyring::new(test_cipher("tenant-a:payload", 32, "tenant-a/payload@new"));
 
     assert_eq!(
         keyring.decrypt(&envelope, context),
@@ -348,8 +358,7 @@ fn keyring_requires_matching_fingerprint_before_decrypt() {
 #[test]
 fn keyring_returns_open_failed_for_matching_retired_tamper() {
     let context = payload_context("42");
-    let retired_cipher =
-        AeadCipher::new("tenant-a:payload-old", SecretKey::from_bytes([33u8; 32])).unwrap();
+    let retired_cipher = test_cipher("tenant-a:payload-old", 33, "tenant-a/payload-old@v1");
     let mut envelope = retired_cipher.encrypt(b"before rotation", context).unwrap();
     let mut raw = BASE64URL_NOPAD
         .decode(envelope.ciphertext.as_bytes())
@@ -357,13 +366,17 @@ fn keyring_returns_open_failed_for_matching_retired_tamper() {
     raw[0] ^= 0x80;
     envelope.ciphertext = BASE64URL_NOPAD.encode(&raw);
 
-    let keyring = AeadKeyring::new(
-        AeadCipher::new("tenant-a:payload-new", SecretKey::from_bytes([34u8; 32])).unwrap(),
-    )
+    let keyring = AeadKeyring::new(test_cipher(
+        "tenant-a:payload-new",
+        34,
+        "tenant-a/payload-new@v1",
+    ))
     .with_retired(retired_cipher)
-    .with_retired(
-        AeadCipher::new("tenant-a:payload-old", SecretKey::from_bytes([35u8; 32])).unwrap(),
-    );
+    .with_retired(test_cipher(
+        "tenant-a:payload-old",
+        35,
+        "tenant-a/payload-old@v2",
+    ));
 
     assert_eq!(
         keyring.decrypt(&envelope, context),
@@ -454,17 +467,39 @@ fn resource_key_metadata_rejects_legacy_envelope_without_rk_metadata() {
 
 #[test]
 fn key_ids_are_strict_ascii_capability_names() {
-    assert!(AeadCipher::new("valid._:-09AZaz", SecretKey::from_bytes([1u8; 32])).is_ok());
+    assert!(
+        AeadCipher::new_with_material_fingerprint(
+            "valid._:-09AZaz",
+            SecretKey::from_bytes([1u8; 32]),
+            "tenant-a/payload@v1",
+        )
+        .is_ok()
+    );
     assert_eq!(
-        AeadCipher::new("", SecretKey::from_bytes([1u8; 32])).err(),
+        AeadCipher::new_with_material_fingerprint(
+            "",
+            SecretKey::from_bytes([1u8; 32]),
+            "tenant-a/payload@v1",
+        )
+        .err(),
         Some(EncryptionError::InvalidKeyId),
     );
     assert_eq!(
-        AeadCipher::new("tenant/key", SecretKey::from_bytes([1u8; 32])).err(),
+        AeadCipher::new_with_material_fingerprint(
+            "tenant/key",
+            SecretKey::from_bytes([1u8; 32]),
+            "tenant-a/payload@v1",
+        )
+        .err(),
         Some(EncryptionError::InvalidKeyId),
     );
     assert_eq!(
-        AeadCipher::new("테넌트", SecretKey::from_bytes([1u8; 32])).err(),
+        AeadCipher::new_with_material_fingerprint(
+            "테넌트",
+            SecretKey::from_bytes([1u8; 32]),
+            "tenant-a/payload@v1",
+        )
+        .err(),
         Some(EncryptionError::InvalidKeyId),
     );
 }
@@ -472,14 +507,16 @@ fn key_ids_are_strict_ascii_capability_names() {
 #[test]
 fn derived_subkeys_separate_payload_and_vector_domains() {
     let master_key = SecretKey::from_bytes([19u8; 32]);
-    let payload_cipher = AeadCipher::new(
+    let payload_cipher = AeadCipher::new_with_material_fingerprint(
         "tenant-a:primary",
         master_key.derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN).unwrap(),
+        "tenant-a/payload@v1",
     )
     .unwrap();
-    let vector_cipher = AeadCipher::new(
+    let vector_cipher = AeadCipher::new_with_material_fingerprint(
         "tenant-a:primary",
         master_key.derive_subkey(CKKS_VECTOR_KEY_DOMAIN).unwrap(),
+        "tenant-a/vector@v1",
     )
     .unwrap();
     let context = payload_context("42");
@@ -507,7 +544,12 @@ fn debug_output_redacts_secrets_and_ciphertexts() {
     assert!(debug_secret.contains("redacted"));
     assert!(!debug_secret.contains("42"));
 
-    let cipher = AeadCipher::new("tenant-a:primary", secret).unwrap();
+    let cipher = AeadCipher::new_with_material_fingerprint(
+        "tenant-a:primary",
+        secret,
+        "tenant-a/primary@v1",
+    )
+    .unwrap();
     let envelope = cipher
         .encrypt(b"hidden text", payload_context("42"))
         .unwrap();

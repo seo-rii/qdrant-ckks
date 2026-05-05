@@ -265,25 +265,6 @@ impl<B> CkksVectorEncryptor<B>
 where
     B: CkksVectorBackend,
 {
-    pub fn new(
-        key_id: impl Into<String>,
-        vector_name: impl Into<String>,
-        parameters: CkksParameters,
-        metadata_key: SecretKey,
-        backend: B,
-    ) -> Result<Self, CkksError> {
-        let key_id = key_id.into();
-        let vector_name = Self::validate_constructor_inputs(&key_id, vector_name, &parameters)?;
-        let metadata_key = metadata_key.derive_subkey(CKKS_VECTOR_KEY_DOMAIN)?;
-
-        Self::new_with_metadata_cipher(
-            vector_name,
-            parameters,
-            AeadCipher::new(key_id, metadata_key)?,
-            backend,
-        )
-    }
-
     pub fn new_from_resource_key_with_material_fingerprint(
         key_id: impl Into<String>,
         vector_name: impl Into<String>,
@@ -393,20 +374,6 @@ where
         Ok(())
     }
 
-    pub fn with_retired_metadata_key(
-        mut self,
-        key_id: impl Into<String>,
-        metadata_key: SecretKey,
-    ) -> Result<Self, CkksError> {
-        let key_id = key_id.into();
-        validate_key_id(&key_id).map_err(|_| CkksError::InvalidKeyId)?;
-        let metadata_key = metadata_key.derive_subkey(CKKS_VECTOR_KEY_DOMAIN)?;
-        self.metadata_keyring = self
-            .metadata_keyring
-            .with_retired(AeadCipher::new(key_id, metadata_key)?);
-        Ok(self)
-    }
-
     pub fn with_retired_metadata_resource_key(
         mut self,
         key_id: impl Into<String>,
@@ -424,6 +391,24 @@ where
             material_fingerprint_id,
         )?
         .with_resource_key_metadata(rk_id, rk_epoch)?;
+        self.metadata_keyring = self.metadata_keyring.with_retired(retired);
+        Ok(self)
+    }
+
+    pub fn with_retired_metadata_key_with_material_fingerprint(
+        mut self,
+        key_id: impl Into<String>,
+        resource_key: &SecretKey,
+        material_fingerprint_id: impl Into<String>,
+    ) -> Result<Self, CkksError> {
+        let key_id = key_id.into();
+        validate_key_id(&key_id).map_err(|_| CkksError::InvalidKeyId)?;
+        let metadata_key = resource_key.derive_subkey(CKKS_VECTOR_KEY_DOMAIN)?;
+        let retired = AeadCipher::new_with_material_fingerprint(
+            key_id,
+            metadata_key,
+            material_fingerprint_id,
+        )?;
         self.metadata_keyring = self.metadata_keyring.with_retired(retired);
         Ok(self)
     }

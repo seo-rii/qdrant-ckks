@@ -19,7 +19,12 @@ struct SealedTestBackend;
 
 impl CkksVectorBackend for SealedTestBackend {
     fn encrypt(&self, input: CkksEncryptionInput<'_>) -> Result<Vec<u8>, CkksError> {
-        let cipher = AeadCipher::new("test-vector", SecretKey::from_bytes([23u8; 32])).unwrap();
+        let cipher = AeadCipher::new_with_material_fingerprint(
+            "test-vector",
+            SecretKey::from_bytes([23u8; 32]),
+            "test/vector@v1",
+        )
+        .unwrap();
         let plaintext = serde_json::to_vec(input.values)
             .map_err(|err| CkksError::Backend(format!("test serialization failed: {err}")))?;
         let envelope = cipher
@@ -76,8 +81,25 @@ fn public_material() -> CkksPublicMaterial {
     .unwrap()
 }
 
+fn test_ckks_encryptor<B: CkksVectorBackend>(
+    key_id: impl Into<String>,
+    vector_name: impl Into<String>,
+    parameters: CkksParameters,
+    resource_key: SecretKey,
+    backend: B,
+) -> Result<CkksVectorEncryptor<B>, CkksError> {
+    CkksVectorEncryptor::new_from_resource_key_with_material_fingerprint(
+        key_id,
+        vector_name,
+        parameters,
+        &resource_key,
+        "tenant-a/vector@v1",
+        backend,
+    )
+}
+
 fn encryptor() -> CkksVectorEncryptor<SealedTestBackend> {
-    CkksVectorEncryptor::new(
+    test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
         CkksParameters::openfhe_default_128_bit(),
@@ -90,7 +112,7 @@ fn encryptor() -> CkksVectorEncryptor<SealedTestBackend> {
 #[test]
 fn ckks_vector_encrypt_batch_uses_backend_batch_and_binds_each_point() {
     let backend = BatchTestBackend::new();
-    let encryptor = CkksVectorEncryptor::new(
+    let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
         CkksParameters::openfhe_default_128_bit(),
@@ -227,7 +249,7 @@ fn vector_open_accepts_retired_metadata_key_but_new_writes_use_active_key() {
     let old_encrypted = encryptor()
         .encrypt("docs", "point-1", &material, &[1.0, 2.0])
         .unwrap();
-    let rotated_encryptor = CkksVectorEncryptor::new(
+    let rotated_encryptor = test_ckks_encryptor(
         "tenant-a:ckks-v2",
         "embedding",
         CkksParameters::openfhe_default_128_bit(),
@@ -235,7 +257,11 @@ fn vector_open_accepts_retired_metadata_key_but_new_writes_use_active_key() {
         SealedTestBackend,
     )
     .unwrap()
-    .with_retired_metadata_key("tenant-a:ckks", SecretKey::from_bytes([29u8; 32]))
+    .with_retired_metadata_key_with_material_fingerprint(
+        "tenant-a:ckks",
+        &SecretKey::from_bytes([29u8; 32]),
+        "tenant-a/vector@v1",
+    )
     .unwrap();
 
     let verified = rotated_encryptor
@@ -366,7 +392,7 @@ fn vector_validation_fails_closed_before_backend_call() {
         batch_size: 1,
         ..CkksParameters::openfhe_default_128_bit()
     };
-    let small_encryptor = CkksVectorEncryptor::new(
+    let small_encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
         small_params,
@@ -422,7 +448,7 @@ fn ckks_parameter_validation_rejects_unsafe_shapes() {
 #[test]
 fn constructor_rejects_invalid_identifiers_and_public_material() {
     assert_eq!(
-        CkksVectorEncryptor::new(
+        test_ckks_encryptor(
             "tenant/key",
             "embedding",
             CkksParameters::openfhe_default_128_bit(),
@@ -433,7 +459,7 @@ fn constructor_rejects_invalid_identifiers_and_public_material() {
         Some(CkksError::InvalidKeyId),
     );
     assert_eq!(
-        CkksVectorEncryptor::new(
+        test_ckks_encryptor(
             "tenant-a:ckks",
             "bad\0name",
             CkksParameters::openfhe_default_128_bit(),
@@ -552,7 +578,7 @@ printf '{"version":1,"ciphertext":"cmVwbGFjZWQtY2lwaGVy"}\n'
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let encryptor = CkksVectorEncryptor::new(
+    let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
         CkksParameters::openfhe_default_128_bit(),
@@ -623,7 +649,7 @@ printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
         }
     }
     let backend = CommandOpenFheBackend::new_checked(&script_path).unwrap();
-    let encryptor = CkksVectorEncryptor::new(
+    let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
         CkksParameters::openfhe_default_128_bit(),
@@ -673,7 +699,7 @@ printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
 
     let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
         .with_args([script_path.display().to_string()]);
-    let encryptor = CkksVectorEncryptor::new(
+    let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
         CkksParameters::openfhe_default_128_bit(),
@@ -748,7 +774,7 @@ printf '{"version":1,"ciphertexts":["YmF0Y2gtb25l","YmF0Y2gtdHdv"]}\n'
 
     let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
         .with_args([script_path.display().to_string()]);
-    let encryptor = CkksVectorEncryptor::new(
+    let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
         CkksParameters::openfhe_default_128_bit(),
@@ -817,7 +843,7 @@ printf '{"version":1,"ciphertexts":["b25seS1vbmU"]}\n'
 
     let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
         .with_args([script_path.display().to_string()]);
-    let encryptor = CkksVectorEncryptor::new(
+    let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
         CkksParameters::openfhe_default_128_bit(),
@@ -874,7 +900,7 @@ sleep 10
     let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
         .with_args([script_path.display().to_string()])
         .with_timeout(Duration::from_millis(50));
-    let encryptor = CkksVectorEncryptor::new(
+    let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
         CkksParameters::openfhe_default_128_bit(),
@@ -914,7 +940,7 @@ sleep 10
     let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
         .with_args([script_path.display().to_string()])
         .with_timeout(Duration::from_millis(50));
-    let encryptor = CkksVectorEncryptor::new(
+    let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
         CkksParameters::openfhe_default_128_bit(),
@@ -954,7 +980,7 @@ exit 0
 
     let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
         .with_args([script_path.display().to_string()]);
-    let encryptor = CkksVectorEncryptor::new(
+    let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
         CkksParameters::openfhe_default_128_bit(),
@@ -998,7 +1024,7 @@ done
     let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
         .with_args([script_path.display().to_string()])
         .with_max_output_bytes(32);
-    let encryptor = CkksVectorEncryptor::new(
+    let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
         CkksParameters::openfhe_default_128_bit(),
@@ -1037,7 +1063,7 @@ printf '{not-json}\n'
 
     let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
         .with_args([script_path.display().to_string()]);
-    let encryptor = CkksVectorEncryptor::new(
+    let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
         CkksParameters::openfhe_default_128_bit(),
@@ -1080,7 +1106,7 @@ printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}'
 
     let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
         .with_args([script_path.display().to_string()]);
-    let encryptor = CkksVectorEncryptor::new(
+    let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
         CkksParameters::openfhe_default_128_bit(),
@@ -1125,7 +1151,7 @@ printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
     let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
         .with_args([script_path.display().to_string()])
         .with_max_output_bytes(64);
-    let encryptor = CkksVectorEncryptor::new(
+    let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
         CkksParameters::openfhe_default_128_bit(),
@@ -1170,7 +1196,7 @@ done
         .with_args([script_path.display().to_string()])
         .with_timeout(Duration::from_secs(5))
         .with_max_output_bytes(64);
-    let encryptor = CkksVectorEncryptor::new(
+    let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
         CkksParameters::openfhe_default_128_bit(),
@@ -1225,7 +1251,7 @@ done
 
     let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
         .with_args([script_path.display().to_string()]);
-    let encryptor = CkksVectorEncryptor::new(
+    let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
         CkksParameters::openfhe_default_128_bit(),
@@ -1280,7 +1306,7 @@ set -euo pipefail
         .with_args([script_path.display().to_string()])
         .with_pool_size(NonZeroUsize::new(2).unwrap());
     let encryptor = Arc::new(
-        CkksVectorEncryptor::new(
+        test_ckks_encryptor(
             "tenant-a:ckks",
             "embedding",
             CkksParameters::openfhe_default_128_bit(),
@@ -1385,7 +1411,7 @@ fn vector_envelope_is_bound_to_collection_point_and_vector() {
         Err(CkksError::Envelope(_)),
     ));
 
-    let other_vector = CkksVectorEncryptor::new(
+    let other_vector = test_ckks_encryptor(
         "tenant-a:ckks",
         "other",
         CkksParameters::openfhe_default_128_bit(),
