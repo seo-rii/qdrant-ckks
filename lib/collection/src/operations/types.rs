@@ -82,7 +82,7 @@ pub enum CollectionUpdateProvenance {
     /// trusted in this mode and must be produced by a runtime transform first.
     #[default]
     ClientPlaintext,
-    /// Internal operation whose server-side `$qdrant_crypto` markers were created
+    /// Internal operation whose server-side `$qdrant_sec` markers were created
     /// by the runtime payload encryptor for the current collection config.
     RuntimeEncryptedPayloads(RuntimeEncryptedPayloads),
     /// Internal operation whose client-side `$qdrant_client_aead` markers were

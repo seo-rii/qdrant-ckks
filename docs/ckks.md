@@ -27,11 +27,11 @@ implementation.
 
 | API/path | Server-side payload AEAD | Client-side payload envelope | CKKS vector envelope |
 | --- | --- | --- | --- |
-| `upsert` payload | Supported for selected JSON string fields. Values are encrypted before storage and client-supplied `$qdrant_crypto` markers are rejected. | Supported for selected fields that already contain a valid `$qdrant_client_aead` marker. Qdrant validates schema, AAD metadata, key policy, and a mandatory Ed25519 signature, but does not decrypt. | Unsupported. CKKS vector selectors are rejected until ciphertext storage/search semantics are implemented. |
+| `upsert` payload | Supported for selected JSON string fields. Values are encrypted before storage and client-supplied `$qdrant_sec` markers are rejected. | Supported for selected fields that already contain a valid `$qdrant_client_aead` marker. Qdrant validates schema, AAD metadata, key policy, and a mandatory Ed25519 signature, but does not decrypt. | Unsupported. CKKS vector selectors are rejected until ciphertext storage/search semantics are implemented. |
 | `set_payload` / `overwrite_payload` | Supported for explicit point ids when Qdrant can bind AAD to each point id. Multi-point updates are fanned out into one encrypted operation per point; filter-based and key-path encrypted-field updates fail closed. | Same explicit-point-id limitation as server-side payload writes. Clients must provide one envelope per point/field; filter-based and key-path encrypted-field updates fail closed. | Not applicable. |
 | `update_vectors` | Not applicable. | Not applicable. | Unsupported. Plaintext writes to encrypted vector names fail closed. |
 | Payload indexes, filters, facets, ordering, grouping, and formulas | Plaintext indexes, read/update filters, facet keys, order-by keys, group-by keys, and formula payload references over encrypted paths, parent paths, or child paths are rejected. Searching, mutating by filter, ordering, grouping, or aggregating encrypted content requires a future blind-index provider. | Same policy. The opaque ciphertext field is not searchable, orderable, groupable, facetable, or usable in mutation filters as plaintext. | Payload filtering/faceting over encrypted metadata is unsupported. |
-| `retrieve`, `scroll`, and `search` result payloads | Stored `$qdrant_crypto` markers are returned raw. There is no `decrypt_payload` option or RBAC capability yet. | Stored `$qdrant_client_aead` markers are returned raw for SDK/client decryption. | Search over CKKS ciphertext vectors is unsupported; separate plaintext or surrogate vectors must be modeled explicitly outside this branch. |
+| `retrieve`, `scroll`, and `search` result payloads | Stored `$qdrant_sec` markers are returned raw. There is no `decrypt_payload` option or RBAC capability yet. | Stored `$qdrant_client_aead` markers are returned raw for SDK/client decryption. | Search over CKKS ciphertext vectors is unsupported; separate plaintext or surrogate vectors must be modeled explicitly outside this branch. |
 | Snapshots | Snapshot archives are expected to contain envelopes only; payload sentinel snapshot leakage is covered by integration tests. Collection, shard, and CLI startup snapshot recover paths preflight runtime crypto settings, including missing material, wrong wrapped-RK key, and provider key-id mismatch cases. | Same stored-value behavior as server-side payloads. Qdrant cannot validate client AEAD tags without client keys. | Restore requires matching OpenFHE context/runtime material; missing runtime instance/material/backend preflight is wired, while wrong-context restore coverage is still missing. |
 | Shard transfer / replication | Encrypted collection data-movement operations require matching non-secret crypto runtime capability fingerprints in peer metadata. Operations fail closed if any involved peer has missing or mismatched metadata. Automatic dead-replica recovery only proposes encrypted shard transfers from source peers with matching parity metadata. | Same policy; client-envelope verifier policy must match across nodes before encrypted transfers are allowed. | Same policy; matching OpenFHE context and metadata AEAD material must be enforced before encrypted transfers are allowed. |
 | Metadata encryption | Not implemented. `metadata_keys` selectors are reserved and rejected. | Not implemented. | Not implemented. |
@@ -42,7 +42,7 @@ Selected JSON string fields are replaced with a single marker object:
 
 ```json
 {
-  "$qdrant_crypto": {
+  "$qdrant_sec": {
     "kind": "payload_text",
     "envelope": {
       "version": 1,
@@ -66,7 +66,7 @@ Payload selectors are object dot paths only. Array syntax, wildcards, and
 numeric path components such as `items[].name`, `items.*.name`, or
 `items.0.name` are rejected instead of being interpreted as array traversal.
 Selector components that collide with reserved envelope markers
-`$qdrant_crypto`, `$qdrant_client_aead`, or `$qdrant_ciphertext` are rejected.
+`$qdrant_sec`, `$qdrant_client_aead`, or `$qdrant_ciphertext` are rejected.
 
 Runtime crypto instances currently accept only these provider IDs:
 `payload/aes-256-gcm@v1`, `payload/client-aead@v1`, and
@@ -152,7 +152,7 @@ AES-GCM tag without the client data key, so the Ed25519 signature is the
 write-time authenticity check for this zero-trust mode.
 
 Client envelopes must carry `rk_id`, `rk_epoch`, and
-`kdf_domain: qdrant/client-payload-text/v1`. Provider instances must pin
+`kdf_domain: qdrant-sec/client-payload-text/v1`. Provider instances must pin
 `expected_rk_id`, `min_rk_epoch`, and `max_rk_epoch` to a single active epoch
 so stale, retired, or wrong client resource-key epochs fail closed during
 rotation.
@@ -194,7 +194,7 @@ before retrying.
       "key_id": "tenant-a/client-rk-2026-04",
       "rk_id": "tenant-a/client-rk-2026-04",
       "rk_epoch": 3,
-      "kdf_domain": "qdrant/client-payload-text/v1",
+      "kdf_domain": "qdrant-sec/client-payload-text/v1",
       "aad": {
         "collection_id": "persisted-collection-uuid",
         "point_id": "1",
@@ -214,12 +214,12 @@ before retrying.
 ```
 
 Client envelopes are not server envelopes. Public writes to a
-`payload/aes-256-gcm@v1` rule reject client-supplied `$qdrant_crypto` markers, and
+`payload/aes-256-gcm@v1` rule reject client-supplied `$qdrant_sec` markers, and
 `payload/client-aead@v1` rules require `$qdrant_client_aead` markers. Because
 Qdrant does not have the client data key in this mode, it cannot verify the
 AES-GCM tag or decrypt responses; clients or SDKs must decrypt returned
 envelopes. Client envelopes must include `rk_id`, `rk_epoch`, and
-`kdf_domain: qdrant/client-payload-text/v1` so resource-key identity is explicit
+`kdf_domain: qdrant-sec/client-payload-text/v1` so resource-key identity is explicit
 even though Qdrant cannot unwrap the client key. The Ed25519 signature covers the
 client envelope header, AAD, nonce, ciphertext, signature algorithm, and
 signature key id.
@@ -238,7 +238,7 @@ SDKs that implement this mode must do all cryptographic data-key operations
 outside Qdrant:
 
 - Generate a random client RK and derive the payload AEAD key with
-  `qdrant/client-payload-text/v1`; do not send the RK to Qdrant.
+  `qdrant-sec/client-payload-text/v1`; do not send the RK to Qdrant.
 - Generate a fresh 96-bit CSPRNG nonce for every envelope and regenerate the
   envelope on retry instead of replaying a failed request body.
 - Canonicalize AAD with the collection crypto identity, point id, field path,
@@ -492,15 +492,15 @@ provider instance and `key_id`; runtime validation rejects missing instances,
 missing material, provider/selector mismatches, and key-id mismatches instead of
 falling back to legacy defaults. The configured 32-byte RK is not used directly
 as an AEAD key. Qdrant derives purpose-specific HKDF-SHA256 subkeys for payload text
-(`qdrant/payload-text/v1`) and CKKS vector envelopes
-(`qdrant/vector-envelope/v1`) before constructing AES-GCM ciphers.
+(`qdrant-sec/payload-text/v1`) and CKKS vector envelopes
+(`qdrant-sec/vector-envelope/v1`) before constructing AES-GCM ciphers.
 `crypto.allow_inline_key_material` defaults to `false` so inline key material is
 rejected at startup unless explicitly enabled for local development fixtures.
 Decrypt paths can be configured with active plus retired AEAD keys; new writes
 always use the active key, and
 envelopes record the active key id plus material fingerprint.
 Server-side public writes reject fields that already contain a
-`$qdrant_crypto` marker so clients cannot smuggle stale or wrong-key envelopes.
+`$qdrant_sec` marker so clients cannot smuggle stale or wrong-key envelopes.
 If the matching runtime crypto settings or key material are absent, selected
 plaintext fields are not stored as a fallback; the collection write guard rejects
 the operation instead.

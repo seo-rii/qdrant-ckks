@@ -116,7 +116,7 @@ mod ckks_tests {
         let marker_field = CkksCollectionConfig {
             enabled: true,
             key_id: Some("tenant-a:docs".to_string()),
-            payload_text_fields: vec!["$qdrant_crypto.body".to_string()],
+            payload_text_fields: vec!["$qdrant_sec.body".to_string()],
             vector_names: Vec::new(),
         };
         assert!(marker_field.validate().is_err());
@@ -290,7 +290,7 @@ mod ckks_tests {
     #[test]
     fn encryption_config_rejects_reserved_and_unsupported_payload_paths() {
         for path in [
-            "$qdrant_crypto.body",
+            "$qdrant_sec.body",
             "$qdrant_client_aead.body",
             "$qdrant_ciphertext.body",
             "items[].name",
@@ -1769,7 +1769,7 @@ fn invalid_payload_encryption_path_part(part: &str) -> bool {
     part.is_empty()
         || matches!(
             part,
-            "$qdrant_crypto" | "$qdrant_client_aead" | "$qdrant_ciphertext"
+            "$qdrant_sec" | "$qdrant_client_aead" | "$qdrant_ciphertext"
         )
         || part.contains('\0')
         || part.contains('[')

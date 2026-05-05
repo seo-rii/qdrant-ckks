@@ -101,7 +101,7 @@ fn client_envelope(point_id: &str, field_path: &str) -> Value {
             "key_id": "tenant-a/client-rk-2026-04",
             "rk_id": "tenant-a/client-rk-2026-04",
             "rk_epoch": 3,
-            "kdf_domain": "qdrant/client-payload-text/v1",
+            "kdf_domain": "qdrant-sec/client-payload-text/v1",
             "aad": {
                 "collection_id": "docs",
                 "point_id": point_id,
@@ -440,7 +440,7 @@ fn client_payload_envelope_requires_resource_key_metadata_and_kdf_domain() {
         .unwrap()
         .insert(
             "kdf_domain".to_string(),
-            Value::String("qdrant/client-payload-text/v0".to_string()),
+            Value::String("qdrant-sec/client-payload-text/v0".to_string()),
         );
     assert_eq!(
         validate_client_payload_value(
@@ -1103,7 +1103,7 @@ fn malformed_marker_does_not_bypass_encryption() {
     let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
     let mut payload = object(json!({
         "body": {
-            "$qdrant_crypto": {
+            "$qdrant_sec": {
                 "kind": "payload_text"
             },
             "plaintext": "secret body"
@@ -1186,7 +1186,7 @@ fn malformed_or_plaintext_values_do_not_decrypt() {
 
     let mut malformed_payload = object(json!({
         "body": {
-            "$qdrant_crypto": {
+            "$qdrant_sec": {
                 "kind": "payload_text"
             }
         }

@@ -2797,7 +2797,7 @@ mod tests {
                             "key_id": "tenant-a/client-rk-2026-04",
                             "rk_id": "tenant-a/client-rk-2026-04",
                             "rk_epoch": 3,
-                            "kdf_domain": "qdrant/client-payload-text/v1",
+                            "kdf_domain": "qdrant-sec/client-payload-text/v1",
                             "aad": {
                                 "collection_id": collection_id,
                                 "point_id": point_id,

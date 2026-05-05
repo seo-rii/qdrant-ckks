@@ -1671,7 +1671,7 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
                 vector: VectorStructPersisted::from(vec![0.0, 0.0, 1.0, 0.0]),
                 payload: Some(
                     serde_json::from_str(
-                        r#"{"document":{"body":{"$qdrant_crypto":{"kind":"payload_text"}}}}"#,
+                        r#"{"document":{"body":{"$qdrant_sec":{"kind":"payload_text"}}}}"#,
                     )
                     .unwrap(),
                 ),
@@ -1912,7 +1912,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
                             "key_id": "tenant-a/client-rk-2026-04",
                             "rk_id": rk_id,
                             "rk_epoch": rk_epoch,
-                            "kdf_domain": "qdrant/client-payload-text/v1",
+                            "kdf_domain": "qdrant-sec/client-payload-text/v1",
                             "aad": {
                                 "collection_id": collection_id,
                                 "point_id": point_id,
@@ -2638,7 +2638,7 @@ async fn client_encrypted_payload_nonce_replay_survives_collection_reload() {
                             "key_id": "tenant-a/client-rk-2026-04",
                             "rk_id": "tenant-a/client-rk-2026-04",
                             "rk_epoch": 3,
-                            "kdf_domain": "qdrant/client-payload-text/v1",
+                            "kdf_domain": "qdrant-sec/client-payload-text/v1",
                             "aad": {
                                 "collection_id": collection_crypto_id,
                                 "point_id": point_id,
@@ -2748,7 +2748,7 @@ async fn client_encrypted_payload_nonce_replay_cache_backfills_from_stored_paylo
                             "key_id": "tenant-a/client-rk-2026-04",
                             "rk_id": "tenant-a/client-rk-2026-04",
                             "rk_epoch": 3,
-                            "kdf_domain": "qdrant/client-payload-text/v1",
+                            "kdf_domain": "qdrant-sec/client-payload-text/v1",
                             "aad": {
                                 "collection_id": collection_crypto_id,
                                 "point_id": point_id,

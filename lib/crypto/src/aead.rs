@@ -15,10 +15,10 @@ const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
 const MAX_KEY_ID_LEN: usize = 128;
-const HKDF_SALT: &[u8] = b"qdrant-crypto-aead-master-key-v1";
+const HKDF_SALT: &[u8] = b"qdrant-sec-aead-master-key-v1";
 
-pub const PAYLOAD_TEXT_KEY_DOMAIN: &[u8] = b"qdrant/payload-text/v1";
-pub const CKKS_VECTOR_KEY_DOMAIN: &[u8] = b"qdrant/vector-envelope/v1";
+pub const PAYLOAD_TEXT_KEY_DOMAIN: &[u8] = b"qdrant-sec/payload-text/v1";
+pub const CKKS_VECTOR_KEY_DOMAIN: &[u8] = b"qdrant-sec/vector-envelope/v1";
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum EncryptionError {
@@ -177,7 +177,7 @@ impl<'a> EncryptionContext<'a> {
             "v2"
         };
         let values = [
-            "qdrant-crypto",
+            "qdrant-sec",
             aad_version,
             self.purpose.as_str(),
             self.collection,

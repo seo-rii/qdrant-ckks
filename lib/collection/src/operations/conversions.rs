@@ -2070,7 +2070,7 @@ mod ckks_grpc_tests {
 
     #[test]
     fn grpc_ckks_config_rejects_invalid_payload_fields() {
-        for payload_text_fields in [vec!["$qdrant_crypto".to_string()], vec!["a..b".to_string()]] {
+        for payload_text_fields in [vec!["$qdrant_sec".to_string()], vec!["a..b".to_string()]] {
             let config = api::grpc::qdrant::CkksCollectionConfig {
                 enabled: true,
                 key_id: Some("tenant-a:docs".to_string()),

@@ -3141,7 +3141,7 @@ mod tests {
                     "key_id": "tenant-a/client-rk-2026-04",
                     "rk_id": "tenant-a/client-rk-2026-04",
                     "rk_epoch": 3,
-                    "kdf_domain": "qdrant/client-payload-text/v1",
+                    "kdf_domain": "qdrant-sec/client-payload-text/v1",
                     "aad": {
                         "collection_id": collection_id,
                         "point_id": point_id,
@@ -5159,7 +5159,7 @@ mod tests {
         let body = payload.0.get("body").unwrap();
         assert!(is_encrypted_payload_value(body));
         assert_eq!(
-            body.get("$qdrant_crypto")
+            body.get("$qdrant_sec")
                 .and_then(|marker| marker.get("envelope"))
                 .and_then(|envelope| envelope.get("material_fingerprint"))
                 .and_then(|fingerprint| fingerprint.as_str()),
@@ -5307,7 +5307,7 @@ mod tests {
             payload
                 .0
                 .get("body")
-                .and_then(|body| body.get("$qdrant_crypto"))
+                .and_then(|body| body.get("$qdrant_sec"))
                 .and_then(|marker| marker.get("encryption_epoch"))
                 .and_then(|epoch| epoch.as_u64()),
             Some(6),
@@ -5316,7 +5316,7 @@ mod tests {
             payload
                 .0
                 .get("body")
-                .and_then(|body| body.get("$qdrant_crypto"))
+                .and_then(|body| body.get("$qdrant_sec"))
                 .and_then(|marker| marker.get("envelope"))
                 .and_then(|envelope| envelope.get("material_fingerprint"))
                 .and_then(|fingerprint| fingerprint.as_str()),
@@ -5516,7 +5516,7 @@ mod tests {
         ));
 
         let mut server_marker_payload = segment::types::Payload(
-            json!({ "body": { "$qdrant_crypto": { "kind": "payload_text" } } })
+            json!({ "body": { "$qdrant_sec": { "kind": "payload_text" } } })
                 .as_object()
                 .unwrap()
                 .clone(),
@@ -5642,7 +5642,7 @@ mod tests {
                         "key_id": "tenant-a/client-rk-2026-04",
                         "rk_id": "tenant-a/client-rk-2026-04",
                         "rk_epoch": 3,
-                        "kdf_domain": "qdrant/client-payload-text/v1",
+                        "kdf_domain": "qdrant-sec/client-payload-text/v1",
                         "aad": {
                             "collection_id": "docs",
                             "point_id": "point-2",
@@ -6395,7 +6395,7 @@ mod tests {
                     "key_id": "tenant-a/client-rk-2026-04",
                     "rk_id": "tenant-a/client-rk-2026-04",
                     "rk_epoch": 3,
-                    "kdf_domain": "qdrant/client-payload-text/v1",
+                    "kdf_domain": "qdrant-sec/client-payload-text/v1",
                     "aad": {
                         "collection_id": "docs",
                         "point_id": "point-1",
@@ -6518,7 +6518,7 @@ mod tests {
                     "key_id": "tenant-a/client-rk-2026-04",
                     "rk_id": "tenant-a/client-rk-2026-04",
                     "rk_epoch": 3,
-                    "kdf_domain": "qdrant/client-payload-text/v1",
+                    "kdf_domain": "qdrant-sec/client-payload-text/v1",
                     "aad": {
                         "collection_id": "docs",
                         "point_id": "point-1",
@@ -6766,21 +6766,21 @@ mod tests {
         let body = payload.0.get("body").unwrap();
         assert!(is_encrypted_payload_value(body));
         assert_eq!(
-            body.get("$qdrant_crypto")
+            body.get("$qdrant_sec")
                 .and_then(|marker| marker.get("envelope"))
                 .and_then(|envelope| envelope.get("material_fingerprint"))
                 .and_then(|fingerprint| fingerprint.as_str()),
             Some("tenant-a/payload-rk@v3"),
         );
         assert_eq!(
-            body.get("$qdrant_crypto")
+            body.get("$qdrant_sec")
                 .and_then(|marker| marker.get("envelope"))
                 .and_then(|envelope| envelope.get("rk_id"))
                 .and_then(|rk_id| rk_id.as_str()),
             Some(rk_material),
         );
         assert_eq!(
-            body.get("$qdrant_crypto")
+            body.get("$qdrant_sec")
                 .and_then(|marker| marker.get("envelope"))
                 .and_then(|envelope| envelope.get("rk_epoch"))
                 .and_then(|rk_epoch| rk_epoch.as_u64()),
