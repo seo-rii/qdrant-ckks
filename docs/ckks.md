@@ -4,11 +4,12 @@ The `sec` branch adds a small `qdrant-sec` workspace crate for encrypted
 payload text and OpenFHE CKKS vector ciphertext envelopes.
 
 Current scope is encrypted storage plumbing, not CKKS-native vector search.
-Payload text encryption happens before storage. CKKS vector envelope primitives
-exist for bridge/runtime experimentation, but collection-level CKKS vector
-selectors are rejected until ciphertext storage/search semantics are
-implemented. This branch does not add encrypted query vectors, homomorphic
-scoring, score decryption, or an HNSW-compatible ciphertext search executor.
+Payload text encryption happens before storage. CKKS vector selectors now have a
+server-side ingest/storage path: selected dense vectors are encrypted through
+the configured OpenFHE bridge and stored as reserved payload sidecar envelopes,
+while the plaintext vector is removed from the dense vector write. This branch
+does not add encrypted query vectors, homomorphic scoring, score decryption, or
+an HNSW-compatible ciphertext search executor.
 
 Unsupported search/index features for CKKS ciphertext vectors in this branch:
 
@@ -27,11 +28,11 @@ implementation.
 
 | API/path | Server-side payload AEAD | Client-side payload envelope | CKKS vector envelope |
 | --- | --- | --- | --- |
-| `upsert` payload | Supported for selected JSON string fields. Values are encrypted before storage and client-supplied `$qdrant_sec` markers are rejected. | Supported for selected fields that already contain a valid `$qdrant_client_aead` marker. Qdrant validates schema, AAD metadata, key policy, and a mandatory Ed25519 signature, but does not decrypt. | Unsupported. CKKS vector selectors are rejected until ciphertext storage/search semantics are implemented. |
+| `upsert` payload/vector | Supported for selected JSON string fields. Values are encrypted before storage and client-supplied `$qdrant_sec` markers are rejected. | Supported for selected fields that already contain a valid `$qdrant_client_aead` marker. Qdrant validates schema, AAD metadata, key policy, and a mandatory Ed25519 signature, but does not decrypt. | Supported for selected dense vectors. Qdrant encrypts through the OpenFHE bridge, stores `$qdrant_sec_vectors` sidecar payload envelopes, and removes plaintext vectors from dense vector storage. Sparse and multi-dense encrypted vectors fail closed. |
 | `set_payload` / `overwrite_payload` | Supported for explicit point ids when Qdrant can bind AAD to each point id. Multi-point updates are fanned out into one encrypted operation per point; filter-based and key-path encrypted-field updates fail closed. | Same explicit-point-id limitation as server-side payload writes. Clients must provide one envelope per point/field; filter-based and key-path encrypted-field updates fail closed. | Not applicable. |
-| `update_vectors` | Not applicable. | Not applicable. | Unsupported. Plaintext writes to encrypted vector names fail closed. |
+| `update_vectors` | Not applicable. | Not applicable. | Supported for point-specific dense vector updates by writing the encrypted sidecar payload and omitting the plaintext vector update. Sparse and multi-dense encrypted vectors fail closed. |
 | Payload indexes, filters, facets, ordering, grouping, and formulas | Plaintext indexes, read/update filters, facet keys, order-by keys, group-by keys, and formula payload references over encrypted paths, parent paths, or child paths are rejected. Searching, mutating by filter, ordering, grouping, or aggregating encrypted content requires a future blind-index provider. | Same policy. The opaque ciphertext field is not searchable, orderable, groupable, facetable, or usable in mutation filters as plaintext. | Payload filtering/faceting over encrypted metadata is unsupported. |
-| `retrieve`, `scroll`, and `search` result payloads | Stored `$qdrant_sec` markers are returned raw. There is no `decrypt_payload` option or RBAC capability yet. | Stored `$qdrant_client_aead` markers are returned raw for SDK/client decryption. | Search over CKKS ciphertext vectors is unsupported; separate plaintext or surrogate vectors must be modeled explicitly outside this branch. |
+| `retrieve`, `scroll`, and `search` result payloads | Stored `$qdrant_sec` markers are returned raw. There is no `decrypt_payload` option or RBAC capability yet. | Stored `$qdrant_client_aead` markers are returned raw for SDK/client decryption. | Stored vector sidecar payload envelopes are returned raw when payloads are requested. Search over CKKS ciphertext vectors is unsupported; separate plaintext or surrogate vectors must be modeled explicitly outside this branch. |
 | Snapshots | Snapshot archives are expected to contain envelopes only; payload sentinel snapshot leakage is covered by integration tests. Collection, shard, and CLI startup snapshot recover paths preflight runtime crypto settings, including missing material, wrong wrapped-RK key, and provider key-id mismatch cases. | Same stored-value behavior as server-side payloads. Qdrant cannot validate client AEAD tags without client keys. | Restore requires matching OpenFHE context/runtime material; missing runtime instance/material/backend preflight is wired, while wrong-context restore coverage is still missing. |
 | Shard transfer / replication | Encrypted collection data-movement operations require matching non-secret crypto runtime capability fingerprints in peer metadata. Operations fail closed if any involved peer has missing or mismatched metadata. Automatic dead-replica recovery only proposes encrypted shard transfers from source peers with matching parity metadata. | Same policy; client-envelope verifier policy must match across nodes before encrypted transfers are allowed. | Same policy; matching OpenFHE context and metadata AEAD material must be enforced before encrypted transfers are allowed. |
 | Metadata encryption | Not implemented. `metadata_keys` selectors are reserved and rejected. | Not implemented. | Not implemented. |
@@ -322,8 +323,9 @@ Provider `options` are allowlisted per provider. `payload/aes-256-gcm@v1`
 accepts only `key_id`, `material_fingerprint_id`, and `retired_materials`;
 `payload/client-aead@v1` accepts only its client envelope policy and signature
 options; `vector/openfhe-ckks@v1` accepts only `key_id`,
-`material_fingerprint_id`, and `profile`. Unknown options fail startup/runtime
-validation instead of being silently ignored.
+`material_fingerprint_id`, `profile`, `crypto_context_b64`, and
+`public_key_b64`. Unknown options fail startup/runtime validation instead of
+being silently ignored.
 
 Provider `materials` roles are also allowlisted. Server-side payload AEAD and
 OpenFHE CKKS vector-envelope providers accept only `materials.sym_key`; the
@@ -351,6 +353,8 @@ crypto:
         key_id: tenant-a:docs
         material_fingerprint_id: tenant-a/vector@v1
         profile: ckks-128-n16384-d4-scale50
+        crypto_context_b64: base64url-no-pad-openfhe-context
+        public_key_b64: base64url-no-pad-openfhe-public-key
 ```
 
 Direct MK/RK materials must set `source` explicitly; qdrant-sec does not infer
@@ -417,10 +421,9 @@ and `AES-256-GCM`. Changing the material reference, epoch, scope, or wrapping MK
 therefore requires rewrapping the RK.
 
 The generic `crypto` control plane can define reserved
-`vector/openfhe-ckks@v1` runtime instances for tests and future migration work.
-If collection vector rules are re-enabled, those rules must bind both the
-OpenFHE process backend and a `sym_key` metadata key material. The bridge
-encrypts the embedding, while the `sym_key` protects the stored vector envelope
+`vector/openfhe-ckks@v1` runtime instances must bind both the OpenFHE process
+backend and a `sym_key` metadata key material. The bridge encrypts selected
+dense embeddings, while the `sym_key` protects the stored vector envelope
 metadata:
 
 ```yaml
@@ -435,6 +438,8 @@ crypto:
         key_id: tenant-a:docs
         material_fingerprint_id: tenant-a/vector@v1
         profile: ckks-128-n16384-d4-scale50
+        crypto_context_b64: base64url-no-pad-openfhe-context
+        public_key_b64: base64url-no-pad-openfhe-public-key
     docs_payload_v1:
       provider: payload/aes-256-gcm@v1
       materials:
@@ -544,7 +549,7 @@ row.
 | Path | Expected protected content | Current status | Required gate before production use |
 | --- | --- | --- | --- |
 | REST/gRPC ingress | Request payload and plaintext embeddings may exist in process memory until encryption completes. | Trusted Qdrant process boundary. Slow-request log values and request hashes redact payloads, vectors, universal query vectors, and payload filter literals before serialization/hash calculation. | Keep request/body logging disabled or redacted for encrypted fields and embeddings. |
-| WAL | Selected payload strings and CKKS vector metadata should be stored only as envelopes after encryption. | Payload sentinel leakage scans cover public server-side/client-side payload ingress and collection directory files, including WAL files. Vector-pattern scans cover rejected encrypted-vector plaintext writes; CKKS vector storage remains unsupported. | Add optimizer temp-path coverage and broaden cluster storage scans. |
+| WAL | Selected payload strings and CKKS vector metadata should be stored only as envelopes after encryption. | Payload sentinel leakage scans cover public server-side/client-side payload ingress and collection directory files, including WAL files. CKKS vector sidecar unit coverage verifies plaintext vectors are removed before storage, but WAL/segment vector byte-pattern scans still need end-to-end coverage. | Add optimizer temp-path coverage, vector byte-pattern leakage scans, and broaden cluster storage scans. |
 | Segment files | Selected payload strings should appear as marker/envelope JSON; CKKS vector plaintext should not be stored by the CKKS envelope path. | Payload sentinel leakage scans cover persisted collection files after graceful stop. Optimizer temp-path scans are still missing. | Add optimizer temp-path leakage tests. |
 | Payload indexes | AEAD-encrypted fields are not searchable as plaintext. | Index creation over encrypted payload paths and parent/child overlaps is rejected. | Keep rejecting plaintext indexes until a blind index provider exists. |
 | HNSW graph and quantization | CKKS ciphertext vectors are not HNSW-searchable in this branch. | Unsupported. | Reject/avoid CKKS ciphertext vectors in HNSW, quantization, recommend, and discover flows. |
@@ -589,8 +594,9 @@ CKKS parameters, serialized OpenFHE crypto context, and public key. It is
 intended to prevent mixing ciphertexts created for incompatible contexts.
 CKKS parameters are restricted to the allowlisted
 `ckks-128-n16384-d4-scale50` profile in this branch. Generic
-`vector/openfhe-ckks@v1` runtime instances must set this `profile` option; a
-missing profile or raw profile name is rejected before collection creation.
+`vector/openfhe-ckks@v1` runtime instances must set this `profile` option plus
+`crypto_context_b64` and `public_key_b64`; a missing profile, missing public
+material, or raw profile name is rejected before collection creation.
 `batch_size` may be lower than the profile slot count, but raw
 modulus/depth/scale combinations are rejected until the OpenFHE bridge returns
 and verifies explicit security-level metadata.

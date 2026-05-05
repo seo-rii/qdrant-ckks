@@ -2,6 +2,7 @@ use std::fmt::{self, Debug, Formatter};
 
 use data_encoding::BASE64URL_NOPAD;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -12,6 +13,8 @@ use crate::aead::{
 
 pub const CKKS_SCHEME: &str = "openfhe-ckks";
 pub const CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50: &str = "ckks-128-n16384-d4-scale50";
+pub const ENCRYPTED_VECTOR_SIDECAR_FIELD: &str = "$qdrant_sec_vectors";
+pub const ENCRYPTED_CKKS_VECTOR_MARKER: &str = "$qdrant_sec_ckks_vector";
 const VERSION: u8 = 1;
 const CRYPTO_SCHEMA_VERSION: u16 = 1;
 const DEFAULT_ENCRYPTION_EPOCH: u64 = 0;
@@ -220,6 +223,21 @@ pub struct EncryptedCkksVector {
     pub version: u8,
     pub scheme: String,
     pub envelope: EncryptedEnvelope,
+}
+
+pub fn encrypted_ckks_vector_payload_value(
+    encrypted: &EncryptedCkksVector,
+) -> Result<Value, CkksError> {
+    Ok(json!({
+        ENCRYPTED_CKKS_VECTOR_MARKER: serde_json::to_value(encrypted)
+            .map_err(|err| CkksError::MalformedEnvelope(err.to_string()))?,
+    }))
+}
+
+pub fn is_encrypted_ckks_vector_payload_value(value: &Value) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.len() == 1 && object.contains_key(ENCRYPTED_CKKS_VECTOR_MARKER)
+    })
 }
 
 impl Debug for EncryptedCkksVector {

@@ -155,6 +155,7 @@ impl Points for PointsService {
             auth,
             inference_params,
             hw_metrics,
+            Some(&self.settings),
         )
         .await
         .map(|resp| resp.map(PointsOperationResponse::from))

@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use api::rest::models::InferenceUsage;
 use api::rest::*;
 use collection::collection::Collection;
+use collection::config::CollectionParams;
 use collection::operations::conversions::write_ordering_from_proto;
 use collection::operations::point_ops::*;
 use collection::operations::shard_selector_internal::ShardSelectorInternal;
@@ -15,12 +17,15 @@ use collection::operations::verification::*;
 use collection::shards::shard::ShardId;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use qdrant_sec::{
-    ClientPayloadNonceReplayKey, ClientPayloadVerifiedEnvelopeKey, PayloadEncryptionError,
+    ClientPayloadNonceReplayKey, ClientPayloadVerifiedEnvelopeKey, ENCRYPTED_VECTOR_SIDECAR_FIELD,
+    PayloadEncryptionError,
 };
 use schemars::JsonSchema;
-use segment::json_path::JsonPath;
-use segment::types::{Filter, PayloadFieldSchema, PayloadKeyType, StrictModeConfig};
+use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
+use segment::json_path::{JsonPath, JsonPathItem};
+use segment::types::{Filter, Payload, PayloadFieldSchema, PayloadKeyType, StrictModeConfig};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use serde_with::DurationSeconds;
 use shard::operations::payload_ops::*;
 use shard::operations::*;
@@ -34,6 +39,7 @@ use validator::Validate;
 
 use crate::common::crypto::{
     PayloadWriteSetupError, payload_write_plan_for_collection_with_crypto_id,
+    vector_write_plan_for_collection_with_crypto_id,
 };
 use crate::common::inference::params::InferenceParams;
 use crate::common::inference::service::InferenceType;
@@ -352,7 +358,7 @@ async fn do_upsert_points_with_replay_cache(
         )
         .await?;
 
-    let (operation, update_provenance) = maybe_encrypt_upsert_payloads(
+    let (operation, mut update_provenance) = maybe_encrypt_upsert_payloads(
         toc,
         &collection_name,
         operation,
@@ -362,7 +368,7 @@ async fn do_upsert_points_with_replay_cache(
     )
     .await?;
 
-    let (operation, shard_key, usage, update_filter, update_mode) = match operation {
+    let (mut operation, shard_key, usage, update_filter, update_mode) = match operation {
         PointInsertOperations::PointsBatch(batch) => {
             let PointsBatch {
                 batch,
@@ -389,6 +395,17 @@ async fn do_upsert_points_with_replay_cache(
             (operation, shard_key, usage, update_filter, update_mode)
         }
     };
+    let vector_provenance = maybe_encrypt_upsert_vectors(
+        toc,
+        &collection_name,
+        &mut operation,
+        &auth,
+        runtime_settings,
+    )
+    .await?;
+    if vector_provenance.allows_vector_sidecars() {
+        update_provenance = update_provenance.with_runtime_encrypted_vectors();
+    }
 
     // Decide which operation to use based on update_filter and update_mode
     let operation = match (update_filter, update_mode) {
@@ -489,6 +506,7 @@ pub async fn do_update_vectors(
     auth: Auth,
     inference_params: InferenceParams,
     hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
 ) -> Result<(UpdateResult, Option<models::InferenceUsage>), StorageError> {
     let toc = toc_provider
         .check_strict_mode(
@@ -505,28 +523,70 @@ pub async fn do_update_vectors(
         update_filter,
     } = operation;
 
-    let (points, usage) =
+    let (mut points, usage) =
         convert_point_vectors(points, InferenceType::Update, inference_params).await?;
-
-    let operation = CollectionUpdateOperations::VectorOperation(VectorOperations::UpdateVectors(
-        UpdateVectorsOp {
-            points,
-            update_filter,
-        },
-    ));
-
-    let result = update(
+    let (sidecar_payload_updates, vector_provenance) = maybe_encrypt_update_vectors(
         toc,
         &collection_name,
-        operation,
-        internal_params,
-        params,
-        shard_key,
-        auth,
-        hw_measurement_acc,
-        CollectionUpdateProvenance::client_plaintext(),
+        &mut points,
+        update_filter.as_ref(),
+        &auth,
+        runtime_settings,
     )
     .await?;
+
+    let mut result = None;
+    for payload in sidecar_payload_updates {
+        let operation =
+            CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
+                payload: payload.payload,
+                points: payload.points,
+                filter: payload.filter,
+                key: payload.key,
+            }));
+        result = Some(
+            update(
+                toc,
+                &collection_name,
+                operation,
+                internal_params,
+                params,
+                shard_key.clone(),
+                auth.clone(),
+                hw_measurement_acc.clone(),
+                CollectionUpdateProvenance::runtime_encrypted_vectors(),
+            )
+            .await?,
+        );
+    }
+
+    if !points.is_empty() {
+        let operation = CollectionUpdateOperations::VectorOperation(
+            VectorOperations::UpdateVectors(UpdateVectorsOp {
+                points,
+                update_filter,
+            }),
+        );
+
+        result = Some(
+            update(
+                toc,
+                &collection_name,
+                operation,
+                internal_params,
+                params,
+                shard_key,
+                auth,
+                hw_measurement_acc,
+                vector_provenance,
+            )
+            .await?,
+        );
+    }
+
+    let Some(result) = result else {
+        return Err(StorageError::bad_request("No vectors provided"));
+    };
 
     Ok((result, usage))
 }
@@ -559,49 +619,103 @@ pub async fn do_delete_vectors(
     } = operation;
 
     let vector_names: Vec<_> = vector.into_iter().collect();
+    let (vector_names, encrypted_sidecar_keys) =
+        split_encrypted_vector_delete_names(toc, &collection_name, &auth, vector_names).await?;
 
     let mut result = None;
 
-    if let Some(filter) = filter {
-        let vectors_operation =
-            VectorOperations::DeleteVectorsByFilter(filter, vector_names.clone());
+    if let Some(filter) = filter.clone() {
+        if !encrypted_sidecar_keys.is_empty() {
+            let operation = CollectionUpdateOperations::PayloadOperation(
+                PayloadOps::DeletePayload(DeletePayloadOp {
+                    keys: encrypted_sidecar_keys.clone(),
+                    points: None,
+                    filter: Some(filter.clone()),
+                }),
+            );
 
-        let operation = CollectionUpdateOperations::VectorOperation(vectors_operation);
+            result = Some(
+                update(
+                    toc,
+                    &collection_name,
+                    operation,
+                    internal_params,
+                    params,
+                    shard_key.clone(),
+                    auth.clone(),
+                    hw_measurement_acc.clone(),
+                    CollectionUpdateProvenance::runtime_encrypted_vectors(),
+                )
+                .await?,
+            );
+        }
+        if !vector_names.is_empty() {
+            let vectors_operation =
+                VectorOperations::DeleteVectorsByFilter(filter, vector_names.clone());
 
-        result = Some(
-            update(
-                toc,
-                &collection_name,
-                operation,
-                internal_params,
-                params,
-                shard_key.clone(),
-                auth.clone(),
-                hw_measurement_acc.clone(),
-                CollectionUpdateProvenance::client_plaintext(),
-            )
-            .await?,
-        );
+            let operation = CollectionUpdateOperations::VectorOperation(vectors_operation);
+
+            result = Some(
+                update(
+                    toc,
+                    &collection_name,
+                    operation,
+                    internal_params,
+                    params,
+                    shard_key.clone(),
+                    auth.clone(),
+                    hw_measurement_acc.clone(),
+                    CollectionUpdateProvenance::client_plaintext(),
+                )
+                .await?,
+            );
+        }
     }
 
-    if let Some(points) = points {
-        let vectors_operation = VectorOperations::DeleteVectors(points.into(), vector_names);
-        let operation = CollectionUpdateOperations::VectorOperation(vectors_operation);
+    if let Some(points) = points.clone() {
+        if !encrypted_sidecar_keys.is_empty() {
+            let operation = CollectionUpdateOperations::PayloadOperation(
+                PayloadOps::DeletePayload(DeletePayloadOp {
+                    keys: encrypted_sidecar_keys,
+                    points: Some(points.clone()),
+                    filter: None,
+                }),
+            );
 
-        result = Some(
-            update(
-                toc,
-                &collection_name,
-                operation,
-                internal_params,
-                params,
-                shard_key,
-                auth,
-                hw_measurement_acc,
-                CollectionUpdateProvenance::client_plaintext(),
-            )
-            .await?,
-        );
+            result = Some(
+                update(
+                    toc,
+                    &collection_name,
+                    operation,
+                    internal_params,
+                    params,
+                    shard_key.clone(),
+                    auth.clone(),
+                    hw_measurement_acc.clone(),
+                    CollectionUpdateProvenance::runtime_encrypted_vectors(),
+                )
+                .await?,
+            );
+        }
+        if !vector_names.is_empty() {
+            let vectors_operation = VectorOperations::DeleteVectors(points.into(), vector_names);
+            let operation = CollectionUpdateOperations::VectorOperation(vectors_operation);
+
+            result = Some(
+                update(
+                    toc,
+                    &collection_name,
+                    operation,
+                    internal_params,
+                    params,
+                    shard_key,
+                    auth,
+                    hw_measurement_acc,
+                    CollectionUpdateProvenance::client_plaintext(),
+                )
+                .await?,
+            );
+        }
     }
 
     result.ok_or_else(|| StorageError::bad_request("No filter or points provided"))
@@ -1007,6 +1121,7 @@ pub async fn do_batch_update_points(
                     auth.clone(),
                     inference_params.clone(),
                     hw_measurement_acc.clone(),
+                    runtime_settings,
                 )
                 .await?;
 
@@ -1205,6 +1320,12 @@ async fn ensure_payload_index_allowed_by_encryption(
     let Some(encryption) = collection_config.params.effective_encryption() else {
         return Ok(());
     };
+
+    if field_name.first_key == ENCRYPTED_VECTOR_SIDECAR_FIELD {
+        return Err(StorageError::bad_input(format!(
+            "cannot create payload index on encrypted vector sidecar field '{field_name}'",
+        )));
+    }
 
     for rule in &encryption.rules {
         let collection::config::EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
@@ -1419,6 +1540,436 @@ async fn maybe_encrypt_upsert_payloads(
     .await?;
 
     Ok((operation, update_provenance))
+}
+
+async fn maybe_encrypt_upsert_vectors(
+    toc: &Arc<TableOfContent>,
+    collection_name: &str,
+    operation: &mut PointInsertOperationsInternal,
+    auth: &Auth,
+    runtime_settings: Option<&Settings>,
+) -> Result<CollectionUpdateProvenance, StorageError> {
+    let collection_pass =
+        auth.check_collection_access(collection_name, AccessRequirements::new(), "upsert_points")?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let collection_config = collection.config_snapshot().await;
+    let collection_crypto_id = collection_config
+        .stable_crypto_id(collection_name)
+        .map_err(|err| StorageError::bad_input(err.to_string()))?;
+
+    let Some(runtime_settings) = runtime_settings else {
+        if upsert_vectors_touch_encrypted_config(operation, &collection_config.params)? {
+            return Err(StorageError::bad_input(format!(
+                "CKKS vector encryption runtime for collection {collection_name} is required before writing encrypted vectors",
+            )));
+        }
+        return Ok(CollectionUpdateProvenance::client_plaintext());
+    };
+
+    let Some(plan) = vector_write_plan_for_collection_with_crypto_id(
+        runtime_settings,
+        collection_name,
+        &collection_crypto_id,
+        &collection_config.params,
+    )?
+    else {
+        return Ok(CollectionUpdateProvenance::client_plaintext());
+    };
+
+    let mut encrypted = 0;
+    match operation {
+        PointInsertOperationsInternal::PointsList(points) => {
+            for point in points {
+                encrypted += encrypt_vectors_for_point(
+                    &plan,
+                    collection_name,
+                    &point.id.to_string(),
+                    &mut point.vector,
+                    &mut point.payload,
+                )?;
+            }
+        }
+        PointInsertOperationsInternal::PointsBatch(batch) => {
+            encrypted += encrypt_vectors_for_batch(
+                &plan,
+                collection_name,
+                &batch.ids,
+                &mut batch.vectors,
+                &mut batch.payloads,
+            )?;
+        }
+    }
+
+    if encrypted == 0 {
+        Ok(CollectionUpdateProvenance::client_plaintext())
+    } else {
+        Ok(CollectionUpdateProvenance::runtime_encrypted_vectors())
+    }
+}
+
+async fn maybe_encrypt_update_vectors(
+    toc: &Arc<TableOfContent>,
+    collection_name: &str,
+    points: &mut Vec<collection::operations::vector_ops::PointVectorsPersisted>,
+    update_filter: Option<&Filter>,
+    auth: &Auth,
+    runtime_settings: Option<&Settings>,
+) -> Result<(Vec<SetPayload>, CollectionUpdateProvenance), StorageError> {
+    let collection_pass =
+        auth.check_collection_access(collection_name, AccessRequirements::new(), "update_vectors")?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let collection_config = collection.config_snapshot().await;
+    let collection_crypto_id = collection_config
+        .stable_crypto_id(collection_name)
+        .map_err(|err| StorageError::bad_input(err.to_string()))?;
+
+    let Some(runtime_settings) = runtime_settings else {
+        if point_vectors_touch_encrypted_config(points, &collection_config.params)? {
+            return Err(StorageError::bad_input(format!(
+                "CKKS vector encryption runtime for collection {collection_name} is required before writing encrypted vectors",
+            )));
+        }
+        return Ok((Vec::new(), CollectionUpdateProvenance::client_plaintext()));
+    };
+
+    let Some(plan) = vector_write_plan_for_collection_with_crypto_id(
+        runtime_settings,
+        collection_name,
+        &collection_crypto_id,
+        &collection_config.params,
+    )?
+    else {
+        return Ok((Vec::new(), CollectionUpdateProvenance::client_plaintext()));
+    };
+
+    let mut sidecar_updates = Vec::new();
+    for point in points.iter_mut() {
+        let mut payload = None;
+        let encrypted = encrypt_vectors_for_point(
+            &plan,
+            collection_name,
+            &point.id.to_string(),
+            &mut point.vector,
+            &mut payload,
+        )?;
+        if encrypted > 0 {
+            sidecar_updates.push(SetPayload {
+                points: Some(vec![point.id]),
+                payload: payload.unwrap_or_default(),
+                filter: update_filter.cloned(),
+                shard_key: None,
+                key: None,
+            });
+        }
+    }
+    points.retain(|point| !point.vector.is_empty());
+
+    let provenance = if sidecar_updates.is_empty() {
+        CollectionUpdateProvenance::client_plaintext()
+    } else {
+        CollectionUpdateProvenance::runtime_encrypted_vectors()
+    };
+    Ok((sidecar_updates, provenance))
+}
+
+fn upsert_vectors_touch_encrypted_config(
+    operation: &PointInsertOperationsInternal,
+    params: &CollectionParams,
+) -> Result<bool, StorageError> {
+    match operation {
+        PointInsertOperationsInternal::PointsList(points) => {
+            points.iter().try_fold(false, |touches, point| {
+                Ok(touches || vector_struct_touches_encrypted_config(&point.vector, params)?)
+            })
+        }
+        PointInsertOperationsInternal::PointsBatch(batch) => {
+            batch_vectors_touch_encrypted_config(&batch.vectors, params)
+        }
+    }
+}
+
+fn point_vectors_touch_encrypted_config(
+    points: &[collection::operations::vector_ops::PointVectorsPersisted],
+    params: &CollectionParams,
+) -> Result<bool, StorageError> {
+    points.iter().try_fold(false, |touches, point| {
+        Ok(touches || vector_struct_touches_encrypted_config(&point.vector, params)?)
+    })
+}
+
+fn vector_struct_touches_encrypted_config(
+    vector: &VectorStructPersisted,
+    params: &CollectionParams,
+) -> Result<bool, StorageError> {
+    let Some(encryption) = params.effective_encryption() else {
+        return Ok(false);
+    };
+    for rule in &encryption.rules {
+        let collection::config::EncryptionSelector::VectorNames { names } = &rule.selector else {
+            continue;
+        };
+        for encrypted_name in names {
+            let touches = match vector {
+                VectorStructPersisted::Single(_) | VectorStructPersisted::MultiDense(_) => {
+                    encrypted_name == DEFAULT_VECTOR_NAME
+                }
+                VectorStructPersisted::Named(vectors) => vectors.contains_key(encrypted_name),
+            };
+            if touches {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn batch_vectors_touch_encrypted_config(
+    vectors: &BatchVectorStructPersisted,
+    params: &CollectionParams,
+) -> Result<bool, StorageError> {
+    let Some(encryption) = params.effective_encryption() else {
+        return Ok(false);
+    };
+    for rule in &encryption.rules {
+        let collection::config::EncryptionSelector::VectorNames { names } = &rule.selector else {
+            continue;
+        };
+        for encrypted_name in names {
+            let touches = match vectors {
+                BatchVectorStructPersisted::Single(_)
+                | BatchVectorStructPersisted::MultiDense(_) => {
+                    encrypted_name == DEFAULT_VECTOR_NAME
+                }
+                BatchVectorStructPersisted::Named(vectors) => vectors.contains_key(encrypted_name),
+            };
+            if touches {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn encrypt_vectors_for_point(
+    plan: &crate::common::crypto::VectorWritePlan,
+    collection_name: &str,
+    point_id: &str,
+    vector: &mut VectorStructPersisted,
+    payload: &mut Option<Payload>,
+) -> Result<usize, StorageError> {
+    match vector {
+        VectorStructPersisted::Single(values) => {
+            if !plan.contains_vector_name(DEFAULT_VECTOR_NAME) {
+                return Ok(0);
+            }
+            let values = std::mem::take(values);
+            let envelope = plan
+                .encrypt_dense_vector_payload_value(
+                    collection_name,
+                    point_id,
+                    DEFAULT_VECTOR_NAME,
+                    &values,
+                )?
+                .expect("default vector was selected");
+            insert_encrypted_vector_sidecar(payload, DEFAULT_VECTOR_NAME, envelope)?;
+            *vector = VectorStructPersisted::Named(HashMap::new());
+            Ok(1)
+        }
+        VectorStructPersisted::MultiDense(_) => {
+            if plan.contains_vector_name(DEFAULT_VECTOR_NAME) {
+                return Err(StorageError::bad_input(format!(
+                    "encrypted vector '{DEFAULT_VECTOR_NAME}' only supports dense vectors; multi-dense vector encryption is not implemented",
+                )));
+            }
+            Ok(0)
+        }
+        VectorStructPersisted::Named(vectors) => {
+            let encrypted_names: Vec<_> = vectors
+                .keys()
+                .filter(|name| plan.contains_vector_name(name))
+                .cloned()
+                .collect();
+            let mut encrypted = 0;
+            for vector_name in encrypted_names {
+                let vector = vectors.remove(&vector_name).expect("key came from map");
+                let VectorPersisted::Dense(values) = vector else {
+                    return Err(StorageError::bad_input(format!(
+                        "encrypted vector '{vector_name}' only supports dense vectors; sparse and multi-dense vector encryption is not implemented",
+                    )));
+                };
+                let envelope = plan
+                    .encrypt_dense_vector_payload_value(
+                        collection_name,
+                        point_id,
+                        &vector_name,
+                        &values,
+                    )?
+                    .expect("vector was selected");
+                insert_encrypted_vector_sidecar(payload, &vector_name, envelope)?;
+                encrypted += 1;
+            }
+            Ok(encrypted)
+        }
+    }
+}
+
+fn encrypt_vectors_for_batch(
+    plan: &crate::common::crypto::VectorWritePlan,
+    collection_name: &str,
+    ids: &[segment::types::PointIdType],
+    vectors: &mut BatchVectorStructPersisted,
+    payloads: &mut Option<Vec<Option<Payload>>>,
+) -> Result<usize, StorageError> {
+    match vectors {
+        BatchVectorStructPersisted::Single(batch_values) => {
+            if !plan.contains_vector_name(DEFAULT_VECTOR_NAME) {
+                return Ok(0);
+            }
+            if batch_values.len() != ids.len() {
+                return Err(StorageError::bad_input(
+                    "batch vector count must match point id count",
+                ));
+            }
+            let batch_values = std::mem::take(batch_values);
+            ensure_batch_payloads(payloads, ids.len())?;
+            let payloads = payloads.as_mut().expect("payloads were created");
+            for ((point_id, values), payload) in ids.iter().zip(batch_values).zip(payloads) {
+                let envelope = plan
+                    .encrypt_dense_vector_payload_value(
+                        collection_name,
+                        &point_id.to_string(),
+                        DEFAULT_VECTOR_NAME,
+                        &values,
+                    )?
+                    .expect("default vector was selected");
+                insert_encrypted_vector_sidecar(payload, DEFAULT_VECTOR_NAME, envelope)?;
+            }
+            *vectors = BatchVectorStructPersisted::Named(HashMap::new());
+            Ok(ids.len())
+        }
+        BatchVectorStructPersisted::MultiDense(_) => {
+            if plan.contains_vector_name(DEFAULT_VECTOR_NAME) {
+                return Err(StorageError::bad_input(format!(
+                    "encrypted vector '{DEFAULT_VECTOR_NAME}' only supports dense vectors; multi-dense vector encryption is not implemented",
+                )));
+            }
+            Ok(0)
+        }
+        BatchVectorStructPersisted::Named(named) => {
+            let encrypted_names: Vec<_> = named
+                .keys()
+                .filter(|name| plan.contains_vector_name(name))
+                .cloned()
+                .collect();
+            if encrypted_names.is_empty() {
+                return Ok(0);
+            }
+            ensure_batch_payloads(payloads, ids.len())?;
+            let payloads = payloads.as_mut().expect("payloads were created");
+            let mut encrypted = 0;
+            for vector_name in encrypted_names {
+                let values = named.remove(&vector_name).expect("key came from map");
+                if values.len() != ids.len() {
+                    return Err(StorageError::bad_input(format!(
+                        "batch vector count for '{vector_name}' must match point id count",
+                    )));
+                }
+                for ((point_id, value), payload) in ids.iter().zip(values).zip(&mut *payloads) {
+                    let VectorPersisted::Dense(values) = value else {
+                        return Err(StorageError::bad_input(format!(
+                            "encrypted vector '{vector_name}' only supports dense vectors; sparse and multi-dense vector encryption is not implemented",
+                        )));
+                    };
+                    let envelope = plan
+                        .encrypt_dense_vector_payload_value(
+                            collection_name,
+                            &point_id.to_string(),
+                            &vector_name,
+                            &values,
+                        )?
+                        .expect("vector was selected");
+                    insert_encrypted_vector_sidecar(payload, &vector_name, envelope)?;
+                    encrypted += 1;
+                }
+            }
+            Ok(encrypted)
+        }
+    }
+}
+
+fn ensure_batch_payloads(
+    payloads: &mut Option<Vec<Option<Payload>>>,
+    len: usize,
+) -> Result<(), StorageError> {
+    match payloads {
+        Some(payloads) if payloads.len() != len => Err(StorageError::bad_input(
+            "batch payload count must match point id count",
+        )),
+        Some(_) => Ok(()),
+        None => {
+            *payloads = Some(vec![None; len]);
+            Ok(())
+        }
+    }
+}
+
+fn insert_encrypted_vector_sidecar(
+    payload: &mut Option<Payload>,
+    vector_name: &str,
+    envelope: Value,
+) -> Result<(), StorageError> {
+    let payload = payload.get_or_insert_with(Payload::default);
+    let sidecar = payload
+        .0
+        .entry(ENCRYPTED_VECTOR_SIDECAR_FIELD.to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(sidecar) = sidecar.as_object_mut() else {
+        return Err(StorageError::bad_input(format!(
+            "reserved encrypted vector sidecar field '{ENCRYPTED_VECTOR_SIDECAR_FIELD}' is already set to a non-object value",
+        )));
+    };
+    sidecar.insert(vector_name.to_string(), envelope);
+    Ok(())
+}
+
+async fn split_encrypted_vector_delete_names(
+    toc: &Arc<TableOfContent>,
+    collection_name: &str,
+    auth: &Auth,
+    vector_names: Vec<String>,
+) -> Result<(Vec<String>, Vec<JsonPath>), StorageError> {
+    let collection_pass =
+        auth.check_collection_access(collection_name, AccessRequirements::new(), "delete_vectors")?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let collection_config = collection.config_snapshot().await;
+    let Some(encryption) = collection_config.params.effective_encryption() else {
+        return Ok((vector_names, Vec::new()));
+    };
+
+    let encrypted_names: std::collections::HashSet<_> = encryption
+        .rules
+        .iter()
+        .filter_map(|rule| match &rule.selector {
+            collection::config::EncryptionSelector::VectorNames { names } => Some(names),
+            _ => None,
+        })
+        .flat_map(|names| names.iter().cloned())
+        .collect();
+
+    let mut plaintext_vector_names = Vec::new();
+    let mut encrypted_sidecar_keys = Vec::new();
+    for vector_name in vector_names {
+        if encrypted_names.contains(&vector_name) {
+            encrypted_sidecar_keys.push(JsonPath {
+                first_key: ENCRYPTED_VECTOR_SIDECAR_FIELD.to_string(),
+                rest: vec![JsonPathItem::Key(vector_name)],
+            });
+        } else {
+            plaintext_vector_names.push(vector_name);
+        }
+    }
+
+    Ok((plaintext_vector_names, encrypted_sidecar_keys))
 }
 
 enum PayloadUpdatePlan {
@@ -1781,8 +2332,10 @@ mod tests {
     use common::mmap;
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_sec::{
-        CLIENT_ENCRYPTED_PAYLOAD_MARKER, client_payload_signature_message,
-        is_client_encrypted_payload_value, is_encrypted_payload_value,
+        CLIENT_ENCRYPTED_PAYLOAD_MARKER, ENCRYPTED_CKKS_VECTOR_MARKER,
+        ENCRYPTED_VECTOR_SIDECAR_FIELD, VECTOR_ENVELOPE_BINDING, client_payload_signature_message,
+        is_client_encrypted_payload_value, is_encrypted_ckks_vector_payload_value,
+        is_encrypted_payload_value,
     };
     use ring::rand::SystemRandom;
     use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -1799,7 +2352,9 @@ mod tests {
 
     use super::*;
     use crate::common::crypto::{PayloadWriteSetupError, payload_write_plan_for_collection};
-    use crate::settings::{CryptoInstanceConfig, Settings};
+    use crate::settings::{
+        CryptoBackendConfig, CryptoInstanceConfig, CryptoMaterialConfig, CryptoSettings, Settings,
+    };
 
     fn payload_runtime_settings() -> Settings {
         let mut settings = Settings::new(None).unwrap();
@@ -1830,6 +2385,175 @@ mod tests {
             },
         )]);
         settings
+    }
+
+    #[cfg(unix)]
+    fn fake_openfhe_bridge() -> tempfile::TempDir {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = Builder::new()
+            .prefix("openfhe-sidecar")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let script_path = dir.path().join("openfhe-bridge");
+        fs::write(
+            &script_path,
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+IFS= read -r request
+case "$request" in
+  *'"scheme":"openfhe-ckks"'*) ;;
+  *) exit 7 ;;
+esac
+printf '{"version":1,"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ"}\n'
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&script_path, permissions).unwrap();
+        dir
+    }
+
+    fn vector_runtime_settings(bridge_path: &std::path::Path) -> Settings {
+        let mut settings = Settings::new(None).unwrap();
+        settings.crypto = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::from([(
+                "docs_vector_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: "vector/openfhe-ckks@v1".to_string(),
+                    materials: HashMap::from([(
+                        "sym_key".to_string(),
+                        "tenant-a/vector-v1".to_string(),
+                    )]),
+                    backend_ref: Some("openfhe_local".to_string()),
+                    options: json!({
+                        "key_id": "tenant-a:vector",
+                        "material_fingerprint_id": "tenant-a/vector@v1",
+                        "profile": qdrant_sec::CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                        "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                        "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                    }),
+                },
+            )]),
+            materials: HashMap::from([(
+                "tenant-a/vector-v1".to_string(),
+                CryptoMaterialConfig {
+                    kind: "symmetric_key_32".to_string(),
+                    source: Some("inline".to_string()),
+                    env: None,
+                    path: None,
+                    value_b64: Some(BASE64URL_NOPAD.encode(&[8u8; 32])),
+                    ..CryptoMaterialConfig::default()
+                },
+            )]),
+            backends: HashMap::from([(
+                "openfhe_local".to_string(),
+                CryptoBackendConfig {
+                    kind: "process".to_string(),
+                    program: Some(bridge_path.display().to_string()),
+                    sha256_b64: None,
+                    size: None,
+                    timeout_ms: Some(5_000),
+                },
+            )]),
+        };
+        settings
+    }
+
+    fn encrypted_vector_params() -> CollectionParams {
+        CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:vector".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "vector_conf".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["embedding".to_string()],
+                    },
+                    instance: "docs_vector_v1".to_string(),
+                    binding: Some(VECTOR_ENVELOPE_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vector_write_plan_moves_dense_vector_into_encrypted_sidecar() {
+        let bridge = fake_openfhe_bridge();
+        let settings = vector_runtime_settings(&bridge.path().join("openfhe-bridge"));
+        let params = encrypted_vector_params();
+        let plan = vector_write_plan_for_collection_with_crypto_id(
+            &settings,
+            "docs",
+            "docs-crypto-id",
+            &params,
+        )
+        .unwrap()
+        .unwrap();
+        let mut vector = VectorStructPersisted::Named(HashMap::from([(
+            "embedding".to_string(),
+            VectorPersisted::Dense(vec![0.125, -42.5]),
+        )]));
+        let mut payload = None;
+
+        let encrypted =
+            encrypt_vectors_for_point(&plan, "docs", "point-1", &mut vector, &mut payload).unwrap();
+
+        assert_eq!(encrypted, 1);
+        assert!(matches!(vector, VectorStructPersisted::Named(ref vectors) if vectors.is_empty()));
+        let payload = payload.unwrap();
+        let sidecar = payload
+            .0
+            .get(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+            .and_then(Value::as_object)
+            .unwrap();
+        let encrypted_embedding = sidecar.get("embedding").unwrap();
+        assert!(is_encrypted_ckks_vector_payload_value(encrypted_embedding));
+        assert!(
+            encrypted_embedding
+                .get(ENCRYPTED_CKKS_VECTOR_MARKER)
+                .is_some()
+        );
+        let serialized = serde_json::to_string(&payload).unwrap();
+        assert!(!serialized.contains("0.125"));
+        assert!(!serialized.contains("-42.5"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vector_write_plan_rejects_sparse_encrypted_vector() {
+        let bridge = fake_openfhe_bridge();
+        let settings = vector_runtime_settings(&bridge.path().join("openfhe-bridge"));
+        let params = encrypted_vector_params();
+        let plan = vector_write_plan_for_collection_with_crypto_id(
+            &settings,
+            "docs",
+            "docs-crypto-id",
+            &params,
+        )
+        .unwrap()
+        .unwrap();
+        let mut vector = VectorStructPersisted::Named(HashMap::from([(
+            "embedding".to_string(),
+            VectorPersisted::empty_sparse(),
+        )]));
+        let mut payload = None;
+
+        let err = encrypt_vectors_for_point(&plan, "docs", "point-1", &mut vector, &mut payload)
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("only supports dense vectors")
+        ));
     }
 
     #[test]
@@ -2147,12 +2871,71 @@ mod tests {
                 .await
                 .unwrap();
 
-            let err = do_upsert_points(
+            let bridge = fake_openfhe_bridge();
+            let vector_settings = vector_runtime_settings(&bridge.path().join("openfhe-bridge"));
+            do_upsert_points(
                 UncheckedTocProvider::new_unchecked(&toc),
                 "vector_docs".to_string(),
                 PointInsertOperations::PointsList(api::rest::schema::PointsList {
                     points: vec![api::rest::PointStruct {
                         id: 1.into(),
+                        vector: api::rest::VectorStruct::Single(vec![0.7, -0.25]),
+                        payload: None,
+                    }],
+                    shard_key: None,
+                    update_filter: None,
+                    update_mode: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+
+            let vector_collection_pass = auth
+                .check_collection_access("vector_docs", AccessRequirements::new(), "test")
+                .unwrap();
+            let vector_collection = toc.get_collection(&vector_collection_pass).await.unwrap();
+            let retrieved = vector_collection
+                .retrieve(
+                    PointRequestInternal {
+                        ids: vec![1.into()],
+                        with_payload: Some(WithPayloadInterface::Bool(true)),
+                        with_vector: false.into(),
+                    },
+                    None,
+                    &ShardSelectorInternal::All,
+                    None,
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .unwrap();
+            let sidecar = retrieved[0]
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.0.get(ENCRYPTED_VECTOR_SIDECAR_FIELD))
+                .and_then(Value::as_object)
+                .unwrap();
+            let encrypted_default_vector = sidecar.get(DEFAULT_VECTOR_NAME).unwrap();
+            assert!(is_encrypted_ckks_vector_payload_value(encrypted_default_vector));
+            let serialized_vector_payload = serde_json::to_string(&retrieved[0].payload).unwrap();
+            assert!(!serialized_vector_payload.contains("0.7"));
+            assert!(!serialized_vector_payload.contains("-0.25"));
+
+            let err = do_upsert_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "vector_docs".to_string(),
+                PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                    points: vec![api::rest::PointStruct {
+                        id: 2.into(),
                         vector: api::rest::VectorStruct::Single(vec![0.1, 0.2]),
                         payload: None,
                     }],
@@ -2177,7 +2960,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains("encrypted vector")
-                        && description.contains("ciphertext storage/write path is not implemented")
+                        && description.contains("runtime")
             ));
 
             let err = do_update_vectors(
@@ -2200,6 +2983,7 @@ mod tests {
                 auth.clone(),
                 InferenceParams::default(),
                 HwMeasurementAcc::disposable(),
+                None,
             )
             .await
             .unwrap_err();
@@ -2207,10 +2991,10 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains("encrypted vector")
-                        && description.contains("ciphertext storage/write path is not implemented")
+                        && description.contains("runtime")
             ));
 
-            let err = do_delete_vectors(
+            do_delete_vectors(
                 UncheckedTocProvider::new_unchecked(&toc),
                 "vector_docs".to_string(),
                 DeleteVectors {
@@ -2229,13 +3013,7 @@ mod tests {
                 HwMeasurementAcc::disposable(),
             )
             .await
-            .unwrap_err();
-            assert!(matches!(
-                err,
-                StorageError::BadInput { description }
-                    if description.contains("encrypted vector")
-                        && description.contains("ciphertext storage/write path is not implemented")
-            ));
+            .unwrap();
 
             let err = do_upsert_points(
                 UncheckedTocProvider::new_unchecked(&toc),

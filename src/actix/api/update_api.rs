@@ -120,6 +120,7 @@ async fn update_vectors(
     operation: Json<UpdateVectors>,
     params: Query<UpdateParams>,
     service_config: web::Data<ServiceConfig>,
+    settings: web::Data<Settings>,
     ActixAuth(auth): ActixAuth,
     api_keys: InferenceApiKeys,
 ) -> impl Responder {
@@ -144,6 +145,7 @@ async fn update_vectors(
         auth,
         inference_params,
         request_hw_counter.get_counter(),
+        Some(settings.get_ref()),
     )
     .await;
 

@@ -39,5 +39,7 @@ pub use payload::{
 pub use vector::{
     CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_SCHEME, CkksBatchEncryptionInput,
     CkksEncryptionInput, CkksError, CkksParameters, CkksPublicMaterial, CkksVectorBackend,
-    CkksVectorBatchItem, CkksVectorEncryptor, EncryptedCkksVector, VerifiedCkksVector,
+    CkksVectorBatchItem, CkksVectorEncryptor, ENCRYPTED_CKKS_VECTOR_MARKER,
+    ENCRYPTED_VECTOR_SIDECAR_FIELD, EncryptedCkksVector, VerifiedCkksVector,
+    encrypted_ckks_vector_payload_value, is_encrypted_ckks_vector_payload_value,
 };

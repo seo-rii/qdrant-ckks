@@ -1769,7 +1769,11 @@ fn invalid_payload_encryption_path_part(part: &str) -> bool {
     part.is_empty()
         || matches!(
             part,
-            "$qdrant_sec" | "$qdrant_client_aead" | "$qdrant_ciphertext"
+            "$qdrant_sec"
+                | "$qdrant_client_aead"
+                | "$qdrant_ciphertext"
+                | "$qdrant_sec_vectors"
+                | "$qdrant_sec_ckks_vector"
         )
         || part.contains('\0')
         || part.contains('[')
@@ -1812,10 +1816,7 @@ fn validate_encryption_rules(
                 "duplicate_encryption_rule_id",
             ));
         }
-        if matches!(
-            rule.selector,
-            EncryptionSelector::MetadataKeys { .. } | EncryptionSelector::VectorNames { .. }
-        ) {
+        if matches!(rule.selector, EncryptionSelector::MetadataKeys { .. }) {
             return Err(validator::ValidationError::new(
                 "unsupported_encryption_selector",
             ));

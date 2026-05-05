@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::Read;
+use std::num::NonZeroUsize;
 use std::path::Path;
+use std::time::Duration;
 
 use collection::config::{
     CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams, EncryptionSelector,
@@ -9,14 +11,16 @@ use collection::config::{
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_VECTOR_KEY_DOMAIN,
-    CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadNonceReplayKey,
-    ClientPayloadSignatureVerification, ClientPayloadValidationContext,
-    ClientPayloadVerifiedEnvelopeKey, ExistingPayloadMode, LocalMasterKeyProvider,
-    MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER,
-    PAYLOAD_FIELD_BINDING, PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
-    RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER,
-    WrappedKeyBlob, client_payload_nonce_replay_key, client_payload_signature_key_id,
-    rewrap_resource_key, validate_client_payload_value_for_runtime,
+    CLIENT_PAYLOAD_ENVELOPE_BINDING, CkksParameters, CkksPublicMaterial, CkksVectorEncryptor,
+    ClientPayloadNonceReplayKey, ClientPayloadSignatureVerification,
+    ClientPayloadValidationContext, ClientPayloadVerifiedEnvelopeKey, CommandOpenFheBackend,
+    ExistingPayloadMode, LocalMasterKeyProvider, MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER,
+    PAYLOAD_CLIENT_AEAD_PROVIDER, PAYLOAD_FIELD_BINDING, PayloadEncryptionError,
+    PayloadEncryptionPolicy, PayloadTextEncryptor, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey,
+    VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER, WrappedKeyBlob,
+    client_payload_nonce_replay_key, client_payload_signature_key_id,
+    encrypted_ckks_vector_payload_value, rewrap_resource_key,
+    validate_client_payload_value_for_runtime,
 };
 use segment::json_path::JsonPath;
 use segment::types::Payload;
@@ -130,6 +134,8 @@ const SIGNATURE_PUBLIC_KEY_B64_OPTION: &str = "signature_public_key_b64";
 const SIGNATURE_PUBLIC_KEYS_OPTION: &str = "signature_public_keys";
 const SIGNATURE_KEY_ID_OPTION: &str = "signature_key_id";
 const CKKS_PROFILE_OPTION: &str = "profile";
+const CKKS_CRYPTO_CONTEXT_B64_OPTION: &str = "crypto_context_b64";
+const CKKS_PUBLIC_KEY_B64_OPTION: &str = "public_key_b64";
 const PAYLOAD_AES_GCM_ALLOWED_OPTIONS: &[&str] = &[
     "key_id",
     MATERIAL_FINGERPRINT_ID_OPTION,
@@ -150,6 +156,8 @@ const VECTOR_OPENFHE_CKKS_ALLOWED_OPTIONS: &[&str] = &[
     "key_id",
     MATERIAL_FINGERPRINT_ID_OPTION,
     CKKS_PROFILE_OPTION,
+    CKKS_CRYPTO_CONTEXT_B64_OPTION,
+    CKKS_PUBLIC_KEY_B64_OPTION,
 ];
 const VECTOR_OPENFHE_CKKS_ALLOWED_MATERIAL_ROLES: &[&str] = &[PAYLOAD_SYM_KEY_ROLE];
 
@@ -628,6 +636,295 @@ pub fn payload_write_plan_for_collection_with_crypto_id(
     };
     let _ = ckks;
     Err(PayloadWriteSetupError::LegacyCkksUnsupported)
+}
+
+struct VectorWriteRule {
+    vector_name: String,
+    encryptor: CkksVectorEncryptor<CommandOpenFheBackend>,
+    public_material: CkksPublicMaterial,
+}
+
+pub struct VectorWritePlan {
+    rules: Vec<VectorWriteRule>,
+}
+
+impl VectorWritePlan {
+    pub fn contains_vector_name(&self, vector_name: &str) -> bool {
+        self.rules
+            .iter()
+            .any(|rule| rule.vector_name == vector_name)
+    }
+
+    pub fn encrypt_dense_vector_payload_value(
+        &self,
+        collection_name: &str,
+        point_id: &str,
+        vector_name: &str,
+        values: &[f32],
+    ) -> Result<Option<Value>, StorageError> {
+        let Some(rule) = self
+            .rules
+            .iter()
+            .find(|rule| rule.vector_name == vector_name)
+        else {
+            return Ok(None);
+        };
+        let values: Vec<f64> = values.iter().map(|value| *value as f64).collect();
+        let encrypted = rule
+            .encryptor
+            .encrypt(
+                collection_name,
+                point_id,
+                &rule.public_material,
+                values.as_slice(),
+            )
+            .map_err(|err| {
+                StorageError::service_error(format!(
+                    "CKKS vector encryption failed for vector '{vector_name}' in collection {collection_name}: {err}",
+                ))
+            })?;
+        encrypted_ckks_vector_payload_value(&encrypted).map_err(|err| {
+            StorageError::service_error(format!(
+                "failed to serialize CKKS vector envelope for vector '{vector_name}' in collection {collection_name}: {err}",
+            ))
+        })
+        .map(Some)
+    }
+}
+
+pub fn vector_write_plan_for_collection_with_crypto_id(
+    settings: &Settings,
+    collection_name: &str,
+    collection_crypto_id: &str,
+    params: &CollectionParams,
+) -> Result<Option<VectorWritePlan>, StorageError> {
+    let Some(encryption) = &params.encryption else {
+        if params.ckks.is_some() {
+            return Err(StorageError::bad_input(
+                "legacy ckks collection config is unsupported; use collection encryption rules",
+            ));
+        }
+        return Ok(None);
+    };
+
+    generic_vector_write_plan(
+        &effective_settings(settings),
+        collection_name,
+        collection_crypto_id,
+        encryption,
+    )
+}
+
+fn generic_vector_write_plan(
+    runtime_settings: &CryptoSettings,
+    collection_name: &str,
+    collection_crypto_id: &str,
+    encryption: &CollectionEncryptionConfig,
+) -> Result<Option<VectorWritePlan>, StorageError> {
+    let mut rules = Vec::new();
+
+    for rule in &encryption.rules {
+        let EncryptionSelector::VectorNames { names } = &rule.selector else {
+            continue;
+        };
+        if rule
+            .binding
+            .as_deref()
+            .is_some_and(|binding| binding != VECTOR_ENVELOPE_BINDING)
+        {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} vector rule {} must use binding {VECTOR_ENVELOPE_BINDING}",
+                rule.id
+            )));
+        }
+        let instance = runtime_settings
+            .instances
+            .get(&rule.instance)
+            .ok_or_else(|| {
+                StorageError::bad_input(format!(
+                    "collection {collection_name} references unknown crypto instance {}",
+                    rule.instance
+                ))
+            })?;
+        if instance.provider != VECTOR_OPENFHE_CKKS_PROVIDER {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} rule {} must use provider {VECTOR_OPENFHE_CKKS_PROVIDER}, found {}",
+                rule.id, instance.provider
+            )));
+        }
+        let profile = required_string_option(instance, &rule.instance, CKKS_PROFILE_OPTION)?;
+        if profile != CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50 {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} vector crypto instance {} profile {profile} is not allowlisted; expected {CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50}",
+                rule.instance
+            )));
+        }
+        let crypto_context =
+            required_base64url_option(instance, &rule.instance, CKKS_CRYPTO_CONTEXT_B64_OPTION)?;
+        let public_key =
+            required_base64url_option(instance, &rule.instance, CKKS_PUBLIC_KEY_B64_OPTION)?;
+        let public_material = CkksPublicMaterial::new(crypto_context, public_key).map_err(|err| {
+            StorageError::bad_input(format!(
+                "collection {collection_name} vector crypto instance {} public material is invalid: {err}",
+                rule.instance
+            ))
+        })?;
+
+        let key_id = resolve_payload_key_id(collection_name, encryption, &rule.instance, instance)
+            .map_err(|err| {
+                StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto key id validation failed: {err}"
+                ))
+            })?;
+        let material_ref = instance
+            .materials
+            .get(PAYLOAD_SYM_KEY_ROLE)
+            .ok_or_else(|| {
+                StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {} is missing metadata key material binding {PAYLOAD_SYM_KEY_ROLE}",
+                    rule.instance
+                ))
+            })?;
+        let material = runtime_settings.materials.get(material_ref).ok_or_else(|| {
+            StorageError::bad_input(format!(
+                "collection {collection_name} vector crypto instance {} references unknown metadata key material {material_ref}",
+                rule.instance
+            ))
+        })?;
+        let resource_key = decode_resource_key(runtime_settings, material_ref, material).map_err(
+            |err| {
+                StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto metadata key validation failed: {err}"
+                ))
+            },
+        )?;
+        let material_fingerprint_id =
+            required_string_option(instance, &rule.instance, MATERIAL_FINGERPRINT_ID_OPTION)?;
+        let backend_ref = instance.backend_ref.as_deref().ok_or_else(|| {
+            StorageError::bad_input(format!(
+                "collection {collection_name} vector crypto instance {} is missing backend_ref",
+                rule.instance
+            ))
+        })?;
+        let backend_config = runtime_settings.backends.get(backend_ref).ok_or_else(|| {
+            StorageError::bad_input(format!(
+                "collection {collection_name} vector crypto instance {} references unknown backend {backend_ref}",
+                rule.instance
+            ))
+        })?;
+        let backend = openfhe_backend_from_config(backend_ref, backend_config)?;
+
+        for vector_name in names {
+            let encryptor = if let Some(rk_epoch) = material.rk_epoch {
+                CkksVectorEncryptor::new_from_resource_key_with_metadata(
+                    key_id,
+                    vector_name,
+                    CkksParameters::openfhe_default_128_bit(),
+                    &resource_key,
+                    material_fingerprint_id,
+                    material_ref.clone(),
+                    rk_epoch,
+                    backend.clone(),
+                )
+            } else {
+                CkksVectorEncryptor::new_from_resource_key_with_material_fingerprint(
+                    key_id,
+                    vector_name,
+                    CkksParameters::openfhe_default_128_bit(),
+                    &resource_key,
+                    material_fingerprint_id,
+                    backend.clone(),
+                )
+            }
+            .and_then(|encryptor| encryptor.with_collection_identity(collection_crypto_id))
+            .map(|encryptor| encryptor.with_encryption_epoch(encryption.encryption_epoch))
+            .map_err(|err| {
+                StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {} is invalid for vector '{vector_name}': {err}",
+                    rule.instance
+                ))
+            })?;
+            rules.push(VectorWriteRule {
+                vector_name: vector_name.clone(),
+                encryptor,
+                public_material: public_material.clone(),
+            });
+        }
+    }
+
+    if rules.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(VectorWritePlan { rules }))
+    }
+}
+
+fn required_string_option<'a>(
+    instance: &'a CryptoInstanceConfig,
+    instance_id: &str,
+    option: &str,
+) -> Result<&'a str, StorageError> {
+    match instance.options.get(option) {
+        Some(Value::String(value)) => Ok(value.as_str()),
+        Some(_) => Err(StorageError::bad_input(format!(
+            "crypto instance {instance_id} option {option} must be a string",
+        ))),
+        None => Err(StorageError::bad_input(format!(
+            "crypto instance {instance_id} must set option {option}",
+        ))),
+    }
+}
+
+fn required_base64url_option(
+    instance: &CryptoInstanceConfig,
+    instance_id: &str,
+    option: &str,
+) -> Result<Vec<u8>, StorageError> {
+    let value = required_string_option(instance, instance_id, option)?;
+    BASE64URL_NOPAD.decode(value.as_bytes()).map_err(|_| {
+        StorageError::bad_input(format!(
+            "crypto instance {instance_id} option {option} must be base64url without padding",
+        ))
+    })
+}
+
+fn openfhe_backend_from_config(
+    backend_name: &str,
+    backend: &CryptoBackendConfig,
+) -> Result<CommandOpenFheBackend, StorageError> {
+    let Some(program) = backend.program.as_deref() else {
+        return Err(StorageError::bad_input(format!(
+            "crypto backend {backend_name} requires program",
+        )));
+    };
+    let mut command_backend = if let Some(expected_sha256_b64) = backend.sha256_b64.as_deref() {
+        CommandOpenFheBackend::new_checked_with_sha256_b64(program, expected_sha256_b64)
+    } else {
+        CommandOpenFheBackend::new_checked(program)
+    }
+    .map_err(|err| {
+        StorageError::bad_input(format!(
+            "crypto backend {backend_name} program path is invalid: {err}",
+        ))
+    })?;
+    if let Some(timeout_ms) = backend.timeout_ms {
+        command_backend = command_backend.with_timeout(Duration::from_millis(timeout_ms));
+    }
+    let pool_size = match backend.kind.as_str() {
+        "process_pool" => backend.size.unwrap_or(1),
+        "process" => 1,
+        kind => {
+            return Err(StorageError::bad_input(format!(
+                "crypto backend {backend_name} has unsupported kind {kind}",
+            )));
+        }
+    };
+    let Some(pool_size) = NonZeroUsize::new(pool_size) else {
+        return Err(StorageError::bad_input(format!(
+            "crypto backend {backend_name} size must be at least 1",
+        )));
+    };
+    Ok(command_backend.with_pool_size(pool_size))
 }
 
 pub fn validate_create_collection_crypto_runtime(
@@ -1130,6 +1427,58 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                 option,
                 reason: "unsupported option for vector/openfhe-ckks@v1".to_string(),
             });
+        }
+        if instance.provider == VECTOR_OPENFHE_CKKS_PROVIDER {
+            match instance.options.get(CKKS_PROFILE_OPTION) {
+                Some(Value::String(profile))
+                    if profile == CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50 => {}
+                Some(Value::String(_)) => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: CKKS_PROFILE_OPTION.to_string(),
+                        reason: format!(
+                            "expected allowlisted profile {CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50}"
+                        ),
+                    });
+                }
+                Some(_) => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: CKKS_PROFILE_OPTION.to_string(),
+                        reason: "expected a string".to_string(),
+                    });
+                }
+                None => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: CKKS_PROFILE_OPTION.to_string(),
+                        reason: "missing profile".to_string(),
+                    });
+                }
+            }
+            for option in [CKKS_CRYPTO_CONTEXT_B64_OPTION, CKKS_PUBLIC_KEY_B64_OPTION] {
+                let Some(Value::String(encoded)) = instance.options.get(option) else {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: option.to_string(),
+                        reason: "expected a base64url string".to_string(),
+                    });
+                };
+                let decoded = BASE64URL_NOPAD.decode(encoded.as_bytes()).map_err(|_| {
+                    CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: option.to_string(),
+                        reason: "expected base64url without padding".to_string(),
+                    }
+                })?;
+                if decoded.is_empty() {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: option.to_string(),
+                        reason: "decoded value must not be empty".to_string(),
+                    });
+                }
+            }
         }
 
         if let Some(backend_ref) = &instance.backend_ref
@@ -2307,6 +2656,16 @@ fn validate_generic_collection_crypto_runtime(
                 rule.instance
             )));
         }
+        let crypto_context =
+            required_base64url_option(instance, &rule.instance, CKKS_CRYPTO_CONTEXT_B64_OPTION)?;
+        let public_key =
+            required_base64url_option(instance, &rule.instance, CKKS_PUBLIC_KEY_B64_OPTION)?;
+        CkksPublicMaterial::new(crypto_context, public_key).map_err(|err| {
+            StorageError::bad_input(format!(
+                "collection {collection_name} vector crypto instance {} public material is invalid: {err}",
+                rule.instance
+            ))
+        })?;
 
         let instance_key_id = match instance.options.get("key_id") {
             None | Some(Value::Null) => None,
@@ -3754,6 +4113,8 @@ mod tests {
                         "key_id": "tenant-a:docs",
                         "material_fingerprint_id": "tenant-a/vector@v1",
                         "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                        "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                        "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
                         "retired_materials": [],
                     }),
                 },
@@ -7323,6 +7684,8 @@ mod tests {
                                 "key_id": "tenant-a:docs",
                                 "material_fingerprint_id": "tenant-a/vector@v2",
                                 "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                                "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                                "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
                             }),
                         },
                     ),
@@ -7726,6 +8089,8 @@ mod tests {
                             "key_id": "tenant-a:docs",
                             "material_fingerprint_id": "tenant-a/vector-rk@v3",
                             "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                            "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                            "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
                         }),
                     },
                 )]),
@@ -7991,6 +8356,8 @@ mod tests {
                         options: json!({
                             "key_id": "tenant-a:docs",
                             "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                            "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                            "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
                         }),
                     },
                 )]),
@@ -8057,6 +8424,8 @@ mod tests {
                         options: json!({
                             "key_id": "tenant-a:docs",
                             "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                            "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                            "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
                         }),
                     },
                 )]),

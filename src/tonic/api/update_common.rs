@@ -149,6 +149,7 @@ pub async fn update_vectors(
     auth: Auth,
     inference_params: InferenceParams,
     request_hw_counter: RequestHwCounter,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Response<PointsOperationResponseInternal>, Status> {
     let UpdatePointVectors {
         collection_name,
@@ -194,6 +195,7 @@ pub async fn update_vectors(
         auth,
         inference_params,
         request_hw_counter.get_counter(),
+        runtime_settings,
     )
     .await?;
 
@@ -628,6 +630,7 @@ pub async fn update_batch(
                     auth.clone(),
                     inference_params.clone(),
                     request_hw_counter.clone(),
+                    runtime_settings,
                 )
                 .await
             }

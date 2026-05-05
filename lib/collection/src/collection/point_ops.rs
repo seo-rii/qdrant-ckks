@@ -9,9 +9,10 @@ use futures::{StreamExt as _, TryFutureExt, TryStreamExt as _, future};
 use itertools::Itertools;
 use qdrant_sec::{
     CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadNonceReplayKey, ClientPayloadValidationContext,
-    ServerPayloadValidationContext, client_payload_envelope_key, client_payload_nonce_replay_key,
-    is_client_encrypted_payload_value, is_encrypted_payload_value, validate_client_payload_value,
-    validate_server_payload_value_metadata,
+    ENCRYPTED_VECTOR_SIDECAR_FIELD, ServerPayloadValidationContext, client_payload_envelope_key,
+    client_payload_nonce_replay_key, is_client_encrypted_payload_value,
+    is_encrypted_ckks_vector_payload_value, is_encrypted_payload_value,
+    validate_client_payload_value, validate_server_payload_value_metadata,
 };
 use segment::data_types::order_by::{Direction, OrderBy};
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
@@ -374,6 +375,88 @@ impl Collection {
                 _ => {}
             }
         }
+        let payload_write_touches_vector_sidecar = |payload: &Payload,
+                                                    key: Option<&JsonPath>|
+         -> CollectionResult<bool> {
+            if let Some(key) = key {
+                return Ok(key.first_key == ENCRYPTED_VECTOR_SIDECAR_FIELD);
+            }
+
+            let mut touches = false;
+            if let Some(value) = payload.0.get(ENCRYPTED_VECTOR_SIDECAR_FIELD) {
+                touches = true;
+                let Some(sidecar) = value.as_object() else {
+                    return Err(CollectionError::bad_input(format!(
+                        "encrypted vector sidecar '{ENCRYPTED_VECTOR_SIDECAR_FIELD}' must be an object",
+                    )));
+                };
+                for (vector_name, encrypted) in sidecar {
+                    if !is_encrypted_ckks_vector_payload_value(encrypted) {
+                        return Err(CollectionError::bad_input(format!(
+                            "encrypted vector sidecar entry '{vector_name}' is malformed",
+                        )));
+                    }
+                }
+            }
+            Ok(touches)
+        };
+        let touches_vector_sidecar = match &operation {
+            CollectionUpdateOperations::PointOperation(point_operation) => match point_operation {
+                PointOperations::UpsertPoints(insert_operation)
+                | PointOperations::UpsertPointsConditional(
+                    shard::operations::point_ops::ConditionalInsertOperationInternal {
+                        points_op: insert_operation,
+                        condition: _,
+                        update_mode: _,
+                    },
+                ) => match insert_operation {
+                    PointInsertOperationsInternal::PointsBatch(batch) => batch
+                        .payloads
+                        .as_ref()
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                        .try_fold(false, |touches, payload| {
+                            Ok::<bool, CollectionError>(
+                                touches || payload_write_touches_vector_sidecar(payload, None)?,
+                            )
+                        })?,
+                    PointInsertOperationsInternal::PointsList(points) => points
+                        .iter()
+                        .filter_map(|point| point.payload.as_ref())
+                        .try_fold(false, |touches, payload| {
+                            Ok::<bool, CollectionError>(
+                                touches || payload_write_touches_vector_sidecar(payload, None)?,
+                            )
+                        })?,
+                },
+                PointOperations::SyncPoints(sync_operation) => sync_operation
+                    .points
+                    .iter()
+                    .filter_map(|point| point.payload.as_ref())
+                    .try_fold(false, |touches, payload| {
+                        Ok::<bool, CollectionError>(
+                            touches || payload_write_touches_vector_sidecar(payload, None)?,
+                        )
+                    })?,
+                PointOperations::DeletePoints { .. } | PointOperations::DeletePointsByFilter(_) => {
+                    false
+                }
+            },
+            CollectionUpdateOperations::PayloadOperation(
+                PayloadOps::SetPayload(operation) | PayloadOps::OverwritePayload(operation),
+            ) => payload_write_touches_vector_sidecar(&operation.payload, operation.key.as_ref())?,
+            CollectionUpdateOperations::PayloadOperation(_)
+            | CollectionUpdateOperations::VectorOperation(_)
+            | CollectionUpdateOperations::FieldIndexOperation(_) => false,
+            #[cfg(feature = "staging")]
+            CollectionUpdateOperations::StagingOperation(_) => false,
+        };
+        if touches_vector_sidecar && !update_provenance.allows_vector_sidecars() {
+            return Err(CollectionError::bad_input(format!(
+                "encrypted vector sidecar '{ENCRYPTED_VECTOR_SIDECAR_FIELD}' requires runtime CKKS vector encryption before collection write",
+            )));
+        }
         if let Some(encryption) = encryption {
             let mut seen_client_nonces = std::collections::HashSet::new();
             let mut payload_write_touches_encrypted_path = |payload: &Payload,
@@ -698,7 +781,7 @@ impl Collection {
 
                             if touches_encrypted_vector {
                                 return Err(CollectionError::bad_input(format!(
-                                    "cannot write encrypted vector '{encrypted_name}'; CKKS vector ciphertext storage/write path is not implemented",
+                                    "cannot write plaintext vector '{encrypted_name}' for encrypted vector rule; configure runtime CKKS vector encryption before writing this vector",
                                 )));
                             }
                         }

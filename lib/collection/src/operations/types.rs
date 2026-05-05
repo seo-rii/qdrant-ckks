@@ -78,42 +78,14 @@ pub enum CollectionStatus {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct CollectionUpdateProvenance {
-    kind: CollectionUpdateProvenanceKind,
+    server_envelopes: bool,
+    vector_sidecars: bool,
+    verified_client_envelopes: Option<RuntimeVerifiedClientEnvelopes>,
 }
 
 impl Default for CollectionUpdateProvenance {
     fn default() -> Self {
         Self::client_plaintext()
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-enum CollectionUpdateProvenanceKind {
-    /// Client-originated plaintext operation. Encrypted payload markers are not
-    /// trusted in this mode and must be produced by a runtime transform first.
-    ClientPlaintext,
-    /// Internal operation whose server-side `$qdrant_sec` markers were created
-    /// by the runtime payload encryptor for the current collection config.
-    RuntimeEncryptedPayloads(RuntimeEncryptedPayloads),
-    /// Internal operation whose client-side `$qdrant_client_aead` markers were
-    /// already validated by the runtime client-envelope provider.
-    RuntimeVerifiedClientEnvelopes(RuntimeVerifiedClientEnvelopes),
-    /// Internal operation containing both runtime-created server envelopes and
-    /// runtime-verified client envelopes.
-    RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(
-        RuntimeEncryptedPayloads,
-        RuntimeVerifiedClientEnvelopes,
-    ),
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct RuntimeEncryptedPayloads {
-    _private: (),
-}
-
-impl RuntimeEncryptedPayloads {
-    fn from_runtime_transform() -> Self {
-        Self { _private: () }
     }
 }
 
@@ -144,15 +116,25 @@ impl RuntimeVerifiedClientEnvelopes {
 impl CollectionUpdateProvenance {
     pub const fn client_plaintext() -> Self {
         Self {
-            kind: CollectionUpdateProvenanceKind::ClientPlaintext,
+            server_envelopes: false,
+            vector_sidecars: false,
+            verified_client_envelopes: None,
         }
     }
 
     pub fn runtime_encrypted_payloads() -> Self {
         Self {
-            kind: CollectionUpdateProvenanceKind::RuntimeEncryptedPayloads(
-                RuntimeEncryptedPayloads::from_runtime_transform(),
-            ),
+            server_envelopes: true,
+            vector_sidecars: false,
+            verified_client_envelopes: None,
+        }
+    }
+
+    pub fn runtime_encrypted_vectors() -> Self {
+        Self {
+            server_envelopes: false,
+            vector_sidecars: true,
+            verified_client_envelopes: None,
         }
     }
 
@@ -164,7 +146,9 @@ impl CollectionUpdateProvenance {
             return Self::client_plaintext();
         }
         Self {
-            kind: CollectionUpdateProvenanceKind::RuntimeVerifiedClientEnvelopes(verified),
+            server_envelopes: false,
+            vector_sidecars: false,
+            verified_client_envelopes: Some(verified),
         }
     }
 
@@ -176,32 +160,29 @@ impl CollectionUpdateProvenance {
             return Self::runtime_encrypted_payloads();
         }
         Self {
-            kind:
-                CollectionUpdateProvenanceKind::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(
-                    RuntimeEncryptedPayloads::from_runtime_transform(),
-                    verified,
-                ),
+            server_envelopes: true,
+            vector_sidecars: false,
+            verified_client_envelopes: Some(verified),
         }
+    }
+
+    pub fn with_runtime_encrypted_vectors(mut self) -> Self {
+        self.vector_sidecars = true;
+        self
     }
 
     pub const fn allows_server_envelopes(&self) -> bool {
-        matches!(
-            self.kind,
-            CollectionUpdateProvenanceKind::RuntimeEncryptedPayloads(_)
-                | CollectionUpdateProvenanceKind::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(_, _)
-        )
+        self.server_envelopes
+    }
+
+    pub const fn allows_vector_sidecars(&self) -> bool {
+        self.vector_sidecars
     }
 
     pub fn allows_client_envelope_key(&self, envelope_key: &ClientPayloadEnvelopeKey) -> bool {
-        match &self.kind {
-            CollectionUpdateProvenanceKind::RuntimeVerifiedClientEnvelopes(verified)
-            | CollectionUpdateProvenanceKind::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(
-                _,
-                verified,
-            ) => verified.contains(envelope_key),
-            CollectionUpdateProvenanceKind::ClientPlaintext
-            | CollectionUpdateProvenanceKind::RuntimeEncryptedPayloads(_) => false,
-        }
+        self.verified_client_envelopes
+            .as_ref()
+            .is_some_and(|verified| verified.contains(envelope_key))
     }
 
     pub fn allows_client_envelope_key_for_binding(
