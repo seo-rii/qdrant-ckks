@@ -40,6 +40,8 @@ pub enum CkksError {
     EmptyCiphertext,
     #[error("openfhe backend returned {actual} batch ciphertexts for {expected} input vectors")]
     BackendBatchSizeMismatch { expected: usize, actual: usize },
+    #[error("ckks vector query has {query_len} values but stored ciphertext has {slots} slots")]
+    QueryDimensionMismatch { query_len: usize, slots: usize },
     #[error("unsupported ckks vector envelope version {0}")]
     UnsupportedEnvelopeVersion(u8),
     #[error("unsupported ckks vector scheme {0}")]
@@ -192,6 +194,17 @@ pub struct CkksBatchEncryptionInput<'a> {
     pub items: &'a [CkksVectorBatchItem<'a>],
 }
 
+#[derive(Clone, Debug)]
+pub struct CkksPlaintextQueryScoreInput<'a> {
+    pub parameters: &'a CkksParameters,
+    pub public_material: &'a CkksPublicMaterial,
+    pub collection: &'a str,
+    pub point_id: &'a str,
+    pub vector_name: &'a str,
+    pub query_values: &'a [f64],
+    pub ciphertext: &'a [u8],
+}
+
 pub trait CkksVectorBackend {
     fn encrypt(&self, input: CkksEncryptionInput<'_>) -> Result<Vec<u8>, CkksError>;
 
@@ -213,6 +226,15 @@ pub trait CkksVectorBackend {
                 })
             })
             .collect()
+    }
+
+    fn score_plaintext_query(
+        &self,
+        _input: CkksPlaintextQueryScoreInput<'_>,
+    ) -> Result<f64, CkksError> {
+        Err(CkksError::Backend(
+            "OpenFHE backend does not support plaintext-query CKKS scoring".to_string(),
+        ))
     }
 }
 
@@ -617,6 +639,12 @@ where
                 "stored context digest does not match active context".to_string(),
             ));
         }
+        Self::decode_verified_ciphertext(&verified)?;
+
+        Ok(verified)
+    }
+
+    fn decode_verified_ciphertext(verified: &VerifiedCkksVector) -> Result<Vec<u8>, CkksError> {
         let ciphertext = BASE64URL_NOPAD
             .decode(verified.ciphertext.as_bytes())
             .map_err(|_| {
@@ -628,7 +656,45 @@ where
             ));
         }
 
-        Ok(verified)
+        Ok(ciphertext)
+    }
+
+    pub fn score_plaintext_query(
+        &self,
+        collection: &str,
+        point_id: &str,
+        expected_public_material: &CkksPublicMaterial,
+        encrypted: &EncryptedCkksVector,
+        query_values: &[f64],
+    ) -> Result<f64, CkksError> {
+        self.validate_vector_values(point_id, query_values)?;
+        let collection_context = self.collection_context(collection)?;
+        let verified = self.open(collection, point_id, expected_public_material, encrypted)?;
+        if verified.slots != query_values.len() {
+            return Err(CkksError::QueryDimensionMismatch {
+                query_len: query_values.len(),
+                slots: verified.slots,
+            });
+        }
+        let ciphertext = Self::decode_verified_ciphertext(&verified)?;
+        let score = self
+            .backend
+            .score_plaintext_query(CkksPlaintextQueryScoreInput {
+                parameters: &self.parameters,
+                public_material: expected_public_material,
+                collection: collection_context,
+                point_id,
+                vector_name: &self.vector_name,
+                query_values,
+                ciphertext: &ciphertext,
+            })?;
+        if !score.is_finite() {
+            return Err(CkksError::Backend(
+                "OpenFHE backend returned non-finite score".to_string(),
+            ));
+        }
+
+        Ok(score)
     }
 }
 

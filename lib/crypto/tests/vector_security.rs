@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CkksBatchEncryptionInput,
-    CkksEncryptionInput, CkksError, CkksParameters, CkksPublicMaterial, CkksVectorBackend,
-    CkksVectorBatchItem, CkksVectorEncryptor, CommandOpenFheBackend, EncryptedCkksVector,
-    EncryptionContext, EncryptionError, SecretKey,
+    CkksEncryptionInput, CkksError, CkksParameters, CkksPlaintextQueryScoreInput,
+    CkksPublicMaterial, CkksVectorBackend, CkksVectorBatchItem, CkksVectorEncryptor,
+    CommandOpenFheBackend, EncryptedCkksVector, EncryptionContext, EncryptionError, SecretKey,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -70,6 +70,27 @@ impl CkksVectorBackend for BatchTestBackend {
             .iter()
             .map(|item| format!("batch:{}:{}", item.point_id, item.values.len()).into_bytes())
             .collect())
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ScoreTestBackend;
+
+impl CkksVectorBackend for ScoreTestBackend {
+    fn encrypt(&self, input: CkksEncryptionInput<'_>) -> Result<Vec<u8>, CkksError> {
+        Ok(format!("cipher:{}:{}", input.point_id, input.values.len()).into_bytes())
+    }
+
+    fn score_plaintext_query(
+        &self,
+        input: CkksPlaintextQueryScoreInput<'_>,
+    ) -> Result<f64, CkksError> {
+        assert_eq!(input.collection, "docs");
+        assert_eq!(input.point_id, "point-1");
+        assert_eq!(input.vector_name, "embedding");
+        assert_eq!(input.query_values, &[0.5, 0.25]);
+        assert_eq!(input.ciphertext, b"cipher:point-1:2");
+        Ok(42.25)
     }
 }
 
@@ -157,6 +178,60 @@ fn ckks_vector_encrypt_batch_uses_backend_batch_and_binds_each_point() {
         encryptor.open("docs", "point-2", &material, &encrypted[0]),
         Err(CkksError::Envelope(_)),
     ));
+}
+
+#[test]
+fn ckks_vector_plaintext_query_scoring_uses_verified_ciphertext() {
+    let encryptor = test_ckks_encryptor(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        ScoreTestBackend,
+    )
+    .unwrap();
+    let encrypted = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0, 2.0])
+        .unwrap();
+
+    let score = encryptor
+        .score_plaintext_query(
+            "docs",
+            "point-1",
+            &public_material(),
+            &encrypted,
+            &[0.5, 0.25],
+        )
+        .unwrap();
+
+    assert_eq!(score, 42.25);
+}
+
+#[test]
+fn ckks_vector_plaintext_query_scoring_rejects_dimension_mismatch() {
+    let encryptor = test_ckks_encryptor(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        ScoreTestBackend,
+    )
+    .unwrap();
+    let encrypted = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0, 2.0])
+        .unwrap();
+
+    let err = encryptor
+        .score_plaintext_query("docs", "point-1", &public_material(), &encrypted, &[0.5])
+        .unwrap_err();
+
+    assert_eq!(
+        err,
+        CkksError::QueryDimensionMismatch {
+            query_len: 1,
+            slots: 2,
+        }
+    );
 }
 
 #[test]
@@ -762,6 +837,62 @@ printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
             .ciphertext,
         BASE64URL_NOPAD.encode(b"openfhe-cipher"),
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn command_openfhe_backend_uses_plaintext_query_score_protocol() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("fake-openfhe-score-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+while IFS= read -r request; do
+  case "$request" in
+    *'"operation":"score_plaintext_query"'*'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*'"query_values":[0.5,0.25]'*'"ciphertext":"b3BlbmZoZS1jaXBoZXI"'*)
+      printf '{"version":1,"score":12.5}\n'
+      ;;
+    *'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*)
+      printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
+      ;;
+    *) exit 7 ;;
+  esac
+done
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+        .with_args([script_path.display().to_string()]);
+    let encryptor = test_ckks_encryptor(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+    let encrypted = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0, 2.0])
+        .unwrap();
+
+    let score = encryptor
+        .score_plaintext_query(
+            "docs",
+            "point-1",
+            &public_material(),
+            &encrypted,
+            &[0.5, 0.25],
+        )
+        .unwrap();
+
+    assert_eq!(score, 12.5);
 }
 
 #[cfg(unix)]

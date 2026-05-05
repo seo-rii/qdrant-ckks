@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 
 use crate::vector::{
     CKKS_SCHEME, CkksBatchEncryptionInput, CkksEncryptionInput, CkksError, CkksParameters,
-    CkksVectorBackend,
+    CkksPlaintextQueryScoreInput, CkksVectorBackend,
 };
 
 const DEFAULT_BRIDGE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -484,6 +484,32 @@ impl CkksVectorBackend for CommandOpenFheBackend {
             decode_batch_bridge_response(response_bytes, input.items.len())
         })
     }
+
+    fn score_plaintext_query(
+        &self,
+        input: CkksPlaintextQueryScoreInput<'_>,
+    ) -> Result<f64, CkksError> {
+        let request = CommandOpenFheScoreRequest {
+            version: 1,
+            operation: "score_plaintext_query",
+            scheme: CKKS_SCHEME,
+            collection: input.collection,
+            point_id: input.point_id,
+            vector_name: input.vector_name,
+            parameters: input.parameters,
+            crypto_context: BASE64URL_NOPAD.encode(input.public_material.crypto_context()),
+            public_key: BASE64URL_NOPAD.encode(input.public_material.public_key()),
+            query_values: input.query_values,
+            ciphertext: BASE64URL_NOPAD.encode(input.ciphertext),
+        };
+        let request_bytes = serde_json::to_vec(&request).map_err(|err| {
+            CkksError::Backend(format!(
+                "failed to serialize OpenFHE bridge score request: {err}"
+            ))
+        })?;
+
+        self.send_bridge_request(&request_bytes, decode_score_bridge_response)
+    }
 }
 
 impl CommandOpenFheBackend {
@@ -907,6 +933,22 @@ struct CommandOpenFheBatchItem<'a> {
     values: &'a [f64],
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+struct CommandOpenFheScoreRequest<'a> {
+    version: u8,
+    operation: &'static str,
+    scheme: &'static str,
+    collection: &'a str,
+    point_id: &'a str,
+    vector_name: &'a str,
+    parameters: &'a CkksParameters,
+    crypto_context: String,
+    public_key: String,
+    query_values: &'a [f64],
+    ciphertext: String,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 struct CommandOpenFheResponse {
@@ -919,6 +961,13 @@ struct CommandOpenFheResponse {
 struct CommandOpenFheBatchResponse {
     version: u8,
     ciphertexts: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct CommandOpenFheScoreResponse {
+    version: u8,
+    score: f64,
 }
 
 fn decode_single_bridge_response(response_bytes: &[u8]) -> Result<Vec<u8>, CkksError> {
@@ -936,6 +985,28 @@ fn decode_single_bridge_response(response_bytes: &[u8]) -> Result<Vec<u8>, CkksE
     BASE64URL_NOPAD
         .decode(response.ciphertext.as_bytes())
         .map_err(|_| CkksError::Backend("OpenFHE bridge returned invalid ciphertext".to_string()))
+}
+
+fn decode_score_bridge_response(response_bytes: &[u8]) -> Result<f64, CkksError> {
+    let response: CommandOpenFheScoreResponse =
+        serde_json::from_slice(response_bytes).map_err(|err| {
+            CkksError::Backend(format!(
+                "failed to parse OpenFHE bridge score response: {err}"
+            ))
+        })?;
+    if response.version != 1 {
+        return Err(CkksError::Backend(format!(
+            "unsupported OpenFHE bridge score response version {}",
+            response.version,
+        )));
+    }
+    if !response.score.is_finite() {
+        return Err(CkksError::Backend(
+            "OpenFHE bridge returned non-finite score".to_string(),
+        ));
+    }
+
+    Ok(response.score)
 }
 
 fn decode_batch_bridge_response(
