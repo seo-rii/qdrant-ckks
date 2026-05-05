@@ -1143,6 +1143,7 @@ fn append_client_payload_nonce_replay_cache(path: &Path, keys: &[String]) -> Col
         use std::os::unix::fs::OpenOptionsExt;
 
         options.mode(0o600);
+        options.custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
     }
     let mut file = options.open(path).map_err(|err| {
         CollectionError::service_error(format!(
@@ -1198,6 +1199,7 @@ fn rewrite_client_payload_nonce_replay_cache(
         use std::os::unix::fs::OpenOptionsExt;
 
         options.mode(0o600);
+        options.custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
     }
     let mut file = options.open(&temp_path).map_err(|err| {
         CollectionError::service_error(format!(
@@ -1400,6 +1402,38 @@ mod tests {
         assert_eq!(
             std::fs::metadata(&cache_path).unwrap().permissions().mode() & 0o077,
             0,
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_payload_nonce_replay_cache_rejects_symlink_paths() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let cache_path = dir.path().join(CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE);
+        let target_path = dir.path().join("target");
+        std::fs::write(&target_path, "target-before\n").unwrap();
+        symlink(&target_path, &cache_path).unwrap();
+
+        let err = append_client_payload_nonce_replay_cache(&cache_path, &["nonce-a".to_string()])
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("failed to open"));
+        assert_eq!(
+            std::fs::read_to_string(&target_path).unwrap(),
+            "target-before\n"
+        );
+
+        std::fs::remove_file(&cache_path).unwrap();
+        let temp_path = cache_path.with_extension("tmp");
+        symlink(&target_path, &temp_path).unwrap();
+        let mut keys = VecDeque::new();
+        keys.push_back("nonce-b".to_string());
+        let err = rewrite_client_payload_nonce_replay_cache(&cache_path, &keys).unwrap_err();
+        assert!(format!("{err:?}").contains("failed to create"));
+        assert_eq!(
+            std::fs::read_to_string(&target_path).unwrap(),
+            "target-before\n"
         );
     }
 }

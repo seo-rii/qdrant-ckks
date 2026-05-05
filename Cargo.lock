@@ -1378,6 +1378,7 @@ dependencies = [
  "issues",
  "itertools 0.14.0",
  "log",
+ "nix 0.31.2",
  "object_store",
  "ordered-float 5.1.0",
  "parking_lot",
