@@ -608,29 +608,45 @@ fn command_openfhe_backend_sets_no_new_privs_before_spawn() {
     let script_path = dir.path().join("checked-openfhe-bridge.sh");
     fs::write(
         &script_path,
-        r#"#!/usr/bin/env bash
-set -euo pipefail
-if [[ "$(awk '/^NoNewPrivs:/ { print $2 }' /proc/self/status)" != "1" ]]; then
-  printf 'no_new_privs was not set\n' >&2
-  exit 17
-fi
-if [[ "$(ulimit -c)" != "0" ]]; then
-  printf 'core dumps were not disabled\n' >&2
-  exit 19
-fi
-for name in \
-  QDRANT__CRYPTO__BRIDGE_ENV_SECRET_FOR_TEST \
-  QDRANT_CRYPTO_BRIDGE_ENV_SECRET_FOR_TEST \
-  QDRANT__CKKS__BRIDGE_ENV_SECRET_FOR_TEST \
-  QDRANT_CKKS_BRIDGE_ENV_SECRET_FOR_TEST
-do
-  if [[ -n "${!name:-}" ]]; then
-    printf 'qdrant crypto secret env leaked to bridge: %s\n' "$name" >&2
-    exit 20
-  fi
-done
-IFS= read -r _request
-printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
+        r#"#!/usr/bin/env python3
+import ctypes
+import signal
+import os
+import resource
+import sys
+
+with open("/proc/self/status", encoding="utf-8") as status:
+    no_new_privs = next(
+        (line.split()[1] for line in status if line.startswith("NoNewPrivs:")),
+        None,
+    )
+if no_new_privs != "1":
+    print("no_new_privs was not set", file=sys.stderr)
+    raise SystemExit(17)
+
+if resource.getrlimit(resource.RLIMIT_CORE) != (0, 0):
+    print("core dumps were not disabled", file=sys.stderr)
+    raise SystemExit(19)
+
+value = ctypes.c_int(0)
+if ctypes.CDLL(None).prctl(2, ctypes.byref(value), 0, 0, 0) != 0:
+    raise SystemExit(2)
+if value.value != signal.SIGKILL:
+    print("parent death signal was not set to SIGKILL", file=sys.stderr)
+    raise SystemExit(21)
+
+for name in (
+    "QDRANT__CRYPTO__BRIDGE_ENV_SECRET_FOR_TEST",
+    "QDRANT_CRYPTO_BRIDGE_ENV_SECRET_FOR_TEST",
+    "QDRANT__CKKS__BRIDGE_ENV_SECRET_FOR_TEST",
+    "QDRANT_CKKS_BRIDGE_ENV_SECRET_FOR_TEST",
+):
+    if os.environ.get(name):
+        print(f"qdrant crypto secret env leaked to bridge: {name}", file=sys.stderr)
+        raise SystemExit(20)
+
+sys.stdin.readline()
+print('{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}', flush=True)
 "#,
     )
     .unwrap();
