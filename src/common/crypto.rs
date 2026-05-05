@@ -250,6 +250,8 @@ pub enum PayloadWriteSetupError {
     MissingMaterialEnv { material: String, env: String },
     #[error("payload crypto material {material} file path is missing")]
     MissingMaterialPath { material: String },
+    #[error("payload crypto material {material} fd is missing")]
+    MissingMaterialFd { material: String },
     #[error("payload crypto material {material} inline value is missing")]
     MissingInlineMaterial { material: String },
     #[error("payload crypto material {material} file {path} could not be read")]
@@ -699,6 +701,7 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
                 "source": material.source,
                 "env": material.env,
                 "path": material.path,
+                "has_fd": material.fd.is_some(),
                 "has_value_b64": material.value_b64.is_some(),
                 "wrapped_by": material.wrapped_by,
                 "wrap_algorithm": material.wrap_algorithm,
@@ -1184,6 +1187,7 @@ fn validate_material(
 
     let configured_sources = usize::from(material.env.is_some())
         + usize::from(material.path.is_some())
+        + usize::from(material.fd.is_some())
         + usize::from(material.value_b64.is_some());
 
     if configured_sources != 1 {
@@ -1197,6 +1201,7 @@ fn validate_material(
         Some("env")
             if material.env.is_some()
                 && material.path.is_none()
+                && material.fd.is_none()
                 && material.value_b64.is_none() =>
         {
             Ok(())
@@ -1204,13 +1209,24 @@ fn validate_material(
         Some("file")
             if material.path.is_some()
                 && material.env.is_none()
+                && material.fd.is_none()
                 && material.value_b64.is_none() =>
         {
+            Ok(())
+        }
+        Some("fd")
+            if material.fd.is_some()
+                && material.env.is_none()
+                && material.path.is_none()
+                && material.value_b64.is_none() =>
+        {
+            validate_material_fd_source(material_name, material.fd.unwrap())?;
             Ok(())
         }
         Some("inline")
             if material.value_b64.is_some()
                 && material.env.is_none()
+                && material.fd.is_none()
                 && material.path.is_none() =>
         {
             if allow_inline_key_material {
@@ -1221,7 +1237,7 @@ fn validate_material(
                 })
             }
         }
-        Some("env" | "file" | "inline") => Err(CryptoSetupError::MaterialSourceMismatch {
+        Some("env" | "file" | "fd" | "inline") => Err(CryptoSetupError::MaterialSourceMismatch {
             material: material_name.to_string(),
         }),
         Some(source) => Err(CryptoSetupError::UnsupportedMaterialSource {
@@ -1232,6 +1248,39 @@ fn validate_material(
 
     if let Some(path) = material.path.as_deref() {
         validate_material_file_source(material_name, path)?;
+    }
+
+    Ok(())
+}
+
+fn validate_material_fd_source(material_name: &str, fd: i32) -> Result<(), CryptoSetupError> {
+    if fd < 0 {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: format!("fd:{fd}"),
+            reason: "fd must be non-negative".to_string(),
+        });
+    }
+
+    #[cfg(unix)]
+    {
+        let result = unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFD) };
+        if result < 0 {
+            return Err(CryptoSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: format!("fd:{fd}"),
+                reason: "fd is not open".to_string(),
+            });
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: format!("fd:{fd}"),
+            reason: "fd source is only supported on Unix".to_string(),
+        });
     }
 
     Ok(())
@@ -1346,11 +1395,12 @@ fn validate_wrapped_resource_key_material(
     if material.source.is_some()
         || material.env.is_some()
         || material.path.is_some()
+        || material.fd.is_some()
         || material.value_b64.is_some()
     {
         return Err(CryptoSetupError::InvalidWrappedMaterial {
             material: material_name.to_string(),
-            reason: "wrapped resource keys must not configure direct source/env/path/value_b64"
+            reason: "wrapped resource keys must not configure direct source/env/path/fd/value_b64"
                 .to_string(),
         });
     }
@@ -2665,6 +2715,14 @@ fn decode_direct_material_key(
             })?;
             read_material_file_to_string(material_name, path)?
         }
+        Some("fd") => {
+            let fd = material
+                .fd
+                .ok_or_else(|| PayloadWriteSetupError::MissingMaterialFd {
+                    material: material_name.to_string(),
+                })?;
+            read_material_fd_to_string(material_name, fd)?
+        }
         Some("inline") => material.value_b64.clone().ok_or_else(|| {
             PayloadWriteSetupError::MissingInlineMaterial {
                 material: material_name.to_string(),
@@ -2678,6 +2736,8 @@ fn decode_direct_material_key(
                 })?
             } else if let Some(path) = material.path.as_deref() {
                 read_material_file_to_string(material_name, path)?
+            } else if let Some(fd) = material.fd {
+                read_material_fd_to_string(material_name, fd)?
             } else {
                 material.value_b64.clone().ok_or_else(|| {
                     PayloadWriteSetupError::MissingInlineMaterial {
@@ -2699,6 +2759,61 @@ fn decode_direct_material_key(
             material: material_name.to_string(),
         }
     })
+}
+
+fn read_material_fd_to_string(
+    material_name: &str,
+    fd: i32,
+) -> Result<String, PayloadWriteSetupError> {
+    validate_material_fd_source(material_name, fd).map_err(|err| match err {
+        CryptoSetupError::InvalidMaterialFileSource {
+            material,
+            path,
+            reason,
+        } => PayloadWriteSetupError::InvalidMaterialFileSource {
+            material,
+            path,
+            reason,
+        },
+        other => PayloadWriteSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: format!("fd:{fd}"),
+            reason: other.to_string(),
+        },
+    })?;
+
+    #[cfg(unix)]
+    {
+        use std::fs::File;
+        use std::os::fd::FromRawFd;
+
+        let duplicated = unsafe { nix::libc::dup(fd) };
+        if duplicated < 0 {
+            return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: format!("fd:{fd}"),
+                reason: "fd could not be duplicated".to_string(),
+            });
+        }
+        let mut file = unsafe { File::from_raw_fd(duplicated) };
+        let mut encoded = String::new();
+        file.read_to_string(&mut encoded).map_err(|_| {
+            PayloadWriteSetupError::UnreadableMaterialFile {
+                material: material_name.to_string(),
+                path: format!("fd:{fd}"),
+            }
+        })?;
+        Ok(encoded)
+    }
+
+    #[cfg(not(unix))]
+    {
+        Err(PayloadWriteSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: format!("fd:{fd}"),
+            reason: "fd source is only supported on Unix".to_string(),
+        })
+    }
 }
 
 fn read_material_file_to_string(
@@ -3610,6 +3725,7 @@ mod tests {
                             source: Some("inline".to_string()),
                             env: None,
                             path: None,
+                            fd: None,
                             value_b64: Some(BASE64URL_NOPAD.encode(&[1_u8; 32])),
                             wrapped_by: None,
                             wrap_algorithm: None,
@@ -3627,6 +3743,7 @@ mod tests {
                             source: Some("wrapped".to_string()),
                             env: None,
                             path: None,
+                            fd: None,
                             value_b64: None,
                             wrapped_by: Some("tenant-a/mk".to_string()),
                             wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
@@ -3704,6 +3821,7 @@ mod tests {
                 source: Some("wrapped".to_string()),
                 env: None,
                 path: None,
+                fd: None,
                 value_b64: None,
                 wrapped_by: Some("tenant-a/mk".to_string()),
                 wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
@@ -3995,6 +4113,23 @@ mod tests {
                 kind: "kms_key".to_string(),
             }),
         );
+
+        assert_eq!(
+            validate_material(
+                "tenant-a/payload-v1",
+                &CryptoMaterialConfig {
+                    kind: "symmetric_key_32".to_string(),
+                    source: Some("fd".to_string()),
+                    env: Some("QDRANT_PAYLOAD_KEY".to_string()),
+                    fd: Some(3),
+                    ..CryptoMaterialConfig::default()
+                },
+                true,
+            ),
+            Err(CryptoSetupError::InvalidMaterialSourceCount {
+                material: "tenant-a/payload-v1".to_string(),
+            }),
+        );
     }
 
     #[test]
@@ -4138,6 +4273,56 @@ mod tests {
                     if reason.contains("group/world")
             ));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn decode_direct_material_key_reads_fd_source() {
+        use std::os::fd::AsRawFd;
+
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-material-fd-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let key_path = dir.path().join("payload.key");
+        std::fs::write(&key_path, BASE64URL_NOPAD.encode(&[11u8; 32])).unwrap();
+        let file = std::fs::File::open(&key_path).unwrap();
+        let fd_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("fd".to_string()),
+            fd: Some(file.as_raw_fd()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        assert_eq!(
+            validate_material("tenant-a/payload-v1", &fd_material, false),
+            Ok(())
+        );
+        let decoded = decode_direct_material_key("tenant-a/payload-v1", &fd_material).unwrap();
+        let encryptor = PayloadTextEncryptor::new_from_resource_key_with_metadata(
+            "docs-crypto-id",
+            "tenant-a:payload",
+            &decoded,
+            "tenant-a/payload@v1",
+            "tenant-a/payload-rk",
+            3,
+        )
+        .unwrap();
+        let policy = PayloadEncryptionPolicy::new(vec!["body".to_string()]).unwrap();
+        let mut payload = json!({ "body": "fd-backed secret" })
+            .as_object()
+            .unwrap()
+            .clone();
+        encryptor
+            .encrypt_selected_fields("1", &mut payload, &policy)
+            .unwrap();
+        encryptor
+            .decrypt_selected_fields("1", &mut payload, &policy)
+            .unwrap();
+        assert_eq!(
+            payload.get("body").and_then(Value::as_str),
+            Some("fd-backed secret"),
+        );
     }
 
     #[cfg(unix)]

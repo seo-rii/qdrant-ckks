@@ -311,7 +311,7 @@ crypto:
 
 The generic `crypto` control plane supports a safer MK/RK hierarchy:
 
-- `wrapping_key_32` is an MK/KEK loaded from env/file/inline material.
+- `wrapping_key_32` is an MK/KEK loaded from env/file/fd/inline material.
 - `wrapped_symmetric_key_32` is a random collection or rule RK wrapped by that
   MK using AES-256-GCM.
 - Payload text and CKKS vector envelope AEAD keys are still purpose-specific
@@ -346,6 +346,12 @@ files and rejects group/world-writable parent directories. The file and each
 parent directory must be owned by root or the qdrant process user so file-backed
 MK/RK material is not accidentally exposed or swapped through broad filesystem
 permissions.
+When a material uses `source: fd`, the `fd` must reference an already-open Unix
+file descriptor containing the base64url-no-pad 32-byte material. Qdrant
+duplicates the descriptor before reading so the original descriptor is not
+closed by material loading. FD-backed material avoids storing the secret or a
+secret file path in config, but operators must still provide the descriptor at
+the beginning of the encoded material and keep cluster runtime parity aligned.
 
 Wrapped RK material may declare a lifecycle `state`:
 
