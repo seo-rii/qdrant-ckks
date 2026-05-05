@@ -365,32 +365,6 @@ crypto:
   #     size: 4
   #     timeout_ms: 5000
 
-# Legacy qdrant-sec runtime configuration for the CKKS adapter.
-# This remains supported through an adapter into the generic `crypto` control plane.
-# Collection-level enablement and field/vector selection live in collection params under `ckks`.
-ckks:
-  enabled: false
-  # Keep false in production/security mode to reject inline legacy direct RK material.
-  # Set true only for local development fixtures.
-  allow_inline_key_material: false
-  # Legacy default base64url-no-padding encoded 32-byte direct RK. Prefer per-collection
-  # environment variables like QDRANT__CKKS__COLLECTIONS__docs__MASTER_KEY_B64.
-  master_key_b64: null
-  # Default capability-style key id recorded in encryption envelopes.
-  key_id: null
-  # Default path to an executable that implements docs/ckks.md bridge protocol.
-  openfhe_bridge_path: null
-  # Optional base64url-no-padding SHA-256 digest of the default bridge binary.
-  openfhe_bridge_sha256_b64: null
-  # Collection-specific runtime key material. Do not commit real keys here.
-  collections: {}
-  # collections:
-  #   docs:
-  #     key_id: tenant-a:docs
-  #     master_key_b64: null
-  #     openfhe_bridge_path: /usr/local/bin/openfhe-bridge
-  #     openfhe_bridge_sha256_b64: base64url-no-pad-sha256-of-bridge
-
 cluster:
   # Use `enabled: true` to run Qdrant in distributed deployment mode
   enabled: false
