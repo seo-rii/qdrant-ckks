@@ -102,7 +102,7 @@ impl AppBuildTelemetry {
             jwt_rbac: settings.service.jwt_rbac,
             hide_jwt_dashboard: settings.service.hide_jwt_dashboard,
             crypto_runtime_capability_fingerprint: (detail.level >= DetailsLevel::Level1
-                && (settings.crypto.is_configured() || settings.ckks.is_configured()))
+                && settings.crypto.is_configured())
             .then(|| crypto_runtime_capability_fingerprint(settings)),
             startup: collector.startup,
         }

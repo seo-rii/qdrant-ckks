@@ -729,20 +729,6 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
         );
     }
 
-    let mut legacy_collections = BTreeMap::new();
-    for (collection_name, collection) in &settings.ckks.collections {
-        legacy_collections.insert(
-            collection_name,
-            json!({
-                "key_id": collection.key_id,
-                "has_master_key_b64": collection.master_key_b64.is_some(),
-                "has_resource_key_b64": collection.resource_key_b64.is_some(),
-                "openfhe_bridge_path": collection.openfhe_bridge_path,
-                "openfhe_bridge_sha256_b64": collection.openfhe_bridge_sha256_b64,
-            }),
-        );
-    }
-
     let view = json!({
         "version": 1,
         "crypto": {
@@ -750,16 +736,6 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
             "instances": instances,
             "materials": materials,
             "backends": backends,
-        },
-        "legacy_ckks": {
-            "enabled": settings.ckks.enabled,
-            "allow_inline_key_material": settings.ckks.allow_inline_key_material,
-            "key_id": settings.ckks.key_id,
-            "has_master_key_b64": settings.ckks.master_key_b64.is_some(),
-            "has_resource_key_b64": settings.ckks.resource_key_b64.is_some(),
-            "openfhe_bridge_path": settings.ckks.openfhe_bridge_path,
-            "openfhe_bridge_sha256_b64": settings.ckks.openfhe_bridge_sha256_b64,
-            "collections": legacy_collections,
         },
     });
     let canonical = serde_json::to_vec(&view)
@@ -3645,6 +3621,30 @@ mod tests {
             crypto_runtime_capability_fingerprint(&settings),
             "fingerprint must change when retired payload key policy changes",
         );
+    }
+
+    #[test]
+    fn crypto_runtime_capability_fingerprint_ignores_unsupported_legacy_ckks() {
+        let baseline = Settings::new(None).unwrap();
+        let with_legacy = Settings {
+            ckks: CkksConfig {
+                enabled: true,
+                key_id: Some("tenant-a:legacy".to_string()),
+                resource_key_b64: Some(BASE64URL_NOPAD.encode(&[7_u8; 32])),
+                ..CkksConfig::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+
+        assert_eq!(
+            crypto_runtime_capability_fingerprint(&baseline),
+            crypto_runtime_capability_fingerprint(&with_legacy),
+            "unsupported legacy ckks runtime settings must not influence canonical crypto parity",
+        );
+        assert!(matches!(
+            validate_runtime_config(&with_legacy),
+            Err(CryptoSetupError::LegacyCkksRuntimeUnsupported),
+        ));
     }
 
     #[test]
