@@ -325,6 +325,11 @@ options; `vector/openfhe-ckks@v1` accepts only `key_id`,
 `material_fingerprint_id`, and `profile`. Unknown options fail startup/runtime
 validation instead of being silently ignored.
 
+Provider `materials` roles are also allowlisted. Server-side payload AEAD and
+OpenFHE CKKS vector-envelope providers accept only `materials.sym_key`; the
+client-side AEAD provider must not configure any server material or backend.
+Unexpected material roles fail validation instead of being silently ignored.
+
 For tests and future vector-envelope work, a generic OpenFHE backend is
 configured under `crypto.backends` and referenced from a
 `vector/openfhe-ckks@v1` instance:

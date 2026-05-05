@@ -135,6 +135,7 @@ const PAYLOAD_AES_GCM_ALLOWED_OPTIONS: &[&str] = &[
     MATERIAL_FINGERPRINT_ID_OPTION,
     RETIRED_MATERIALS_OPTION,
 ];
+const PAYLOAD_AES_GCM_ALLOWED_MATERIAL_ROLES: &[&str] = &[PAYLOAD_SYM_KEY_ROLE];
 const CLIENT_AEAD_ALLOWED_OPTIONS: &[&str] = &[
     "key_id",
     KEY_ID_REQUIRED_OPTION,
@@ -150,12 +151,23 @@ const VECTOR_OPENFHE_CKKS_ALLOWED_OPTIONS: &[&str] = &[
     MATERIAL_FINGERPRINT_ID_OPTION,
     CKKS_PROFILE_OPTION,
 ];
+const VECTOR_OPENFHE_CKKS_ALLOWED_MATERIAL_ROLES: &[&str] = &[PAYLOAD_SYM_KEY_ROLE];
 
 fn unsupported_instance_option(options: &Value, allowed_options: &[&str]) -> Option<String> {
     let options = options.as_object()?;
     options
         .keys()
         .find(|option| !allowed_options.contains(&option.as_str()))
+        .cloned()
+}
+
+fn unsupported_material_role(
+    materials: &HashMap<String, String>,
+    allowed_roles: &[&str],
+) -> Option<String> {
+    materials
+        .keys()
+        .find(|role| !allowed_roles.contains(&role.as_str()))
         .cloned()
 }
 
@@ -1051,6 +1063,30 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                 });
             }
         }
+        if instance.provider == PAYLOAD_AES_GCM_PROVIDER
+            && let Some(role) = unsupported_material_role(
+                &instance.materials,
+                PAYLOAD_AES_GCM_ALLOWED_MATERIAL_ROLES,
+            )
+        {
+            return Err(CryptoSetupError::InvalidInstanceOption {
+                instance: instance_name.clone(),
+                option: format!("materials.{role}"),
+                reason: "unsupported material role for payload/aes-256-gcm@v1".to_string(),
+            });
+        }
+        if instance.provider == VECTOR_OPENFHE_CKKS_PROVIDER
+            && let Some(role) = unsupported_material_role(
+                &instance.materials,
+                VECTOR_OPENFHE_CKKS_ALLOWED_MATERIAL_ROLES,
+            )
+        {
+            return Err(CryptoSetupError::InvalidInstanceOption {
+                instance: instance_name.clone(),
+                option: format!("materials.{role}"),
+                reason: "unsupported material role for vector/openfhe-ckks@v1".to_string(),
+            });
+        }
         if matches!(
             instance.provider.as_str(),
             PAYLOAD_AES_GCM_PROVIDER | VECTOR_OPENFHE_CKKS_PROVIDER
@@ -1775,6 +1811,15 @@ fn generic_payload_write_plan(
                         option,
                     });
                 }
+                if let Some(role) = unsupported_material_role(
+                    &instance.materials,
+                    PAYLOAD_AES_GCM_ALLOWED_MATERIAL_ROLES,
+                ) {
+                    return Err(PayloadWriteSetupError::UnsupportedInstanceOption {
+                        instance: rule.instance.clone(),
+                        option: format!("materials.{role}"),
+                    });
+                }
                 let material_ref =
                     instance
                         .materials
@@ -2230,6 +2275,15 @@ fn validate_generic_collection_crypto_runtime(
             return Err(StorageError::bad_input(format!(
                 "collection {collection_name} rule {} must use provider {VECTOR_OPENFHE_CKKS_PROVIDER}, found {}",
                 rule.id, instance.provider
+            )));
+        }
+        if let Some(role) = unsupported_material_role(
+            &instance.materials,
+            VECTOR_OPENFHE_CKKS_ALLOWED_MATERIAL_ROLES,
+        ) {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} vector crypto instance {} uses unsupported material role {role}",
+                rule.instance
             )));
         }
         let profile = match instance.options.get(CKKS_PROFILE_OPTION) {
@@ -3663,6 +3717,27 @@ mod tests {
                 if option == EXPECTED_RK_ID_OPTION
         ));
 
+        let mut payload_with_extra_material_role = payload_with_client_option.clone();
+        payload_with_extra_material_role
+            .instances
+            .get_mut("docs_payload_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .remove(EXPECTED_RK_ID_OPTION);
+        payload_with_extra_material_role
+            .instances
+            .get_mut("docs_payload_v1")
+            .unwrap()
+            .materials
+            .insert("client_key".to_string(), "tenant-a/payload-v1".to_string());
+        assert!(matches!(
+            validate_crypto_settings(&payload_with_extra_material_role),
+            Err(CryptoSetupError::InvalidInstanceOption { option, .. })
+                if option == "materials.client_key"
+        ));
+
         let bridge_program = std::env::current_exe().unwrap().display().to_string();
         let vector_with_payload_option = CryptoSettings {
             allow_inline_key_material: true,
@@ -3707,6 +3782,27 @@ mod tests {
             validate_crypto_settings(&vector_with_payload_option),
             Err(CryptoSetupError::InvalidInstanceOption { option, .. })
                 if option == RETIRED_MATERIALS_OPTION
+        ));
+
+        let mut vector_with_extra_material_role = vector_with_payload_option;
+        vector_with_extra_material_role
+            .instances
+            .get_mut("docs_vector_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .remove(RETIRED_MATERIALS_OPTION);
+        vector_with_extra_material_role
+            .instances
+            .get_mut("docs_vector_v1")
+            .unwrap()
+            .materials
+            .insert("payload_key".to_string(), "tenant-a/vector-v1".to_string());
+        assert!(matches!(
+            validate_crypto_settings(&vector_with_extra_material_role),
+            Err(CryptoSetupError::InvalidInstanceOption { option, .. })
+                if option == "materials.payload_key"
         ));
     }
 
@@ -5023,6 +5119,24 @@ mod tests {
             payload_write_plan_for_collection(&settings_with_unsupported_option, "docs", &params),
             Err(PayloadWriteSetupError::UnsupportedInstanceOption { instance, option })
                 if instance == "docs_payload_v1" && option == EXPECTED_RK_ID_OPTION
+        ));
+
+        let mut settings_with_unsupported_material_role = settings.clone();
+        settings_with_unsupported_material_role
+            .crypto
+            .instances
+            .get_mut("docs_payload_v1")
+            .unwrap()
+            .materials
+            .insert("client_key".to_string(), "tenant-a/payload-v1".to_string());
+        assert!(matches!(
+            payload_write_plan_for_collection(
+                &settings_with_unsupported_material_role,
+                "docs",
+                &params
+            ),
+            Err(PayloadWriteSetupError::UnsupportedInstanceOption { instance, option })
+                if instance == "docs_payload_v1" && option == "materials.client_key"
         ));
 
         let plan = payload_write_plan_for_collection(&settings, "docs", &params)
