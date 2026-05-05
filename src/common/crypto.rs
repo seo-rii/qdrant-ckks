@@ -345,13 +345,7 @@ impl PayloadWritePlan {
             .any(|rule| matches!(rule, PayloadWriteRule::ClientEnvelope { .. }))
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "test helper for exercising payload write plans without constructing public update operations"
-        )
-    )]
+    #[cfg(test)]
     pub fn encrypt_payload(
         &self,
         point_id: &str,
@@ -2384,13 +2378,6 @@ fn decode_wrapped_resource_key_for_state(
         .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "reserved for the admin MK rotation operation that rewraps resource keys without data rewrite"
-    )
-)]
 pub fn rewrap_runtime_resource_key_material(
     runtime_settings: &CryptoSettings,
     material_name: &str,
