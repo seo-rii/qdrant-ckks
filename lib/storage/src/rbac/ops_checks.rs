@@ -46,6 +46,7 @@ impl Access {
         match operation {
             CollectionMetaOperations::CreateCollection(_)
             | CollectionMetaOperations::UpdateCollection(_)
+            | CollectionMetaOperations::ApplyCryptoMigration(_)
             | CollectionMetaOperations::DeleteCollection(_)
             | CollectionMetaOperations::ChangeAliases(_)
             | CollectionMetaOperations::Resharding(_, _)

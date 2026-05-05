@@ -75,6 +75,13 @@ impl TableOfContent {
                 log::info!("Updating collection {}", operation.collection_name);
                 self.update_collection(operation).await
             }
+            CollectionMetaOperations::ApplyCryptoMigration(operation) => {
+                log::info!(
+                    "Applying crypto migration plan to collection {}",
+                    operation.collection_name
+                );
+                self.apply_crypto_migration_plan(operation).await
+            }
             CollectionMetaOperations::DeleteCollection(operation) => {
                 log::info!("Deleting collection {}", operation.0);
                 self.delete_collection(&operation.0).await
@@ -193,6 +200,21 @@ impl TableOfContent {
         if recreate_optimizers {
             collection.recreate_optimizers_blocking().await?;
         }
+        Ok(true)
+    }
+
+    async fn apply_crypto_migration_plan(
+        &self,
+        operation: ApplyCryptoMigrationPlan,
+    ) -> Result<bool, StorageError> {
+        let collection = self
+            .get_collection_unchecked(&operation.collection_name)
+            .await?;
+
+        collection
+            .apply_crypto_migration_plan(&operation.plan)
+            .await?;
+
         Ok(true)
     }
 

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use collection::config::{
     CkksCollectionConfig, CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams,
-    ShardingMethod,
+    CryptoMigrationPlan, ShardingMethod,
 };
 use collection::operations::config_diff::{
     CollectionParamsDiff, HnswConfigDiff, OptimizersConfigDiff, QuantizationConfigDiff,
@@ -338,6 +338,13 @@ impl UpdateCollectionOperation {
     }
 }
 
+#[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq, Hash, Clone)]
+#[serde(rename_all = "snake_case")]
+pub struct ApplyCryptoMigrationPlan {
+    pub collection_name: String,
+    pub plan: CryptoMigrationPlan,
+}
+
 /// Operation for performing changes of collection aliases.
 /// Alias changes are atomic, meaning that no collection modifications can happen between
 /// alias operations.
@@ -437,6 +444,7 @@ pub struct DropPayloadIndex {
 pub enum CollectionMetaOperations {
     CreateCollection(CreateCollectionOperation),
     UpdateCollection(UpdateCollectionOperation),
+    ApplyCryptoMigration(ApplyCryptoMigrationPlan),
     DeleteCollection(DeleteCollectionOperation),
     ChangeAliases(ChangeAliasesOperation),
     Resharding(CollectionId, ReshardingOperation),

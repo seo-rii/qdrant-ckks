@@ -172,6 +172,7 @@ impl Dispatcher {
 
                 // No need to sync nodes for other operations
                 CollectionMetaOperations::UpdateCollection(_)
+                | CollectionMetaOperations::ApplyCryptoMigration(_)
                 | CollectionMetaOperations::DeleteCollection(_)
                 | CollectionMetaOperations::TransferShard(_, _)
                 | CollectionMetaOperations::SetShardReplicaState(_)

@@ -10,6 +10,7 @@ use shard::count::CountRequestInternal;
 use shard::operations::optimization::{OptimizationsRequestOptions, OptimizationsResponse};
 
 use super::Collection;
+use crate::config::CryptoMigrationPlan;
 use crate::operations::config_diff::*;
 use crate::operations::shard_selector_internal::ShardSelectorInternal;
 use crate::operations::types::*;
@@ -48,6 +49,33 @@ impl Collection {
             config.params = config.params.update(&params_diff);
         }
         self.collection_config.read().await.save(&self.path)?;
+        Ok(())
+    }
+
+    /// Applies an admin-validated crypto migration state transition.
+    ///
+    /// Regular collection params diff updates must not mutate encryption
+    /// config. This is the narrow path used by the crypto migration control
+    /// plane to advance `migration_state`/epoch after plan validation.
+    pub async fn apply_crypto_migration_plan(
+        &self,
+        plan: &CryptoMigrationPlan,
+    ) -> CollectionResult<()> {
+        let mut config = self.collection_config.write().await;
+        let Some(current_encryption) = config.params.encryption.as_ref() else {
+            return Err(CollectionError::bad_input(
+                "crypto migration requires generic collection encryption config",
+            ));
+        };
+        let next_encryption = plan.apply_to_config(current_encryption).map_err(|err| {
+            CollectionError::bad_input(format!("invalid crypto migration plan: {err:?}"))
+        })?;
+
+        if !plan.dry_run {
+            config.params.encryption = Some(next_encryption);
+            config.save(&self.path)?;
+        }
+
         Ok(())
     }
 

@@ -46,6 +46,7 @@ impl AuditableOperation for CollectionMetaOperations {
         match self {
             CollectionMetaOperations::CreateCollection(_) => "create_collection",
             CollectionMetaOperations::UpdateCollection(_) => "update_collection",
+            CollectionMetaOperations::ApplyCryptoMigration(_) => "apply_crypto_migration",
             CollectionMetaOperations::DeleteCollection(_) => "delete_collection",
             CollectionMetaOperations::ChangeAliases(_) => "change_aliases",
             CollectionMetaOperations::Resharding(_, _) => "resharding",
