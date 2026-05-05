@@ -942,7 +942,9 @@ fn payload_outer_metadata_tampering_fails_authentication() {
         .insert("material_fingerprint".to_string(), json!(""));
     assert_eq!(
         encryptor.decrypt_selected_fields("point-1", &mut payload, &policy),
-        Err(PayloadEncryptionError::Crypto(EncryptionError::OpenFailed)),
+        Err(PayloadEncryptionError::Crypto(
+            EncryptionError::InvalidMaterialFingerprintId,
+        )),
     );
 }
 

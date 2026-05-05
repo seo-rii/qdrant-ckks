@@ -1367,7 +1367,9 @@ fn vector_header_tampering_fails_authentication() {
 
     assert!(matches!(
         encryptor.open("docs", "point-1", &public_material(), &encrypted),
-        Err(CkksError::Envelope(EncryptionError::OpenFailed)),
+        Err(CkksError::Envelope(
+            EncryptionError::InvalidMaterialFingerprintId
+        )),
     ));
 }
 

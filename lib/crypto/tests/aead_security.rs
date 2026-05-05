@@ -290,7 +290,7 @@ fn stripping_material_fingerprint_breaks_authentication() {
 
     assert_eq!(
         cipher.decrypt(&envelope, payload_context("42")),
-        Err(EncryptionError::OpenFailed),
+        Err(EncryptionError::InvalidMaterialFingerprintId),
     );
 }
 

@@ -268,9 +268,7 @@ pub(crate) fn validate_encrypted_envelope_metadata(
         ));
     }
     validate_key_id(&envelope.key_id)?;
-    if !envelope.material_fingerprint.is_empty() {
-        validate_material_fingerprint_id(&envelope.material_fingerprint)?;
-    }
+    validate_material_fingerprint_id(&envelope.material_fingerprint)?;
     match (!envelope.rk_id.is_empty(), envelope.rk_epoch) {
         (true, Some(_)) => validate_resource_key_id(&envelope.rk_id)?,
         (true, None) | (false, Some(_)) => {
@@ -522,9 +520,7 @@ impl AeadCipher {
         if self.key_id != envelope.key_id {
             return Ok(false);
         }
-        if !envelope.material_fingerprint.is_empty()
-            && self.material_fingerprint != envelope.material_fingerprint
-        {
+        if self.material_fingerprint != envelope.material_fingerprint {
             return Ok(false);
         }
         if !self.rk_id.is_empty() && (envelope.rk_id.is_empty() || envelope.rk_epoch.is_none()) {
@@ -617,9 +613,7 @@ impl AeadCipher {
         if envelope.key_id != self.key_id {
             return Err(EncryptionError::KeyMismatch);
         }
-        if !envelope.material_fingerprint.is_empty()
-            && envelope.material_fingerprint != self.material_fingerprint
-        {
+        if envelope.material_fingerprint != self.material_fingerprint {
             return Err(EncryptionError::MaterialFingerprintMismatch);
         }
         if !self.rk_id.is_empty() && (envelope.rk_id.is_empty() || envelope.rk_epoch.is_none()) {
@@ -734,68 +728,19 @@ impl AeadKeyring {
     ) -> Result<Vec<u8>, EncryptionError> {
         validate_encrypted_envelope_metadata(envelope)?;
 
-        if !envelope.material_fingerprint.is_empty() {
-            if self.active.matches_envelope_metadata(envelope)? {
-                return self
-                    .active
-                    .decrypt_with_aad_suffix(envelope, context, aad_suffix);
-            }
-
-            for retired in &self.retired {
-                if retired.matches_envelope_metadata(envelope)? {
-                    return retired.decrypt_with_aad_suffix(envelope, context, aad_suffix);
-                }
-            }
-
-            return Err(EncryptionError::KeyMismatch);
-        }
-
-        let mut found_key_id = false;
-        let mut metadata_mismatch = false;
-        let mut open_failed = false;
-
-        if self.active.key_id == envelope.key_id {
-            found_key_id = true;
-            if !self.active.matches_envelope_metadata(envelope)? {
-                metadata_mismatch = true;
-            } else {
-                match self
-                    .active
-                    .decrypt_with_aad_suffix(envelope, context, aad_suffix)
-                {
-                    Ok(plaintext) => return Ok(plaintext),
-                    Err(EncryptionError::OpenFailed) => open_failed = true,
-                    Err(error) => return Err(error),
-                }
-            }
+        if self.active.matches_envelope_metadata(envelope)? {
+            return self
+                .active
+                .decrypt_with_aad_suffix(envelope, context, aad_suffix);
         }
 
         for retired in &self.retired {
-            if retired.key_id != envelope.key_id {
-                continue;
-            }
-
-            found_key_id = true;
-            if !retired.matches_envelope_metadata(envelope)? {
-                metadata_mismatch = true;
-                continue;
-            }
-            match retired.decrypt_with_aad_suffix(envelope, context, aad_suffix) {
-                Ok(plaintext) => return Ok(plaintext),
-                Err(EncryptionError::OpenFailed) => open_failed = true,
-                Err(error) => return Err(error),
+            if retired.matches_envelope_metadata(envelope)? {
+                return retired.decrypt_with_aad_suffix(envelope, context, aad_suffix);
             }
         }
 
-        if open_failed {
-            Err(EncryptionError::OpenFailed)
-        } else if metadata_mismatch {
-            Err(EncryptionError::KeyMismatch)
-        } else if found_key_id {
-            Err(EncryptionError::MaterialFingerprintMismatch)
-        } else {
-            Err(EncryptionError::KeyMismatch)
-        }
+        Err(EncryptionError::KeyMismatch)
     }
 }
 
