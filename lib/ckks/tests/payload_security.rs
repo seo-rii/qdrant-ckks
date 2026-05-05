@@ -181,6 +181,121 @@ fn client_payload_envelope_validates_expected_aad_and_key_policy() {
 }
 
 #[test]
+fn payload_envelopes_reject_unknown_metadata_fields() {
+    let context = ClientPayloadValidationContext {
+        collection_id: "docs",
+        point_id: "point-1",
+        field_path: "body",
+        expected_key_id: Some("tenant-a/client-rk-2026-04"),
+        expected_rk_id: Some("tenant-a/client-rk-2026-04"),
+        min_rk_epoch: Some(3),
+        max_rk_epoch: Some(3),
+        key_id_required: true,
+        signature_required: false,
+        signature_verification: None,
+    };
+
+    let mut extra_client_header = client_envelope("point-1", "body");
+    extra_client_header
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("unexpected_header".to_string(), json!(true));
+    assert_eq!(
+        validate_client_payload_value(&extra_client_header, context),
+        Err(PayloadEncryptionError::MalformedEnvelope(
+            "body".to_string()
+        )),
+    );
+
+    let mut extra_client_aad = client_envelope("point-1", "body");
+    extra_client_aad
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut("aad")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("unexpected_aad".to_string(), json!("not-signed"));
+    assert_eq!(
+        validate_client_payload_value(&extra_client_aad, context),
+        Err(PayloadEncryptionError::MalformedEnvelope(
+            "body".to_string()
+        )),
+    );
+
+    let mut extra_client_signature = client_envelope("point-1", "body");
+    extra_client_signature
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert(
+            "signature".to_string(),
+            json!({
+                "alg": "ed25519",
+                "key_id": "tenant-a/client-signing-v1",
+                "sig": BASE64URL_NOPAD.encode(&[0u8; 64]),
+                "unexpected_signature": "not-signed"
+            }),
+        );
+    assert_eq!(
+        validate_client_payload_value(&extra_client_signature, context),
+        Err(PayloadEncryptionError::MalformedEnvelope(
+            "body".to_string()
+        )),
+    );
+
+    let encryptor = encryptor();
+    let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
+    let mut server_payload = object(json!({ "body": "secret" }));
+    encryptor
+        .encrypt_selected_fields("point-1", &mut server_payload, &policy)
+        .unwrap();
+    let mut server_outer_metadata = server_payload.clone();
+    server_outer_metadata
+        .get_mut("body")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut(ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("unexpected_header".to_string(), json!(true));
+    assert_eq!(
+        encryptor.decrypt_selected_fields("point-1", &mut server_outer_metadata, &policy),
+        Err(PayloadEncryptionError::MalformedEnvelope(
+            "body".to_string()
+        )),
+    );
+
+    server_payload
+        .get_mut("body")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut(ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut("envelope")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("unexpected_envelope".to_string(), json!(true));
+    assert_eq!(
+        encryptor.decrypt_selected_fields("point-1", &mut server_payload, &policy),
+        Err(PayloadEncryptionError::MalformedEnvelope(
+            "body".to_string()
+        )),
+    );
+}
+
+#[test]
 fn client_payload_envelope_rejects_aad_and_key_mismatch() {
     let envelope = client_envelope("point-1", "body");
     assert_eq!(

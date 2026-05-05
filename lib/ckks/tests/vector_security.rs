@@ -8,8 +8,8 @@ use data_encoding::BASE64URL_NOPAD;
 use qdrant_ckks::{
     AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CkksBatchEncryptionInput,
     CkksEncryptionInput, CkksError, CkksParameters, CkksPublicMaterial, CkksVectorBackend,
-    CkksVectorBatchItem, CkksVectorEncryptor, CommandOpenFheBackend, EncryptionContext,
-    EncryptionError, SecretKey,
+    CkksVectorBatchItem, CkksVectorEncryptor, CommandOpenFheBackend, EncryptedCkksVector,
+    EncryptionContext, EncryptionError, SecretKey,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -164,6 +164,30 @@ fn ckks_vector_envelope_does_not_serialize_plain_embedding() {
     let debug = format!("{encrypted:?}");
     assert!(debug.contains("EncryptedEnvelope"));
     assert!(!debug.contains(&encrypted.envelope.ciphertext));
+}
+
+#[test]
+fn ckks_vector_envelope_rejects_unknown_metadata_fields() {
+    let material = public_material();
+    let encrypted = encryptor()
+        .encrypt("docs", "point-1", &material, &[0.125, -42.5, 9.75])
+        .unwrap();
+
+    let mut top_level = serde_json::to_value(&encrypted).unwrap();
+    top_level
+        .as_object_mut()
+        .unwrap()
+        .insert("unexpected_header".to_string(), json!(true));
+    assert!(serde_json::from_value::<EncryptedCkksVector>(top_level).is_err());
+
+    let mut envelope_header = serde_json::to_value(&encrypted).unwrap();
+    envelope_header
+        .get_mut("envelope")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("unexpected_envelope".to_string(), json!(true));
+    assert!(serde_json::from_value::<EncryptedCkksVector>(envelope_header).is_err());
 }
 
 #[test]

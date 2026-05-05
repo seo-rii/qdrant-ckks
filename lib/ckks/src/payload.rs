@@ -850,6 +850,7 @@ pub fn client_payload_nonce_replay_key(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct StoredPayloadEnvelope {
     kind: String,
     #[serde(default = "default_crypto_schema_version")]
@@ -860,6 +861,7 @@ struct StoredPayloadEnvelope {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ClientPayloadEnvelope {
     version: u16,
     kind: String,
@@ -880,6 +882,7 @@ struct ClientPayloadEnvelope {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ClientPayloadAad {
     collection_id: String,
     point_id: String,
@@ -889,6 +892,7 @@ struct ClientPayloadAad {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ClientPayloadSignature {
     alg: String,
     key_id: String,

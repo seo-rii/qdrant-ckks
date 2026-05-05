@@ -215,6 +215,7 @@ pub trait CkksVectorBackend {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
 pub struct EncryptedCkksVector {
     pub version: u8,
     pub scheme: String,
@@ -233,6 +234,7 @@ impl Debug for EncryptedCkksVector {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
 pub struct VerifiedCkksVector {
     #[serde(default = "default_crypto_schema_version")]
     pub crypto_schema_version: u16,

@@ -226,6 +226,7 @@ struct EnvelopeHeader<'a> {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EncryptedEnvelope {
     pub version: u8,
     pub algorithm: String,
@@ -302,6 +303,7 @@ pub struct AeadCipher {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WrappedKeyBlob {
     pub version: u8,
     pub algorithm: String,
