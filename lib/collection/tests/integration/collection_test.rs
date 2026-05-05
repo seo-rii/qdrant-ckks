@@ -1975,6 +1975,12 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
                 )),
             }]),
         ));
+    let empty_verified_provenance =
+        CollectionUpdateProvenance::runtime_verified_client_envelopes(Vec::new());
+    assert_eq!(
+        empty_verified_provenance,
+        CollectionUpdateProvenance::ClientPlaintext,
+    );
     let err = collection
         .update_from_client(
             empty_proof_marker,
@@ -1983,7 +1989,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::runtime_verified_client_envelopes(Vec::new()),
+            empty_verified_provenance,
         )
         .await
         .unwrap_err();

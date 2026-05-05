@@ -139,17 +139,23 @@ impl CollectionUpdateProvenance {
     pub fn runtime_verified_client_envelopes(
         verified_envelope_keys: impl IntoIterator<Item = ClientPayloadVerifiedEnvelopeKey>,
     ) -> Self {
-        Self::RuntimeVerifiedClientEnvelopes(RuntimeVerifiedClientEnvelopes::from_verified(
-            verified_envelope_keys,
-        ))
+        let verified = RuntimeVerifiedClientEnvelopes::from_verified(verified_envelope_keys);
+        if verified.verified_envelope_keys.is_empty() {
+            return Self::ClientPlaintext;
+        }
+        Self::RuntimeVerifiedClientEnvelopes(verified)
     }
 
     pub fn runtime_encrypted_payloads_and_verified_client_envelopes(
         verified_envelope_keys: impl IntoIterator<Item = ClientPayloadVerifiedEnvelopeKey>,
     ) -> Self {
+        let verified = RuntimeVerifiedClientEnvelopes::from_verified(verified_envelope_keys);
+        if verified.verified_envelope_keys.is_empty() {
+            return Self::runtime_encrypted_payloads();
+        }
         Self::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(
             RuntimeEncryptedPayloads::from_runtime_transform(),
-            RuntimeVerifiedClientEnvelopes::from_verified(verified_envelope_keys),
+            verified,
         )
     }
 
