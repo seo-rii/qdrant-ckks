@@ -2339,9 +2339,11 @@ mod tests {
     };
     use ring::rand::SystemRandom;
     use ring::signature::{Ed25519KeyPair, KeyPair};
-    use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
+    use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, NamedQuery, VectorInternal};
     use segment::types::{Condition, Distance, FieldCondition, WithPayloadInterface, WithVector};
     use serde_json::json;
+    use shard::query::query_enum::QueryEnum;
+    use shard::search::CoreSearchRequest;
     use storage::content_manager::collection_meta_ops::{
         CollectionMetaOperations, CreateCollectionOperation,
     };
@@ -2976,6 +2978,80 @@ esac
             assert_eq!(search_result.len(), 1);
             assert_eq!(search_result[0].id, 1.into());
             assert_eq!(search_result[0].score, 9.0);
+
+            let err = crate::common::query::do_core_search_points(
+                &toc,
+                "vector_docs",
+                SearchRequestInternal {
+                    vector: vec![0.0, 0.0].into(),
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(true)),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    score_threshold: None,
+                }
+                .into(),
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cannot return encrypted vector")
+            ));
+
+            let encrypted_search = SearchRequestInternal {
+                vector: vec![0.0, 0.0].into(),
+                with_payload: Some(WithPayloadInterface::Bool(false)),
+                with_vector: Some(WithVector::Bool(false)),
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: None,
+                score_threshold: None,
+            }
+            .into();
+            let plaintext_search = CoreSearchRequest {
+                query: QueryEnum::Nearest(NamedQuery::new(
+                    VectorInternal::Dense(vec![0.0, 0.0]),
+                    "plain",
+                )),
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: 0,
+                with_payload: Some(WithPayloadInterface::Bool(false)),
+                with_vector: Some(WithVector::Bool(false)),
+                score_threshold: None,
+            };
+            let err = crate::common::query::do_search_batch_points(
+                &toc,
+                "vector_docs",
+                vec![
+                    (encrypted_search, ShardSelectorInternal::All),
+                    (plaintext_search, ShardSelectorInternal::All),
+                ],
+                None,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cannot mix CKKS encrypted vector search")
+            ));
 
             let err = do_upsert_points(
                 UncheckedTocProvider::new_unchecked(&toc),
