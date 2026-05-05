@@ -1283,6 +1283,17 @@ fn validate_material_fd_source(material_name: &str, fd: i32) -> Result<(), Crypt
                 reason: "fd is not open".to_string(),
             });
         }
+        if result & nix::libc::FD_CLOEXEC == 0 {
+            let set_result =
+                unsafe { nix::libc::fcntl(fd, nix::libc::F_SETFD, result | nix::libc::FD_CLOEXEC) };
+            if set_result < 0 {
+                return Err(CryptoSetupError::InvalidMaterialFileSource {
+                    material: material_name.to_string(),
+                    path: format!("fd:{fd}"),
+                    reason: "fd close-on-exec flag could not be set".to_string(),
+                });
+            }
+        }
     }
 
     #[cfg(not(unix))]
@@ -4342,6 +4353,57 @@ mod tests {
             payload.get("body").and_then(Value::as_str),
             Some("fd-backed secret"),
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_material_fd_source_sets_close_on_exec() {
+        use std::ffi::CString;
+        use std::os::fd::{AsRawFd, FromRawFd};
+        use std::os::unix::ffi::OsStrExt;
+
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-material-fd-cloexec-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let key_path = dir.path().join("payload.key");
+        std::fs::write(&key_path, BASE64URL_NOPAD.encode(&[13u8; 32])).unwrap();
+        let path = CString::new(key_path.as_os_str().as_bytes()).unwrap();
+        let raw_fd = unsafe { nix::libc::open(path.as_ptr(), nix::libc::O_RDONLY) };
+        assert!(raw_fd >= 0);
+        let file = unsafe { std::fs::File::from_raw_fd(raw_fd) };
+        assert_eq!(
+            unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_GETFD) }
+                & nix::libc::FD_CLOEXEC,
+            0,
+        );
+
+        let fd_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("fd".to_string()),
+            fd: Some(file.as_raw_fd()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        assert_eq!(
+            validate_material("tenant-a/payload-v1", &fd_material, false),
+            Ok(())
+        );
+        assert_ne!(
+            unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_GETFD) }
+                & nix::libc::FD_CLOEXEC,
+            0,
+        );
+        let decoded = decode_direct_material_key("tenant-a/payload-v1", &fd_material).unwrap();
+        PayloadTextEncryptor::new_from_resource_key_with_metadata(
+            "docs-crypto-id",
+            "tenant-a:payload",
+            &decoded,
+            "tenant-a/payload@v1",
+            "tenant-a/payload-rk",
+            3,
+        )
+        .unwrap();
     }
 
     #[cfg(unix)]
