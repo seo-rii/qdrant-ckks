@@ -692,6 +692,27 @@ mod ckks_tests {
         };
         assert!(verified_but_incomplete.validate_admin_plan().is_err());
 
+        let verified_without_rewrite_completion = CryptoMigrationPlan {
+            from: Rotating,
+            to: Active,
+            target_epoch: 4,
+            active_rk_id: Some("rk/docs/4".to_string()),
+            retired_rk_id: Some("rk/docs/3".to_string()),
+            dry_run: false,
+            checkpoints: vec![CryptoMigrationCheckpoint {
+                shard_id: 0,
+                total_points: 10,
+                processed_points: 10,
+                rewritten_points: 9,
+                status: CryptoMigrationCheckpointStatus::Verified,
+            }],
+        };
+        assert!(
+            verified_without_rewrite_completion
+                .validate_admin_plan()
+                .is_err()
+        );
+
         let invalid_counts = CryptoMigrationPlan {
             from: Active,
             to: Rotating,
@@ -1304,6 +1325,7 @@ impl CryptoMigrationPlan {
                 || self.checkpoints.iter().any(|checkpoint| {
                     checkpoint.status != CryptoMigrationCheckpointStatus::Verified
                         || checkpoint.processed_points != checkpoint.total_points
+                        || checkpoint.rewritten_points != checkpoint.total_points
                 })
             {
                 return Err(ValidationError::new(
