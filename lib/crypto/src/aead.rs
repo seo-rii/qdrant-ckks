@@ -16,7 +16,7 @@ const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
 const MAX_KEY_ID_LEN: usize = 128;
-const HKDF_SALT: &[u8] = b"qdrant-ckks-aead-master-key-v1";
+const HKDF_SALT: &[u8] = b"qdrant-crypto-aead-master-key-v1";
 
 pub const PAYLOAD_TEXT_KEY_DOMAIN: &[u8] = b"qdrant/payload-text/v1";
 pub const CKKS_VECTOR_KEY_DOMAIN: &[u8] = b"qdrant/vector-envelope/v1";
@@ -178,7 +178,7 @@ impl<'a> EncryptionContext<'a> {
             "v2"
         };
         let values = [
-            "qdrant-ckks",
+            "qdrant-crypto",
             aad_version,
             self.purpose.as_str(),
             self.collection,
@@ -794,7 +794,7 @@ impl AeadKeyring {
 impl SecretKey {
     fn material_fingerprint(&self) -> String {
         let mut hasher = Sha256::new();
-        hasher.update(b"qdrant-ckks-aead-material-fingerprint-v1");
+        hasher.update(b"qdrant-crypto-aead-material-fingerprint-v1");
         hasher.update(self.as_bytes());
         BASE64URL_NOPAD.encode(&hasher.finalize())
     }

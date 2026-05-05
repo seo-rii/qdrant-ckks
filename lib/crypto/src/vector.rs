@@ -150,7 +150,7 @@ impl CkksPublicMaterial {
 
     pub fn digest_for(&self, parameters: &CkksParameters) -> String {
         let mut hasher = Sha256::new();
-        hasher.update(b"qdrant-ckks-openfhe-context-v1");
+        hasher.update(b"qdrant-crypto-openfhe-context-v1");
         hasher.update(parameters.poly_modulus_degree.to_be_bytes());
         hasher.update(parameters.multiplicative_depth.to_be_bytes());
         hasher.update(parameters.scaling_mod_size.to_be_bytes());

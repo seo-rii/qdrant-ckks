@@ -1671,7 +1671,7 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
                 vector: VectorStructPersisted::from(vec![0.0, 0.0, 1.0, 0.0]),
                 payload: Some(
                     serde_json::from_str(
-                        r#"{"document":{"body":{"$qdrant_ckks":{"kind":"payload_text"}}}}"#,
+                        r#"{"document":{"body":{"$qdrant_crypto":{"kind":"payload_text"}}}}"#,
                     )
                     .unwrap(),
                 ),
@@ -2663,7 +2663,7 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     let collection_path = collection_dir.path().to_path_buf();
     let collection =
         encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
-    let sentinel = "qdrant-ckks-plaintext-sentinel-9f74dcb5";
+    let sentinel = "qdrant-crypto-plaintext-sentinel-9f74dcb5";
     let mut encrypted_payload = Payload(
         serde_json::json!({ "document": { "body": sentinel } })
             .as_object()

@@ -27,11 +27,11 @@ implementation.
 
 | API/path | Server-side payload AEAD | Client-side payload envelope | CKKS vector envelope |
 | --- | --- | --- | --- |
-| `upsert` payload | Supported for selected JSON string fields. Values are encrypted before storage and client-supplied `$qdrant_ckks` markers are rejected. | Supported for selected fields that already contain a valid `$qdrant_client_aead` marker. Qdrant validates schema, AAD metadata, key policy, and a mandatory Ed25519 signature, but does not decrypt. | Unsupported. CKKS vector selectors are rejected until ciphertext storage/search semantics are implemented. |
+| `upsert` payload | Supported for selected JSON string fields. Values are encrypted before storage and client-supplied `$qdrant_crypto` markers are rejected. | Supported for selected fields that already contain a valid `$qdrant_client_aead` marker. Qdrant validates schema, AAD metadata, key policy, and a mandatory Ed25519 signature, but does not decrypt. | Unsupported. CKKS vector selectors are rejected until ciphertext storage/search semantics are implemented. |
 | `set_payload` / `overwrite_payload` | Supported for explicit point ids when Qdrant can bind AAD to each point id. Multi-point updates are fanned out into one encrypted operation per point; filter-based and key-path encrypted-field updates fail closed. | Same explicit-point-id limitation as server-side payload writes. Clients must provide one envelope per point/field; filter-based and key-path encrypted-field updates fail closed. | Not applicable. |
 | `update_vectors` | Not applicable. | Not applicable. | Unsupported. Plaintext writes to encrypted vector names fail closed. |
 | Payload indexes, filters, facets, ordering, grouping, and formulas | Plaintext indexes, read/update filters, facet keys, order-by keys, group-by keys, and formula payload references over encrypted paths, parent paths, or child paths are rejected. Searching, mutating by filter, ordering, grouping, or aggregating encrypted content requires a future blind-index provider. | Same policy. The opaque ciphertext field is not searchable, orderable, groupable, facetable, or usable in mutation filters as plaintext. | Payload filtering/faceting over encrypted metadata is unsupported. |
-| `retrieve`, `scroll`, and `search` result payloads | Stored `$qdrant_ckks` markers are returned raw. There is no `decrypt_payload` option or RBAC capability yet. | Stored `$qdrant_client_aead` markers are returned raw for SDK/client decryption. | Search over CKKS ciphertext vectors is unsupported; separate plaintext or surrogate vectors must be modeled explicitly outside this branch. |
+| `retrieve`, `scroll`, and `search` result payloads | Stored `$qdrant_crypto` markers are returned raw. There is no `decrypt_payload` option or RBAC capability yet. | Stored `$qdrant_client_aead` markers are returned raw for SDK/client decryption. | Search over CKKS ciphertext vectors is unsupported; separate plaintext or surrogate vectors must be modeled explicitly outside this branch. |
 | Snapshots | Snapshot archives are expected to contain envelopes only; payload sentinel snapshot leakage is covered by integration tests. Collection, shard, and CLI startup snapshot recover paths preflight runtime crypto settings, including missing material, wrong wrapped-RK key, and provider key-id mismatch cases. | Same stored-value behavior as server-side payloads. Qdrant cannot validate client AEAD tags without client keys. | Restore requires matching OpenFHE context/runtime material; missing runtime instance/material/backend preflight is wired, while wrong-context restore coverage is still missing. |
 | Shard transfer / replication | Encrypted collection data-movement operations (`move_shard`, `replicate_shard`, `replicate_points`, `restart_transfer`, and `start_resharding`) fail closed until cluster crypto runtime parity enforcement is wired. Automatic dead-replica recovery also skips encrypted shard transfer. | Same policy; client-envelope verifier policy must match across nodes before encrypted transfers are allowed. | Same policy; matching OpenFHE context and metadata AEAD material must be enforced before encrypted transfers are allowed. |
 | Metadata encryption | Not implemented. `metadata_keys` selectors are reserved and rejected. | Not implemented. | Not implemented. |
@@ -42,7 +42,7 @@ Selected JSON string fields are replaced with a single marker object:
 
 ```json
 {
-  "$qdrant_ckks": {
+  "$qdrant_crypto": {
     "kind": "payload_text",
     "envelope": {
       "version": 1,
@@ -66,7 +66,7 @@ Payload selectors are object dot paths only. Array syntax, wildcards, and
 numeric path components such as `items[].name`, `items.*.name`, or
 `items.0.name` are rejected instead of being interpreted as array traversal.
 Selector components that collide with reserved envelope markers
-`$qdrant_ckks`, `$qdrant_client_aead`, or `$qdrant_ciphertext` are rejected.
+`$qdrant_crypto`, `$qdrant_client_aead`, or `$qdrant_ciphertext` are rejected.
 
 Runtime crypto instances currently accept only these provider IDs:
 `payload/aes-256-gcm@v1`, `payload/client-aead@v1`, and
@@ -210,7 +210,7 @@ clients must build a new envelope with a new nonce before retrying.
 ```
 
 Client envelopes are not server envelopes. Public writes to a
-`payload/aes-256-gcm@v1` rule reject client-supplied `$qdrant_ckks` markers, and
+`payload/aes-256-gcm@v1` rule reject client-supplied `$qdrant_crypto` markers, and
 `payload/client-aead@v1` rules require `$qdrant_client_aead` markers. Because
 Qdrant does not have the client data key in this mode, it cannot verify the
 AES-GCM tag or decrypt responses; clients or SDKs must decrypt returned
@@ -431,7 +431,7 @@ enabled for local development fixtures. Decrypt paths can be configured with
 active plus retired AEAD keys; new writes always use the active key, and
 envelopes record the active key id plus material fingerprint.
 Server-side public writes reject fields that already contain a
-`$qdrant_ckks` marker so clients cannot smuggle stale or wrong-key envelopes.
+`$qdrant_crypto` marker so clients cannot smuggle stale or wrong-key envelopes.
 If the matching runtime crypto settings or key material are absent, selected
 plaintext fields are not stored as a fallback; the collection write guard rejects
 the operation instead.

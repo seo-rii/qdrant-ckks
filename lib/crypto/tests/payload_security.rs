@@ -1082,7 +1082,7 @@ fn malformed_marker_does_not_bypass_encryption() {
     let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
     let mut payload = object(json!({
         "body": {
-            "$qdrant_ckks": {
+            "$qdrant_crypto": {
                 "kind": "payload_text"
             },
             "plaintext": "secret body"
@@ -1165,7 +1165,7 @@ fn malformed_or_plaintext_values_do_not_decrypt() {
 
     let mut malformed_payload = object(json!({
         "body": {
-            "$qdrant_ckks": {
+            "$qdrant_crypto": {
                 "kind": "payload_text"
             }
         }

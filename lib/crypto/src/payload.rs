@@ -11,7 +11,7 @@ use crate::aead::{
     validate_resource_key_id,
 };
 
-pub const ENCRYPTED_PAYLOAD_MARKER: &str = "$qdrant_ckks";
+pub const ENCRYPTED_PAYLOAD_MARKER: &str = "$qdrant_crypto";
 pub const CLIENT_ENCRYPTED_PAYLOAD_MARKER: &str = "$qdrant_client_aead";
 const PAYLOAD_TEXT_KIND: &str = "payload_text";
 const CLIENT_PAYLOAD_ALGORITHM: &str = "AES-256-GCM";

@@ -691,11 +691,11 @@ mod tests {
             }),
         );
 
-        config.openfhe_bridge_path = Some("/definitely/not/a/qdrant-ckks-bridge".to_string());
+        config.openfhe_bridge_path = Some("/definitely/not/a/qdrant-crypto-bridge".to_string());
         assert_eq!(
             validate_runtime_config(&config),
             Err(CkksSetupError::InvalidOpenFheBridgePath {
-                path: "/definitely/not/a/qdrant-ckks-bridge".to_string(),
+                path: "/definitely/not/a/qdrant-crypto-bridge".to_string(),
             }),
         );
 
