@@ -1425,21 +1425,21 @@ pub enum CryptoMigrationCheckpointStatus {
 #[validate(schema(function = "validate_ckks_collection_config"))]
 #[serde(rename_all = "snake_case")]
 pub struct CkksCollectionConfig {
-    /// Enable encryption for this collection.
+    /// Legacy collection encryption switch retained only to reject old configs explicitly.
     #[serde(default)]
     #[anonymize(false)]
     pub enabled: bool,
-    /// Public key id recorded in encryption envelopes. Key material is resolved from runtime config.
+    /// Legacy key id retained only for reject-only deserialization.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[validate(custom(function = "validate_ckks_key_id"))]
     #[anonymize(false)]
     pub key_id: Option<String>,
-    /// Dot-separated payload string fields encrypted before storage.
+    /// Legacy payload selector retained only for reject-only deserialization.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[validate(custom(function = "validate_ckks_payload_fields"))]
     #[anonymize(true)]
     pub payload_text_fields: Vec<String>,
-    /// Named dense vectors that should be encrypted through the OpenFHE CKKS bridge.
+    /// Legacy vector selector retained only for reject-only deserialization.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[anonymize(false)]
     pub vector_names: Vec<VectorNameBuf>,
@@ -1914,7 +1914,8 @@ pub struct CollectionParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[validate(nested)]
     pub encryption: Option<CollectionEncryptionConfig>,
-    /// Collection-local encryption settings. Secret key material is never stored here.
+    /// Legacy `params.ckks` is unsupported. This field remains only so old
+    /// collection configs are rejected explicitly instead of silently ignored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[validate(nested)]
     pub ckks: Option<CkksCollectionConfig>,

@@ -398,21 +398,21 @@ impl CryptoSettings {
 
 #[derive(Deserialize, Clone, Default, Validate)]
 pub struct CkksCollectionKeyConfig {
-    /// Runtime key id for one collection. If omitted, collection params or default key id are used.
+    /// Legacy runtime key id retained only so old `ckks` configs deserialize and fail validation.
     #[serde(default)]
     pub key_id: Option<String>,
-    /// Base64url-no-padding encoded 32-byte AES key for this collection.
+    /// Legacy base64url-no-padding encoded 32-byte direct RK.
     #[serde(default)]
     pub master_key_b64: Option<String>,
-    /// Preferred name for the direct 32-byte collection resource key.
+    /// Legacy direct 32-byte collection resource key spelling.
     ///
-    /// `master_key_b64` is kept as a legacy alias, but it is not an MK/KEK.
+    /// Any configured legacy `ckks` runtime field is rejected by startup validation.
     #[serde(default)]
     pub resource_key_b64: Option<String>,
-    /// External OpenFHE bridge executable for this collection.
+    /// Legacy OpenFHE bridge executable path retained for reject-only deserialization.
     #[serde(default)]
     pub openfhe_bridge_path: Option<String>,
-    /// Optional base64url-no-padding SHA-256 digest for this collection's OpenFHE bridge executable.
+    /// Legacy bridge SHA-256 pin retained for reject-only deserialization.
     #[serde(default)]
     pub openfhe_bridge_sha256_b64: Option<String>,
 }
@@ -453,30 +453,30 @@ impl CkksCollectionKeyConfig {
 
 #[derive(Deserialize, Clone, Validate)]
 pub struct CkksConfig {
-    /// Global CKKS master switch. Collections still need `params.ckks.enabled: true`.
+    /// Legacy CKKS runtime switch retained only to reject old config files.
     #[serde(default)]
     pub enabled: bool,
-    /// Allow inline key material in runtime config. Disabled by default; enable only for local development.
+    /// Legacy inline-material flag retained only to reject old config files.
     #[serde(default = "default_allow_inline_key_material")]
     pub allow_inline_key_material: bool,
-    /// Default key id used when neither collection params nor collection runtime config set one.
+    /// Legacy default key id retained only to reject old config files.
     #[serde(default)]
     pub key_id: Option<String>,
-    /// Default base64url-no-padding encoded 32-byte AES key.
+    /// Legacy base64url-no-padding encoded 32-byte direct RK.
     #[serde(default)]
     pub master_key_b64: Option<String>,
-    /// Preferred name for the direct default resource key.
+    /// Legacy direct default resource key spelling.
     ///
-    /// `master_key_b64` is kept as a legacy alias, but it is not an MK/KEK.
+    /// Any configured legacy `ckks` runtime field is rejected by startup validation.
     #[serde(default)]
     pub resource_key_b64: Option<String>,
-    /// Default external OpenFHE bridge executable for CKKS vector encryption.
+    /// Legacy OpenFHE bridge executable path retained for reject-only deserialization.
     #[serde(default)]
     pub openfhe_bridge_path: Option<String>,
-    /// Optional base64url-no-padding SHA-256 digest for the default OpenFHE bridge executable.
+    /// Legacy bridge SHA-256 pin retained for reject-only deserialization.
     #[serde(default)]
     pub openfhe_bridge_sha256_b64: Option<String>,
-    /// Collection-specific key material. Prefer this over default key material.
+    /// Legacy collection-specific runtime settings retained only to reject old config files.
     #[serde(default)]
     #[validate(nested)]
     pub collections: HashMap<String, CkksCollectionKeyConfig>,
@@ -589,6 +589,8 @@ pub struct Settings {
     #[serde(default)]
     #[validate(nested)]
     pub crypto: CryptoSettings,
+    /// Legacy `ckks` runtime config is unsupported. The field remains only so
+    /// old config files are rejected explicitly instead of being silently ignored.
     #[serde(default)]
     #[validate(nested)]
     pub ckks: CkksConfig,
