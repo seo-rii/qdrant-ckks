@@ -173,12 +173,15 @@ request, including `update_batch`, and records validated nonces in a
 collection-local replay cache keyed by the collection's stable crypto identity
 and `(key_id, rk_id, rk_epoch, nonce)`. The cache is persisted under the
 collection directory and loaded on collection restart, so replay is caught
-across later requests and same-node reloads. A cluster-wide replay index and
-existing-data backfill are not implemented, so SDKs must still generate fresh
-96-bit CSPRNG nonces and regenerate envelopes on retry instead of replaying
-failed request bodies. Nonces are recorded before shard storage is attempted so
-the policy fails secure; if a write returns an error after envelope validation,
-clients must build a new envelope with a new nonce before retrying.
+across later requests and same-node reloads. On collection load, Qdrant also
+scans already stored `$qdrant_client_aead` envelope markers for configured
+client-payload paths and backfills missing replay-cache entries; stored duplicate
+nonces fail closed. A cluster-wide replay index is not implemented, so SDKs must
+still generate fresh 96-bit CSPRNG nonces and regenerate envelopes on retry
+instead of replaying failed request bodies. Nonces are recorded before shard
+storage is attempted so the policy fails secure; if a write returns an error
+after envelope validation, clients must build a new envelope with a new nonce
+before retrying.
 
 ```json
 {
@@ -516,14 +519,14 @@ row.
 
 | Path | Expected protected content | Current status | Required gate before production use |
 | --- | --- | --- | --- |
-| REST/gRPC ingress | Request payload and plaintext embeddings may exist in process memory until encryption completes. | Trusted Qdrant process boundary. | Avoid request/body logging for encrypted fields and embeddings. |
-| WAL | Selected payload strings and CKKS vector metadata should be stored only as envelopes after encryption. | Payload sentinel leakage scan covers the collection directory, including WAL files, for the marker-upsert path. Vector-pattern scans are still missing. | Add vector-pattern scans and cover public API encryption ingress. |
-| Segment files | Selected payload strings should appear as marker/envelope JSON; CKKS vector plaintext should not be stored by the CKKS envelope path. | Payload sentinel leakage scan covers persisted collection files after graceful stop. Optimizer temp-path and vector-pattern scans are still missing. | Add optimizer temp-path and vector-pattern leakage tests. |
+| REST/gRPC ingress | Request payload and plaintext embeddings may exist in process memory until encryption completes. | Trusted Qdrant process boundary. Slow-request log values and request hashes redact payloads, vectors, universal query vectors, and payload filter literals before serialization/hash calculation. | Keep request/body logging disabled or redacted for encrypted fields and embeddings. |
+| WAL | Selected payload strings and CKKS vector metadata should be stored only as envelopes after encryption. | Payload sentinel leakage scans cover public server-side/client-side payload ingress and collection directory files, including WAL files. Vector-pattern scans cover rejected encrypted-vector plaintext writes; CKKS vector storage remains unsupported. | Add optimizer temp-path coverage and broaden cluster storage scans. |
+| Segment files | Selected payload strings should appear as marker/envelope JSON; CKKS vector plaintext should not be stored by the CKKS envelope path. | Payload sentinel leakage scans cover persisted collection files after graceful stop. Optimizer temp-path scans are still missing. | Add optimizer temp-path leakage tests. |
 | Payload indexes | AEAD-encrypted fields are not searchable as plaintext. | Index creation over encrypted payload paths and parent/child overlaps is rejected. | Keep rejecting plaintext indexes until a blind index provider exists. |
 | HNSW graph and quantization | CKKS ciphertext vectors are not HNSW-searchable in this branch. | Unsupported. | Reject/avoid CKKS ciphertext vectors in HNSW, quantization, recommend, and discover flows. |
 | Snapshots | Snapshot archives should contain encrypted payload/vector envelopes and enough metadata to preflight required keys/context and stable collection identity. | Payload sentinel leakage scan now creates and scans a collection snapshot archive. Collection, shard, and CLI startup snapshot recover paths preflight runtime crypto settings for missing instance/material/backend, wrong wrapped-RK key, provider key-id mismatch, missing encrypted collection UUID, and UUID mismatch. Wrong CKKS context restore tests are still missing. | Add restore tests for wrong CKKS context and broaden restore coverage across cluster paths. |
 | Shard transfer and replication | Sender and receiver must have matching crypto runtime material and CKKS context. | App telemetry, peer metadata, and distributed telemetry expose a non-secret crypto runtime capability fingerprint. Encrypted collection data-movement operations validate involved peer metadata and fail closed on missing or mismatched fingerprints. Automatic dead-replica recovery skips source peers without matching parity metadata. `/readyz` does not mark the node ready for encrypted collections while peer metadata fingerprints are missing or mismatched. | Broaden distributed integration coverage and cluster-wide parity tests. |
-| Telemetry, logs, and audit | No plaintext payload bodies or embeddings should be emitted. | Bridge request bodies and stderr are not included in returned errors; broader logging scans are still missing. | Add telemetry/log smoke tests with sentinel values. |
+| Telemetry, logs, and audit | No plaintext payload bodies or embeddings should be emitted. | Bridge request bodies and stderr are not included in returned errors. Collection telemetry and slow-request log-value/request-hash smoke tests cover payload/vector/filter/query sentinels. | Broaden audit/log capture coverage around any new request logging surfaces. |
 
 ## CKKS vectors
 
@@ -586,7 +589,9 @@ therefore accepts only absolute bridge paths that resolve to executable regular
 files, rejects symlinks and group/world-writable binaries or parent directories
 on Unix, and requires the binary plus every parent directory to be owned by root
 or the Qdrant process user. Set `sha256_b64` in the generic backend to pin the
-expected bridge binary digest. Treat any bridge path change as privileged code
+expected bridge binary digest; generic runtime validation and checked backend
+construction both hash the bridge through a no-follow file descriptor on Unix.
+Treat any bridge path change as privileged code
 execution under the Qdrant service account. On Linux, the checked bridge spawn path also
 sets `no_new_privs` and `RLIMIT_CORE=0` so the plaintext-bearing bridge cannot
 gain extra privileges through setuid/file-capability execution and does not
