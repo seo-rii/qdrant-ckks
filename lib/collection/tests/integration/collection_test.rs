@@ -2714,6 +2714,117 @@ async fn client_encrypted_payload_nonce_replay_survives_collection_reload() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn client_encrypted_payload_nonce_replay_cache_backfills_from_stored_payloads() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection_path = collection_dir.path().to_path_buf();
+    let snapshot_path = collection_path.join("snapshots");
+    let collection =
+        encrypted_collection_fixture(&collection_path, 1, client_payload_encryption_config()).await;
+    let collection_crypto_id = collection.config_snapshot().await.uuid.unwrap().to_string();
+    let rng = SystemRandom::new();
+    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+    let public_key = key_pair.public_key().as_ref().to_vec();
+
+    let client_payload = |point_id: &str| {
+        let mut payload = Payload(
+            serde_json::json!({
+                "document": {
+                    "body": {
+                        CLIENT_ENCRYPTED_PAYLOAD_MARKER: {
+                            "version": 1,
+                            "kind": "payload_text",
+                            "algorithm": "AES-256-GCM",
+                            "key_id": "tenant-a/client-rk-2026-04",
+                            "rk_id": "tenant-a/client-rk-2026-04",
+                            "rk_epoch": 3,
+                            "kdf_domain": "qdrant/client-payload-text/v1",
+                            "aad": {
+                                "collection_id": collection_crypto_id,
+                                "point_id": point_id,
+                                "field_path": "document.body",
+                                "schema_version": 1
+                            },
+                            "nonce": "AAAAAAAAAAAAAAAA",
+                            "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA",
+                            "signature": {
+                                "alg": "ed25519",
+                                "key_id": "tenant-a/client-signing-v1",
+                                "sig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                            }
+                        }
+                    }
+                }
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        sign_client_payload(&mut payload, &key_pair);
+        payload
+    };
+
+    let valid_marker = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+        PointInsertOperationsInternal::from(vec![PointStructPersisted {
+            id: 1.into(),
+            vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+            payload: Some(client_payload("1")),
+        }]),
+    ));
+    collection
+        .update_from_client(
+            valid_marker.clone(),
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            runtime_verified_client_envelopes_for_operation(
+                &valid_marker,
+                &collection_crypto_id,
+                &public_key,
+            ),
+        )
+        .await
+        .unwrap();
+
+    collection.stop_gracefully().await;
+    drop(collection);
+    fs::remove_file(collection_path.join("client_payload_nonce_replay.cache")).unwrap();
+
+    let collection =
+        load_local_collection("test".to_string(), &collection_path, &snapshot_path).await;
+    let replay_marker = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+        PointInsertOperationsInternal::from(vec![PointStructPersisted {
+            id: 2.into(),
+            vector: VectorStructPersisted::from(vec![0.0, 1.0, 0.0, 0.0]),
+            payload: Some(client_payload("2")),
+        }]),
+    ));
+    let err = collection
+        .update_from_client(
+            replay_marker.clone(),
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            runtime_verified_client_envelopes_for_operation(
+                &replay_marker,
+                &collection_crypto_id,
+                &public_key,
+            ),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("nonce was already used in this collection")
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_files() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection_path = collection_dir.path().to_path_buf();

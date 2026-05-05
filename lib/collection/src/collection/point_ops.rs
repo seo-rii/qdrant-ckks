@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,7 +18,8 @@ use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
 use segment::index::query_optimization::rescore_formula::parsed_formula::ParsedFormula;
 use segment::json_path::JsonPath;
 use segment::types::{
-    Condition, Filter, Payload, ShardKey, WithPayload, WithPayloadInterface, WithVector,
+    Condition, ExtendedPointId, Filter, Payload, ShardKey, WithPayload, WithPayloadInterface,
+    WithVector,
 };
 use shard::count::CountRequestInternal;
 use shard::retrieve::record_internal::RecordInternal;
@@ -40,6 +41,130 @@ use crate::shards::shard::ShardId;
 use crate::shards::shard_trait::WaitUntil;
 
 impl Collection {
+    pub(crate) async fn backfill_client_payload_nonce_replay_cache_from_storage(
+        &self,
+    ) -> CollectionResult<()> {
+        let (collection_crypto_id, encrypted_paths) = {
+            let collection_config = self.collection_config.read().await;
+            let Some(encryption) = collection_config.params.effective_encryption() else {
+                return Ok(());
+            };
+
+            let encrypted_paths = encryption
+                .rules
+                .iter()
+                .filter(|rule| rule.binding.as_deref() == Some(CLIENT_PAYLOAD_ENVELOPE_BINDING))
+                .filter_map(|rule| match &rule.selector {
+                    EncryptionSelector::PayloadPaths { paths } => Some(paths),
+                    _ => None,
+                })
+                .flatten()
+                .cloned()
+                .collect::<Vec<_>>();
+            if encrypted_paths.is_empty() {
+                return Ok(());
+            }
+
+            (
+                collection_config.stable_crypto_id(self.name())?,
+                encrypted_paths,
+            )
+        };
+
+        let encrypted_paths = encrypted_paths
+            .into_iter()
+            .map(|path| {
+                path.parse::<JsonPath>()
+                    .map(|json_path| (path, json_path))
+                    .map_err(|err| {
+                        CollectionError::bad_input(format!(
+                            "encrypted payload field path is invalid: {err:?}",
+                        ))
+                    })
+            })
+            .collect::<CollectionResult<Vec<_>>>()?;
+
+        const BATCH_SIZE: usize = 1024;
+        let mut scanned_keys = HashSet::new();
+        let mut cache_keys = Vec::new();
+        let with_payload = WithPayloadInterface::Bool(true);
+        let with_vector = WithVector::Bool(false);
+        let shard_holder = self.shards_holder.read().await;
+
+        for shard in shard_holder.all_shards() {
+            let mut next_offset = Some(ExtendedPointId::NumId(0));
+            while let Some(current_offset) = next_offset {
+                let mut records = shard
+                    .local_scroll_by_id(
+                        Some(current_offset),
+                        BATCH_SIZE + 1,
+                        &with_payload,
+                        &with_vector,
+                        None,
+                        None,
+                        None,
+                        HwMeasurementAcc::disposable(),
+                        DeferredBehavior::IncludeAll,
+                    )
+                    .await?;
+                if records.is_empty() {
+                    break;
+                }
+
+                next_offset = if records.len() > BATCH_SIZE {
+                    records.pop().map(|record| record.id)
+                } else {
+                    None
+                };
+
+                for record in &records {
+                    let Some(payload) = record.payload.as_ref() else {
+                        continue;
+                    };
+                    for (encrypted_path, encrypted_json_path) in &encrypted_paths {
+                        for value in encrypted_json_path.value_get(&payload.0) {
+                            let Some(key) =
+                                client_payload_nonce_replay_key(value, encrypted_path).map_err(
+                                    |err| {
+                                        CollectionError::service_error(format!(
+                                            "stored client encrypted payload marker for field '{encrypted_path}' is invalid for nonce replay cache backfill: {err}",
+                                        ))
+                                    },
+                                )?
+                            else {
+                                continue;
+                            };
+                            let cache_key =
+                                client_nonce_replay_cache_key(&collection_crypto_id, &key);
+                            if !scanned_keys.insert(cache_key.clone()) {
+                                return Err(CollectionError::service_error(format!(
+                                    "stored client encrypted payload nonce was reused for field '{encrypted_path}'; refuse to load replay cache backfill",
+                                )));
+                            }
+                            cache_keys.push(cache_key);
+                        }
+                    }
+                }
+
+                if next_offset.is_none() {
+                    break;
+                }
+            }
+        }
+
+        let backfilled = self
+            .backfill_client_payload_nonce_replay_keys(cache_keys)
+            .await?;
+        if backfilled > 0 {
+            log::info!(
+                "Backfilled {backfilled} client encrypted payload nonce replay cache entries for collection {}",
+                self.name(),
+            );
+        }
+
+        Ok(())
+    }
+
     /// Apply collection update operation to all local shards.
     /// Return None if there are no local shards
     ///

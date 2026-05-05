@@ -405,7 +405,7 @@ impl Collection {
                 .expect("Failed to load collection size stats"),
         );
 
-        Self {
+        let collection = Self {
             id: collection_id.clone(),
             shards_holder: shared_shard_holder,
             collection_config: shared_collection_config,
@@ -432,7 +432,16 @@ impl Collection {
                 }),
             ),
             shard_clean_tasks: Default::default(),
-        }
+        };
+
+        collection
+            .backfill_client_payload_nonce_replay_cache_from_storage()
+            .await
+            .unwrap_or_else(|err| {
+                panic!("can't backfill client payload nonce replay cache: {err}")
+            });
+
+        collection
     }
 
     pub async fn stop_gracefully(&self) {
@@ -494,6 +503,43 @@ impl Collection {
         }
 
         Ok(())
+    }
+
+    pub(crate) async fn backfill_client_payload_nonce_replay_keys(
+        &self,
+        keys: impl IntoIterator<Item = String>,
+    ) -> CollectionResult<usize> {
+        let keys = keys.into_iter().collect::<Vec<_>>();
+        if keys.is_empty() {
+            return Ok(0);
+        }
+
+        let mut loaded_keys = HashSet::new();
+        for key in &keys {
+            if !loaded_keys.insert(key) {
+                return Err(CollectionError::service_error(
+                    "stored client encrypted payload nonce was reused in this collection; refuse to load replay cache backfill".to_string(),
+                ));
+            }
+        }
+
+        let mut cache = self.client_payload_nonce_replay_cache.lock().await;
+        let missing = keys
+            .into_iter()
+            .filter(|key| !cache.seen.contains(key))
+            .collect::<Vec<_>>();
+        if missing.is_empty() {
+            return Ok(0);
+        }
+
+        let missing_count = missing.len();
+        let cache_path = self.path.join(CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE);
+        append_client_payload_nonce_replay_cache(&cache_path, &missing)?;
+        if cache.insert_pending(missing) {
+            rewrite_client_payload_nonce_replay_cache(&cache_path, &cache.order)?;
+        }
+
+        Ok(missing_count)
     }
 
     pub async fn get_sharding_method_and_keys(&self) -> (ShardingMethod, Vec<ShardKey>) {
