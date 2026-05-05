@@ -1555,7 +1555,7 @@ fn validate_backend_program_path_with_sha256(
             return Err(invalid_program());
         }
 
-        let bytes = fs::read(program).map_err(|_| invalid_program())?;
+        let bytes = read_backend_program_for_sha256(backend_name, program)?;
         let actual = Sha256::digest(&bytes);
         if actual[..] != expected[..] {
             return Err(invalid_program());
@@ -1563,6 +1563,44 @@ fn validate_backend_program_path_with_sha256(
     }
 
     Ok(())
+}
+
+#[cfg(unix)]
+fn read_backend_program_for_sha256(
+    backend_name: &str,
+    program: &str,
+) -> Result<Vec<u8>, CryptoSetupError> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let invalid_program = || CryptoSetupError::InvalidBackendProgram {
+        backend: backend_name.to_string(),
+        program: program.to_string(),
+    };
+
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NOFOLLOW)
+        .open(program)
+        .map_err(|_| invalid_program())?;
+    if !file.metadata().map_err(|_| invalid_program())?.is_file() {
+        return Err(invalid_program());
+    }
+
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|_| invalid_program())?;
+    Ok(bytes)
+}
+
+#[cfg(not(unix))]
+fn read_backend_program_for_sha256(
+    backend_name: &str,
+    program: &str,
+) -> Result<Vec<u8>, CryptoSetupError> {
+    fs::read(program).map_err(|_| CryptoSetupError::InvalidBackendProgram {
+        backend: backend_name.to_string(),
+        program: program.to_string(),
+    })
 }
 
 fn generic_payload_write_plan(
