@@ -1068,52 +1068,6 @@ mod ckks_tests {
     }
 
     #[test]
-    fn ckks_config_adapts_to_generic_encryption_rules() {
-        let ckks = CkksCollectionConfig {
-            enabled: true,
-            key_id: Some("tenant-a:docs".to_string()),
-            payload_text_fields: vec!["body".to_string()],
-            vector_names: Vec::new(),
-        };
-
-        let encryption = CollectionEncryptionConfig::from_legacy_ckks(&ckks).unwrap();
-        assert_eq!(encryption.crypto_schema_version, 1);
-        assert_eq!(encryption.encryption_epoch, 0);
-        assert_eq!(encryption.migration_state, CryptoMigrationState::Active);
-        assert_eq!(encryption.rules.len(), 1);
-        assert_eq!(
-            encryption.legacy_ckks_projection(),
-            Some(CkksCollectionConfig {
-                enabled: true,
-                key_id: Some("tenant-a:docs".to_string()),
-                payload_text_fields: vec!["body".to_string()],
-                vector_names: Vec::new(),
-            }),
-        );
-    }
-
-    #[test]
-    fn legacy_ckks_projection_rejects_non_legacy_rules() {
-        let encryption = CollectionEncryptionConfig {
-            version: 1,
-            key_id: Some("tenant-a/client-rk-2026-04".to_string()),
-            crypto_schema_version: 1,
-            encryption_epoch: 0,
-            migration_state: CryptoMigrationState::Active,
-            rules: vec![EncryptionRuleRef {
-                id: "body_client_conf".to_string(),
-                selector: EncryptionSelector::PayloadPaths {
-                    paths: vec!["body".to_string()],
-                },
-                instance: "docs_payload_client_v1".to_string(),
-                binding: Some("client-payload-envelope/v1".to_string()),
-            }],
-        };
-
-        assert_eq!(encryption.legacy_ckks_projection(), None);
-    }
-
-    #[test]
     fn collection_params_rejects_generic_and_legacy_encryption_together() {
         let params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
@@ -1664,88 +1618,6 @@ pub enum EncryptionSelector {
         #[anonymize(true)]
         keys: Vec<String>,
     },
-}
-
-impl CollectionEncryptionConfig {
-    pub fn from_legacy_ckks(value: &CkksCollectionConfig) -> Option<Self> {
-        if !value.enabled {
-            return None;
-        }
-
-        let mut rules = Vec::new();
-        if !value.payload_text_fields.is_empty() {
-            rules.push(EncryptionRuleRef {
-                id: "legacy_ckks_payload".to_string(),
-                selector: EncryptionSelector::PayloadPaths {
-                    paths: value.payload_text_fields.clone(),
-                },
-                instance: "legacy_ckks_payload".to_string(),
-                binding: Some("payload-field/v1".to_string()),
-            });
-        }
-        if !value.vector_names.is_empty() {
-            rules.push(EncryptionRuleRef {
-                id: "legacy_ckks_vector".to_string(),
-                selector: EncryptionSelector::VectorNames {
-                    names: value.vector_names.clone(),
-                },
-                instance: "legacy_ckks_vector".to_string(),
-                binding: Some("vector-envelope/v1".to_string()),
-            });
-        }
-        if rules.is_empty() {
-            return None;
-        }
-
-        Some(Self {
-            version: 1,
-            key_id: value.key_id.clone(),
-            crypto_schema_version: default_crypto_schema_version(),
-            encryption_epoch: 0,
-            migration_state: CryptoMigrationState::Active,
-            rules,
-        })
-    }
-
-    pub fn legacy_ckks_projection(&self) -> Option<CkksCollectionConfig> {
-        let mut payload_text_fields = Vec::new();
-        let mut vector_names = Vec::new();
-
-        for rule in &self.rules {
-            match &rule.selector {
-                EncryptionSelector::PayloadPaths { paths } => {
-                    if rule.id != "legacy_ckks_payload"
-                        || rule.instance != "legacy_ckks_payload"
-                        || rule.binding.as_deref() != Some("payload-field/v1")
-                    {
-                        return None;
-                    }
-                    payload_text_fields.extend(paths.clone());
-                }
-                EncryptionSelector::VectorNames { names } => {
-                    if rule.id != "legacy_ckks_vector"
-                        || rule.instance != "legacy_ckks_vector"
-                        || rule.binding.as_deref() != Some("vector-envelope/v1")
-                    {
-                        return None;
-                    }
-                    vector_names.extend(names.clone());
-                }
-                EncryptionSelector::MetadataKeys { .. } => return None,
-            }
-        }
-
-        if payload_text_fields.is_empty() && vector_names.is_empty() {
-            return None;
-        }
-
-        Some(CkksCollectionConfig {
-            enabled: true,
-            key_id: self.key_id.clone(),
-            payload_text_fields,
-            vector_names,
-        })
-    }
 }
 
 impl Validate for EncryptionSelector {
@@ -2380,11 +2252,7 @@ impl CollectionParams {
     }
 
     pub fn effective_encryption(&self) -> Option<CollectionEncryptionConfig> {
-        self.encryption.clone().or_else(|| {
-            self.ckks
-                .as_ref()
-                .and_then(CollectionEncryptionConfig::from_legacy_ckks)
-        })
+        self.encryption.clone()
     }
 
     fn missing_vector_error(&self, vector_name: &VectorName) -> CollectionError {

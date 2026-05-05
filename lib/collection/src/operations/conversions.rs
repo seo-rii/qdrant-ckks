@@ -351,6 +351,11 @@ impl TryFrom<api::grpc::qdrant::CollectionParamsDiff> for CollectionParamsDiff {
             read_fan_out_delay_ms,
             ckks,
         } = value;
+        if ckks.is_some() {
+            return Err(Status::invalid_argument(
+                "legacy_ckks_config_unsupported: use collection encryption and crypto runtime settings",
+            ));
+        }
         let diff = Self {
             replication_factor: replication_factor
                 .map(|factor| {
@@ -369,7 +374,7 @@ impl TryFrom<api::grpc::qdrant::CollectionParamsDiff> for CollectionParamsDiff {
             read_fan_out_delay_ms,
             on_disk_payload,
             encryption: None,
-            ckks: ckks.map(TryInto::try_into).transpose()?,
+            ckks: None,
         };
         diff.validate().map_err(|err| {
             Status::invalid_argument(format!("invalid collection params diff: {err}"))
@@ -490,10 +495,9 @@ impl From<CollectionInfo> for api::grpc::qdrant::CollectionInfo {
             read_fan_out_factor,
             sharding_method,
             sparse_vectors,
-            encryption,
-            ckks,
+            encryption: _,
+            ckks: _,
         } = params;
-        let ckks = ckks.or_else(|| encryption.and_then(|config| config.legacy_ckks_projection()));
 
         api::grpc::qdrant::CollectionInfo {
             status: match status {
@@ -556,7 +560,7 @@ impl From<CollectionInfo> for api::grpc::qdrant::CollectionInfo {
                         }
                     }),
                     read_fan_out_delay_ms,
-                    ckks: ckks.map(Into::into),
+                    ckks: None,
                 }),
                 hnsw_config: Some(api::grpc::qdrant::HnswConfigDiff {
                     m: Some(m as u64),
@@ -1931,6 +1935,11 @@ impl TryFrom<api::grpc::qdrant::CollectionConfig> for CollectionConfig {
                     read_fan_out_delay_ms,
                     ckks,
                 } = params;
+                if ckks.is_some() {
+                    return Err(Status::invalid_argument(
+                        "legacy_ckks_config_unsupported: use collection encryption and crypto runtime settings",
+                    ));
+                }
                 CollectionParams {
                     vectors: match vectors_config {
                         None => {
@@ -1984,7 +1993,7 @@ impl TryFrom<api::grpc::qdrant::CollectionConfig> for CollectionConfig {
                         .transpose()?,
                     read_fan_out_delay_ms,
                     encryption: None,
-                    ckks: ckks.map(TryInto::try_into).transpose()?,
+                    ckks: None,
                 }
             }
         };
@@ -2042,10 +2051,7 @@ mod ckks_grpc_tests {
         let err = CollectionParamsDiff::try_from(diff).unwrap_err();
 
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
-        assert!(
-            err.message()
-                .contains("collection_encryption_diff_requires_crypto_migration")
-        );
+        assert!(err.message().contains("legacy_ckks_config_unsupported"));
     }
 
     #[test]
