@@ -107,8 +107,6 @@ pub enum CryptoSetupError {
     },
     #[error("legacy ckks runtime settings are unsupported; use crypto.* runtime settings")]
     LegacyCkksRuntimeUnsupported,
-    #[error(transparent)]
-    LegacyCkks(#[from] crate::common::ckks::CkksSetupError),
 }
 
 const PAYLOAD_SYM_KEY_ROLE: &str = "sym_key";
@@ -268,8 +266,6 @@ pub enum PayloadWriteSetupError {
     InvalidMaterialLength { material: String },
     #[error("legacy ckks collection config is unsupported; use collection encryption rules")]
     LegacyCkksUnsupported,
-    #[error(transparent)]
-    LegacyCkks(#[from] crate::common::ckks::CkksSetupError),
     #[error(transparent)]
     Payload(#[from] PayloadEncryptionError),
 }
@@ -1473,17 +1469,97 @@ fn validate_backend(
             kind: backend.kind.clone(),
         });
     };
-    crate::common::ckks::validate_bridge_path_with_sha256(program, backend.sha256_b64.as_deref())
-        .map_err(|_| CryptoSetupError::InvalidBackendProgram {
-        backend: backend_name.to_string(),
-        program: program.to_string(),
-    })?;
+    validate_backend_program_path_with_sha256(
+        backend_name,
+        program,
+        backend.sha256_b64.as_deref(),
+    )?;
 
     if backend.timeout_ms == Some(0) {
         return Err(CryptoSetupError::InvalidBackendTimeout {
             backend: backend_name.to_string(),
             reason: "timeout_ms must be at least 1".to_string(),
         });
+    }
+
+    Ok(())
+}
+
+fn validate_backend_program_path_with_sha256(
+    backend_name: &str,
+    program: &str,
+    expected_sha256_b64: Option<&str>,
+) -> Result<(), CryptoSetupError> {
+    let invalid_program = || CryptoSetupError::InvalidBackendProgram {
+        backend: backend_name.to_string(),
+        program: program.to_string(),
+    };
+    let path_ref = Path::new(program);
+    if !path_ref.is_absolute() {
+        return Err(invalid_program());
+    }
+
+    let metadata = fs::symlink_metadata(program).map_err(|_| invalid_program())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(invalid_program());
+    }
+
+    let metadata = fs::metadata(program).map_err(|_| invalid_program())?;
+    if !metadata.is_file() {
+        return Err(invalid_program());
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return Err(invalid_program());
+        }
+        if metadata.permissions().mode() & 0o022 != 0 {
+            return Err(invalid_program());
+        }
+
+        let owner = metadata.uid();
+        // SAFETY: geteuid has no preconditions and does not dereference pointers.
+        let effective_uid = unsafe { nix::libc::geteuid() };
+        if owner != 0 && owner != effective_uid {
+            return Err(invalid_program());
+        }
+
+        let mut parent = path_ref.parent();
+        while let Some(directory) = parent {
+            let directory_metadata =
+                fs::symlink_metadata(directory).map_err(|_| invalid_program())?;
+            if directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir() {
+                return Err(invalid_program());
+            }
+            if directory_metadata.permissions().mode() & 0o022 != 0 {
+                return Err(invalid_program());
+            }
+
+            let directory_owner = directory_metadata.uid();
+            if directory_owner != 0 && directory_owner != effective_uid {
+                return Err(invalid_program());
+            }
+
+            parent = directory.parent();
+        }
+    }
+
+    if let Some(expected_sha256_b64) = expected_sha256_b64 {
+        let expected = BASE64URL_NOPAD
+            .decode(expected_sha256_b64.as_bytes())
+            .map_err(|_| invalid_program())?;
+        if expected.len() != 32 {
+            return Err(invalid_program());
+        }
+
+        let bytes = fs::read(program).map_err(|_| invalid_program())?;
+        let actual = Sha256::digest(&bytes);
+        if actual[..] != expected[..] {
+            return Err(invalid_program());
+        }
     }
 
     Ok(())
@@ -4284,6 +4360,57 @@ mod tests {
                 kind: "shell".to_string(),
             }),
         );
+    }
+
+    #[test]
+    fn validate_backend_verifies_bridge_sha256_pin() {
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-bridge-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let bridge_path = dir.path().join("openfhe-bridge");
+        std::fs::write(&bridge_path, b"#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut dir_permissions = std::fs::metadata(dir.path()).unwrap().permissions();
+            dir_permissions.set_mode(0o700);
+            std::fs::set_permissions(dir.path(), dir_permissions).unwrap();
+
+            let mut permissions = std::fs::metadata(&bridge_path).unwrap().permissions();
+            permissions.set_mode(0o700);
+            std::fs::set_permissions(&bridge_path, permissions).unwrap();
+        }
+
+        let expected_digest = BASE64URL_NOPAD.encode(&Sha256::digest(b"#!/bin/sh\nexit 0\n"));
+        assert_eq!(
+            validate_backend(
+                "openfhe_local",
+                &CryptoBackendConfig {
+                    kind: "process_pool".to_string(),
+                    program: Some(bridge_path.to_string_lossy().to_string()),
+                    sha256_b64: Some(expected_digest),
+                    size: Some(1),
+                    timeout_ms: Some(5_000),
+                },
+            ),
+            Ok(()),
+        );
+
+        assert!(matches!(
+            validate_backend(
+                "openfhe_local",
+                &CryptoBackendConfig {
+                    kind: "process_pool".to_string(),
+                    program: Some(bridge_path.to_string_lossy().to_string()),
+                    sha256_b64: Some(BASE64URL_NOPAD.encode(&[0_u8; 32])),
+                    size: Some(1),
+                    timeout_ms: Some(5_000),
+                },
+            ),
+            Err(CryptoSetupError::InvalidBackendProgram { .. }),
+        ));
     }
 
     #[test]
