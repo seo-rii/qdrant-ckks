@@ -458,10 +458,11 @@ crypto:
 
 Generic OpenFHE backends currently accept only `process` or `process_pool`.
 Any other backend `kind` is rejected during runtime settings validation.
-On Linux, Qdrant sets `no_new_privs` immediately before spawning the configured
-bridge process. This is not a complete sandbox, but it prevents privilege gain
-through setuid binaries or file capabilities after bridge path, ownership, mode,
-parent directory, and optional SHA-256 pin checks have passed.
+On Linux, Qdrant sets `no_new_privs` and a parent-death `SIGKILL` immediately
+before spawning the configured bridge process. This is not a complete sandbox,
+but it prevents privilege gain through setuid binaries or file capabilities and
+reduces orphaned plaintext-bearing bridge exposure after bridge path, ownership,
+mode, parent directory, and optional SHA-256 pin checks have passed.
 
 Collection encryption rules and runtime instances must use the same explicit
 provider instance and `key_id`; runtime validation rejects missing instances,
@@ -593,8 +594,9 @@ expected bridge binary digest; generic runtime validation and checked backend
 construction both hash the bridge through a no-follow file descriptor on Unix.
 Treat any bridge path change as privileged code
 execution under the Qdrant service account. On Linux, the checked bridge spawn path also
-sets `no_new_privs` and `RLIMIT_CORE=0` so the plaintext-bearing bridge cannot
-gain extra privileges through setuid/file-capability execution and does not
+sets `no_new_privs`, parent-death `SIGKILL`, and `RLIMIT_CORE=0` so the
+plaintext-bearing bridge cannot gain extra privileges through
+setuid/file-capability execution, is killed if Qdrant exits, and does not
 produce normal core dumps. The bridge child also drops inherited environment
 variables whose names start with `QDRANT__CRYPTO`, `QDRANT_CRYPTO`,
 `QDRANT__CKKS`, or `QDRANT_CKKS`, so env-backed Qdrant crypto material is not
