@@ -4,8 +4,7 @@ use std::io::Read;
 use std::path::Path;
 
 use collection::config::{
-    CkksCollectionConfig, CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams,
-    EncryptionSelector,
+    CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams, EncryptionSelector,
 };
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_crypto::{
@@ -106,6 +105,8 @@ pub enum CryptoSetupError {
         option: String,
         reason: String,
     },
+    #[error("legacy ckks runtime settings are unsupported; use crypto.* runtime settings")]
+    LegacyCkksRuntimeUnsupported,
     #[error(transparent)]
     LegacyCkks(#[from] crate::common::ckks::CkksSetupError),
 }
@@ -265,6 +266,8 @@ pub enum PayloadWriteSetupError {
     InvalidMaterialEncoding { material: String },
     #[error("payload crypto material {material} must decode to exactly 32 bytes")]
     InvalidMaterialLength { material: String },
+    #[error("legacy ckks collection config is unsupported; use collection encryption rules")]
+    LegacyCkksUnsupported,
     #[error(transparent)]
     LegacyCkks(#[from] crate::common::ckks::CkksSetupError),
     #[error(transparent)]
@@ -574,33 +577,8 @@ pub fn payload_write_plan_for_collection_with_crypto_id(
     let Some(ckks) = params.ckks.as_ref() else {
         return Ok(None);
     };
-
-    if settings.ckks.is_configured() {
-        let Some((encryptor, policy)) = crate::common::ckks::payload_text_encryptor_for_collection(
-            &settings.ckks,
-            collection_name,
-            collection_crypto_id,
-            Some(ckks),
-        )?
-        else {
-            return Ok(None);
-        };
-
-        return Ok(Some(PayloadWritePlan {
-            collection_crypto_id: collection_crypto_id.to_string(),
-            rules: vec![PayloadWriteRule::ServerEncrypt { encryptor, policy }],
-        }));
-    }
-
-    let Some(encryption) = CollectionEncryptionConfig::from_legacy_ckks(ckks) else {
-        return Ok(None);
-    };
-    generic_payload_write_plan(
-        &effective_settings(settings),
-        collection_name,
-        collection_crypto_id,
-        &encryption,
-    )
+    let _ = ckks;
+    Err(PayloadWriteSetupError::LegacyCkksUnsupported)
 }
 
 pub fn validate_create_collection_crypto_runtime(
@@ -650,19 +628,10 @@ fn validate_collection_crypto_runtime_inner(
     let Some(ckks) = params.ckks.as_ref() else {
         return Ok(());
     };
-
-    if settings.ckks.is_configured() {
-        return validate_legacy_collection_crypto_runtime(&settings.ckks, collection_name, ckks);
-    }
-
-    let Some(encryption) = CollectionEncryptionConfig::from_legacy_ckks(ckks) else {
-        return Ok(());
-    };
-    validate_generic_collection_crypto_runtime(
-        &effective_settings(settings),
-        collection_name,
-        &encryption,
-    )
+    let _ = ckks;
+    Err(StorageError::bad_input(format!(
+        "collection {collection_name} legacy ckks config is unsupported; use collection encryption rules"
+    )))
 }
 
 pub fn validate_recovered_collection_crypto_runtime(
@@ -704,11 +673,7 @@ pub fn validate_recovered_collection_crypto_config(
 }
 
 pub fn effective_settings(settings: &Settings) -> CryptoSettings {
-    if settings.crypto.is_configured() {
-        settings.crypto.clone()
-    } else {
-        CryptoSettings::from_legacy_ckks(&settings.ckks)
-    }
+    settings.crypto.clone()
 }
 
 pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
@@ -826,7 +791,7 @@ pub fn validate_runtime_config(settings: &Settings) -> Result<(), CryptoSetupErr
         validate_crypto_settings(&settings.crypto)?;
     }
     if settings.ckks.is_configured() {
-        crate::common::ckks::validate_runtime_config(&settings.ckks)?;
+        return Err(CryptoSetupError::LegacyCkksRuntimeUnsupported);
     }
 
     Ok(())
@@ -2737,65 +2702,6 @@ fn validate_material_file_source_for_payload_read(
             path: format!("{path}: {err}"),
         },
     })
-}
-
-fn validate_legacy_collection_crypto_runtime(
-    runtime_config: &crate::settings::CkksConfig,
-    collection_name: &str,
-    collection_config: &CkksCollectionConfig,
-) -> Result<(), StorageError> {
-    if !collection_config.payload_text_fields.is_empty() {
-        crate::common::ckks::payload_text_encryptor_for_collection(
-            runtime_config,
-            collection_name,
-            collection_name,
-            Some(collection_config),
-        )
-        .map_err(|err| {
-            StorageError::bad_input(format!(
-                "collection {collection_name} payload crypto runtime validation failed: {err}"
-            ))
-        })?;
-    }
-
-    if collection_config.vector_names.is_empty() {
-        return Ok(());
-    }
-    if crate::common::ckks::openfhe_bridge_for_collection(
-        runtime_config,
-        collection_name,
-        Some(collection_config),
-    )
-    .is_none()
-    {
-        return Err(StorageError::bad_input(format!(
-            "collection {collection_name} CKKS vector runtime validation failed: missing OpenFHE bridge backend"
-        )));
-    }
-
-    let collection_runtime = runtime_config.collections.get(collection_name);
-    let collection_runtime_key_id =
-        collection_runtime.and_then(|runtime| runtime.key_id.as_deref());
-    match (
-        collection_config.key_id.as_deref(),
-        collection_runtime_key_id,
-    ) {
-        (Some(collection_key_id), Some(runtime_key_id)) if collection_key_id != runtime_key_id => {
-            return Err(StorageError::bad_input(format!(
-                "collection {collection_name} key id does not match CKKS runtime key id"
-            )));
-        }
-        (Some(_), _) => {}
-        (None, Some(_)) => {}
-        (None, None) if runtime_config.key_id.is_none() => {
-            return Err(StorageError::bad_input(format!(
-                "collection {collection_name} CKKS vector runtime validation failed: missing key id"
-            )));
-        }
-        (None, None) => {}
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]
@@ -6533,7 +6439,7 @@ mod tests {
     }
 
     #[test]
-    fn payload_write_plan_supports_legacy_collection_and_runtime_ckks() {
+    fn payload_write_plan_rejects_legacy_collection_and_runtime_ckks() {
         let settings = Settings {
             ckks: CkksConfig {
                 enabled: true,
@@ -6554,22 +6460,14 @@ mod tests {
             ..CollectionParams::empty()
         };
 
-        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
-            .unwrap()
-            .unwrap();
-        let mut payload = segment::types::Payload(
-            json!({ "body": "legacy secret" })
-                .as_object()
-                .unwrap()
-                .clone(),
-        );
-
-        assert_eq!(plan.encrypt_payload("point-1", &mut payload).unwrap(), 1);
-        assert!(is_encrypted_payload_value(payload.0.get("body").unwrap()));
+        assert!(matches!(
+            payload_write_plan_for_collection(&settings, "docs", &params),
+            Err(PayloadWriteSetupError::LegacyCkksUnsupported)
+        ));
     }
 
     #[test]
-    fn legacy_payload_write_plan_uses_explicit_crypto_collection_id() {
+    fn legacy_payload_write_plan_rejects_explicit_crypto_collection_id() {
         let settings = Settings {
             ckks: CkksConfig {
                 enabled: true,
@@ -6590,40 +6488,15 @@ mod tests {
             ..CollectionParams::empty()
         };
 
-        let plan = payload_write_plan_for_collection_with_crypto_id(
-            &settings,
-            "docs",
-            "crypto-docs-uuid",
-            &params,
-        )
-        .unwrap()
-        .unwrap();
-        let mut payload = segment::types::Payload(
-            json!({ "body": "legacy stable id secret" })
-                .as_object()
-                .unwrap()
-                .clone(),
-        );
-
-        assert_eq!(plan.encrypt_payload("point-1", &mut payload).unwrap(), 1);
-        let stable_id_encryptor = PayloadTextEncryptor::new_from_resource_key(
-            "crypto-docs-uuid",
-            "tenant-a:docs",
-            &SecretKey::from_bytes([5u8; 32]),
-        )
-        .unwrap();
-        let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
-
-        assert_eq!(
-            stable_id_encryptor
-                .decrypt_selected_fields("point-1", &mut payload.0, &policy)
-                .unwrap(),
-            1,
-        );
-        assert_eq!(
-            payload.0.get("body").and_then(Value::as_str),
-            Some("legacy stable id secret"),
-        );
+        assert!(matches!(
+            payload_write_plan_for_collection_with_crypto_id(
+                &settings,
+                "docs",
+                "crypto-docs-uuid",
+                &params,
+            ),
+            Err(PayloadWriteSetupError::LegacyCkksUnsupported)
+        ));
     }
 
     #[test]

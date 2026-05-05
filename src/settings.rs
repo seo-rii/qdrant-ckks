@@ -707,6 +707,10 @@ impl CkksConfig {
 }
 
 fn validate_settings_crypto_sections(settings: &Settings) -> Result<(), ValidationError> {
+    if settings.ckks.is_configured() {
+        return Err(ValidationError::new("legacy_ckks_runtime_unsupported"));
+    }
+
     if settings.crypto.is_configured() && settings.ckks.is_configured() {
         return Err(ValidationError::new("conflicting_runtime_crypto_sections"));
     }

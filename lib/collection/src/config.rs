@@ -71,7 +71,7 @@ mod ckks_tests {
     use super::*;
 
     #[test]
-    fn ckks_collection_config_round_trips_without_key_material() {
+    fn ckks_collection_config_deserializes_but_is_unsupported() {
         let params = CollectionParams {
             ckks: Some(CkksCollectionConfig {
                 enabled: true,
@@ -89,7 +89,10 @@ mod ckks_tests {
 
         let deserialized: CollectionParams = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized.ckks, params.ckks);
-        deserialized.validate().unwrap();
+        let err = deserialized
+            .validate()
+            .expect_err("legacy ckks collection config must be rejected");
+        assert!(err.to_string().contains("legacy_ckks_config_unsupported"));
     }
 
     #[test]
@@ -1139,11 +1142,8 @@ mod ckks_tests {
 
         let err = params
             .validate()
-            .expect_err("generic and legacy collection encryption sections must conflict");
-        assert!(
-            err.to_string()
-                .contains("conflicting_collection_encryption_sections")
-        );
+            .expect_err("legacy ckks collection config must be rejected");
+        assert!(err.to_string().contains("legacy_ckks_config_unsupported"));
     }
 
     #[test]
@@ -1969,6 +1969,12 @@ fn encryption_paths_overlap(left: &str, right: &str) -> bool {
 fn validate_collection_encryption_sections(
     params: &CollectionParams,
 ) -> Result<(), validator::ValidationError> {
+    if params.ckks.is_some() {
+        return Err(validator::ValidationError::new(
+            "legacy_ckks_config_unsupported",
+        ));
+    }
+
     if params.encryption.is_some() && params.ckks.is_some() {
         return Err(validator::ValidationError::new(
             "conflicting_collection_encryption_sections",

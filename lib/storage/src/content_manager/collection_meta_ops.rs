@@ -108,6 +108,12 @@ impl From<RenameAlias> for AliasOperations {
 fn validate_create_collection_encryption_sections(
     create_collection: &CreateCollection,
 ) -> Result<(), validator::ValidationError> {
+    if create_collection.ckks.is_some() {
+        return Err(validator::ValidationError::new(
+            "legacy_ckks_config_unsupported",
+        ));
+    }
+
     if create_collection.encryption.is_some() && create_collection.ckks.is_some() {
         return Err(validator::ValidationError::new(
             "conflicting_collection_encryption_sections",
@@ -236,6 +242,9 @@ impl CreateCollectionOperation {
         if crypto_identity_bound && create_collection.uuid.is_none() {
             create_collection.uuid = Some(Uuid::new_v4());
         }
+        create_collection.validate().map_err(|err| {
+            StorageError::bad_input(format!("invalid create collection config: {err}"))
+        })?;
 
         Ok(Self {
             collection_name,

@@ -247,17 +247,24 @@ outside Qdrant:
   with a different client key/HKDF domain. Plain Qdrant payload indexes remain
   unsupported for encrypted fields.
 
-Legacy collection params can select payload fields. `vector_names` remains shown
-only as a legacy/future shape; current collection validation rejects CKKS vector
-selectors until an encrypted-vector storage path exists:
+Collection encryption rules are configured only through the canonical
+`params.encryption` section. The old `params.ckks` shape is no longer accepted
+on public REST/gRPC create/update paths; use explicit provider bindings instead:
 
 ```yaml
 params:
-  ckks:
-    enabled: true
+  encryption:
+    version: 1
     key_id: tenant-a:docs
-    payload_text_fields: [body]
-    vector_names: [embedding]
+    crypto_schema_version: 1
+    encryption_epoch: 0
+    migration_state: active
+    rules:
+      - id: docs_payload
+        selector:
+          payload_paths: [body]
+        instance: docs_payload_v1
+        binding: payload-field/v1
 ```
 
 Metadata encryption is not implemented yet. The generic control-plane types
@@ -266,24 +273,37 @@ token designs, but collection validation rejects metadata selectors in this
 branch. Payload filtering over encrypted metadata, including range, geo, and
 full-text filtering, is unsupported until a separate blind-index design exists.
 
-Runtime settings provide key material per collection. In the legacy `ckks`
-adapter, `resource_key_b64` is a direct 32-byte resource key (RK), not a master
-key-encryption key. The old `master_key_b64` name remains as a legacy alias only
-and cannot be configured together with `resource_key_b64`. Prefer injecting that
-legacy RK through environment variables such as
-`QDRANT__CKKS__COLLECTIONS__docs__RESOURCE_KEY_B64` instead of committing it to
-config files:
+Runtime settings provide key material and providers through the canonical
+`crypto` section. The old runtime `ckks` section and `master_key_b64` /
+`resource_key_b64` direct-key shape are rejected by startup validation; define a
+`payload/aes-256-gcm@v1` or `payload/client-aead@v1` instance instead:
 
 ```yaml
-ckks:
-  enabled: true
+crypto:
   allow_inline_key_material: false
-  collections:
-    docs:
-      key_id: tenant-a:docs
-      resource_key_b64: base64url-no-pad-32-byte-key
-      openfhe_bridge_path: /usr/local/bin/openfhe-bridge
-      openfhe_bridge_sha256_b64: base64url-no-pad-sha256-of-bridge
+  instances:
+    docs_payload_v1:
+      provider: payload/aes-256-gcm@v1
+      materials:
+        sym_key: tenant-a/payload-v1
+      options:
+        key_id: tenant-a:docs
+        material_fingerprint_id: tenant-a/payload@v1
+  materials:
+    tenant-a/payload-v1:
+      kind: wrapped_symmetric_key_32
+      wrapped_by: tenant-a/mk
+      wrap_algorithm: AES-256-GCM
+      nonce: base64url-no-pad-12-byte-nonce
+      wrapped_key_b64: base64url-no-pad-wrapped-rk
+      rk_id: tenant-a/payload-rk
+      rk_epoch: 3
+      state: active
+      scope: collection:uuid
+    tenant-a/mk:
+      kind: wrapping_key_32
+      source: env
+      env: QDRANT_CRYPTO_MK_B64
 ```
 
 The generic `crypto` control plane supports a safer MK/RK hierarchy:
@@ -293,6 +313,29 @@ The generic `crypto` control plane supports a safer MK/RK hierarchy:
   MK using AES-256-GCM.
 - Payload text and CKKS vector envelope AEAD keys are still purpose-specific
   HKDF subkeys derived from the unwrapped RK.
+
+For tests and future vector-envelope work, a generic OpenFHE backend is
+configured under `crypto.backends` and referenced from a
+`vector/openfhe-ckks@v1` instance:
+
+```yaml
+crypto:
+  backends:
+    openfhe_local:
+      kind: process
+      program: /usr/local/bin/openfhe-bridge
+      sha256_b64: base64url-no-pad-sha256-of-bridge
+  instances:
+    docs_vector_v1:
+      provider: vector/openfhe-ckks@v1
+      backend_ref: openfhe_local
+      materials:
+        sym_key: tenant-a/vector-v1
+      options:
+        key_id: tenant-a:docs
+        material_fingerprint_id: tenant-a/vector@v1
+        profile: ckks-128-n16384-d4-scale50
+```
 
 When a material uses `source: file`, the path must be absolute and point to a
 regular non-symlink file. On Unix, qdrant-sec rejects group/world-accessible key
@@ -417,18 +460,17 @@ bridge process. This is not a complete sandbox, but it prevents privilege gain
 through setuid binaries or file capabilities after bridge path, ownership, mode,
 parent directory, and optional SHA-256 pin checks have passed.
 
-If both collection params and the matching `ckks.collections.<name>` runtime
-entry specify `key_id`, they must match. Otherwise the collection value wins,
-then the collection runtime value, then the global default. This prevents
-accidentally encrypting a collection with the wrong key.
-The configured 32-byte master key is not used directly as an AEAD key. Qdrant
-derives purpose-specific HKDF-SHA256 subkeys for payload text
+Collection encryption rules and runtime instances must use the same explicit
+provider instance and `key_id`; runtime validation rejects missing instances,
+missing material, provider/selector mismatches, and key-id mismatches instead of
+falling back to legacy defaults. The configured 32-byte RK is not used directly
+as an AEAD key. Qdrant derives purpose-specific HKDF-SHA256 subkeys for payload text
 (`qdrant/payload-text/v1`) and CKKS vector envelopes
 (`qdrant/vector-envelope/v1`) before constructing AES-GCM ciphers.
-`crypto.allow_inline_key_material` and `ckks.allow_inline_key_material` default
-to `false` so inline key material is rejected at startup unless explicitly
-enabled for local development fixtures. Decrypt paths can be configured with
-active plus retired AEAD keys; new writes always use the active key, and
+`crypto.allow_inline_key_material` defaults to `false` so inline key material is
+rejected at startup unless explicitly enabled for local development fixtures.
+Decrypt paths can be configured with active plus retired AEAD keys; new writes
+always use the active key, and
 envelopes record the active key id plus material fingerprint.
 Server-side public writes reject fields that already contain a
 `$qdrant_crypto` marker so clients cannot smuggle stale or wrong-key envelopes.
@@ -457,14 +499,12 @@ and telemetry.
 Generic server-side crypto instances require
 `options.material_fingerprint_id` to be an opaque deployment-local key version
 id. Payload and vector runtime validation rejects missing values so envelopes
-do not fall back to key-derived fingerprints. Direct legacy CKKS settings and
-low-level test helpers can still fall back to a deterministic fingerprint
-derived from the key material; that fallback is not secret, can reveal key reuse
-across collections or deployments, and should be limited to migration or local
-development fixtures.
-When `ckks.enabled` is true, startup validates any configured key ids, master
-keys, and OpenFHE bridge paths so bad runtime key material fails before the
-first encrypted write.
+do not fall back to key-derived fingerprints. Low-level test helpers may still
+construct deterministic fingerprints directly from key material, but production
+runtime configuration must provide explicit opaque fingerprint ids.
+If the old `ckks` runtime section is configured, startup validation fails and
+requires migration to the canonical `crypto` control plane before encrypted
+writes are accepted.
 
 ## Storage path threat model
 
@@ -545,10 +585,9 @@ plaintext embeddings before producing CKKS ciphertext. Runtime configuration
 therefore accepts only absolute bridge paths that resolve to executable regular
 files, rejects symlinks and group/world-writable binaries or parent directories
 on Unix, and requires the binary plus every parent directory to be owned by root
-or the Qdrant process user. Set `sha256_b64` in generic backends or
-`openfhe_bridge_sha256_b64` in legacy CKKS runtime settings to pin the expected
-bridge binary digest. Treat any bridge path change as privileged code execution
-under the Qdrant service account. On Linux, the checked bridge spawn path also
+or the Qdrant process user. Set `sha256_b64` in the generic backend to pin the
+expected bridge binary digest. Treat any bridge path change as privileged code
+execution under the Qdrant service account. On Linux, the checked bridge spawn path also
 sets `no_new_privs` and `RLIMIT_CORE=0` so the plaintext-bearing bridge cannot
 gain extra privileges through setuid/file-capability execution and does not
 produce normal core dumps. The bridge child also drops inherited environment

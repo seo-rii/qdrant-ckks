@@ -87,6 +87,11 @@ impl TryFrom<grpc::CreateCollection> for CollectionMetaOperations {
             strict_mode_config,
             metadata,
         } = value;
+        if ckks.is_some() {
+            return Err(Status::invalid_argument(
+                "legacy_ckks_config_unsupported: use collection encryption and crypto runtime settings",
+            ));
+        }
         let op = CreateCollectionOperation::new(
             collection_name,
             CreateCollection {
@@ -110,7 +115,7 @@ impl TryFrom<grpc::CreateCollection> for CollectionMetaOperations {
                     .map(sharding_method_from_proto)
                     .transpose()?,
                 encryption: None,
-                ckks: ckks.map(TryInto::try_into).transpose()?,
+                ckks: None,
                 strict_mode_config: strict_mode_config.map(strict_mode_from_api),
                 uuid: None,
                 metadata: if metadata.is_empty() {
@@ -382,8 +387,8 @@ mod ckks_grpc_tests {
     use super::*;
 
     #[test]
-    fn create_collection_preserves_ckks_config_from_grpc() {
-        let operation = CollectionMetaOperations::try_from(grpc::CreateCollection {
+    fn create_collection_rejects_legacy_ckks_config_from_grpc() {
+        let err = CollectionMetaOperations::try_from(grpc::CreateCollection {
             collection_name: "docs".to_string(),
             ckks: Some(grpc::CkksCollectionConfig {
                 enabled: true,
@@ -393,17 +398,9 @@ mod ckks_grpc_tests {
             }),
             ..Default::default()
         })
-        .unwrap();
+        .unwrap_err();
 
-        let CollectionMetaOperations::CreateCollection(operation) = operation else {
-            panic!("expected create collection operation");
-        };
-        let ckks = operation.create_collection.ckks.unwrap();
-
-        assert!(ckks.enabled);
-        assert_eq!(ckks.key_id.as_deref(), Some("tenant-a:docs"));
-        assert_eq!(ckks.payload_text_fields, vec!["body".to_string()]);
-        assert!(ckks.vector_names.is_empty());
+        assert!(err.message().contains("legacy_ckks_config_unsupported"));
     }
 
     #[test]
@@ -420,6 +417,6 @@ mod ckks_grpc_tests {
         })
         .unwrap_err();
 
-        assert!(err.message().contains("unsupported_ckks_vector_selector"));
+        assert!(err.message().contains("legacy_ckks_config_unsupported"));
     }
 }
