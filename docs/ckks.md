@@ -318,6 +318,13 @@ The generic `crypto` control plane supports a safer MK/RK hierarchy:
 - Payload text and CKKS vector envelope AEAD keys are still purpose-specific
   HKDF subkeys derived from the unwrapped RK.
 
+Provider `options` are allowlisted per provider. `payload/aes-256-gcm@v1`
+accepts only `key_id`, `material_fingerprint_id`, and `retired_materials`;
+`payload/client-aead@v1` accepts only its client envelope policy and signature
+options; `vector/openfhe-ckks@v1` accepts only `key_id`,
+`material_fingerprint_id`, and `profile`. Unknown options fail startup/runtime
+validation instead of being silently ignored.
+
 For tests and future vector-envelope work, a generic OpenFHE backend is
 configured under `crypto.backends` and referenced from a
 `vector/openfhe-ckks@v1` instance:

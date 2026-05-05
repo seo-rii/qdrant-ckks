@@ -130,6 +130,11 @@ const SIGNATURE_PUBLIC_KEY_B64_OPTION: &str = "signature_public_key_b64";
 const SIGNATURE_PUBLIC_KEYS_OPTION: &str = "signature_public_keys";
 const SIGNATURE_KEY_ID_OPTION: &str = "signature_key_id";
 const CKKS_PROFILE_OPTION: &str = "profile";
+const PAYLOAD_AES_GCM_ALLOWED_OPTIONS: &[&str] = &[
+    "key_id",
+    MATERIAL_FINGERPRINT_ID_OPTION,
+    RETIRED_MATERIALS_OPTION,
+];
 const CLIENT_AEAD_ALLOWED_OPTIONS: &[&str] = &[
     "key_id",
     KEY_ID_REQUIRED_OPTION,
@@ -140,12 +145,17 @@ const CLIENT_AEAD_ALLOWED_OPTIONS: &[&str] = &[
     SIGNATURE_PUBLIC_KEYS_OPTION,
     SIGNATURE_KEY_ID_OPTION,
 ];
+const VECTOR_OPENFHE_CKKS_ALLOWED_OPTIONS: &[&str] = &[
+    "key_id",
+    MATERIAL_FINGERPRINT_ID_OPTION,
+    CKKS_PROFILE_OPTION,
+];
 
-fn unsupported_client_aead_option(options: &Value) -> Option<String> {
+fn unsupported_instance_option(options: &Value, allowed_options: &[&str]) -> Option<String> {
     let options = options.as_object()?;
     options
         .keys()
-        .find(|option| !CLIENT_AEAD_ALLOWED_OPTIONS.contains(&option.as_str()))
+        .find(|option| !allowed_options.contains(&option.as_str()))
         .cloned()
 }
 
@@ -890,7 +900,9 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
             });
         }
         if instance.provider == PAYLOAD_CLIENT_AEAD_PROVIDER {
-            if let Some(option) = unsupported_client_aead_option(&instance.options) {
+            if let Some(option) =
+                unsupported_instance_option(&instance.options, CLIENT_AEAD_ALLOWED_OPTIONS)
+            {
                 return Err(CryptoSetupError::InvalidInstanceOption {
                     instance: instance_name.clone(),
                     option,
@@ -1006,6 +1018,16 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                 }
             })?;
         }
+        if instance.provider == PAYLOAD_AES_GCM_PROVIDER
+            && let Some(option) =
+                unsupported_instance_option(&instance.options, PAYLOAD_AES_GCM_ALLOWED_OPTIONS)
+        {
+            return Err(CryptoSetupError::InvalidInstanceOption {
+                instance: instance_name.clone(),
+                option,
+                reason: "unsupported option for payload/aes-256-gcm@v1".to_string(),
+            });
+        }
         if instance.provider == PAYLOAD_AES_GCM_PROVIDER && instance.backend_ref.is_some() {
             return Err(CryptoSetupError::InvalidInstanceOption {
                 instance: instance_name.clone(),
@@ -1061,6 +1083,16 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                 instance: instance_name.clone(),
                 option: "backend_ref".to_string(),
                 reason: "vector/openfhe-ckks@v1 must configure backend_ref".to_string(),
+            });
+        }
+        if instance.provider == VECTOR_OPENFHE_CKKS_PROVIDER
+            && let Some(option) =
+                unsupported_instance_option(&instance.options, VECTOR_OPENFHE_CKKS_ALLOWED_OPTIONS)
+        {
+            return Err(CryptoSetupError::InvalidInstanceOption {
+                instance: instance_name.clone(),
+                option,
+                reason: "unsupported option for vector/openfhe-ckks@v1".to_string(),
             });
         }
 
@@ -1735,6 +1767,14 @@ fn generic_payload_write_plan(
                         binding: PAYLOAD_FIELD_BINDING.to_string(),
                     });
                 }
+                if let Some(option) =
+                    unsupported_instance_option(&instance.options, PAYLOAD_AES_GCM_ALLOWED_OPTIONS)
+                {
+                    return Err(PayloadWriteSetupError::UnsupportedInstanceOption {
+                        instance: rule.instance.clone(),
+                        option,
+                    });
+                }
                 let material_ref =
                     instance
                         .materials
@@ -1869,7 +1909,9 @@ fn generic_payload_write_plan(
                         binding: CLIENT_PAYLOAD_ENVELOPE_BINDING.to_string(),
                     });
                 }
-                if let Some(option) = unsupported_client_aead_option(&instance.options) {
+                if let Some(option) =
+                    unsupported_instance_option(&instance.options, CLIENT_AEAD_ALLOWED_OPTIONS)
+                {
                     return Err(PayloadWriteSetupError::UnsupportedInstanceOption {
                         instance: rule.instance.clone(),
                         option,
@@ -3586,6 +3628,89 @@ mod tests {
     }
 
     #[test]
+    fn validate_crypto_settings_rejects_unsupported_provider_options() {
+        let payload_with_client_option = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::from([(
+                "docs_payload_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: PAYLOAD_AES_GCM_PROVIDER.to_string(),
+                    materials: HashMap::from([(
+                        PAYLOAD_SYM_KEY_ROLE.to_string(),
+                        "tenant-a/payload-v1".to_string(),
+                    )]),
+                    backend_ref: None,
+                    options: json!({
+                        "material_fingerprint_id": "tenant-a/payload@v1",
+                        "expected_rk_id": "tenant-a/client-rk-v1",
+                    }),
+                },
+            )]),
+            materials: HashMap::from([(
+                "tenant-a/payload-v1".to_string(),
+                CryptoMaterialConfig {
+                    kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                    source: Some("inline".to_string()),
+                    value_b64: Some(BASE64URL_NOPAD.encode(&[1_u8; 32])),
+                    ..CryptoMaterialConfig::default()
+                },
+            )]),
+            backends: HashMap::new(),
+        };
+        assert!(matches!(
+            validate_crypto_settings(&payload_with_client_option),
+            Err(CryptoSetupError::InvalidInstanceOption { option, .. })
+                if option == EXPECTED_RK_ID_OPTION
+        ));
+
+        let bridge_program = std::env::current_exe().unwrap().display().to_string();
+        let vector_with_payload_option = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::from([(
+                "docs_vector_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: VECTOR_OPENFHE_CKKS_PROVIDER.to_string(),
+                    materials: HashMap::from([(
+                        PAYLOAD_SYM_KEY_ROLE.to_string(),
+                        "tenant-a/vector-v1".to_string(),
+                    )]),
+                    backend_ref: Some("openfhe_local".to_string()),
+                    options: json!({
+                        "key_id": "tenant-a:docs",
+                        "material_fingerprint_id": "tenant-a/vector@v1",
+                        "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                        "retired_materials": [],
+                    }),
+                },
+            )]),
+            materials: HashMap::from([(
+                "tenant-a/vector-v1".to_string(),
+                CryptoMaterialConfig {
+                    kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                    source: Some("inline".to_string()),
+                    value_b64: Some(BASE64URL_NOPAD.encode(&[2_u8; 32])),
+                    ..CryptoMaterialConfig::default()
+                },
+            )]),
+            backends: HashMap::from([(
+                "openfhe_local".to_string(),
+                CryptoBackendConfig {
+                    kind: "process".to_string(),
+                    program: Some(bridge_program),
+                    sha256_b64: None,
+                    size: None,
+                    timeout_ms: Some(1000),
+                },
+            )]),
+        };
+        assert!(matches!(
+            validate_crypto_settings(&vector_with_payload_option),
+            Err(CryptoSetupError::InvalidInstanceOption { option, .. })
+                if option == RETIRED_MATERIALS_OPTION
+        ));
+    }
+
+    #[test]
     fn validate_crypto_settings_rejects_invalid_retired_payload_materials() {
         let mut settings = CryptoSettings {
             allow_inline_key_material: true,
@@ -4880,6 +5005,25 @@ mod tests {
             }),
             ..CollectionParams::empty()
         };
+
+        let mut settings_with_unsupported_option = settings.clone();
+        settings_with_unsupported_option
+            .crypto
+            .instances
+            .get_mut("docs_payload_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                EXPECTED_RK_ID_OPTION.to_string(),
+                json!("tenant-a/client-rk-v1"),
+            );
+        assert!(matches!(
+            payload_write_plan_for_collection(&settings_with_unsupported_option, "docs", &params),
+            Err(PayloadWriteSetupError::UnsupportedInstanceOption { instance, option })
+                if instance == "docs_payload_v1" && option == EXPECTED_RK_ID_OPTION
+        ));
 
         let plan = payload_write_plan_for_collection(&settings, "docs", &params)
             .unwrap()
