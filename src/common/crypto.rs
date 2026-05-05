@@ -2802,7 +2802,7 @@ fn read_material_fd_to_string(
         use std::fs::File;
         use std::os::fd::FromRawFd;
 
-        let duplicated = unsafe { nix::libc::dup(fd) };
+        let duplicated = unsafe { nix::libc::fcntl(fd, nix::libc::F_DUPFD_CLOEXEC, 0) };
         if duplicated < 0 {
             return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
                 material: material_name.to_string(),
