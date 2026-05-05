@@ -1383,7 +1383,7 @@ dependencies = [
  "parking_lot",
  "pprof",
  "proptest",
- "qdrant-ckks",
+ "qdrant-crypto",
  "rand 0.10.0",
  "ring",
  "ringbuffer",
@@ -5846,7 +5846,7 @@ dependencies = [
  "prometheus",
  "prost 0.11.9",
  "pyroscope",
- "qdrant-ckks",
+ "qdrant-crypto",
  "raft",
  "raft-proto",
  "rand 0.10.0",
@@ -5893,7 +5893,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "qdrant-ckks"
+name = "qdrant-crypto"
 version = "0.1.0"
 dependencies = [
  "data-encoding",

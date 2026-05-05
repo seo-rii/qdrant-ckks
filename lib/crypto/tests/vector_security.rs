@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use data_encoding::BASE64URL_NOPAD;
-use qdrant_ckks::{
+use qdrant_crypto::{
     AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CkksBatchEncryptionInput,
     CkksEncryptionInput, CkksError, CkksParameters, CkksPublicMaterial, CkksVectorBackend,
     CkksVectorBatchItem, CkksVectorEncryptor, CommandOpenFheBackend, EncryptedCkksVector,

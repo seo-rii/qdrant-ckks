@@ -3,7 +3,7 @@ use std::path::Path;
 
 use collection::config::CkksCollectionConfig;
 use data_encoding::BASE64URL_NOPAD;
-use qdrant_ckks::{
+use qdrant_crypto::{
     PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
 };
 use sha2::{Digest, Sha256};

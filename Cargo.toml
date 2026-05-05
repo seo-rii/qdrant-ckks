@@ -133,7 +133,7 @@ storage = { path = "lib/storage" }
 api = { path = "lib/api" }
 gpu = { path = "lib/gpu" }
 wal = { path = "lib/wal" }
-qdrant-ckks = { path = "lib/ckks" }
+qdrant-crypto = { path = "lib/crypto" }
 
 actix-multipart = "0.7.2"
 constant_time_eq = "0.4.2"
@@ -352,7 +352,7 @@ required-features = ["service_debug"]
 members = [
     "lib/api",
     "lib/collection",
-    "lib/ckks",
+    "lib/crypto",
     "lib/common/*",
     "lib/edge",
     "lib/edge/python",

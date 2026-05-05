@@ -8,7 +8,7 @@ use collection::config::{
     EncryptionSelector,
 };
 use data_encoding::BASE64URL_NOPAD;
-use qdrant_ckks::{
+use qdrant_crypto::{
     AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_VECTOR_KEY_DOMAIN,
     CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadNonceReplayKey,
     ClientPayloadSignatureVerification, ClientPayloadValidationContext,
@@ -2811,7 +2811,7 @@ mod tests {
     };
     use collection::optimizers_builder::OptimizersConfig;
     use data_encoding::BASE64URL_NOPAD;
-    use qdrant_ckks::{
+    use qdrant_crypto::{
         CLIENT_ENCRYPTED_PAYLOAD_MARKER, CLIENT_PAYLOAD_ENVELOPE_BINDING, LocalMasterKeyProvider,
         MasterKeyProvider, RESOURCE_KEY_WRAP_ALGORITHM, client_payload_signature_message,
         is_client_encrypted_payload_value, is_encrypted_payload_value,

@@ -33,13 +33,15 @@ pub enum PayloadEncryptionError {
     ExpectedObjectParent(String),
     #[error("payload field {field} must be a string, found {found}")]
     ExpectedString { field: String, found: &'static str },
-    #[error("payload field {field} must contain an encrypted qdrant-ckks envelope, found {found}")]
+    #[error(
+        "payload field {field} must contain an encrypted qdrant crypto envelope, found {found}"
+    )]
     ExpectedEncryptedEnvelope { field: String, found: &'static str },
     #[error("payload field is already encrypted: {0}")]
     AlreadyEncrypted(String),
-    #[error("payload field contains a malformed qdrant-ckks envelope: {0}")]
+    #[error("payload field contains a malformed qdrant crypto envelope: {0}")]
     MalformedEnvelope(String),
-    #[error("payload field contains unsupported qdrant-ckks envelope kind: {0}")]
+    #[error("payload field contains unsupported qdrant crypto envelope kind: {0}")]
     UnsupportedEnvelopeKind(String),
     #[error("payload field contains unsupported client envelope algorithm: {0}")]
     UnsupportedClientAlgorithm(String),
@@ -67,7 +69,7 @@ pub enum PayloadEncryptionError {
     UnsupportedClientSignatureAlgorithm(String),
     #[error("payload field client envelope signature verification failed")]
     InvalidClientSignature,
-    #[error("payload field contains unsupported qdrant-ckks schema version: {0}")]
+    #[error("payload field contains unsupported qdrant crypto schema version: {0}")]
     UnsupportedSchemaVersion(u16),
     #[error("payload field encryption epoch does not match active policy")]
     EncryptionEpochMismatch,
