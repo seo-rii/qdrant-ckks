@@ -272,16 +272,21 @@ impl Collection {
                                 "client encrypted payload marker for field '{encrypted_path_str}' requires runtime envelope verification before collection write",
                             )));
                         };
-                        if !update_provenance.allows_client_envelope_key(&envelope_key) {
-                            return Err(CollectionError::bad_input(format!(
-                                "client encrypted payload marker for field '{encrypted_path_str}' requires runtime envelope verification before collection write",
-                            )));
-                        }
                         let Some(point_id) = point_id else {
                             return Err(CollectionError::bad_input(format!(
                                 "client encrypted payload marker for field '{encrypted_path_str}' requires point-specific runtime envelope verification before collection write",
                             )));
                         };
+                        if !update_provenance.allows_client_envelope_key_for_binding(
+                            &envelope_key,
+                            &collection_crypto_id,
+                            point_id,
+                            encrypted_path_str,
+                        ) {
+                            return Err(CollectionError::bad_input(format!(
+                                "client encrypted payload marker for field '{encrypted_path_str}' requires runtime envelope verification before collection write",
+                            )));
+                        }
                         validate_client_payload_value(
                                 value,
                                 ClientPayloadValidationContext {

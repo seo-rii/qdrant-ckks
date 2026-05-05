@@ -176,6 +176,17 @@ impl CollectionUpdateProvenance {
             Self::ClientPlaintext | Self::RuntimeEncryptedPayloads(_) => false,
         }
     }
+
+    pub fn allows_client_envelope_key_for_binding(
+        &self,
+        envelope_key: &ClientPayloadEnvelopeKey,
+        collection_id: &str,
+        point_id: &str,
+        field_path: &str,
+    ) -> bool {
+        envelope_key.matches_binding(collection_id, point_id, field_path)
+            && self.allows_client_envelope_key(envelope_key)
+    }
 }
 
 /// Current state of the shard (supports same states as the collection)

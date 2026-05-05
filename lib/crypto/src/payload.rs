@@ -263,6 +263,14 @@ impl ClientPayloadVerifiedEnvelopeKey {
     }
 }
 
+impl ClientPayloadEnvelopeKey {
+    pub fn matches_binding(&self, collection_id: &str, point_id: &str, field_path: &str) -> bool {
+        self.collection_id == collection_id
+            && self.point_id == point_id
+            && self.field_path == field_path
+    }
+}
+
 impl PayloadTextEncryptor {
     pub fn new_from_resource_key(
         collection: impl Into<String>,

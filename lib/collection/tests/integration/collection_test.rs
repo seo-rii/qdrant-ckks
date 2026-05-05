@@ -2054,6 +2054,61 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
                 && description.contains("requires point-specific runtime envelope verification")
     ));
 
+    let mismatched_point_payload =
+        client_payload(&collection_crypto_id, "1", "tenant-a/client-rk-2026-04");
+    let mismatched_point_body = mismatched_point_payload
+        .0
+        .get("document")
+        .and_then(|document| document.get("body"))
+        .unwrap();
+    let mismatched_point_verified_key = validate_client_payload_value_for_runtime(
+        mismatched_point_body,
+        ClientPayloadValidationContext {
+            collection_id: &collection_crypto_id,
+            point_id: "1",
+            field_path: "document.body",
+            expected_key_id: Some("tenant-a/client-rk-2026-04"),
+            expected_rk_id: Some("tenant-a/client-rk-2026-04"),
+            min_rk_epoch: Some(3),
+            max_rk_epoch: Some(3),
+            key_id_required: true,
+            signature_required: true,
+            signature_verification: Some(ClientPayloadSignatureVerification {
+                expected_key_id: "tenant-a/client-signing-v1",
+                public_key: &public_key,
+            }),
+        },
+    )
+    .unwrap();
+    let mismatched_point_marker =
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                id: 2.into(),
+                vector: VectorStructPersisted::from(vec![0.0, 1.0, 0.0, 0.0]),
+                payload: Some(mismatched_point_payload),
+            }]),
+        ));
+    let err = collection
+        .update_from_client(
+            mismatched_point_marker,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::runtime_verified_client_envelopes(vec![
+                mismatched_point_verified_key,
+            ]),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("client encrypted payload marker")
+                && description.contains("requires runtime envelope verification")
+    ));
+
     let mut wrong_collection_marker =
         CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
             PointInsertOperationsInternal::from(vec![PointStructPersisted {
@@ -2349,7 +2404,8 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         let serde_json::Value::String(signature) = signature_value else {
             panic!("client signature fixture must contain string sig");
         };
-        signature.replace_range(0..1, "B");
+        let replacement = if signature.starts_with('A') { "B" } else { "A" };
+        signature.replace_range(0..1, replacement);
     }
     let err = collection
         .update_from_client(
