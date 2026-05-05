@@ -340,6 +340,8 @@ crypto:
         profile: ckks-128-n16384-d4-scale50
 ```
 
+Direct MK/RK materials must set `source` explicitly; qdrant-sec does not infer
+`env`, `file`, `fd`, or `inline` from whichever field happens to be present.
 When a material uses `source: file`, the path must be absolute and point to a
 regular non-symlink file. On Unix, qdrant-sec rejects group/world-accessible key
 files and rejects group/world-writable parent directories. The file and each

@@ -36,6 +36,8 @@ use crate::settings::{
 pub enum CryptoSetupError {
     #[error("crypto material {material} must specify exactly one source")]
     InvalidMaterialSourceCount { material: String },
+    #[error("crypto material {material} must set source explicitly")]
+    MissingMaterialSource { material: String },
     #[error("crypto material {material} has unsupported source {material_source}")]
     UnsupportedMaterialSource {
         material: String,
@@ -246,6 +248,13 @@ pub enum PayloadWriteSetupError {
     InvalidWrappedMaterial { material: String, reason: String },
     #[error("payload crypto material {material} uses unsupported wrap algorithm {algorithm}")]
     UnsupportedWrapAlgorithm { material: String, algorithm: String },
+    #[error("payload crypto material {material} must set source explicitly")]
+    MissingMaterialSource { material: String },
+    #[error("payload crypto material {material} has unsupported source {material_source}")]
+    UnsupportedMaterialSource {
+        material: String,
+        material_source: String,
+    },
     #[error("payload crypto material {material} is missing environment variable {env}")]
     MissingMaterialEnv { material: String, env: String },
     #[error("payload crypto material {material} file path is missing")]
@@ -1197,7 +1206,9 @@ fn validate_material(
     }
 
     match material.source.as_deref() {
-        None => Ok(()),
+        None => Err(CryptoSetupError::MissingMaterialSource {
+            material: material_name.to_string(),
+        }),
         Some("env")
             if material.env.is_some()
                 && material.path.is_none()
@@ -2728,23 +2739,16 @@ fn decode_direct_material_key(
                 material: material_name.to_string(),
             }
         })?,
-        Some(_) | None => {
-            if let Some(env) = material.env.as_deref() {
-                std::env::var(env).map_err(|_| PayloadWriteSetupError::MissingMaterialEnv {
-                    material: material_name.to_string(),
-                    env: env.to_string(),
-                })?
-            } else if let Some(path) = material.path.as_deref() {
-                read_material_file_to_string(material_name, path)?
-            } else if let Some(fd) = material.fd {
-                read_material_fd_to_string(material_name, fd)?
-            } else {
-                material.value_b64.clone().ok_or_else(|| {
-                    PayloadWriteSetupError::MissingInlineMaterial {
-                        material: material_name.to_string(),
-                    }
-                })?
-            }
+        None => {
+            return Err(PayloadWriteSetupError::MissingMaterialSource {
+                material: material_name.to_string(),
+            });
+        }
+        Some(source) => {
+            return Err(PayloadWriteSetupError::UnsupportedMaterialSource {
+                material: material_name.to_string(),
+                material_source: source.to_string(),
+            });
         }
     });
 
@@ -4127,6 +4131,21 @@ mod tests {
                 true,
             ),
             Err(CryptoSetupError::InvalidMaterialSourceCount {
+                material: "tenant-a/payload-v1".to_string(),
+            }),
+        );
+
+        assert_eq!(
+            validate_material(
+                "tenant-a/payload-v1",
+                &CryptoMaterialConfig {
+                    kind: "symmetric_key_32".to_string(),
+                    value_b64: Some("AQID".to_string()),
+                    ..CryptoMaterialConfig::default()
+                },
+                true,
+            ),
+            Err(CryptoSetupError::MissingMaterialSource {
                 material: "tenant-a/payload-v1".to_string(),
             }),
         );
