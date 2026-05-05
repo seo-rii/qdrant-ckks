@@ -4284,14 +4284,38 @@ esac
             collection.stop_gracefully().await;
         });
 
-        for sentinel in [
-            "public ingress secret",
-            "public set payload secret",
-            "public overwrite payload secret",
-            "multi point secret",
-            "multi point overwrite secret",
-        ] {
-            let sentinel = sentinel.as_bytes();
+        let mut vector_plaintext_f32_pair = Vec::new();
+        vector_plaintext_f32_pair.extend_from_slice(&0.7_f32.to_le_bytes());
+        vector_plaintext_f32_pair.extend_from_slice(&(-0.25_f32).to_le_bytes());
+        let mut vector_plaintext_f64_pair = Vec::new();
+        vector_plaintext_f64_pair.extend_from_slice(&0.7_f64.to_le_bytes());
+        vector_plaintext_f64_pair.extend_from_slice(&(-0.25_f64).to_le_bytes());
+
+        let mut sentinels = vec![
+            (
+                "payload public ingress secret",
+                b"public ingress secret".to_vec(),
+            ),
+            (
+                "payload public set secret",
+                b"public set payload secret".to_vec(),
+            ),
+            (
+                "payload public overwrite secret",
+                b"public overwrite payload secret".to_vec(),
+            ),
+            ("payload multi point secret", b"multi point secret".to_vec()),
+            (
+                "payload multi point overwrite secret",
+                b"multi point overwrite secret".to_vec(),
+            ),
+            ("CKKS vector plaintext ascii x", b"0.7".to_vec()),
+            ("CKKS vector plaintext ascii y", b"-0.25".to_vec()),
+        ];
+        sentinels.push(("CKKS vector plaintext f32 pair", vector_plaintext_f32_pair));
+        sentinels.push(("CKKS vector plaintext f64 pair", vector_plaintext_f64_pair));
+
+        for (label, sentinel) in sentinels {
             let mut pending = vec![storage_dir.path().to_path_buf()];
             while let Some(path) = pending.pop() {
                 let metadata = fs::metadata(&path).unwrap();
@@ -4309,8 +4333,8 @@ esac
                 assert!(
                     !bytes
                         .windows(sentinel.len())
-                        .any(|window| window == sentinel),
-                    "plaintext sentinel leaked into {}",
+                        .any(|window| window == sentinel.as_slice()),
+                    "plaintext sentinel '{label}' leaked into {}",
                     path.display(),
                 );
             }
