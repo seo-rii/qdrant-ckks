@@ -120,6 +120,43 @@ impl Default for ClientPayloadNonceReplayCache {
 impl ClientPayloadNonceReplayCache {
     fn load(path: &Path) -> CollectionResult<Self> {
         let cache_path = path.join(CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE);
+        #[cfg(unix)]
+        let file = {
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+            let mut options = OpenOptions::new();
+            options.read(true);
+            options.custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
+            match options.open(&cache_path) {
+                Ok(file) => {
+                    let metadata = file.metadata().map_err(|err| {
+                        CollectionError::service_error(format!(
+                            "failed to inspect client payload nonce replay cache {cache_path:?}: {err}",
+                        ))
+                    })?;
+                    if !metadata.is_file() {
+                        return Err(CollectionError::service_error(format!(
+                            "client payload nonce replay cache {cache_path:?} must be a regular file",
+                        )));
+                    }
+                    if metadata.permissions().mode() & 0o077 != 0 {
+                        return Err(CollectionError::service_error(format!(
+                            "client payload nonce replay cache {cache_path:?} must not be group/world accessible",
+                        )));
+                    }
+                    file
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    return Ok(Self::default());
+                }
+                Err(err) => {
+                    return Err(CollectionError::service_error(format!(
+                        "failed to open client payload nonce replay cache {cache_path:?}: {err}",
+                    )));
+                }
+            }
+        };
+        #[cfg(not(unix))]
         let file = match File::open(&cache_path) {
             Ok(file) => file,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
@@ -1332,6 +1369,12 @@ mod tests {
             ),
         )
         .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            std::fs::set_permissions(&cache_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
 
         let err = ClientPayloadNonceReplayCache::load(dir.path()).unwrap_err();
         assert!(format!("{err:?}").contains("oversized entry"));
@@ -1342,6 +1385,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache_path = dir.path().join(CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE);
         std::fs::write(&cache_path, "not-a-valid-cache-key\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            std::fs::set_permissions(&cache_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
 
         let err = ClientPayloadNonceReplayCache::load(dir.path()).unwrap_err();
         assert!(format!("{err:?}").contains("malformed entry"));
@@ -1415,6 +1464,13 @@ mod tests {
         let target_path = dir.path().join("target");
         std::fs::write(&target_path, "target-before\n").unwrap();
         symlink(&target_path, &cache_path).unwrap();
+
+        let err = ClientPayloadNonceReplayCache::load(dir.path()).unwrap_err();
+        assert!(format!("{err:?}").contains("failed to open"));
+        assert_eq!(
+            std::fs::read_to_string(&target_path).unwrap(),
+            "target-before\n"
+        );
 
         let err = append_client_payload_nonce_replay_cache(&cache_path, &["nonce-a".to_string()])
             .unwrap_err();
