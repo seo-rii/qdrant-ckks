@@ -895,7 +895,7 @@ pub async fn sync(
         None,
         auth,
         HwMeasurementAcc::disposable(), // API unmeasured
-        CollectionUpdateProvenance::ClientPlaintext,
+        CollectionUpdateProvenance::client_plaintext(),
     )
     .await?;
 

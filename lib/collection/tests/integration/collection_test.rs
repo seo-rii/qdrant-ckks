@@ -1989,7 +1989,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         CollectionUpdateProvenance::runtime_verified_client_envelopes(Vec::new());
     assert_eq!(
         empty_verified_provenance,
-        CollectionUpdateProvenance::ClientPlaintext,
+        CollectionUpdateProvenance::client_plaintext(),
     );
     let err = collection
         .update_from_client(

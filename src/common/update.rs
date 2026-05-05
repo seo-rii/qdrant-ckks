@@ -474,7 +474,7 @@ pub async fn do_delete_points(
         shard_key,
         auth,
         hw_measurement_acc,
-        CollectionUpdateProvenance::ClientPlaintext,
+        CollectionUpdateProvenance::client_plaintext(),
     )
     .await
 }
@@ -524,7 +524,7 @@ pub async fn do_update_vectors(
         shard_key,
         auth,
         hw_measurement_acc,
-        CollectionUpdateProvenance::ClientPlaintext,
+        CollectionUpdateProvenance::client_plaintext(),
     )
     .await?;
 
@@ -578,7 +578,7 @@ pub async fn do_delete_vectors(
                 shard_key.clone(),
                 auth.clone(),
                 hw_measurement_acc.clone(),
-                CollectionUpdateProvenance::ClientPlaintext,
+                CollectionUpdateProvenance::client_plaintext(),
             )
             .await?,
         );
@@ -598,7 +598,7 @@ pub async fn do_delete_vectors(
                 shard_key,
                 auth,
                 hw_measurement_acc,
-                CollectionUpdateProvenance::ClientPlaintext,
+                CollectionUpdateProvenance::client_plaintext(),
             )
             .await?,
         );
@@ -836,7 +836,7 @@ pub async fn do_delete_payload(
         shard_key,
         auth,
         hw_measurement_acc,
-        CollectionUpdateProvenance::ClientPlaintext,
+        CollectionUpdateProvenance::client_plaintext(),
     )
     .await
 }
@@ -874,7 +874,7 @@ pub async fn do_clear_payload(
         shard_key,
         auth,
         hw_measurement_acc,
-        CollectionUpdateProvenance::ClientPlaintext,
+        CollectionUpdateProvenance::client_plaintext(),
     )
     .await
 }
@@ -1120,7 +1120,7 @@ pub async fn do_create_index_internal(
         None,
         Auth::new_internal(Access::full("Internal API")),
         hw_measurement_acc,
-        CollectionUpdateProvenance::ClientPlaintext,
+        CollectionUpdateProvenance::client_plaintext(),
     )
     .await
 }
@@ -1188,7 +1188,7 @@ pub async fn do_delete_index_internal(
         None,
         Auth::new_internal(Access::full("Internal API")),
         hw_measurement_acc,
-        CollectionUpdateProvenance::ClientPlaintext,
+        CollectionUpdateProvenance::client_plaintext(),
     )
     .await
 }
@@ -1341,7 +1341,7 @@ async fn maybe_encrypt_upsert_payloads(
 ) -> Result<(PointInsertOperations, CollectionUpdateProvenance), StorageError> {
     let Some(runtime_settings) = runtime_settings else {
         ensure_payload_runtime_available_for_upsert(toc, collection_name, &operation, auth).await?;
-        return Ok((operation, CollectionUpdateProvenance::ClientPlaintext));
+        return Ok((operation, CollectionUpdateProvenance::client_plaintext()));
     };
 
     let collection_pass =
@@ -1363,7 +1363,7 @@ async fn maybe_encrypt_upsert_payloads(
         ))
     })?
     else {
-        return Ok((operation, CollectionUpdateProvenance::ClientPlaintext));
+        return Ok((operation, CollectionUpdateProvenance::client_plaintext()));
     };
     let mut local_seen_client_nonces = std::collections::HashSet::new();
     let seen_client_nonces = client_nonce_replay_cache.unwrap_or(&mut local_seen_client_nonces);
@@ -1455,7 +1455,7 @@ async fn maybe_encrypt_point_payload_update(
         .await?;
         return Ok((
             PayloadUpdatePlan::Single(operation),
-            CollectionUpdateProvenance::ClientPlaintext,
+            CollectionUpdateProvenance::client_plaintext(),
         ));
     };
 
@@ -1480,7 +1480,7 @@ async fn maybe_encrypt_point_payload_update(
     else {
         return Ok((
             PayloadUpdatePlan::Single(operation),
-            CollectionUpdateProvenance::ClientPlaintext,
+            CollectionUpdateProvenance::client_plaintext(),
         ));
     };
     let mut local_seen_client_nonces = std::collections::HashSet::new();
@@ -1498,7 +1498,7 @@ async fn maybe_encrypt_point_payload_update(
         }
         return Ok((
             PayloadUpdatePlan::Single(operation),
-            CollectionUpdateProvenance::ClientPlaintext,
+            CollectionUpdateProvenance::client_plaintext(),
         ));
     }
 
@@ -1510,7 +1510,7 @@ async fn maybe_encrypt_point_payload_update(
         }
         return Ok((
             PayloadUpdatePlan::Single(operation),
-            CollectionUpdateProvenance::ClientPlaintext,
+            CollectionUpdateProvenance::client_plaintext(),
         ));
     }
 
@@ -1522,7 +1522,7 @@ async fn maybe_encrypt_point_payload_update(
         }
         return Ok((
             PayloadUpdatePlan::Single(operation),
-            CollectionUpdateProvenance::ClientPlaintext,
+            CollectionUpdateProvenance::client_plaintext(),
         ));
     };
 
@@ -1534,7 +1534,7 @@ async fn maybe_encrypt_point_payload_update(
         }
         return Ok((
             PayloadUpdatePlan::Single(operation),
-            CollectionUpdateProvenance::ClientPlaintext,
+            CollectionUpdateProvenance::client_plaintext(),
         ));
     }
 
@@ -1577,7 +1577,7 @@ async fn maybe_encrypt_point_payload_update(
     let Some(point_id) = points.first() else {
         return Ok((
             PayloadUpdatePlan::Single(operation),
-            CollectionUpdateProvenance::ClientPlaintext,
+            CollectionUpdateProvenance::client_plaintext(),
         ));
     };
 
@@ -1620,7 +1620,7 @@ fn payload_update_provenance(
         (false, false) => CollectionUpdateProvenance::runtime_verified_client_envelopes(
             verified_client_envelope_keys,
         ),
-        (false, true) => CollectionUpdateProvenance::ClientPlaintext,
+        (false, true) => CollectionUpdateProvenance::client_plaintext(),
     }
 }
 

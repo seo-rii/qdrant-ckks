@@ -76,11 +76,21 @@ pub enum CollectionStatus {
     Red,
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Clone)]
-pub enum CollectionUpdateProvenance {
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct CollectionUpdateProvenance {
+    kind: CollectionUpdateProvenanceKind,
+}
+
+impl Default for CollectionUpdateProvenance {
+    fn default() -> Self {
+        Self::client_plaintext()
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum CollectionUpdateProvenanceKind {
     /// Client-originated plaintext operation. Encrypted payload markers are not
     /// trusted in this mode and must be produced by a runtime transform first.
-    #[default]
     ClientPlaintext,
     /// Internal operation whose server-side `$qdrant_sec` markers were created
     /// by the runtime payload encryptor for the current collection config.
@@ -132,8 +142,18 @@ impl RuntimeVerifiedClientEnvelopes {
 }
 
 impl CollectionUpdateProvenance {
+    pub const fn client_plaintext() -> Self {
+        Self {
+            kind: CollectionUpdateProvenanceKind::ClientPlaintext,
+        }
+    }
+
     pub fn runtime_encrypted_payloads() -> Self {
-        Self::RuntimeEncryptedPayloads(RuntimeEncryptedPayloads::from_runtime_transform())
+        Self {
+            kind: CollectionUpdateProvenanceKind::RuntimeEncryptedPayloads(
+                RuntimeEncryptedPayloads::from_runtime_transform(),
+            ),
+        }
     }
 
     pub fn runtime_verified_client_envelopes(
@@ -141,9 +161,11 @@ impl CollectionUpdateProvenance {
     ) -> Self {
         let verified = RuntimeVerifiedClientEnvelopes::from_verified(verified_envelope_keys);
         if verified.verified_envelope_keys.is_empty() {
-            return Self::ClientPlaintext;
+            return Self::client_plaintext();
         }
-        Self::RuntimeVerifiedClientEnvelopes(verified)
+        Self {
+            kind: CollectionUpdateProvenanceKind::RuntimeVerifiedClientEnvelopes(verified),
+        }
     }
 
     pub fn runtime_encrypted_payloads_and_verified_client_envelopes(
@@ -153,27 +175,32 @@ impl CollectionUpdateProvenance {
         if verified.verified_envelope_keys.is_empty() {
             return Self::runtime_encrypted_payloads();
         }
-        Self::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(
-            RuntimeEncryptedPayloads::from_runtime_transform(),
-            verified,
-        )
+        Self {
+            kind:
+                CollectionUpdateProvenanceKind::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(
+                    RuntimeEncryptedPayloads::from_runtime_transform(),
+                    verified,
+                ),
+        }
     }
 
     pub const fn allows_server_envelopes(&self) -> bool {
         matches!(
-            self,
-            Self::RuntimeEncryptedPayloads(_)
-                | Self::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(_, _)
+            self.kind,
+            CollectionUpdateProvenanceKind::RuntimeEncryptedPayloads(_)
+                | CollectionUpdateProvenanceKind::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(_, _)
         )
     }
 
     pub fn allows_client_envelope_key(&self, envelope_key: &ClientPayloadEnvelopeKey) -> bool {
-        match self {
-            Self::RuntimeVerifiedClientEnvelopes(verified)
-            | Self::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(_, verified) => {
-                verified.contains(envelope_key)
-            }
-            Self::ClientPlaintext | Self::RuntimeEncryptedPayloads(_) => false,
+        match &self.kind {
+            CollectionUpdateProvenanceKind::RuntimeVerifiedClientEnvelopes(verified)
+            | CollectionUpdateProvenanceKind::RuntimeEncryptedPayloadsAndVerifiedClientEnvelopes(
+                _,
+                verified,
+            ) => verified.contains(envelope_key),
+            CollectionUpdateProvenanceKind::ClientPlaintext
+            | CollectionUpdateProvenanceKind::RuntimeEncryptedPayloads(_) => false,
         }
     }
 

@@ -473,7 +473,7 @@ async fn staging_operation(
         None, // shard_key
         auth,
         HwMeasurementAcc::disposable(),
-        CollectionUpdateProvenance::ClientPlaintext,
+        CollectionUpdateProvenance::client_plaintext(),
     )
     .await;
 

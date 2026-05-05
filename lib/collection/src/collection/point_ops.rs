@@ -869,7 +869,7 @@ impl Collection {
             ordering,
             None,
             hw_measurement_acc,
-            CollectionUpdateProvenance::ClientPlaintext,
+            CollectionUpdateProvenance::client_plaintext(),
         )
         .await
     }
