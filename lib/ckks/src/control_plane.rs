@@ -50,6 +50,7 @@ impl CryptoCapability {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
 pub struct CiphertextEnvelope {
     pub version: u16,
     pub capability: CryptoCapability,
@@ -424,6 +425,20 @@ mod tests {
             CiphertextEnvelope::from_stored_value(&empty_body),
             Err(ControlPlaneError::InvalidIdentifier(body)) if body == "body"
         ));
+
+        let mut unknown_field = envelope.to_stored_value();
+        unknown_field
+            .as_object_mut()
+            .unwrap()
+            .get_mut(GENERIC_CIPHERTEXT_MARKER)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("unexpected_header".to_string(), Value::Bool(true));
+        assert_eq!(
+            CiphertextEnvelope::from_stored_value(&unknown_field),
+            Err(ControlPlaneError::MalformedEnvelope),
+        );
     }
 
     #[test]
