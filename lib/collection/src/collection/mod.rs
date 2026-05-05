@@ -180,7 +180,7 @@ impl ClientPayloadNonceReplayCache {
                         "client payload nonce replay cache {cache_path:?} contains oversized entry",
                     )));
                 }
-                qdrant_crypto::ClientPayloadNonceReplayKey::validate_cache_key_for_collection(&key)
+                qdrant_sec::ClientPayloadNonceReplayKey::validate_cache_key_for_collection(&key)
                     .map_err(|err| {
                         CollectionError::service_error(format!(
                             "client payload nonce replay cache {cache_path:?} contains malformed entry: {err}",

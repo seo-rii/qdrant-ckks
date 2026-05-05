@@ -1,6 +1,6 @@
 use data_encoding::BASE64URL_NOPAD;
 use proptest::prelude::*;
-use qdrant_crypto::{
+use qdrant_sec::{
     AeadCipher, AeadKeyring, CKKS_VECTOR_KEY_DOMAIN, EncryptionContext, EncryptionError,
     LocalMasterKeyProvider, MasterKeyProvider, PAYLOAD_TEXT_KEY_DOMAIN,
     RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, WrappedKeyBlob, rewrap_resource_key,

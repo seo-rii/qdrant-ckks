@@ -7,7 +7,7 @@ use common::types::DeferredBehavior;
 use futures::stream::FuturesUnordered;
 use futures::{StreamExt as _, TryFutureExt, TryStreamExt as _, future};
 use itertools::Itertools;
-use qdrant_crypto::{
+use qdrant_sec::{
     CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadNonceReplayKey, ClientPayloadValidationContext,
     ServerPayloadValidationContext, client_payload_envelope_key, client_payload_nonce_replay_key,
     is_client_encrypted_payload_value, is_encrypted_payload_value, validate_client_payload_value,

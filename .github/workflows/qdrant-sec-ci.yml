@@ -34,7 +34,7 @@ jobs:
           sudo apt-get install -y clang libunwind-dev protobuf-compiler
 
       - name: Run qdrant-sec crypto crate security tests
-        run: cargo test --locked -p qdrant-crypto
+        run: cargo test --locked -p qdrant-sec
 
       - name: Run collection qdrant-sec config tests
         run: cargo test --locked -p collection ckks --lib

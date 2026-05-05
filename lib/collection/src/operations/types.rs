@@ -19,7 +19,7 @@ use common::types::ScoreType;
 use common::validation::validate_range_generic;
 use common::{defaults, save_on_disk};
 use issues::IssueRecord;
-use qdrant_crypto::{ClientPayloadEnvelopeKey, ClientPayloadVerifiedEnvelopeKey};
+use qdrant_sec::{ClientPayloadEnvelopeKey, ClientPayloadVerifiedEnvelopeKey};
 use schemars::JsonSchema;
 use segment::common::anonymize::Anonymize;
 use segment::common::operation_error::{CancelledError, OperationError};

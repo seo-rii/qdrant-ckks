@@ -1,6 +1,6 @@
 use data_encoding::BASE64URL_NOPAD;
 use proptest::prelude::*;
-use qdrant_crypto::{
+use qdrant_sec::{
     AeadCipher, AeadKeyring, CLIENT_ENCRYPTED_PAYLOAD_MARKER, ClientPayloadNonceReplayKey,
     ClientPayloadSignatureVerification, ClientPayloadValidationContext, ENCRYPTED_PAYLOAD_MARKER,
     EncryptionError, ExistingPayloadMode, PayloadEncryptionError, PayloadEncryptionPolicy,
@@ -71,7 +71,7 @@ fn fingerprinted_keyring_does_not_fallback_after_active_open_failure() {
     )
     .unwrap();
     let keyring = AeadKeyring::new(active).with_retired(retired);
-    let context = qdrant_crypto::EncryptionContext::payload_text("docs", "point-1", "body");
+    let context = qdrant_sec::EncryptionContext::payload_text("docs", "point-1", "body");
     let mut envelope = keyring.encrypt(b"secret", context).unwrap();
     let mut raw = BASE64URL_NOPAD
         .decode(envelope.ciphertext.as_bytes())

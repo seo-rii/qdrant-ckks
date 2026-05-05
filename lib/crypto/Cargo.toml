@@ -1,5 +1,5 @@
 [package]
-name = "qdrant-crypto"
+name = "qdrant-sec"
 version = "0.1.0"
 authors = [
     "Qdrant Team <info@qdrant.tech>",

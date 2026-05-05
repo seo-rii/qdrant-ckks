@@ -78,7 +78,7 @@ shard = { path = "../shard", default-features = false, features = ["api"] }
 sparse = { path = "../sparse" }
 api = { path = "../api" }
 wal = { path = "../wal" }
-qdrant-crypto = { path = "../crypto" }
+qdrant-sec = { path = "../crypto" }
 nix = { workspace = true, features = ["fs"] }
 
 itertools = { workspace = true }

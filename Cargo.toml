@@ -133,7 +133,7 @@ storage = { path = "lib/storage" }
 api = { path = "lib/api" }
 gpu = { path = "lib/gpu" }
 wal = { path = "lib/wal" }
-qdrant-crypto = { path = "lib/crypto" }
+qdrant-sec = { path = "lib/crypto" }
 
 actix-multipart = "0.7.2"
 constant_time_eq = "0.4.2"

@@ -1384,7 +1384,7 @@ dependencies = [
  "parking_lot",
  "pprof",
  "proptest",
- "qdrant-crypto",
+ "qdrant-sec",
  "rand 0.10.0",
  "ring",
  "ringbuffer",
@@ -5847,7 +5847,7 @@ dependencies = [
  "prometheus",
  "prost 0.11.9",
  "pyroscope",
- "qdrant-crypto",
+ "qdrant-sec",
  "raft",
  "raft-proto",
  "rand 0.10.0",
@@ -5894,22 +5894,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "qdrant-crypto"
-version = "0.1.0"
-dependencies = [
- "data-encoding",
- "nix 0.31.2",
- "proptest",
- "ring",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 2.0.18",
- "zeroize",
-]
-
-[[package]]
 name = "qdrant-edge-py"
 version = "0.6.0"
 dependencies = [
@@ -5938,6 +5922,22 @@ checksum = "e61bd348ee10767d59d65d47ced0861921e8bb3ef0823aab63cc16c6c0f6d756"
 dependencies = [
  "serde",
  "serde_derive",
+]
+
+[[package]]
+name = "qdrant-sec"
+version = "0.1.0"
+dependencies = [
+ "data-encoding",
+ "nix 0.31.2",
+ "proptest",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "zeroize",
 ]
 
 [[package]]

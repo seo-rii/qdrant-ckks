@@ -45,7 +45,7 @@ use common::types::{DetailsLevel, TelemetryDetail};
 use data_encoding::BASE64URL_NOPAD;
 use fs_err::{self as fs, File};
 use itertools::Itertools;
-use qdrant_crypto::{
+use qdrant_sec::{
     AeadCipher, CLIENT_ENCRYPTED_PAYLOAD_MARKER, CLIENT_PAYLOAD_ENVELOPE_BINDING,
     ClientPayloadSignatureVerification, ClientPayloadValidationContext, ENCRYPTED_PAYLOAD_MARKER,
     PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
@@ -2840,7 +2840,7 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     let collection_path = collection_dir.path().to_path_buf();
     let collection =
         encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
-    let sentinel = "qdrant-crypto-plaintext-sentinel-9f74dcb5";
+    let sentinel = "qdrant-sec-plaintext-sentinel-9f74dcb5";
     let mut encrypted_payload = Payload(
         serde_json::json!({ "document": { "body": sentinel } })
             .as_object()

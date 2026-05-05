@@ -14,7 +14,7 @@ use collection::operations::vector_ops::*;
 use collection::operations::verification::*;
 use collection::shards::shard::ShardId;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
-use qdrant_crypto::{
+use qdrant_sec::{
     ClientPayloadNonceReplayKey, ClientPayloadVerifiedEnvelopeKey, PayloadEncryptionError,
 };
 use schemars::JsonSchema;
@@ -1780,7 +1780,7 @@ mod tests {
     use common::load_concurrency::LoadConcurrencyConfig;
     use common::mmap;
     use data_encoding::BASE64URL_NOPAD;
-    use qdrant_crypto::{
+    use qdrant_sec::{
         CLIENT_ENCRYPTED_PAYLOAD_MARKER, client_payload_signature_message,
         is_client_encrypted_payload_value, is_encrypted_payload_value,
     };
@@ -1982,7 +1982,7 @@ mod tests {
         assert!(matches!(
             plan.encrypt_payload("1", &mut payload),
             Err(PayloadWriteSetupError::Payload(
-                qdrant_crypto::PayloadEncryptionError::AlreadyEncrypted(field)
+                qdrant_sec::PayloadEncryptionError::AlreadyEncrypted(field)
             )) if field == "body"
         ));
     }

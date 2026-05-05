@@ -201,7 +201,7 @@ mod tests {
         EncryptionSelector,
     };
     use data_encoding::BASE64URL_NOPAD;
-    use qdrant_crypto::{
+    use qdrant_sec::{
         LocalMasterKeyProvider, MasterKeyProvider, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey,
     };
     use serde_json::json;
