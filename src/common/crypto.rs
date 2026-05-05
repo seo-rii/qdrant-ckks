@@ -130,6 +130,24 @@ const SIGNATURE_PUBLIC_KEY_B64_OPTION: &str = "signature_public_key_b64";
 const SIGNATURE_PUBLIC_KEYS_OPTION: &str = "signature_public_keys";
 const SIGNATURE_KEY_ID_OPTION: &str = "signature_key_id";
 const CKKS_PROFILE_OPTION: &str = "profile";
+const CLIENT_AEAD_ALLOWED_OPTIONS: &[&str] = &[
+    "key_id",
+    KEY_ID_REQUIRED_OPTION,
+    EXPECTED_RK_ID_OPTION,
+    MIN_RK_EPOCH_OPTION,
+    MAX_RK_EPOCH_OPTION,
+    SIGNATURE_PUBLIC_KEY_B64_OPTION,
+    SIGNATURE_PUBLIC_KEYS_OPTION,
+    SIGNATURE_KEY_ID_OPTION,
+];
+
+fn unsupported_client_aead_option(options: &Value) -> Option<String> {
+    let options = options.as_object()?;
+    options
+        .keys()
+        .find(|option| !CLIENT_AEAD_ALLOWED_OPTIONS.contains(&option.as_str()))
+        .cloned()
+}
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum PayloadWriteSetupError {
@@ -218,6 +236,8 @@ pub enum PayloadWriteSetupError {
         "payload crypto instance {instance} retired_materials option must be an array of objects with material and material_fingerprint_id"
     )]
     InvalidRetiredMaterials { instance: String },
+    #[error("payload crypto instance {instance} uses unsupported option {option}")]
+    UnsupportedInstanceOption { instance: String, option: String },
     #[error("collection {collection} payload encryption is missing a key id")]
     MissingKeyId { collection: String },
     #[error(
@@ -870,6 +890,13 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
             });
         }
         if instance.provider == PAYLOAD_CLIENT_AEAD_PROVIDER {
+            if let Some(option) = unsupported_client_aead_option(&instance.options) {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option,
+                    reason: "unsupported option for payload/client-aead@v1".to_string(),
+                });
+            }
             let configured_key_id = match instance.options.get("key_id") {
                 None | Some(Value::Null) => None,
                 Some(Value::String(key_id)) if is_crypto_identifier(key_id) => {
@@ -1840,6 +1867,12 @@ fn generic_payload_write_plan(
                         collection: collection_name.to_string(),
                         rule_id: rule.id.clone(),
                         binding: CLIENT_PAYLOAD_ENVELOPE_BINDING.to_string(),
+                    });
+                }
+                if let Some(option) = unsupported_client_aead_option(&instance.options) {
+                    return Err(PayloadWriteSetupError::UnsupportedInstanceOption {
+                        instance: rule.instance.clone(),
+                        option,
                     });
                 }
                 let expected_key_id = resolve_optional_payload_key_id(
@@ -3520,6 +3553,21 @@ mod tests {
         assert!(matches!(
             validate_crypto_settings(&broad_epoch),
             Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
+
+        let mut unsupported_client_option = valid_client_settings.clone();
+        unsupported_client_option
+            .instances
+            .get_mut("docs_payload_client_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(RETIRED_MATERIALS_OPTION.to_string(), json!([]));
+        assert!(matches!(
+            validate_crypto_settings(&unsupported_client_option),
+            Err(CryptoSetupError::InvalidInstanceOption { option, .. })
+                if option == RETIRED_MATERIALS_OPTION
         ));
 
         let mut missing_signature = valid_client_settings;
@@ -5674,6 +5722,21 @@ mod tests {
         let settings_with_options = |options: serde_json::Value| -> Settings {
             raw_settings_with_options(client_policy_options(options))
         };
+
+        assert!(matches!(
+            payload_write_plan_for_collection(
+                &settings_with_options(json!({
+                    "key_id": "tenant-a/client-rk-2026-04",
+                    "signature_key_id": "tenant-a/client-signing-v1",
+                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                    "retired_materials": [],
+                })),
+                "docs",
+                &params,
+            ),
+            Err(PayloadWriteSetupError::UnsupportedInstanceOption { instance, option })
+                if instance == "docs_payload_client_v1" && option == RETIRED_MATERIALS_OPTION
+        ));
 
         assert!(matches!(
             payload_write_plan_for_collection(
