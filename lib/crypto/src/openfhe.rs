@@ -361,7 +361,7 @@ fn read_bridge_program_for_sha256(path: &Path) -> Result<Vec<u8>, CkksError> {
 
     let mut file = OpenOptions::new()
         .read(true)
-        .custom_flags(nix::libc::O_NOFOLLOW)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .open(path)
         .map_err(|err| {
             CkksError::Backend(format!(

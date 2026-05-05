@@ -1678,7 +1678,7 @@ fn read_backend_program_for_sha256(
 
     let mut file = fs::OpenOptions::new()
         .read(true)
-        .custom_flags(nix::libc::O_NOFOLLOW)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .open(program)
         .map_err(|_| invalid_program())?;
     if !file.metadata().map_err(|_| invalid_program())?.is_file() {
