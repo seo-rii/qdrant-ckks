@@ -784,6 +784,7 @@ pub async fn query(
     auth: Auth,
     request_hw_counter: RequestHwCounter,
     inference_params: InferenceParams,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Response<QueryResponse>, Status> {
     let shard_key_selector = query_points.shard_key_selector.clone();
     let shard_selector = convert_shard_selector_for_read(shard_selection, shard_key_selector)?;
@@ -818,6 +819,7 @@ pub async fn query(
         auth,
         timeout,
         request_hw_counter.get_counter(),
+        runtime_settings,
     )
     .await?;
 
@@ -843,6 +845,7 @@ pub async fn query_batch(
     timeout: Option<Duration>,
     request_hw_counter: RequestHwCounter,
     inference_params: InferenceParams,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Response<QueryBatchResponse>, Status> {
     let read_consistency = ReadConsistency::try_from_optional(read_consistency)?;
     let mut requests = Vec::with_capacity(points.len());
@@ -876,6 +879,7 @@ pub async fn query_batch(
         auth,
         timeout,
         request_hw_counter.get_counter(),
+        runtime_settings,
     )
     .await?;
 

@@ -2324,6 +2324,9 @@ mod tests {
         EncryptionSelector,
     };
     use collection::operations::types::PointRequestInternal;
+    use collection::operations::universal_query::collection_query::{
+        CollectionQueryRequest, Query, VectorInputInternal, VectorQuery,
+    };
     use collection::operations::vector_params_builder::VectorParamsBuilder;
     use collection::optimizers_builder::OptimizersConfig;
     use collection::shards::channel_service::ChannelService;
@@ -2978,6 +2981,121 @@ esac
             assert_eq!(search_result.len(), 1);
             assert_eq!(search_result[0].id, 1.into());
             assert_eq!(search_result[0].score, 9.0);
+
+            let query_result = crate::common::query::do_query_points(
+                &toc,
+                "vector_docs",
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(query_result.len(), 1);
+            assert_eq!(query_result[0].id, 1.into());
+            assert_eq!(query_result[0].score, 9.0);
+
+            let err = crate::common::query::do_query_points(
+                &toc,
+                "vector_docs",
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(true),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cannot return encrypted vector")
+            ));
+
+            let encrypted_query = CollectionQueryRequest {
+                prefetch: Vec::new(),
+                query: Some(Query::Vector(VectorQuery::Nearest(
+                    VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                ))),
+                using: DEFAULT_VECTOR_NAME.to_string(),
+                filter: None,
+                score_threshold: None,
+                limit: 1,
+                offset: 0,
+                params: None,
+                with_vector: WithVector::Bool(false),
+                with_payload: WithPayloadInterface::Bool(false),
+                lookup_from: None,
+            };
+            let plaintext_query = CollectionQueryRequest {
+                prefetch: Vec::new(),
+                query: Some(Query::Vector(VectorQuery::Nearest(
+                    VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                ))),
+                using: "plain".to_string(),
+                filter: None,
+                score_threshold: None,
+                limit: 1,
+                offset: 0,
+                params: None,
+                with_vector: WithVector::Bool(false),
+                with_payload: WithPayloadInterface::Bool(false),
+                lookup_from: None,
+            };
+            let err = crate::common::query::do_query_batch_points(
+                &toc,
+                "vector_docs",
+                vec![
+                    (encrypted_query, ShardSelectorInternal::All),
+                    (plaintext_query, ShardSelectorInternal::All),
+                ],
+                None,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cannot mix CKKS encrypted vector query")
+            ));
 
             let err = crate::common::query::do_core_search_points(
                 &toc,

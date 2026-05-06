@@ -12,7 +12,7 @@ use common::counter::hardware_accumulator::HwMeasurementAcc;
 use qdrant_sec::{
     ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD, EncryptedCkksVector,
 };
-use segment::data_types::vectors::{Named, VectorInternal};
+use segment::data_types::vectors::{Named, NamedQuery, VectorInternal};
 use segment::types::{ScoredPoint, WithPayloadInterface, WithVector};
 use shard::query::query_enum::QueryEnum;
 use shard::retrieve::record_internal::RecordInternal;
@@ -552,18 +552,20 @@ pub async fn do_query_points(
     auth: Auth,
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Vec<ScoredPoint>, StorageError> {
     let requests = vec![(request, shard_selection)];
-    let batch_res = toc
-        .query_batch(
-            collection_name,
-            requests,
-            read_consistency,
-            auth,
-            timeout,
-            hw_measurement_acc,
-        )
-        .await?;
+    let batch_res = do_query_batch_points(
+        toc,
+        collection_name,
+        requests,
+        read_consistency,
+        auth,
+        timeout,
+        hw_measurement_acc,
+        runtime_settings,
+    )
+    .await?;
     batch_res
         .into_iter()
         .next()
@@ -579,7 +581,117 @@ pub async fn do_query_batch_points(
     auth: Auth,
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Vec<Vec<ScoredPoint>>, StorageError> {
+    if let Some(settings) = runtime_settings {
+        let collection_pass = auth.check_collection_access(
+            collection_name,
+            AccessRequirements::new(),
+            "ckks_vector_query",
+        )?;
+        let collection = toc.get_collection(&collection_pass).await?;
+        let config = collection.config_snapshot().await;
+        let collection_crypto_id = config.stable_crypto_id(collection_name)?;
+        if let Some(plan) = vector_write_plan_for_collection_with_crypto_id(
+            settings,
+            collection_name,
+            &collection_crypto_id,
+            &config.params,
+        )? {
+            let mut has_encrypted_query = false;
+            let mut has_plain_query = false;
+            let mut core_requests = Vec::with_capacity(requests.len());
+
+            for (request, shard_selection) in &requests {
+                let mut prefetches = request.prefetch.iter().collect::<Vec<_>>();
+                while let Some(prefetch) = prefetches.pop() {
+                    if plan.contains_vector_name(&prefetch.using) {
+                        return Err(StorageError::bad_input(format!(
+                            "encrypted vector '{}' only supports root nearest-neighbor dense query; prefetch/fusion/MMR over CKKS ciphertext are not implemented",
+                            prefetch.using,
+                        )));
+                    }
+                    prefetches.extend(prefetch.prefetch.iter());
+                }
+
+                if !plan.contains_vector_name(&request.using) {
+                    has_plain_query = true;
+                    core_requests.push(None);
+                    continue;
+                }
+
+                has_encrypted_query = true;
+                if !request.prefetch.is_empty() {
+                    return Err(StorageError::bad_input(format!(
+                        "encrypted vector '{}' only supports root nearest-neighbor dense query; prefetch/fusion/MMR over CKKS ciphertext are not implemented",
+                        request.using,
+                    )));
+                }
+                if request.lookup_from.is_some() {
+                    return Err(StorageError::bad_input(format!(
+                        "encrypted vector '{}' query does not support lookup_from; provide a plaintext dense query vector",
+                        request.using,
+                    )));
+                }
+                let Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::Vector(
+                    VectorInternal::Dense(query_values),
+                )))) = &request.query
+                else {
+                    return Err(StorageError::bad_input(format!(
+                        "encrypted vector '{}' only supports nearest-neighbor dense query vectors",
+                        request.using,
+                    )));
+                };
+
+                core_requests.push(Some((
+                    CoreSearchRequest {
+                        query: QueryEnum::Nearest(NamedQuery::new(
+                            VectorInternal::Dense(query_values.clone()),
+                            request.using.clone(),
+                        )),
+                        filter: request.filter.clone(),
+                        params: request.params.clone(),
+                        limit: request.limit,
+                        offset: request.offset,
+                        with_payload: Some(request.with_payload.clone()),
+                        with_vector: Some(request.with_vector.clone()),
+                        score_threshold: request.score_threshold,
+                    },
+                    shard_selection.clone(),
+                )));
+            }
+
+            if has_encrypted_query {
+                if has_plain_query {
+                    return Err(StorageError::bad_input(
+                        "cannot mix CKKS encrypted vector query with plaintext vector query in the same batch",
+                    ));
+                }
+
+                let mut results = Vec::with_capacity(core_requests.len());
+                for request in core_requests {
+                    let Some((request, shard_selection)) = request else {
+                        unreachable!("plain query was rejected above");
+                    };
+                    results.push(
+                        ckks_vector_search_points(
+                            &collection,
+                            collection_name,
+                            &request,
+                            &plan,
+                            read_consistency,
+                            &shard_selection,
+                            timeout,
+                            hw_measurement_acc.clone(),
+                        )
+                        .await?,
+                    );
+                }
+                return Ok(results);
+            }
+        }
+    }
+
     toc.query_batch(
         collection_name,
         requests,

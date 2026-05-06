@@ -7,7 +7,6 @@ use itertools::Itertools;
 use storage::content_manager::collection_verification::{
     check_strict_mode, check_strict_mode_batch,
 };
-use storage::content_manager::errors::StorageError;
 use storage::dispatcher::Dispatcher;
 use tokio::time::Instant;
 
@@ -21,8 +20,8 @@ use crate::common::inference::query_requests_rest::{
     CollectionQueryGroupsRequestWithUsage, CollectionQueryRequestWithUsage,
     convert_query_groups_request_from_rest, convert_query_request_from_rest,
 };
-use crate::common::query::do_query_point_groups;
-use crate::settings::ServiceConfig;
+use crate::common::query::{do_query_batch_points, do_query_point_groups, do_query_points};
+use crate::settings::{ServiceConfig, Settings};
 
 #[cfg(test)]
 pub const THIS_FILE: &str = file!();
@@ -35,6 +34,7 @@ async fn query_points(
     request: Json<QueryRequest>,
     params: Query<ReadParams>,
     service_config: web::Data<ServiceConfig>,
+    settings: web::Data<Settings>,
     ActixAuth(auth): ActixAuth,
     api_keys: InferenceApiKeys,
 ) -> impl Responder {
@@ -75,24 +75,21 @@ async fn query_points(
         )
         .await?;
 
-        let points = dispatcher
-            .toc(&auth, &pass)
-            .query_batch(
-                &collection.collection_name,
-                vec![(request, shard_selection)],
-                params.consistency,
-                auth,
-                params.timeout(),
-                hw_measurement_acc,
-            )
-            .await?
-            .pop()
-            .ok_or_else(|| {
-                StorageError::service_error("Expected at least one response for one query")
-            })?
-            .into_iter()
-            .map(api::rest::ScoredPoint::from)
-            .collect_vec();
+        let points = do_query_points(
+            dispatcher.toc(&auth, &pass),
+            &collection.collection_name,
+            request,
+            params.consistency,
+            shard_selection,
+            auth,
+            params.timeout(),
+            hw_measurement_acc,
+            Some(settings.get_ref()),
+        )
+        .await?
+        .into_iter()
+        .map(api::rest::ScoredPoint::from)
+        .collect_vec();
 
         Ok(QueryResponse { points })
     }
@@ -114,6 +111,7 @@ async fn query_points_batch(
     request: Json<QueryRequestBatch>,
     params: Query<ReadParams>,
     service_config: web::Data<ServiceConfig>,
+    settings: web::Data<Settings>,
     ActixAuth(auth): ActixAuth,
     api_keys: InferenceApiKeys,
 ) -> impl Responder {
@@ -164,25 +162,25 @@ async fn query_points_batch(
         )
         .await?;
 
-        let res = dispatcher
-            .toc(&auth, &pass)
-            .query_batch(
-                &collection.collection_name,
-                batch,
-                params.consistency,
-                auth,
-                params.timeout(),
-                hw_measurement_acc,
-            )
-            .await?
-            .into_iter()
-            .map(|response| QueryResponse {
-                points: response
-                    .into_iter()
-                    .map(api::rest::ScoredPoint::from)
-                    .collect_vec(),
-            })
-            .collect_vec();
+        let res = do_query_batch_points(
+            dispatcher.toc(&auth, &pass),
+            &collection.collection_name,
+            batch,
+            params.consistency,
+            auth,
+            params.timeout(),
+            hw_measurement_acc,
+            Some(settings.get_ref()),
+        )
+        .await?
+        .into_iter()
+        .map(|response| QueryResponse {
+            points: response
+                .into_iter()
+                .map(api::rest::ScoredPoint::from)
+                .collect_vec(),
+        })
+        .collect_vec();
         Ok(res)
     }
     .await;
