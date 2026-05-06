@@ -3049,6 +3049,45 @@ esac
             assert_eq!(query_result[0].id, 1.into());
             assert_eq!(query_result[0].score, 9.0);
 
+            let query_with_payload = crate::common::query::do_query_points(
+                &toc,
+                "vector_docs",
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(true),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(query_with_payload.len(), 1);
+            let returned_sidecar = query_with_payload[0]
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.0.get(ENCRYPTED_VECTOR_SIDECAR_FIELD))
+                .and_then(Value::as_object)
+                .unwrap()
+                .get(DEFAULT_VECTOR_NAME)
+                .unwrap();
+            assert!(is_encrypted_ckks_vector_payload_value(returned_sidecar));
+            assert!(query_with_payload[0].vector.is_none());
+
             let mut wrong_context_settings =
                 vector_runtime_settings(&bridge.path().join("openfhe-bridge"));
             wrong_context_settings
