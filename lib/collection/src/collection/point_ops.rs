@@ -8,10 +8,10 @@ use futures::stream::FuturesUnordered;
 use futures::{StreamExt as _, TryFutureExt, TryStreamExt as _, future};
 use itertools::Itertools;
 use qdrant_sec::{
-    CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadNonceReplayKey, ClientPayloadValidationContext,
-    ENCRYPTED_VECTOR_SIDECAR_FIELD, ServerPayloadValidationContext, client_payload_envelope_key,
-    client_payload_nonce_replay_key, is_client_encrypted_payload_value,
-    is_encrypted_ckks_vector_payload_value, is_encrypted_payload_value,
+    CKKS_SCHEME, CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadNonceReplayKey,
+    ClientPayloadValidationContext, ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD,
+    EncryptedCkksVector, ServerPayloadValidationContext, client_payload_envelope_key,
+    client_payload_nonce_replay_key, is_client_encrypted_payload_value, is_encrypted_payload_value,
     validate_client_payload_value, validate_server_payload_value_metadata,
 };
 use segment::data_types::order_by::{Direction, OrderBy};
@@ -375,11 +375,34 @@ impl Collection {
                 _ => {}
             }
         }
+        let encrypted_vector_names = encryption
+            .as_ref()
+            .map(|encryption| {
+                encryption
+                    .rules
+                    .iter()
+                    .flat_map(|rule| match &rule.selector {
+                        EncryptionSelector::VectorNames { names } => names.clone(),
+                        EncryptionSelector::PayloadPaths { .. }
+                        | EncryptionSelector::MetadataKeys { .. } => Vec::new(),
+                    })
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
+        let encrypted_vector_key_id = encryption
+            .as_ref()
+            .and_then(|encryption| encryption.key_id.clone());
+
         let payload_write_touches_vector_sidecar = |payload: &Payload,
                                                     key: Option<&JsonPath>|
          -> CollectionResult<bool> {
             if let Some(key) = key {
-                return Ok(key.first_key == ENCRYPTED_VECTOR_SIDECAR_FIELD);
+                if key.first_key == ENCRYPTED_VECTOR_SIDECAR_FIELD {
+                    return Err(CollectionError::bad_input(format!(
+                        "encrypted vector sidecar '{ENCRYPTED_VECTOR_SIDECAR_FIELD}' must be written as a full runtime-generated sidecar payload",
+                    )));
+                }
+                return Ok(false);
             }
 
             let mut touches = false;
@@ -391,9 +414,44 @@ impl Collection {
                     )));
                 };
                 for (vector_name, encrypted) in sidecar {
-                    if !is_encrypted_ckks_vector_payload_value(encrypted) {
+                    if !encrypted_vector_names.contains(vector_name) {
+                        return Err(CollectionError::bad_input(format!(
+                            "encrypted vector sidecar entry '{vector_name}' is not configured as an encrypted vector",
+                        )));
+                    }
+                    let Some(marker) = encrypted
+                        .as_object()
+                        .and_then(|object| object.get(ENCRYPTED_CKKS_VECTOR_MARKER))
+                    else {
                         return Err(CollectionError::bad_input(format!(
                             "encrypted vector sidecar entry '{vector_name}' is malformed",
+                        )));
+                    };
+                    let encrypted_vector: EncryptedCkksVector = serde_json::from_value(
+                        marker.clone(),
+                    )
+                    .map_err(|err| {
+                        CollectionError::bad_input(format!(
+                            "encrypted vector sidecar entry '{vector_name}' is malformed: {err}",
+                        ))
+                    })?;
+                    if encrypted_vector.version != 1 {
+                        return Err(CollectionError::bad_input(format!(
+                            "encrypted vector sidecar entry '{vector_name}' has unsupported version {}",
+                            encrypted_vector.version,
+                        )));
+                    }
+                    if encrypted_vector.scheme != CKKS_SCHEME {
+                        return Err(CollectionError::bad_input(format!(
+                            "encrypted vector sidecar entry '{vector_name}' has unsupported scheme '{}'",
+                            encrypted_vector.scheme,
+                        )));
+                    }
+                    if let Some(key_id) = encrypted_vector_key_id.as_deref()
+                        && encrypted_vector.envelope.key_id != key_id
+                    {
+                        return Err(CollectionError::bad_input(format!(
+                            "encrypted vector sidecar entry '{vector_name}' key id does not match this collection",
                         )));
                     }
                 }

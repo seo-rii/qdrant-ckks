@@ -47,7 +47,8 @@ use fs_err::{self as fs, File};
 use itertools::Itertools;
 use qdrant_sec::{
     AeadCipher, CLIENT_ENCRYPTED_PAYLOAD_MARKER, CLIENT_PAYLOAD_ENVELOPE_BINDING,
-    ClientPayloadSignatureVerification, ClientPayloadValidationContext, ENCRYPTED_PAYLOAD_MARKER,
+    ClientPayloadSignatureVerification, ClientPayloadValidationContext,
+    ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_PAYLOAD_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD,
     PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
     client_payload_signature_message, is_client_encrypted_payload_value,
     is_encrypted_payload_value, validate_client_payload_value_for_runtime,
@@ -3203,6 +3204,92 @@ async fn encrypted_vector_rejects_plaintext_vector_writes() {
             );
         }
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, vector_encryption_config()).await;
+
+    let vector_sidecar = |vector_name: &str, key_id: &str| {
+        let mut sidecar = Map::new();
+        sidecar.insert(
+            vector_name.to_string(),
+            serde_json::json!({
+                ENCRYPTED_CKKS_VECTOR_MARKER: {
+                    "version": 1,
+                    "scheme": "openfhe-ckks",
+                    "envelope": {
+                        "version": 1,
+                        "algorithm": "AES-256-GCM",
+                        "key_id": key_id,
+                        "material_fingerprint": "tenant-a/vector@v1",
+                        "nonce": BASE64URL_NOPAD.encode(&[1u8; 12]),
+                        "ciphertext": BASE64URL_NOPAD.encode(&[2u8; 16]),
+                    },
+                },
+            }),
+        );
+        let mut payload = Map::new();
+        payload.insert(
+            ENCRYPTED_VECTOR_SIDECAR_FIELD.to_string(),
+            serde_json::Value::Object(sidecar),
+        );
+        Payload(payload)
+    };
+
+    let wrong_key_sidecar =
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
+            payload: vector_sidecar(DEFAULT_VECTOR_NAME, "tenant-a:wrong"),
+            points: Some(vec![1.into()]),
+            filter: None,
+            key: None,
+        }));
+    let err = collection
+        .update_from_client(
+            wrong_key_sidecar,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::runtime_encrypted_vectors(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("encrypted vector sidecar entry")
+                && description.contains("key id does not match")
+    ));
+
+    let unconfigured_vector_sidecar =
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
+            payload: vector_sidecar("other", "tenant-a:docs"),
+            points: Some(vec![1.into()]),
+            filter: None,
+            key: None,
+        }));
+    let err = collection
+        .update_from_client(
+            unconfigured_vector_sidecar,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::runtime_encrypted_vectors(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("encrypted vector sidecar entry 'other'")
+                && description.contains("not configured")
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread")]
