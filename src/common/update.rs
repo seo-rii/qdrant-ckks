@@ -3013,6 +3013,44 @@ esac
             assert_eq!(query_result[0].id, 1.into());
             assert_eq!(query_result[0].score, 9.0);
 
+            let mut wrong_context_settings =
+                vector_runtime_settings(&bridge.path().join("openfhe-bridge"));
+            wrong_context_settings
+                .crypto
+                .instances
+                .get_mut("docs_vector_v1")
+                .unwrap()
+                .options["crypto_context_b64"] =
+                json!(BASE64URL_NOPAD.encode(b"different openfhe context"));
+            let err = crate::common::query::do_core_search_points(
+                &toc,
+                "vector_docs",
+                SearchRequestInternal {
+                    vector: vec![0.0, 0.0].into(),
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    score_threshold: None,
+                }
+                .into(),
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&wrong_context_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::ServiceError { description, .. }
+                    if description.contains("context digest does not match")
+            ));
+
             let err = crate::common::query::do_query_points(
                 &toc,
                 "vector_docs",
