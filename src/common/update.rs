@@ -1486,6 +1486,11 @@ async fn maybe_encrypt_upsert_payloads(
     else {
         return Ok((operation, CollectionUpdateProvenance::client_plaintext()));
     };
+    ensure_client_envelope_cluster_nonce_ledger_available(
+        runtime_settings,
+        collection_name,
+        plan.has_client_envelope_rules(),
+    )?;
     let mut local_seen_client_nonces = std::collections::HashSet::new();
     let seen_client_nonces = client_nonce_replay_cache.unwrap_or(&mut local_seen_client_nonces);
     let seen_client_nonces_before = seen_client_nonces.clone();
@@ -2034,6 +2039,11 @@ async fn maybe_encrypt_point_payload_update(
             CollectionUpdateProvenance::client_plaintext(),
         ));
     };
+    ensure_client_envelope_cluster_nonce_ledger_available(
+        runtime_settings,
+        collection_name,
+        plan.has_client_envelope_rules(),
+    )?;
     let mut local_seen_client_nonces = std::collections::HashSet::new();
     let seen_client_nonces = client_nonce_replay_cache.unwrap_or(&mut local_seen_client_nonces);
     let seen_client_nonces_before = seen_client_nonces.clone();
@@ -2152,6 +2162,19 @@ async fn maybe_encrypt_point_payload_update(
     .await?;
 
     Ok((PayloadUpdatePlan::Single(operation), update_provenance))
+}
+
+fn ensure_client_envelope_cluster_nonce_ledger_available(
+    runtime_settings: &Settings,
+    collection_name: &str,
+    has_client_envelope_rules: bool,
+) -> Result<(), StorageError> {
+    if runtime_settings.cluster.enabled && has_client_envelope_rules {
+        return Err(StorageError::bad_input(format!(
+            "client-side encrypted payload writes in clustered mode for collection {collection_name} require a cluster-wide nonce replay ledger; this build only provides request, process, and collection-local replay caches",
+        )));
+    }
+    Ok(())
 }
 
 fn payload_update_provenance(
@@ -4373,6 +4396,45 @@ esac
                 )
                 .await
                 .unwrap();
+            let mut clustered_client_settings = client_settings.clone();
+            clustered_client_settings.cluster.enabled = true;
+            let err = do_upsert_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "client_docs".to_string(),
+                PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                    points: vec![api::rest::PointStruct {
+                        id: 11.into(),
+                        vector: api::rest::VectorStruct::Single(vec![0.7, 0.8]),
+                        payload: Some(segment::types::Payload(
+                            json!({ "body": signed_client_body(&client_docs_uuid_string, "11") })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        )),
+                    }],
+                    shard_key: None,
+                    update_filter: None,
+                    update_mode: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                Some(&clustered_client_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cluster-wide nonce replay ledger")
+            ));
+
             do_upsert_points(
                 UncheckedTocProvider::new_unchecked(&toc),
                 "client_docs".to_string(),
