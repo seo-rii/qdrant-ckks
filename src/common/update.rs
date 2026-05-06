@@ -3172,6 +3172,71 @@ esac
             assert!(is_encrypted_ckks_vector_payload_value(returned_sidecar));
             assert!(query_with_payload[0].vector.is_none());
 
+            let batch_query_with_payload = crate::common::query::do_query_batch_points(
+                &toc,
+                "vector_docs",
+                vec![
+                    (
+                        CollectionQueryRequest {
+                            prefetch: Vec::new(),
+                            query: Some(Query::Vector(VectorQuery::Nearest(
+                                VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                            ))),
+                            using: DEFAULT_VECTOR_NAME.to_string(),
+                            filter: None,
+                            score_threshold: None,
+                            limit: 1,
+                            offset: 0,
+                            params: None,
+                            with_vector: WithVector::Bool(false),
+                            with_payload: WithPayloadInterface::Bool(true),
+                            lookup_from: None,
+                        },
+                        ShardSelectorInternal::All,
+                    ),
+                    (
+                        CollectionQueryRequest {
+                            prefetch: Vec::new(),
+                            query: Some(Query::Vector(VectorQuery::Nearest(
+                                VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                            ))),
+                            using: DEFAULT_VECTOR_NAME.to_string(),
+                            filter: None,
+                            score_threshold: Some(5.0),
+                            limit: 1,
+                            offset: 0,
+                            params: None,
+                            with_vector: WithVector::Bool(false),
+                            with_payload: WithPayloadInterface::Bool(true),
+                            lookup_from: None,
+                        },
+                        ShardSelectorInternal::All,
+                    ),
+                ],
+                None,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(batch_query_with_payload.len(), 2);
+            for batch_result in &batch_query_with_payload {
+                assert_eq!(batch_result.len(), 1);
+                assert_eq!(batch_result[0].id, 1.into());
+                let returned_sidecar = batch_result[0]
+                    .payload
+                    .as_ref()
+                    .and_then(|payload| payload.0.get(ENCRYPTED_VECTOR_SIDECAR_FIELD))
+                    .and_then(Value::as_object)
+                    .unwrap()
+                    .get(DEFAULT_VECTOR_NAME)
+                    .unwrap();
+                assert!(is_encrypted_ckks_vector_payload_value(returned_sidecar));
+                assert!(batch_result[0].vector.is_none());
+            }
+
             let mut wrong_context_settings =
                 vector_runtime_settings(&bridge.path().join("openfhe-bridge"));
             wrong_context_settings
