@@ -4498,6 +4498,44 @@ esac
                 StorageError::BadInput { description }
                     if description.contains("cluster-wide nonce replay ledger")
             ));
+            let err = do_batch_update_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "client_docs".to_string(),
+                vec![UpdateOperation::Upsert(UpsertOperation {
+                    upsert: PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                        points: vec![api::rest::PointStruct {
+                            id: 15.into(),
+                            vector: api::rest::VectorStruct::Single(vec![0.5, 0.6]),
+                            payload: Some(segment::types::Payload(
+                                json!({ "body": signed_client_body(&client_docs_uuid_string, "15") })
+                                    .as_object()
+                                    .unwrap()
+                                    .clone(),
+                            )),
+                        }],
+                        shard_key: None,
+                        update_filter: None,
+                        update_mode: None,
+                    }),
+                })],
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                Some(&clustered_client_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cluster-wide nonce replay ledger")
+            ));
 
             do_upsert_points(
                 UncheckedTocProvider::new_unchecked(&toc),
