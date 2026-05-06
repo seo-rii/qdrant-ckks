@@ -14,6 +14,7 @@ use qdrant_sec::{
 };
 use segment::data_types::vectors::{Named, NamedQuery, VectorInternal};
 use segment::types::{ScoredPoint, WithPayloadInterface, WithVector};
+use segment::utils::scored_point_ties::ScoredPointTies;
 use shard::query::query_enum::QueryEnum;
 use shard::retrieve::record_internal::RecordInternal;
 use shard::scroll::ScrollRequestInternal;
@@ -330,7 +331,7 @@ async fn ckks_vector_search_points(
     }
 
     let mut scored = scored_by_id.into_values().collect::<Vec<_>>();
-    scored.sort_unstable_by(|a, b| b.cmp(a));
+    scored.sort_unstable_by(|a, b| ScoredPointTies(b).cmp(&ScoredPointTies(a)));
     let mut top = scored
         .into_iter()
         .skip(search.offset)
