@@ -3380,6 +3380,75 @@ async fn encrypted_vector_rejects_search_path() {
                 && description.contains("CKKS-native vector search is not implemented")
     ));
 
+    let err = GroupBy::new(
+        GroupRequest {
+            source: SourceRequest::Search(SearchRequestInternal {
+                vector: vec![1.0, 0.0, 0.0, 0.0].into(),
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: Some(0),
+                with_payload: Some(WithPayloadInterface::Bool(false)),
+                with_vector: Some(WithVector::Bool(false)),
+                score_threshold: None,
+            }),
+            group_by: "group".parse().unwrap(),
+            group_size: 1,
+            limit: 1,
+            with_lookup: None,
+        },
+        &collection,
+        |_name| async { None },
+        HwMeasurementAcc::new(),
+    )
+    .execute()
+    .await
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("encrypted vector")
+                && description.contains("CKKS-native vector search is not implemented")
+    ));
+
+    let err = GroupBy::new(
+        GroupRequest {
+            source: SourceRequest::Query(CollectionQueryRequest {
+                prefetch: vec![],
+                query: Some(Query::Vector(VectorQuery::Nearest(
+                    VectorInputInternal::Vector(VectorInternal::from(vec![1.0, 0.0, 0.0, 0.0])),
+                ))),
+                using: DEFAULT_VECTOR_NAME.to_string(),
+                filter: None,
+                score_threshold: None,
+                limit: 1,
+                offset: 0,
+                params: None,
+                with_vector: WithVector::Bool(false),
+                with_payload: WithPayloadInterface::Bool(false),
+                lookup_from: None,
+            }),
+            group_by: "group".parse().unwrap(),
+            group_size: 1,
+            limit: 1,
+            with_lookup: None,
+        },
+        &collection,
+        |_name| async { None },
+        HwMeasurementAcc::new(),
+    )
+    .execute()
+    .await
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("encrypted vector")
+                && description.contains("CKKS-native vector search is not implemented")
+    ));
+
     let err = recommend_by(
         RecommendRequestInternal {
             positive: vec![RecommendExample::Dense(vec![1.0, 0.0, 0.0, 0.0])],
