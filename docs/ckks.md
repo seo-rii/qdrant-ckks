@@ -185,13 +185,13 @@ across later requests and same-node reloads. On collection load, Qdrant also
 scans already stored `$qdrant_client_aead` envelope markers for configured
 client-payload paths and backfills missing replay-cache entries; stored duplicate
 nonces fail closed. A cluster-wide replay index is not implemented, so
-`payload/client-aead@v1` public writes fail closed when `cluster.enabled=true`;
-clustered zero-trust client envelope ingest requires a future consensus-backed
-nonce ledger. SDKs must still generate fresh 96-bit CSPRNG nonces and
-regenerate envelopes on retry instead of replaying failed request bodies. Nonces
-are recorded before shard storage is attempted so the policy fails secure; if a
-write returns an error after envelope validation, clients must build a new
-envelope with a new nonce before retrying.
+`payload/client-aead@v1` collection runtime validation and public writes fail
+closed when `cluster.enabled=true`; clustered zero-trust client envelope ingest
+requires a future consensus-backed nonce ledger. SDKs must still generate fresh
+96-bit CSPRNG nonces and regenerate envelopes on retry instead of replaying
+failed request bodies. Nonces are recorded before shard storage is attempted so
+the policy fails secure; if a write returns an error after envelope validation,
+clients must build a new envelope with a new nonce before retrying.
 
 ```json
 {

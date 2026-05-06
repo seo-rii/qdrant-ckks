@@ -1028,6 +1028,23 @@ fn validate_collection_crypto_runtime_inner(
     params: &CollectionParams,
 ) -> Result<(), StorageError> {
     if let Some(encryption) = &params.encryption {
+        if settings.cluster.enabled {
+            for rule in &encryption.rules {
+                let EncryptionSelector::PayloadPaths { .. } = &rule.selector else {
+                    continue;
+                };
+                let Some(instance) = settings.crypto.instances.get(&rule.instance) else {
+                    continue;
+                };
+                if instance.provider == PAYLOAD_CLIENT_AEAD_PROVIDER {
+                    return Err(StorageError::bad_input(format!(
+                        "collection {collection_name} rule {} uses {PAYLOAD_CLIENT_AEAD_PROVIDER}, \
+                         which requires a cluster-wide nonce replay ledger when cluster.enabled=true",
+                        rule.id,
+                    )));
+                }
+            }
+        }
         return validate_generic_collection_crypto_runtime(
             &effective_settings(settings),
             collection_name,
@@ -5895,6 +5912,60 @@ mod tests {
             payload.0.get("body").unwrap()
         ));
         assert!(!is_encrypted_payload_value(payload.0.get("body").unwrap()));
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_rejects_client_envelopes_in_clustered_mode() {
+        let (_, public_key) =
+            signed_client_envelope("docs", "point-1", "body", "tenant-a/client-signing-v1");
+        let mut settings = Settings {
+            crypto: CryptoSettings {
+                instances: HashMap::from([(
+                    "docs_payload_client_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: client_policy_options(json!({
+                            "key_id": "tenant-a/client-rk-2026-04",
+                            "key_id_required": true,
+                            "signature_key_id": "tenant-a/client-signing-v1",
+                            "signature_public_key_b64": BASE64URL_NOPAD.encode(&public_key),
+                        })),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        settings.cluster.enabled = true;
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/client-rk-2026-04".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_client_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_client_v1".to_string(),
+                    binding: Some(CLIENT_PAYLOAD_ENVELOPE_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params)
+            .expect_err("clustered client-side envelope collection must fail closed");
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("cluster-wide nonce replay ledger")
+                    && description.contains(PAYLOAD_CLIENT_AEAD_PROVIDER)
+        ));
     }
 
     #[test]
