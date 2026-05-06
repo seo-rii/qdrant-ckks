@@ -20,6 +20,7 @@ Unsupported search/index features for CKKS ciphertext vectors in this branch:
 - HNSW similarity search directly over CKKS ciphertext
 - quantization over CKKS ciphertext
 - recommend/discover flows that require vector arithmetic over encrypted values
+- search-groups/query-groups over CKKS ciphertext sidecars
 - mixed plaintext and encrypted vector searches in one batch
 - payload filtering over encrypted metadata
 - shard transfer or snapshot restore without matching runtime keys and OpenFHE
@@ -37,7 +38,7 @@ implementation.
 | `set_payload` / `overwrite_payload` | Supported for explicit point ids when Qdrant can bind AAD to each point id. Multi-point updates are fanned out into one encrypted operation per point; filter-based and key-path encrypted-field updates fail closed. | Same explicit-point-id limitation as server-side payload writes. Clients must provide one envelope per point/field; filter-based and key-path encrypted-field updates fail closed. | Not applicable. |
 | `update_vectors` | Not applicable. | Not applicable. | Supported for point-specific dense vector updates by writing the encrypted sidecar payload and omitting the plaintext vector update. Sparse and multi-dense encrypted vectors fail closed. |
 | Payload indexes, filters, facets, ordering, grouping, and formulas | Plaintext indexes, read/update filters, facet keys, order-by keys, group-by keys, and formula payload references over encrypted paths, parent paths, or child paths are rejected. Searching, mutating by filter, ordering, grouping, or aggregating encrypted content requires a future blind-index provider. | Same policy. The opaque ciphertext field is not searchable, orderable, groupable, facetable, or usable in mutation filters as plaintext. | Payload filtering/faceting over encrypted metadata is unsupported. |
-| `retrieve`, `scroll`, `search`, and `query` result payloads | Stored `$qdrant_sec` markers are returned raw. There is no `decrypt_payload` option or RBAC capability yet. | Stored `$qdrant_client_aead` markers are returned raw for SDK/client decryption. | Stored vector sidecar payload envelopes are returned raw when payloads are requested. REST/gRPC nearest-neighbor dense-vector `search` and root direct `query` are supported through brute-force sidecar scoring with runtime OpenFHE settings. HNSW, quantization, recommend/discover, prefetch/fusion/MMR, encrypted query vectors, and mixed encrypted/plaintext batch search remain unsupported. |
+| `retrieve`, `scroll`, `search`, and `query` result payloads | Stored `$qdrant_sec` markers are returned raw. There is no `decrypt_payload` option or RBAC capability yet. | Stored `$qdrant_client_aead` markers are returned raw for SDK/client decryption. | Stored vector sidecar payload envelopes are returned raw when payloads are requested. REST/gRPC nearest-neighbor dense-vector `search` and root direct `query` are supported through brute-force sidecar scoring with runtime OpenFHE settings. HNSW, quantization, recommend/discover, search-groups/query-groups, prefetch/fusion/MMR, encrypted query vectors, and mixed encrypted/plaintext batch search remain unsupported. |
 | Snapshots | Snapshot archives are expected to contain envelopes only; payload sentinel snapshot leakage is covered by integration tests. Collection, shard, and CLI startup snapshot recover paths preflight runtime crypto settings, including missing material, wrong wrapped-RK key, and provider key-id mismatch cases. | Same stored-value behavior as server-side payloads. Qdrant cannot validate client AEAD tags without client keys. | Restore requires matching OpenFHE context/runtime material; missing runtime instance/material/backend preflight is wired, while wrong-context restore coverage is still missing. |
 | Shard transfer / replication | Encrypted collection data-movement operations require matching non-secret crypto runtime capability fingerprints in peer metadata. Operations fail closed if any involved peer has missing or mismatched metadata. Automatic dead-replica recovery only proposes encrypted shard transfers from source peers with matching parity metadata. | Same policy; client-envelope verifier policy must match across nodes before encrypted transfers are allowed. | Same policy; matching OpenFHE context and metadata AEAD material must be enforced before encrypted transfers are allowed. |
 | Metadata encryption | Not implemented. `metadata_keys` selectors are reserved and rejected. | Not implemented. | Not implemented. |
@@ -614,9 +615,9 @@ validates each CKKS envelope against the active OpenFHE public material/context
 digest, and sends `score_plaintext_query` requests to the bridge. Scores are
 treated as larger-is-better similarity values. This executor is intentionally
 brute-force: it does not use HNSW pruning, quantization, recommend/discover
-vector arithmetic, prefetch/fusion/MMR, or encrypted query ciphertexts. Direct
-collection-internal calls without runtime settings still fail closed for
-encrypted vector names.
+vector arithmetic, search-groups/query-groups, prefetch/fusion/MMR, or encrypted
+query ciphertexts. Direct collection-internal calls without runtime settings
+still fail closed for encrypted vector names.
 
 ## OpenFHE bridge protocol
 
