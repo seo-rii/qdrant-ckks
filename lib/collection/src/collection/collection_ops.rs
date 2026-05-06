@@ -61,6 +61,26 @@ impl Collection {
         &self,
         plan: &CryptoMigrationPlan,
     ) -> CollectionResult<()> {
+        if plan.requires_verified_completion() {
+            let expected_shards: std::collections::BTreeSet<_> = self
+                .shards_holder
+                .read()
+                .await
+                .get_shards()
+                .map(|(shard_id, _)| shard_id)
+                .collect();
+            let checkpoint_shards: std::collections::BTreeSet<_> = plan
+                .checkpoints
+                .iter()
+                .map(|checkpoint| checkpoint.shard_id)
+                .collect();
+            if checkpoint_shards != expected_shards {
+                return Err(CollectionError::bad_input(
+                    "crypto migration completion checkpoints must cover every collection shard",
+                ));
+            }
+        }
+
         let mut config = self.collection_config.write().await;
         let Some(current_encryption) = config.params.encryption.as_ref() else {
             return Err(CollectionError::bad_input(

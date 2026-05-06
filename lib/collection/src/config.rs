@@ -1219,6 +1219,20 @@ pub struct CryptoMigrationPlan {
 }
 
 impl CryptoMigrationPlan {
+    pub fn requires_verified_completion(&self) -> bool {
+        matches!(
+            (self.from, self.to),
+            (
+                CryptoMigrationState::Encrypting,
+                CryptoMigrationState::Active
+            ) | (CryptoMigrationState::Rotating, CryptoMigrationState::Active)
+                | (
+                    CryptoMigrationState::Decrypting,
+                    CryptoMigrationState::Disabled
+                )
+        )
+    }
+
     pub fn validate_admin_plan(&self) -> Result<(), ValidationError> {
         if !self.from.is_job_transition_to(self.to) {
             return Err(ValidationError::new("invalid_crypto_migration_transition"));
@@ -1268,17 +1282,7 @@ impl CryptoMigrationPlan {
             ));
         }
 
-        let requires_verified_completion = matches!(
-            (self.from, self.to),
-            (
-                CryptoMigrationState::Encrypting,
-                CryptoMigrationState::Active
-            ) | (CryptoMigrationState::Rotating, CryptoMigrationState::Active)
-                | (
-                    CryptoMigrationState::Decrypting,
-                    CryptoMigrationState::Disabled
-                )
-        );
+        let requires_verified_completion = self.requires_verified_completion();
 
         if self.dry_run && requires_verified_completion {
             return Err(ValidationError::new(

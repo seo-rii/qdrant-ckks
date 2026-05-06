@@ -1180,6 +1180,64 @@ async fn crypto_migration_plan_updates_collection_config_through_admin_path() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn crypto_migration_completion_requires_all_collection_shards() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 2, payload_encryption_config()).await;
+
+    collection
+        .apply_crypto_migration_plan(&CryptoMigrationPlan {
+            from: CryptoMigrationState::Active,
+            to: CryptoMigrationState::Rotating,
+            target_epoch: 1,
+            active_rk_id: Some("tenant-a/payload-rk-v2".to_string()),
+            retired_rk_id: Some("tenant-a/payload-rk-v1".to_string()),
+            dry_run: false,
+            checkpoints: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    let incomplete_completion = CryptoMigrationPlan {
+        from: CryptoMigrationState::Rotating,
+        to: CryptoMigrationState::Active,
+        target_epoch: 1,
+        active_rk_id: Some("tenant-a/payload-rk-v2".to_string()),
+        retired_rk_id: Some("tenant-a/payload-rk-v1".to_string()),
+        dry_run: false,
+        checkpoints: vec![CryptoMigrationCheckpoint {
+            shard_id: 0,
+            total_points: 1,
+            processed_points: 1,
+            rewritten_points: 1,
+            status: CryptoMigrationCheckpointStatus::Verified,
+        }],
+    };
+    let err = collection
+        .apply_crypto_migration_plan(&incomplete_completion)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("must cover every collection shard")
+    ));
+
+    let mut complete = incomplete_completion;
+    complete.checkpoints.push(CryptoMigrationCheckpoint {
+        shard_id: 1,
+        total_points: 1,
+        processed_points: 1,
+        rewritten_points: 1,
+        status: CryptoMigrationCheckpointStatus::Verified,
+    });
+    collection
+        .apply_crypto_migration_plan(&complete)
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn encrypted_payload_field_rejects_plaintext_filters() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection =
