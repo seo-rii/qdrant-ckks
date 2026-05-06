@@ -2319,6 +2319,7 @@ mod tests {
     use std::num::NonZeroUsize;
     use std::sync::Arc;
 
+    use api::rest::{BaseGroupRequest, SearchGroupsRequestInternal};
     use collection::config::{
         CollectionEncryptionConfig, CollectionParams, CryptoMigrationState, EncryptionRuleRef,
         EncryptionSelector,
@@ -3049,6 +3050,73 @@ esac
                 err,
                 StorageError::ServiceError { description, .. }
                     if description.contains("context digest does not match")
+            ));
+
+            let err = crate::common::query::do_search_point_groups(
+                &toc,
+                "vector_docs",
+                SearchGroupsRequestInternal {
+                    vector: vec![0.0, 0.0].into(),
+                    filter: None,
+                    params: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                    group_request: BaseGroupRequest {
+                        group_by: "group".parse().unwrap(),
+                        group_size: 1,
+                        limit: 1,
+                        with_lookup: None,
+                    },
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("encrypted vector")
+                        && description.contains("CKKS-native vector search is not implemented")
+            ));
+
+            let err = crate::common::query::do_query_point_groups(
+                &toc,
+                "vector_docs",
+                collection::operations::universal_query::collection_query::CollectionQueryGroupsRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    params: None,
+                    score_threshold: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                    group_by: "group".parse().unwrap(),
+                    group_size: 1,
+                    limit: 1,
+                    with_lookup: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("encrypted vector")
+                        && description.contains("CKKS-native vector search is not implemented")
             ));
 
             let err = crate::common::query::do_query_points(
