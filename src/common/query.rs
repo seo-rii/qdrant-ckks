@@ -255,7 +255,7 @@ async fn ckks_vector_search_points(
     }
 
     let mut next_offset = None;
-    let mut scored = Vec::new();
+    let mut scored_by_id = std::collections::HashMap::new();
     const BATCH_SIZE: usize = 512;
 
     loop {
@@ -302,7 +302,7 @@ async fn ckks_vector_search_points(
             {
                 continue;
             }
-            scored.push(ScoredPoint {
+            let scored_point = ScoredPoint {
                 id: record.id,
                 version: 0,
                 score,
@@ -310,7 +310,17 @@ async fn ckks_vector_search_points(
                 vector: None,
                 shard_key: record.shard_key,
                 order_value: None,
-            });
+            };
+            match scored_by_id.entry(scored_point.id) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    if scored_point > *entry.get() {
+                        entry.insert(scored_point);
+                    }
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(scored_point);
+                }
+            }
         }
 
         let Some(offset) = scroll_result.next_page_offset else {
@@ -319,8 +329,8 @@ async fn ckks_vector_search_points(
         next_offset = Some(offset);
     }
 
+    let mut scored = scored_by_id.into_values().collect::<Vec<_>>();
     scored.sort_unstable_by(|a, b| b.cmp(a));
-    scored.dedup_by(|a, b| a.id == b.id);
     let mut top = scored
         .into_iter()
         .skip(search.offset)
