@@ -3018,6 +3018,90 @@ esac
             assert!(is_encrypted_ckks_vector_payload_value(returned_sidecar));
             assert!(search_with_payload[0].vector.is_none());
 
+            let threshold_result = crate::common::query::do_core_search_points(
+                &toc,
+                "vector_docs",
+                SearchRequestInternal {
+                    vector: vec![0.0, 0.0].into(),
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    filter: None,
+                    params: None,
+                    limit: 2,
+                    offset: None,
+                    score_threshold: Some(5.0),
+                }
+                .into(),
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(threshold_result.len(), 1);
+            assert_eq!(threshold_result[0].id, 1.into());
+            assert_eq!(threshold_result[0].score, 9.0);
+
+            let batch_with_payload = crate::common::query::do_search_batch_points(
+                &toc,
+                "vector_docs",
+                vec![
+                    (
+                        SearchRequestInternal {
+                            vector: vec![0.0, 0.0].into(),
+                            with_payload: Some(WithPayloadInterface::Bool(true)),
+                            with_vector: Some(WithVector::Bool(false)),
+                            filter: None,
+                            params: None,
+                            limit: 1,
+                            offset: None,
+                            score_threshold: None,
+                        }
+                        .into(),
+                        ShardSelectorInternal::All,
+                    ),
+                    (
+                        SearchRequestInternal {
+                            vector: vec![0.0, 0.0].into(),
+                            with_payload: Some(WithPayloadInterface::Bool(true)),
+                            with_vector: Some(WithVector::Bool(false)),
+                            filter: None,
+                            params: None,
+                            limit: 1,
+                            offset: None,
+                            score_threshold: Some(5.0),
+                        }
+                        .into(),
+                        ShardSelectorInternal::All,
+                    ),
+                ],
+                None,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(batch_with_payload.len(), 2);
+            for batch_result in &batch_with_payload {
+                assert_eq!(batch_result.len(), 1);
+                assert_eq!(batch_result[0].id, 1.into());
+                let returned_sidecar = batch_result[0]
+                    .payload
+                    .as_ref()
+                    .and_then(|payload| payload.0.get(ENCRYPTED_VECTOR_SIDECAR_FIELD))
+                    .and_then(Value::as_object)
+                    .unwrap()
+                    .get(DEFAULT_VECTOR_NAME)
+                    .unwrap();
+                assert!(is_encrypted_ckks_vector_payload_value(returned_sidecar));
+                assert!(batch_result[0].vector.is_none());
+            }
+
             let query_result = crate::common::query::do_query_points(
                 &toc,
                 "vector_docs",
@@ -3117,6 +3201,44 @@ esac
                 None,
                 HwMeasurementAcc::disposable(),
                 Some(&wrong_context_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::ServiceError { description, .. }
+                    if description.contains("context digest does not match")
+            ));
+
+            let mut wrong_public_key_settings =
+                vector_runtime_settings(&bridge.path().join("openfhe-bridge"));
+            wrong_public_key_settings
+                .crypto
+                .instances
+                .get_mut("docs_vector_v1")
+                .unwrap()
+                .options["public_key_b64"] =
+                json!(BASE64URL_NOPAD.encode(b"different openfhe public key"));
+            let err = crate::common::query::do_core_search_points(
+                &toc,
+                "vector_docs",
+                SearchRequestInternal {
+                    vector: vec![0.0, 0.0].into(),
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    score_threshold: None,
+                }
+                .into(),
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&wrong_public_key_settings),
             )
             .await
             .unwrap_err();
