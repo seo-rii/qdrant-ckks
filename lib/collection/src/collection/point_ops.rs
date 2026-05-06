@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use common::types::DeferredBehavior;
+use data_encoding::BASE64URL_NOPAD;
 use futures::stream::FuturesUnordered;
 use futures::{StreamExt as _, TryFutureExt, TryStreamExt as _, future};
 use itertools::Itertools;
@@ -452,6 +453,41 @@ impl Collection {
                     {
                         return Err(CollectionError::bad_input(format!(
                             "encrypted vector sidecar entry '{vector_name}' key id does not match this collection",
+                        )));
+                    }
+                    if encrypted_vector.envelope.algorithm != "AES-256-GCM" {
+                        return Err(CollectionError::bad_input(format!(
+                            "encrypted vector sidecar entry '{vector_name}' has unsupported envelope algorithm '{}'",
+                            encrypted_vector.envelope.algorithm,
+                        )));
+                    }
+                    if encrypted_vector.envelope.material_fingerprint.is_empty() {
+                        return Err(CollectionError::bad_input(format!(
+                            "encrypted vector sidecar entry '{vector_name}' is missing material fingerprint",
+                        )));
+                    }
+                    let nonce = BASE64URL_NOPAD
+                        .decode(encrypted_vector.envelope.nonce.as_bytes())
+                        .map_err(|_| {
+                            CollectionError::bad_input(format!(
+                                "encrypted vector sidecar entry '{vector_name}' nonce is not base64url",
+                            ))
+                        })?;
+                    if nonce.len() != 12 {
+                        return Err(CollectionError::bad_input(format!(
+                            "encrypted vector sidecar entry '{vector_name}' nonce must be 12 bytes",
+                        )));
+                    }
+                    let ciphertext = BASE64URL_NOPAD
+                        .decode(encrypted_vector.envelope.ciphertext.as_bytes())
+                        .map_err(|_| {
+                            CollectionError::bad_input(format!(
+                                "encrypted vector sidecar entry '{vector_name}' ciphertext is not base64url",
+                            ))
+                        })?;
+                    if ciphertext.len() < 16 {
+                        return Err(CollectionError::bad_input(format!(
+                            "encrypted vector sidecar entry '{vector_name}' ciphertext is too short",
                         )));
                     }
                 }

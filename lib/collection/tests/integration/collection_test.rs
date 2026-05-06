@@ -3212,7 +3212,10 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
     let collection =
         encrypted_collection_fixture(collection_dir.path(), 1, vector_encryption_config()).await;
 
-    let vector_sidecar = |vector_name: &str, key_id: &str| {
+    let vector_sidecar = |vector_name: &str,
+                          key_id: &str,
+                          nonce: serde_json::Value,
+                          ciphertext: serde_json::Value| {
         let mut sidecar = Map::new();
         sidecar.insert(
             vector_name.to_string(),
@@ -3225,8 +3228,8 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
                         "algorithm": "AES-256-GCM",
                         "key_id": key_id,
                         "material_fingerprint": "tenant-a/vector@v1",
-                        "nonce": BASE64URL_NOPAD.encode(&[1u8; 12]),
-                        "ciphertext": BASE64URL_NOPAD.encode(&[2u8; 16]),
+                        "nonce": nonce,
+                        "ciphertext": ciphertext,
                     },
                 },
             }),
@@ -3238,10 +3241,17 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
         );
         Payload(payload)
     };
+    let valid_nonce = || serde_json::Value::String(BASE64URL_NOPAD.encode(&[1u8; 12]));
+    let valid_ciphertext = || serde_json::Value::String(BASE64URL_NOPAD.encode(&[2u8; 16]));
 
     let wrong_key_sidecar =
         CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
-            payload: vector_sidecar(DEFAULT_VECTOR_NAME, "tenant-a:wrong"),
+            payload: vector_sidecar(
+                DEFAULT_VECTOR_NAME,
+                "tenant-a:wrong",
+                valid_nonce(),
+                valid_ciphertext(),
+            ),
             points: Some(vec![1.into()]),
             filter: None,
             key: None,
@@ -3267,7 +3277,7 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
 
     let unconfigured_vector_sidecar =
         CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
-            payload: vector_sidecar("other", "tenant-a:docs"),
+            payload: vector_sidecar("other", "tenant-a:docs", valid_nonce(), valid_ciphertext()),
             points: Some(vec![1.into()]),
             filter: None,
             key: None,
@@ -3289,6 +3299,37 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
         CollectionError::BadInput { description }
             if description.contains("encrypted vector sidecar entry 'other'")
                 && description.contains("not configured")
+    ));
+
+    let malformed_nonce_sidecar =
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
+            payload: vector_sidecar(
+                DEFAULT_VECTOR_NAME,
+                "tenant-a:docs",
+                serde_json::Value::String("not-base64url".to_string()),
+                valid_ciphertext(),
+            ),
+            points: Some(vec![1.into()]),
+            filter: None,
+            key: None,
+        }));
+    let err = collection
+        .update_from_client(
+            malformed_nonce_sidecar,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::runtime_encrypted_vectors(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("encrypted vector sidecar entry")
+                && description.contains("nonce")
     ));
 }
 

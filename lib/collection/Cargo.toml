@@ -20,7 +20,6 @@ staging = ["shard/staging"]
 
 [dev-dependencies]
 criterion = { workspace = true }
-data-encoding = { workspace = true }
 fs-err = { workspace = true, features = ["debug"] }
 proptest = { workspace = true }
 ring = { workspace = true }
@@ -38,6 +37,7 @@ pprof = { workspace = true }
 
 [dependencies]
 bytemuck = { workspace = true }
+data-encoding = { workspace = true }
 fs-err = { workspace = true }
 parking_lot = { workspace = true }
 ahash = { workspace = true }
