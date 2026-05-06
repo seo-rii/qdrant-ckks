@@ -2983,6 +2983,41 @@ esac
             assert_eq!(search_result[0].id, 1.into());
             assert_eq!(search_result[0].score, 9.0);
 
+            let search_with_payload = crate::common::query::do_core_search_points(
+                &toc,
+                "vector_docs",
+                SearchRequestInternal {
+                    vector: vec![0.0, 0.0].into(),
+                    with_payload: Some(WithPayloadInterface::Bool(true)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    score_threshold: None,
+                }
+                .into(),
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(search_with_payload.len(), 1);
+            let returned_sidecar = search_with_payload[0]
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.0.get(ENCRYPTED_VECTOR_SIDECAR_FIELD))
+                .and_then(Value::as_object)
+                .unwrap()
+                .get(DEFAULT_VECTOR_NAME)
+                .unwrap();
+            assert!(is_encrypted_ckks_vector_payload_value(returned_sidecar));
+            assert!(search_with_payload[0].vector.is_none());
+
             let query_result = crate::common::query::do_query_points(
                 &toc,
                 "vector_docs",
