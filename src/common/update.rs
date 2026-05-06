@@ -2325,7 +2325,7 @@ mod tests {
     };
     use collection::operations::types::PointRequestInternal;
     use collection::operations::universal_query::collection_query::{
-        CollectionQueryRequest, Query, VectorInputInternal, VectorQuery,
+        CollectionPrefetch, CollectionQueryRequest, Query, VectorInputInternal, VectorQuery,
     };
     use collection::operations::vector_params_builder::VectorParamsBuilder;
     use collection::optimizers_builder::OptimizersConfig;
@@ -3095,6 +3095,50 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains("cannot mix CKKS encrypted vector query")
+            ));
+
+            let err = crate::common::query::do_query_points(
+                &toc,
+                "vector_docs",
+                CollectionQueryRequest {
+                    prefetch: vec![CollectionPrefetch {
+                        prefetch: Vec::new(),
+                        query: Some(Query::Vector(VectorQuery::Nearest(
+                            VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                        ))),
+                        using: DEFAULT_VECTOR_NAME.to_string(),
+                        filter: None,
+                        score_threshold: None,
+                        limit: 1,
+                        params: None,
+                        lookup_from: None,
+                    }],
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("prefetch/fusion/MMR")
             ));
 
             let err = crate::common::query::do_core_search_points(
