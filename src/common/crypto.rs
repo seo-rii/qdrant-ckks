@@ -23,7 +23,7 @@ use qdrant_sec::{
     validate_client_payload_value_for_runtime,
 };
 use segment::json_path::JsonPath;
-use segment::types::Payload;
+use segment::types::{Distance, Payload};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use storage::content_manager::collection_meta_ops::CreateCollection;
@@ -754,6 +754,7 @@ pub fn vector_write_plan_for_collection_with_crypto_id(
         &effective_settings(settings),
         collection_name,
         collection_crypto_id,
+        params,
         encryption,
     )
 }
@@ -762,6 +763,7 @@ fn generic_vector_write_plan(
     runtime_settings: &CryptoSettings,
     collection_name: &str,
     collection_crypto_id: &str,
+    params: &CollectionParams,
     encryption: &CollectionEncryptionConfig,
 ) -> Result<Option<VectorWritePlan>, StorageError> {
     let mut rules = Vec::new();
@@ -858,6 +860,7 @@ fn generic_vector_write_plan(
         let backend = openfhe_backend_from_config(backend_ref, backend_config)?;
 
         for vector_name in names {
+            ensure_ckks_vector_distance(params, collection_name, vector_name)?;
             let encryptor = if let Some(rk_epoch) = material.rk_epoch {
                 CkksVectorEncryptor::new_from_resource_key_with_metadata(
                     key_id,
@@ -900,6 +903,24 @@ fn generic_vector_write_plan(
     } else {
         Ok(Some(VectorWritePlan { rules }))
     }
+}
+
+fn ensure_ckks_vector_distance(
+    params: &CollectionParams,
+    collection_name: &str,
+    vector_name: &str,
+) -> Result<(), StorageError> {
+    let distance = params.get_distance(vector_name).map_err(|err| {
+        StorageError::bad_input(format!(
+            "collection {collection_name} encrypted vector '{vector_name}' is not configured: {err}",
+        ))
+    })?;
+    if distance != Distance::Dot {
+        return Err(StorageError::bad_input(format!(
+            "collection {collection_name} encrypted vector '{vector_name}' uses distance {distance:?}; CKKS sidecar search currently supports Distance::Dot only",
+        )));
+    }
+    Ok(())
 }
 
 fn required_string_option<'a>(
@@ -1010,6 +1031,7 @@ fn validate_collection_crypto_runtime_inner(
         return validate_generic_collection_crypto_runtime(
             &effective_settings(settings),
             collection_name,
+            params,
             encryption,
         );
     }
@@ -2611,6 +2633,7 @@ fn is_crypto_identifier(value: &str) -> bool {
 fn validate_generic_collection_crypto_runtime(
     runtime_settings: &CryptoSettings,
     collection_name: &str,
+    params: &CollectionParams,
     encryption: &CollectionEncryptionConfig,
 ) -> Result<(), StorageError> {
     let payload_rules: Vec<_> = encryption
@@ -2642,9 +2665,9 @@ fn validate_generic_collection_crypto_runtime(
     }
 
     for rule in &encryption.rules {
-        if !matches!(rule.selector, EncryptionSelector::VectorNames { .. }) {
+        let EncryptionSelector::VectorNames { names } = &rule.selector else {
             continue;
-        }
+        };
 
         if rule
             .binding
@@ -2811,6 +2834,9 @@ fn validate_generic_collection_crypto_runtime(
                         ))
                     })?;
             }
+        }
+        for vector_name in names {
+            ensure_ckks_vector_distance(params, collection_name, vector_name)?;
         }
     }
 
@@ -3457,12 +3483,13 @@ fn validate_material_file_source_for_payload_read(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::{BTreeMap, HashMap, HashSet};
 
     use collection::config::{
         CkksCollectionConfig, CollectionConfigInternal, CollectionEncryptionConfig,
         CollectionParams, CryptoMigrationState, EncryptionRuleRef, EncryptionSelector, WalConfig,
     };
+    use collection::operations::vector_params_builder::VectorParamsBuilder;
     use collection::optimizers_builder::OptimizersConfig;
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_sec::{
@@ -3477,6 +3504,14 @@ mod tests {
 
     use super::*;
     use crate::settings::{CkksConfig, CryptoInstanceConfig};
+
+    fn with_embedding_vector(mut params: CollectionParams, distance: Distance) -> CollectionParams {
+        params.vectors = collection::operations::types::VectorsConfig::Multi(BTreeMap::from([(
+            "embedding".to_string(),
+            VectorParamsBuilder::new(2, distance).build(),
+        )]));
+        params
+    }
 
     fn recovered_config(params: CollectionParams, uuid: Option<Uuid>) -> CollectionConfigInternal {
         CollectionConfigInternal {
@@ -7770,36 +7805,54 @@ mod tests {
             },
             ..Settings::new(None).unwrap()
         };
-        let params = CollectionParams {
-            encryption: Some(CollectionEncryptionConfig {
-                version: 1,
-                key_id: Some("tenant-a:docs".to_string()),
-                crypto_schema_version: 1,
-                encryption_epoch: 0,
-                migration_state: CryptoMigrationState::Active,
-                rules: vec![
-                    EncryptionRuleRef {
-                        id: "body_conf".to_string(),
-                        selector: EncryptionSelector::PayloadPaths {
-                            paths: vec!["body".to_string()],
+        let params = with_embedding_vector(
+            CollectionParams {
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 0,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![
+                        EncryptionRuleRef {
+                            id: "body_conf".to_string(),
+                            selector: EncryptionSelector::PayloadPaths {
+                                paths: vec!["body".to_string()],
+                            },
+                            instance: "docs_payload_v1".to_string(),
+                            binding: Some("payload-field/v1".to_string()),
                         },
-                        instance: "docs_payload_v1".to_string(),
-                        binding: Some("payload-field/v1".to_string()),
-                    },
-                    EncryptionRuleRef {
-                        id: "embedding_conf".to_string(),
-                        selector: EncryptionSelector::VectorNames {
-                            names: vec!["embedding".to_string()],
+                        EncryptionRuleRef {
+                            id: "embedding_conf".to_string(),
+                            selector: EncryptionSelector::VectorNames {
+                                names: vec!["embedding".to_string()],
+                            },
+                            instance: "docs_vector_v1".to_string(),
+                            binding: Some("vector-envelope/v1".to_string()),
                         },
-                        instance: "docs_vector_v1".to_string(),
-                        binding: Some("vector-envelope/v1".to_string()),
-                    },
-                ],
-            }),
-            ..CollectionParams::empty()
-        };
+                    ],
+                }),
+                ..CollectionParams::empty()
+            },
+            Distance::Dot,
+        );
 
         validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap();
+
+        let euclid_params = with_embedding_vector(
+            CollectionParams {
+                encryption: params.encryption.clone(),
+                ..CollectionParams::empty()
+            },
+            Distance::Euclid,
+        );
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &euclid_params)
+            .unwrap_err();
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("Distance::Dot only")),
+            "unexpected error: {err:?}",
+        );
 
         let mut settings_with_extra_vector_role = settings.clone();
         settings_with_extra_vector_role
@@ -8164,24 +8217,27 @@ mod tests {
             },
             ..Settings::new(None).unwrap()
         };
-        let params = CollectionParams {
-            encryption: Some(CollectionEncryptionConfig {
-                version: 1,
-                key_id: Some("tenant-a:docs".to_string()),
-                crypto_schema_version: 1,
-                encryption_epoch: 0,
-                migration_state: CryptoMigrationState::Active,
-                rules: vec![EncryptionRuleRef {
-                    id: "embedding_conf".to_string(),
-                    selector: EncryptionSelector::VectorNames {
-                        names: vec!["embedding".to_string()],
-                    },
-                    instance: "docs_vector_v1".to_string(),
-                    binding: Some("vector-envelope/v1".to_string()),
-                }],
-            }),
-            ..CollectionParams::empty()
-        };
+        let params = with_embedding_vector(
+            CollectionParams {
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 0,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "embedding_conf".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec!["embedding".to_string()],
+                        },
+                        instance: "docs_vector_v1".to_string(),
+                        binding: Some("vector-envelope/v1".to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            },
+            Distance::Dot,
+        );
 
         validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap();
     }
