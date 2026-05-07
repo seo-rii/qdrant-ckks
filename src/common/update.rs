@@ -2386,7 +2386,7 @@ mod tests {
         EncryptionSelector,
     };
     use collection::operations::types::{
-        DiscoverRequestInternal, PointRequestInternal, RecommendExample,
+        ContextExamplePair, DiscoverRequestInternal, PointRequestInternal, RecommendExample,
         RecommendGroupsRequestInternal, RecommendRequestInternal,
     };
     use collection::operations::universal_query::collection_query::{
@@ -3212,7 +3212,7 @@ esac
                 },
                 None,
                 ShardSelectorInternal::All,
-                auth,
+                auth.clone(),
                 None,
                 HwMeasurementAcc::disposable(),
                 Some(&vector_settings),
@@ -3223,6 +3223,71 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains("cannot resolve point-id")
+            ));
+
+            let err = crate::common::query::do_recommend_points(
+                &toc,
+                "vector_groups",
+                RecommendRequestInternal {
+                    positive: vec![RecommendExample::Dense(vec![0.0, 0.0])],
+                    negative: Vec::new(),
+                    strategy: Some(api::rest::RecommendStrategy::BestScore),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                    using: Some(DEFAULT_VECTOR_NAME.to_string().into()),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("average-vector recommendations")
+            ));
+
+            let err = crate::common::query::do_discover_points(
+                &toc,
+                "vector_groups",
+                DiscoverRequestInternal {
+                    target: Some(RecommendExample::Dense(vec![0.0, 0.0])),
+                    context: Some(vec![ContextExamplePair {
+                        positive: RecommendExample::Dense(vec![0.0, 0.0]),
+                        negative: RecommendExample::Dense(vec![1.0, 1.0]),
+                    }]),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    using: Some(DEFAULT_VECTOR_NAME.to_string().into()),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth,
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("target-only discover")
             ));
         });
     }
