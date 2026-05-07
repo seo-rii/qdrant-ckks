@@ -88,6 +88,7 @@ impl CkksVectorBackend for ScoreTestBackend {
         assert_eq!(input.collection, "docs");
         assert_eq!(input.point_id, "point-1");
         assert_eq!(input.vector_name, "embedding");
+        assert_eq!(input.distance, "dot");
         assert_eq!(input.query_values, &[0.5, 0.25]);
         assert_eq!(input.ciphertext, b"cipher:point-1:2");
         Ok(42.25)
@@ -200,6 +201,7 @@ fn ckks_vector_plaintext_query_scoring_uses_verified_ciphertext() {
             "point-1",
             &public_material(),
             &encrypted,
+            "dot",
             &[0.5, 0.25],
         )
         .unwrap();
@@ -222,7 +224,14 @@ fn ckks_vector_plaintext_query_scoring_rejects_dimension_mismatch() {
         .unwrap();
 
     let err = encryptor
-        .score_plaintext_query("docs", "point-1", &public_material(), &encrypted, &[0.5])
+        .score_plaintext_query(
+            "docs",
+            "point-1",
+            &public_material(),
+            &encrypted,
+            "dot",
+            &[0.5],
+        )
         .unwrap_err();
 
     assert_eq!(
@@ -938,7 +947,7 @@ fn command_openfhe_backend_uses_plaintext_query_score_protocol() {
 set -euo pipefail
 while IFS= read -r request; do
   case "$request" in
-    *'"operation":"score_plaintext_query"'*'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*'"query_values":[0.5,0.25]'*'"ciphertext":"b3BlbmZoZS1jaXBoZXI"'*)
+    *'"operation":"score_plaintext_query"'*'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*'"distance":"dot"'*'"query_values":[0.5,0.25]'*'"ciphertext":"b3BlbmZoZS1jaXBoZXI"'*)
       printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","score":12.5}\n'
       ;;
     *'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*)
@@ -974,6 +983,7 @@ done
             "point-1",
             &public_material(),
             &encrypted,
+            "dot",
             &[0.5, 0.25],
         )
         .unwrap();

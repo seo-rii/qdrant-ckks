@@ -201,6 +201,7 @@ pub struct CkksPlaintextQueryScoreInput<'a> {
     pub collection: &'a str,
     pub point_id: &'a str,
     pub vector_name: &'a str,
+    pub distance: &'a str,
     pub query_values: &'a [f64],
     pub ciphertext: &'a [u8],
 }
@@ -665,6 +666,7 @@ where
         point_id: &str,
         expected_public_material: &CkksPublicMaterial,
         encrypted: &EncryptedCkksVector,
+        distance: &str,
         query_values: &[f64],
     ) -> Result<f64, CkksError> {
         self.validate_vector_values(point_id, query_values)?;
@@ -685,6 +687,7 @@ where
                 collection: collection_context,
                 point_id,
                 vector_name: &self.vector_name,
+                distance,
                 query_values,
                 ciphertext: &ciphertext,
             })?;

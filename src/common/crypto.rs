@@ -640,6 +640,7 @@ pub fn payload_write_plan_for_collection_with_crypto_id(
 
 struct VectorWriteRule {
     vector_name: String,
+    distance: Distance,
     encryptor: CkksVectorEncryptor<CommandOpenFheBackend>,
     public_material: CkksPublicMaterial,
 }
@@ -717,6 +718,7 @@ impl VectorWritePlan {
                 point_id,
                 &rule.public_material,
                 encrypted,
+                ckks_score_distance_name(rule.distance),
                 query_values.as_slice(),
             )
             .map_err(|err| {
@@ -860,7 +862,7 @@ fn generic_vector_write_plan(
         let backend = openfhe_backend_from_config(backend_ref, backend_config)?;
 
         for vector_name in names {
-            ensure_ckks_vector_distance(params, collection_name, vector_name)?;
+            let distance = ckks_vector_distance(params, collection_name, vector_name)?;
             let encryptor = if let Some(rk_epoch) = material.rk_epoch {
                 CkksVectorEncryptor::new_from_resource_key_with_metadata(
                     key_id,
@@ -892,6 +894,7 @@ fn generic_vector_write_plan(
             })?;
             rules.push(VectorWriteRule {
                 vector_name: vector_name.clone(),
+                distance,
                 encryptor,
                 public_material: public_material.clone(),
             });
@@ -905,22 +908,25 @@ fn generic_vector_write_plan(
     }
 }
 
-fn ensure_ckks_vector_distance(
+fn ckks_vector_distance(
     params: &CollectionParams,
     collection_name: &str,
     vector_name: &str,
-) -> Result<(), StorageError> {
-    let distance = params.get_distance(vector_name).map_err(|err| {
+) -> Result<Distance, StorageError> {
+    params.get_distance(vector_name).map_err(|err| {
         StorageError::bad_input(format!(
             "collection {collection_name} encrypted vector '{vector_name}' is not configured: {err}",
         ))
-    })?;
-    if distance != Distance::Dot {
-        return Err(StorageError::bad_input(format!(
-            "collection {collection_name} encrypted vector '{vector_name}' uses distance {distance:?}; CKKS sidecar search currently supports Distance::Dot only",
-        )));
+    })
+}
+
+fn ckks_score_distance_name(distance: Distance) -> &'static str {
+    match distance {
+        Distance::Cosine => "cosine",
+        Distance::Euclid => "euclid",
+        Distance::Dot => "dot",
+        Distance::Manhattan => "manhattan",
     }
-    Ok(())
 }
 
 fn required_string_option<'a>(
@@ -2853,7 +2859,7 @@ fn validate_generic_collection_crypto_runtime(
             }
         }
         for vector_name in names {
-            ensure_ckks_vector_distance(params, collection_name, vector_name)?;
+            let _distance = ckks_vector_distance(params, collection_name, vector_name)?;
         }
     }
 
@@ -7910,20 +7916,16 @@ mod tests {
 
         validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap();
 
-        let euclid_params = with_embedding_vector(
-            CollectionParams {
-                encryption: params.encryption.clone(),
-                ..CollectionParams::empty()
-            },
-            Distance::Euclid,
-        );
-        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &euclid_params)
-            .unwrap_err();
-        assert!(
-            matches!(err, StorageError::BadInput { ref description }
-                if description.contains("Distance::Dot only")),
-            "unexpected error: {err:?}",
-        );
+        for distance in [Distance::Cosine, Distance::Euclid, Distance::Manhattan] {
+            let params = with_embedding_vector(
+                CollectionParams {
+                    encryption: params.encryption.clone(),
+                    ..CollectionParams::empty()
+                },
+                distance,
+            );
+            validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap();
+        }
 
         let mut settings_with_extra_vector_role = settings.clone();
         settings_with_extra_vector_role

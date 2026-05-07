@@ -2431,10 +2431,10 @@ mod tests {
 set -euo pipefail
 IFS= read -r request
 case "$request" in
-  *'"operation":"score_plaintext_query"'*'"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"'*)
+  *'"operation":"score_plaintext_query"'*'"distance":"dot"'*'"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","score":9.0}\n'
     ;;
-  *'"operation":"score_plaintext_query"'*'"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"'*)
+  *'"operation":"score_plaintext_query"'*'"distance":"dot"'*'"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","score":4.0}\n'
     ;;
   *'"operation":"score_plaintext_query"'*)
