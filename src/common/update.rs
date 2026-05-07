@@ -2337,7 +2337,7 @@ fn payload_write_error_to_storage_error(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
     use std::fs;
     use std::num::NonZeroUsize;
     use std::sync::Arc;
@@ -2432,22 +2432,22 @@ set -euo pipefail
 IFS= read -r request
 case "$request" in
   *'"operation":"score_plaintext_query"'*'"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"'*)
-    printf '{"version":1,"score":9.0}\n'
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","score":9.0}\n'
     ;;
   *'"operation":"score_plaintext_query"'*'"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"'*)
-    printf '{"version":1,"score":4.0}\n'
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","score":4.0}\n'
     ;;
   *'"operation":"score_plaintext_query"'*)
-    printf '{"version":1,"score":1.0}\n'
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","score":1.0}\n'
     ;;
   *'"scheme":"openfhe-ckks"'*'"point_id":"1"'*)
-    printf '{"version":1,"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"}\n'
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"}\n'
     ;;
   *'"scheme":"openfhe-ckks"'*'"point_id":"2"'*)
-    printf '{"version":1,"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"}\n'
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"}\n'
     ;;
   *'"scheme":"openfhe-ckks"'*)
-    printf '{"version":1,"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ"}\n'
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ"}\n'
     ;;
   *) exit 7 ;;
 esac
@@ -2509,6 +2509,10 @@ esac
 
     fn encrypted_vector_params() -> CollectionParams {
         CollectionParams {
+            vectors: collection::operations::types::VectorsConfig::Multi(BTreeMap::from([(
+                "embedding".to_string(),
+                VectorParamsBuilder::new(2, Distance::Dot).build(),
+            )])),
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
                 key_id: Some("tenant-a:vector".to_string()),
