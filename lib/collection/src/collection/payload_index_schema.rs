@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use common::save_on_disk::SaveOnDisk;
+use qdrant_sec::ENCRYPTED_VECTOR_SIDECAR_FIELD;
 use segment::json_path::JsonPath;
 use segment::types::{Filter, PayloadFieldSchema};
 use shard::files::PAYLOAD_INDEX_CONFIG_FILE;
@@ -24,6 +25,21 @@ pub fn validate_payload_index_paths_for_encrypted_paths<'a>(
     let Some(encryption) = collection_params.effective_encryption() else {
         return Ok(());
     };
+
+    if encryption
+        .rules
+        .iter()
+        .any(|rule| matches!(rule.selector, EncryptionSelector::VectorNames { .. }))
+    {
+        let sidecar_path = encrypted_vector_sidecar_path()?;
+        for field_name in &field_names {
+            if field_name.compatible(&sidecar_path) {
+                return Err(CollectionError::bad_input(format!(
+                    "cannot {action} payload index schema on encrypted vector sidecar field '{field_name}'; use encrypted vector search APIs instead",
+                )));
+            }
+        }
+    }
 
     for rule in &encryption.rules {
         let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
@@ -98,6 +114,19 @@ impl Collection {
             .params
             .effective_encryption()
         {
+            if encryption
+                .rules
+                .iter()
+                .any(|rule| matches!(rule.selector, EncryptionSelector::VectorNames { .. }))
+            {
+                let sidecar_path = encrypted_vector_sidecar_path()?;
+                if field_name.compatible(&sidecar_path) {
+                    return Err(CollectionError::bad_input(format!(
+                        "cannot create payload index on encrypted vector sidecar field '{field_name}'; use encrypted vector search APIs instead",
+                    )));
+                }
+            }
+
             for rule in &encryption.rules {
                 let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
                     continue;
@@ -182,6 +211,16 @@ impl Collection {
     ) -> Option<(JsonPath, Vec<PayloadFieldSchema>)> {
         one_unindexed_expression_key(&self.payload_index_schema.read(), expr)
     }
+}
+
+fn encrypted_vector_sidecar_path() -> CollectionResult<JsonPath> {
+    format!("\"{ENCRYPTED_VECTOR_SIDECAR_FIELD}\"")
+        .parse::<JsonPath>()
+        .map_err(|err| {
+            CollectionError::bad_input(format!(
+                "encrypted vector sidecar field path '{ENCRYPTED_VECTOR_SIDECAR_FIELD}' is invalid: {err:?}",
+            ))
+        })
 }
 
 enum PotentiallyUnindexed<'a> {
