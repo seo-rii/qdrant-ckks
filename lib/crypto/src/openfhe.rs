@@ -432,7 +432,10 @@ impl CkksVectorBackend for CommandOpenFheBackend {
             CkksError::Backend(format!("failed to serialize OpenFHE bridge request: {err}"))
         })?;
 
-        self.send_bridge_request(&request_bytes, decode_single_bridge_response)
+        let expected_security_profile = expected_security_profile(input.parameters)?;
+        self.send_bridge_request(&request_bytes, |response_bytes| {
+            decode_single_bridge_response(response_bytes, expected_security_profile)
+        })
     }
 
     fn encrypt_batch(
@@ -480,8 +483,13 @@ impl CkksVectorBackend for CommandOpenFheBackend {
             ))
         })?;
 
+        let expected_security_profile = expected_security_profile(input.parameters)?;
         self.send_bridge_request(&request_bytes, |response_bytes| {
-            decode_batch_bridge_response(response_bytes, input.items.len())
+            decode_batch_bridge_response(
+                response_bytes,
+                input.items.len(),
+                expected_security_profile,
+            )
         })
     }
 
@@ -508,7 +516,10 @@ impl CkksVectorBackend for CommandOpenFheBackend {
             ))
         })?;
 
-        self.send_bridge_request(&request_bytes, decode_score_bridge_response)
+        let expected_security_profile = expected_security_profile(input.parameters)?;
+        self.send_bridge_request(&request_bytes, |response_bytes| {
+            decode_score_bridge_response(response_bytes, expected_security_profile)
+        })
     }
 }
 
@@ -953,6 +964,8 @@ struct CommandOpenFheScoreRequest<'a> {
 #[serde(rename_all = "snake_case")]
 struct CommandOpenFheResponse {
     version: u8,
+    #[serde(default)]
+    security_profile: Option<String>,
     ciphertext: String,
 }
 
@@ -960,6 +973,8 @@ struct CommandOpenFheResponse {
 #[serde(rename_all = "snake_case")]
 struct CommandOpenFheBatchResponse {
     version: u8,
+    #[serde(default)]
+    security_profile: Option<String>,
     ciphertexts: Vec<String>,
 }
 
@@ -967,10 +982,15 @@ struct CommandOpenFheBatchResponse {
 #[serde(rename_all = "snake_case")]
 struct CommandOpenFheScoreResponse {
     version: u8,
+    #[serde(default)]
+    security_profile: Option<String>,
     score: f64,
 }
 
-fn decode_single_bridge_response(response_bytes: &[u8]) -> Result<Vec<u8>, CkksError> {
+fn decode_single_bridge_response(
+    response_bytes: &[u8],
+    expected_security_profile: &str,
+) -> Result<Vec<u8>, CkksError> {
     let response: CommandOpenFheResponse =
         serde_json::from_slice(response_bytes).map_err(|err| {
             CkksError::Backend(format!("failed to parse OpenFHE bridge response: {err}"))
@@ -981,13 +1001,20 @@ fn decode_single_bridge_response(response_bytes: &[u8]) -> Result<Vec<u8>, CkksE
             response.version,
         )));
     }
+    validate_bridge_security_profile(
+        response.security_profile.as_deref(),
+        expected_security_profile,
+    )?;
 
     BASE64URL_NOPAD
         .decode(response.ciphertext.as_bytes())
         .map_err(|_| CkksError::Backend("OpenFHE bridge returned invalid ciphertext".to_string()))
 }
 
-fn decode_score_bridge_response(response_bytes: &[u8]) -> Result<f64, CkksError> {
+fn decode_score_bridge_response(
+    response_bytes: &[u8],
+    expected_security_profile: &str,
+) -> Result<f64, CkksError> {
     let response: CommandOpenFheScoreResponse =
         serde_json::from_slice(response_bytes).map_err(|err| {
             CkksError::Backend(format!(
@@ -1000,6 +1027,10 @@ fn decode_score_bridge_response(response_bytes: &[u8]) -> Result<f64, CkksError>
             response.version,
         )));
     }
+    validate_bridge_security_profile(
+        response.security_profile.as_deref(),
+        expected_security_profile,
+    )?;
     if !response.score.is_finite() {
         return Err(CkksError::Backend(
             "OpenFHE bridge returned non-finite score".to_string(),
@@ -1012,6 +1043,7 @@ fn decode_score_bridge_response(response_bytes: &[u8]) -> Result<f64, CkksError>
 fn decode_batch_bridge_response(
     response_bytes: &[u8],
     expected: usize,
+    expected_security_profile: &str,
 ) -> Result<Vec<Vec<u8>>, CkksError> {
     let response: CommandOpenFheBatchResponse =
         serde_json::from_slice(response_bytes).map_err(|err| {
@@ -1025,6 +1057,10 @@ fn decode_batch_bridge_response(
             response.version,
         )));
     }
+    validate_bridge_security_profile(
+        response.security_profile.as_deref(),
+        expected_security_profile,
+    )?;
     if response.ciphertexts.len() != expected {
         return Err(CkksError::Backend(format!(
             "OpenFHE bridge returned {} batch ciphertexts for {expected} input vectors",
@@ -1041,4 +1077,28 @@ fn decode_batch_bridge_response(
             })
         })
         .collect()
+}
+
+fn expected_security_profile(parameters: &CkksParameters) -> Result<&'static str, CkksError> {
+    parameters.security_profile().ok_or_else(|| {
+        CkksError::InvalidParameters(
+            "OpenFHE bridge request parameters do not match an allowlisted security profile"
+                .to_string(),
+        )
+    })
+}
+
+fn validate_bridge_security_profile(
+    reported: Option<&str>,
+    expected: &str,
+) -> Result<(), CkksError> {
+    if let Some(reported) = reported
+        && reported != expected
+    {
+        return Err(CkksError::Backend(format!(
+            "OpenFHE bridge security profile {reported} does not match expected {expected}",
+        )));
+    }
+
+    Ok(())
 }

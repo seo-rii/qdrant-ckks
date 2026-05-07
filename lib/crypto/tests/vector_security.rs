@@ -841,6 +841,49 @@ printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
 
 #[cfg(unix)]
 #[test]
+fn command_openfhe_backend_rejects_security_profile_mismatch() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("wrong-profile-openfhe-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+IFS= read -r _request
+printf '{"version":1,"security_profile":"ckks-unsafe-test-profile","ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+        .with_args([script_path.display().to_string()]);
+    let encryptor = test_ckks_encryptor(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+
+    let err = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0, 2.0])
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CkksError::Backend(message)
+            if message.contains("security profile ckks-unsafe-test-profile")
+                && message.contains(CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50)
+    ));
+}
+
+#[cfg(unix)]
+#[test]
 fn command_openfhe_backend_uses_plaintext_query_score_protocol() {
     use std::os::unix::fs::PermissionsExt;
 
