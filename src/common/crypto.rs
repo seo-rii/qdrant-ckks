@@ -656,6 +656,13 @@ impl VectorWritePlan {
             .any(|rule| rule.vector_name == vector_name)
     }
 
+    pub fn distance_for_vector(&self, vector_name: &str) -> Option<Distance> {
+        self.rules
+            .iter()
+            .find(|rule| rule.vector_name == vector_name)
+            .map(|rule| rule.distance)
+    }
+
     pub fn encrypt_dense_vector_payload_value(
         &self,
         collection_name: &str,

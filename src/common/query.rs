@@ -13,7 +13,7 @@ use qdrant_sec::{
     ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD, EncryptedCkksVector,
 };
 use segment::data_types::vectors::{Named, NamedQuery, VectorInternal};
-use segment::types::{ScoredPoint, WithPayloadInterface, WithVector};
+use segment::types::{Distance, Order, ScoredPoint, WithPayloadInterface, WithVector};
 use segment::utils::scored_point_ties::ScoredPointTies;
 use shard::query::query_enum::QueryEnum;
 use shard::retrieve::record_internal::RecordInternal;
@@ -248,6 +248,11 @@ async fn ckks_vector_search_points(
         )));
     };
     let vector_name = named_query.get_name();
+    let distance = plan.distance_for_vector(vector_name).ok_or_else(|| {
+        StorageError::service_error(format!(
+            "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
+        ))
+    })?;
     let with_vector = search.with_vector.clone().unwrap_or_default();
     if with_vector.is_enabled() {
         return Err(StorageError::bad_input(format!(
@@ -256,7 +261,7 @@ async fn ckks_vector_search_points(
     }
 
     let mut next_offset = None;
-    let mut scored_by_id = std::collections::HashMap::new();
+    let mut scored_by_id = std::collections::HashMap::<_, ScoredPoint>::new();
     const BATCH_SIZE: usize = 512;
 
     loop {
@@ -309,10 +314,7 @@ async fn ckks_vector_search_points(
             for ((id, shard_key, _point_id, _encrypted), score) in
                 encrypted_records.into_iter().zip(scores)
             {
-                if search
-                    .score_threshold
-                    .is_some_and(|threshold| score < threshold)
-                {
+                if !ckks_score_passes_threshold(distance, score, search.score_threshold) {
                     continue;
                 }
                 let scored_point = ScoredPoint {
@@ -326,7 +328,7 @@ async fn ckks_vector_search_points(
                 };
                 match scored_by_id.entry(scored_point.id) {
                     std::collections::hash_map::Entry::Occupied(mut entry) => {
-                        if scored_point > *entry.get() {
+                        if ckks_scored_point_is_better(distance, &scored_point, entry.get()) {
                             entry.insert(scored_point);
                         }
                     }
@@ -344,7 +346,7 @@ async fn ckks_vector_search_points(
     }
 
     let mut scored = scored_by_id.into_values().collect::<Vec<_>>();
-    scored.sort_unstable_by(|a, b| ScoredPointTies(b).cmp(&ScoredPointTies(a)));
+    sort_ckks_scored_points(distance, &mut scored);
     let mut top = scored
         .into_iter()
         .skip(search.offset)
@@ -385,6 +387,32 @@ async fn ckks_vector_search_points(
     }
 
     Ok(top)
+}
+
+fn ckks_score_passes_threshold(
+    distance: Distance,
+    score: f32,
+    score_threshold: Option<f32>,
+) -> bool {
+    score_threshold.is_none_or(|threshold| distance.check_threshold(score, threshold))
+}
+
+fn ckks_scored_point_is_better(
+    distance: Distance,
+    candidate: &ScoredPoint,
+    current: &ScoredPoint,
+) -> bool {
+    match distance.distance_order() {
+        Order::LargeBetter => ScoredPointTies(candidate) > ScoredPointTies(current),
+        Order::SmallBetter => ScoredPointTies(candidate) < ScoredPointTies(current),
+    }
+}
+
+fn sort_ckks_scored_points(distance: Distance, scored: &mut [ScoredPoint]) {
+    scored.sort_unstable_by(|a, b| match distance.distance_order() {
+        Order::LargeBetter => ScoredPointTies(b).cmp(&ScoredPointTies(a)),
+        Order::SmallBetter => ScoredPointTies(a).cmp(&ScoredPointTies(b)),
+    });
 }
 
 fn encrypted_vector_from_payload(
@@ -771,4 +799,65 @@ pub async fn do_search_points_matrix(
         hw_measurement_acc,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scored_point(id: u64, score: f32) -> ScoredPoint {
+        ScoredPoint {
+            id: id.into(),
+            version: 0,
+            score,
+            payload: None,
+            vector: None,
+            shard_key: None,
+            order_value: None,
+        }
+    }
+
+    #[test]
+    fn ckks_sidecar_search_uses_distance_order_for_ranking() {
+        let mut dot = vec![scored_point(1, 9.0), scored_point(2, 4.0)];
+        sort_ckks_scored_points(Distance::Dot, &mut dot);
+        assert_eq!(dot[0].id, 1.into());
+        assert_eq!(dot[1].id, 2.into());
+
+        let mut euclid = vec![scored_point(1, 9.0), scored_point(2, 4.0)];
+        sort_ckks_scored_points(Distance::Euclid, &mut euclid);
+        assert_eq!(euclid[0].id, 2.into());
+        assert_eq!(euclid[1].id, 1.into());
+    }
+
+    #[test]
+    fn ckks_sidecar_search_uses_distance_order_for_thresholds() {
+        assert!(ckks_score_passes_threshold(Distance::Dot, 9.0, Some(5.0)));
+        assert!(!ckks_score_passes_threshold(Distance::Dot, 4.0, Some(5.0)));
+
+        assert!(ckks_score_passes_threshold(
+            Distance::Euclid,
+            4.0,
+            Some(5.0)
+        ));
+        assert!(!ckks_score_passes_threshold(
+            Distance::Euclid,
+            9.0,
+            Some(5.0)
+        ));
+    }
+
+    #[test]
+    fn ckks_sidecar_search_replaces_duplicates_using_distance_order() {
+        assert!(ckks_scored_point_is_better(
+            Distance::Dot,
+            &scored_point(1, 9.0),
+            &scored_point(1, 4.0),
+        ));
+        assert!(ckks_scored_point_is_better(
+            Distance::Euclid,
+            &scored_point(1, 4.0),
+            &scored_point(1, 9.0),
+        ));
+    }
 }
