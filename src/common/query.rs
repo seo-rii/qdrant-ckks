@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use api::rest::{SearchGroupsRequestInternal, SearchRequestInternal};
+use api::rest::{BaseGroupRequest, SearchGroupsRequestInternal, SearchRequestInternal};
 use collection::collection::distance_matrix::*;
 use collection::common::batching::batch_requests;
 use collection::config::EncryptionSelector;
@@ -14,7 +14,9 @@ use qdrant_sec::{
     ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD, EncryptedCkksVector,
 };
 use segment::data_types::groups::GroupId;
-use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, Named, NamedQuery, VectorInternal};
+use segment::data_types::vectors::{
+    DEFAULT_VECTOR_NAME, Named, NamedQuery, NamedVector, VectorInternal,
+};
 use segment::json_path::JsonPath;
 use segment::types::{
     Distance, Order, PayloadContainer, ScoredPoint, SearchParams, WithPayloadInterface, WithVector,
@@ -999,7 +1001,25 @@ pub async fn do_query_point_groups(
     auth: Auth,
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
 ) -> Result<GroupsResult, StorageError> {
+    if let Some(settings) = runtime_settings
+        && let Some(result) = try_ckks_vector_query_groups(
+            toc,
+            collection_name,
+            &request,
+            read_consistency,
+            &shard_selection,
+            &auth,
+            timeout,
+            hw_measurement_acc.clone(),
+            settings,
+        )
+        .await?
+    {
+        return Ok(result);
+    }
+
     ensure_encrypted_vector_group_request_is_unsupported(
         toc,
         collection_name,
@@ -1029,6 +1049,121 @@ pub async fn do_query_point_groups(
         hw_measurement_acc,
     )
     .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn try_ckks_vector_query_groups(
+    toc: &TableOfContent,
+    collection_name: &str,
+    request: &CollectionQueryGroupsRequest,
+    read_consistency: Option<ReadConsistency>,
+    shard_selection: &ShardSelectorInternal,
+    auth: &Auth,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: &Settings,
+) -> Result<Option<GroupsResult>, StorageError> {
+    let collection_pass = auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new(),
+        "ckks_vector_query_groups",
+    )?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let config = collection.config_snapshot().await;
+    let collection_crypto_id = config.stable_crypto_id(collection_name)?;
+    let Some(plan) = vector_write_plan_for_collection_with_crypto_id(
+        runtime_settings,
+        collection_name,
+        &collection_crypto_id,
+        &config.params,
+    )?
+    else {
+        return Ok(None);
+    };
+
+    let mut prefetches = request.prefetch.iter().collect::<Vec<_>>();
+    while let Some(prefetch) = prefetches.pop() {
+        if plan.contains_vector_name(&prefetch.using) {
+            return Err(StorageError::bad_input(format!(
+                "encrypted vector '{}' only supports root nearest-neighbor dense query groups; prefetch/fusion/MMR over CKKS ciphertext are not implemented",
+                prefetch.using,
+            )));
+        }
+        prefetches.extend(prefetch.prefetch.iter());
+    }
+    if !plan.contains_vector_name(&request.using) {
+        return Ok(None);
+    }
+    if !request.prefetch.is_empty() {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{}' only supports root nearest-neighbor dense query groups; prefetch/fusion/MMR over CKKS ciphertext are not implemented",
+            request.using,
+        )));
+    }
+    if request.lookup_from.is_some() {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{}' query groups do not support lookup_from; provide a plaintext dense query vector",
+            request.using,
+        )));
+    }
+    if request.with_lookup.is_some() {
+        return Err(StorageError::bad_input(format!(
+            "cannot use with_lookup for grouped query over encrypted vector '{}'; CKKS sidecar grouped lookup is not implemented",
+            request.using,
+        )));
+    }
+
+    let search_request = query_groups_as_search_groups_request(request)?;
+    try_ckks_vector_search_groups(
+        toc,
+        collection_name,
+        &search_request,
+        read_consistency,
+        shard_selection,
+        auth,
+        timeout,
+        hw_measurement_acc,
+        runtime_settings,
+    )
+    .await
+}
+
+fn query_groups_as_search_groups_request(
+    request: &CollectionQueryGroupsRequest,
+) -> Result<SearchGroupsRequestInternal, StorageError> {
+    let Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::Vector(
+        VectorInternal::Dense(query_values),
+    )))) = &request.query
+    else {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{}' only supports nearest-neighbor dense query group vectors",
+            request.using,
+        )));
+    };
+
+    let vector = if request.using == DEFAULT_VECTOR_NAME {
+        api::rest::NamedVectorStruct::Default(query_values.clone())
+    } else {
+        api::rest::NamedVectorStruct::Dense(NamedVector {
+            name: request.using.clone(),
+            vector: query_values.clone(),
+        })
+    };
+
+    Ok(SearchGroupsRequestInternal {
+        vector,
+        filter: request.filter.clone(),
+        params: request.params.clone(),
+        with_payload: Some(request.with_payload.clone()),
+        with_vector: Some(request.with_vector.clone()),
+        score_threshold: request.score_threshold,
+        group_request: BaseGroupRequest {
+            group_by: request.group_by.clone(),
+            group_size: request.group_size as u32,
+            limit: request.limit as u32,
+            with_lookup: None,
+        },
+    })
 }
 
 fn search_group_vector_name(vector: &api::rest::NamedVectorStruct) -> &str {

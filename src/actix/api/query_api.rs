@@ -201,6 +201,7 @@ async fn query_points_groups(
     request: Json<QueryGroupsRequest>,
     params: Query<ReadParams>,
     service_config: web::Data<ServiceConfig>,
+    settings: web::Data<Settings>,
     ActixAuth(auth): ActixAuth,
     api_keys: InferenceApiKeys,
 ) -> impl Responder {
@@ -249,6 +250,7 @@ async fn query_points_groups(
             auth,
             params.timeout(),
             hw_measurement_acc,
+            Some(settings.get_ref()),
         )
         .await?;
         Ok(query_result)

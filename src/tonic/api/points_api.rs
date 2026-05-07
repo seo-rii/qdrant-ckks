@@ -677,6 +677,7 @@ impl Points for PointsService {
             auth,
             hw_metrics,
             inference_params,
+            Some(&self.settings),
         )
         .await?;
 
