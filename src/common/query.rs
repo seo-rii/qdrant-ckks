@@ -13,7 +13,9 @@ use qdrant_sec::{
     ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD, EncryptedCkksVector,
 };
 use segment::data_types::vectors::{Named, NamedQuery, VectorInternal};
-use segment::types::{Distance, Order, ScoredPoint, WithPayloadInterface, WithVector};
+use segment::types::{
+    Distance, Order, ScoredPoint, SearchParams, WithPayloadInterface, WithVector,
+};
 use segment::utils::scored_point_ties::ScoredPointTies;
 use shard::query::query_enum::QueryEnum;
 use shard::retrieve::record_internal::RecordInternal;
@@ -259,6 +261,13 @@ async fn ckks_vector_search_points(
             "cannot return encrypted vector '{vector_name}'; CKKS vector ciphertext read path returns payload sidecar only",
         )));
     }
+    if let Some(params) = search.params.as_ref()
+        && !ckks_search_params_supported(params)
+    {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' uses brute-force CKKS sidecar scoring and does not support HNSW, quantization, indexed_only, or ACORN search params",
+        )));
+    }
 
     let mut next_offset = None;
     let mut scored_by_id = std::collections::HashMap::<_, ScoredPoint>::new();
@@ -413,6 +422,13 @@ fn sort_ckks_scored_points(distance: Distance, scored: &mut [ScoredPoint]) {
         Order::LargeBetter => ScoredPointTies(b).cmp(&ScoredPointTies(a)),
         Order::SmallBetter => ScoredPointTies(a).cmp(&ScoredPointTies(b)),
     });
+}
+
+fn ckks_search_params_supported(params: &SearchParams) -> bool {
+    params.hnsw_ef.is_none()
+        && params.quantization.is_none()
+        && !params.indexed_only
+        && params.acorn.is_none()
 }
 
 fn encrypted_vector_from_payload(
@@ -859,5 +875,26 @@ mod tests {
             &scored_point(1, 4.0),
             &scored_point(1, 9.0),
         ));
+    }
+
+    #[test]
+    fn ckks_sidecar_search_rejects_unsupported_search_params() {
+        let exact_params = SearchParams {
+            exact: true,
+            ..SearchParams::default()
+        };
+        assert!(ckks_search_params_supported(&exact_params));
+
+        let hnsw_params = SearchParams {
+            hnsw_ef: Some(128),
+            ..SearchParams::default()
+        };
+        assert!(!ckks_search_params_supported(&hnsw_params));
+
+        let indexed_only_params = SearchParams {
+            indexed_only: true,
+            ..SearchParams::default()
+        };
+        assert!(!ckks_search_params_supported(&indexed_only_params));
     }
 }
