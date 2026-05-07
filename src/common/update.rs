@@ -2780,6 +2780,170 @@ esac
 
             let bridge = fake_openfhe_bridge();
             let vector_settings = vector_runtime_settings(&bridge.path().join("openfhe-bridge"));
+            dispatcher
+                .submit_collection_meta_op(
+                    CollectionMetaOperations::CreateCollection(
+                        CreateCollectionOperation::new(
+                            "vector_small_better".to_string(),
+                            CreateCollection {
+                                vectors: VectorParamsBuilder::new(2, Distance::Euclid)
+                                    .build()
+                                    .into(),
+                                sparse_vectors: None,
+                                hnsw_config: None,
+                                wal_config: None,
+                                optimizers_config: None,
+                                shard_number: Some(1),
+                                on_disk_payload: None,
+                                replication_factor: None,
+                                write_consistency_factor: None,
+                                quantization_config: None,
+                                sharding_method: None,
+                                encryption: Some(CollectionEncryptionConfig {
+                                    version: 1,
+                                    key_id: Some("tenant-a:vector".to_string()),
+                                    crypto_schema_version: 1,
+                                    encryption_epoch: 0,
+                                    migration_state: CryptoMigrationState::Active,
+                                    rules: vec![EncryptionRuleRef {
+                                        id: "vector_conf".to_string(),
+                                        selector: EncryptionSelector::VectorNames {
+                                            names: vec![DEFAULT_VECTOR_NAME.to_string()],
+                                        },
+                                        instance: "docs_vector_v1".to_string(),
+                                        binding: Some("vector-envelope/v1".to_string()),
+                                    }],
+                                }),
+                                ckks: None,
+                                strict_mode_config: None,
+                                uuid: None,
+                                metadata: None,
+                            },
+                        )
+                        .unwrap(),
+                    ),
+                    auth.clone(),
+                    None,
+                )
+                .await
+                .unwrap();
+
+            let small_better_recommend_err = crate::common::query::do_query_points(
+                &toc,
+                "vector_small_better",
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::RecommendBestScore(
+                        segment::vector_storage::query::RecoQuery::new(
+                            vec![VectorInputInternal::Vector(VectorInternal::Dense(vec![
+                                0.0, 0.0,
+                            ]))],
+                            Vec::new(),
+                        ),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                small_better_recommend_err,
+                StorageError::BadInput { description }
+                    if description.contains("large-better metric")
+            ));
+
+            let small_better_discover_err = crate::common::query::do_query_points(
+                &toc,
+                "vector_small_better",
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Discover(
+                        segment::vector_storage::query::DiscoverQuery::new(
+                            VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                            Vec::new(),
+                        ),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                small_better_discover_err,
+                StorageError::BadInput { description }
+                    if description.contains("large-better metric")
+            ));
+
+            let small_better_context_err = crate::common::query::do_query_points(
+                &toc,
+                "vector_small_better",
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Context(
+                        segment::vector_storage::query::ContextQuery::new(vec![
+                            segment::vector_storage::query::ContextPair {
+                                positive: VectorInputInternal::Vector(VectorInternal::Dense(vec![
+                                    0.0, 0.0,
+                                ])),
+                                negative: VectorInputInternal::Vector(VectorInternal::Dense(vec![
+                                    1.0, 1.0,
+                                ])),
+                            },
+                        ]),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                small_better_context_err,
+                StorageError::BadInput { description }
+                    if description.contains("large-better metric")
+            ));
+
             do_upsert_points(
                 UncheckedTocProvider::new_unchecked(&toc),
                 "vector_groups".to_string(),
