@@ -219,6 +219,15 @@ fn encrypted_payload_filter() -> Filter {
     )))
 }
 
+fn encrypted_vector_sidecar_filter() -> Filter {
+    Filter::new_must(Condition::Field(FieldCondition::new_match(
+        format!("\"{ENCRYPTED_VECTOR_SIDECAR_FIELD}\"")
+            .parse()
+            .unwrap(),
+        serde_json::from_str(r#"{ "value": "opaque" }"#).unwrap(),
+    )))
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_collection_updater() {
     test_collection_updater_with_shards(1).await;
@@ -3106,8 +3115,8 @@ async fn encrypted_vector_rejects_plaintext_vector_writes() {
     assert!(matches!(
         err,
         CollectionError::BadInput { description }
-            if description.contains("encrypted vector")
-                && description.contains("ciphertext storage/write path is not implemented")
+            if description.contains("cannot write plaintext vector")
+                && description.contains("runtime CKKS vector encryption")
     ));
 
     let plaintext_sync = CollectionUpdateOperations::PointOperation(PointOperations::SyncPoints(
@@ -3135,8 +3144,8 @@ async fn encrypted_vector_rejects_plaintext_vector_writes() {
     assert!(matches!(
         err,
         CollectionError::BadInput { description }
-            if description.contains("encrypted vector")
-                && description.contains("ciphertext storage/write path is not implemented")
+            if description.contains("cannot write plaintext vector")
+                && description.contains("runtime CKKS vector encryption")
     ));
 
     let plaintext_vector_update = CollectionUpdateOperations::VectorOperation(
@@ -3162,8 +3171,8 @@ async fn encrypted_vector_rejects_plaintext_vector_writes() {
     assert!(matches!(
         err,
         CollectionError::BadInput { description }
-            if description.contains("encrypted vector")
-                && description.contains("ciphertext storage/write path is not implemented")
+            if description.contains("cannot write plaintext vector")
+                && description.contains("runtime CKKS vector encryption")
     ));
 
     let delete_vector =
@@ -3185,8 +3194,8 @@ async fn encrypted_vector_rejects_plaintext_vector_writes() {
     assert!(matches!(
         err,
         CollectionError::BadInput { description }
-            if description.contains("encrypted vector")
-                && description.contains("ciphertext storage/write path is not implemented")
+            if description.contains("cannot write plaintext vector")
+                && description.contains("runtime CKKS vector encryption")
     ));
 
     let delete_vector_by_filter =
@@ -3208,8 +3217,8 @@ async fn encrypted_vector_rejects_plaintext_vector_writes() {
     assert!(matches!(
         err,
         CollectionError::BadInput { description }
-            if description.contains("encrypted vector")
-                && description.contains("ciphertext storage/write path is not implemented")
+            if description.contains("cannot write plaintext vector")
+                && description.contains("runtime CKKS vector encryption")
     ));
 
     let has_encrypted_vector_filter = Filter::new_must(Condition::HasVector(
@@ -3818,6 +3827,133 @@ async fn encrypted_vector_rejects_search_path() {
         CollectionError::BadInput { description }
             if description.contains("cannot build search matrix for encrypted vector")
                 && description.contains("CKKS-native vector search is not implemented")
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn encrypted_vector_rejects_sidecar_payload_query_surfaces() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, vector_encryption_config()).await;
+
+    let err = collection
+        .count(
+            CountRequestInternal {
+                filter: Some(encrypted_vector_sidecar_filter()),
+                exact: true,
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot filter on encrypted vector sidecar field")
+                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+    ));
+
+    let encrypted_sidecar_order_by = OrderBy {
+        key: format!("\"{ENCRYPTED_VECTOR_SIDECAR_FIELD}\"")
+            .parse()
+            .unwrap(),
+        direction: Some(Direction::Asc),
+        start_from: None,
+    };
+    let err = collection
+        .scroll_by(
+            ScrollRequestInternal {
+                offset: None,
+                limit: Some(10),
+                filter: None,
+                with_payload: Some(WithPayloadInterface::Bool(true)),
+                with_vector: false.into(),
+                order_by: Some(OrderByInterface::Struct(encrypted_sidecar_order_by)),
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot order by encrypted vector sidecar field")
+                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+    ));
+
+    let err = GroupBy::new(
+        GroupRequest {
+            source: SourceRequest::Search(SearchRequestInternal {
+                vector: vec![1.0, 0.0, 0.0, 0.0].into(),
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: Some(0),
+                with_payload: Some(WithPayloadInterface::Bool(false)),
+                with_vector: Some(WithVector::Bool(false)),
+                score_threshold: None,
+            }),
+            group_by: format!("\"{ENCRYPTED_VECTOR_SIDECAR_FIELD}\"")
+                .parse()
+                .unwrap(),
+            group_size: 1,
+            limit: 1,
+            with_lookup: None,
+        },
+        &collection,
+        |_name| async { None },
+        HwMeasurementAcc::new(),
+    )
+    .execute()
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot group by encrypted vector sidecar field")
+                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+    ));
+
+    let encrypted_sidecar_formula = FormulaInternal {
+        formula: ExpressionInternal::Variable(format!("\"{ENCRYPTED_VECTOR_SIDECAR_FIELD}\"")),
+        defaults: HashMap::new(),
+    };
+    let err = collection
+        .query_batch(
+            vec![(
+                CollectionQueryRequest {
+                    prefetch: vec![],
+                    query: Some(Query::Formula(encrypted_sidecar_formula)),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                ShardSelectorInternal::All,
+            )],
+            |_name| async { None },
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot use encrypted vector sidecar field")
+                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
     ));
 }
 

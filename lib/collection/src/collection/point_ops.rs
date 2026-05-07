@@ -1408,6 +1408,14 @@ impl Collection {
             return Ok(());
         };
 
+        if let Some(sidecar_path) = encrypted_vector_sidecar_path(&encryption)?
+            && let Some(filter_path) = filter_touches_encrypted_payload(filter, &sidecar_path)
+        {
+            return Err(CollectionError::bad_input(format!(
+                "cannot filter on encrypted vector sidecar field '{filter_path}'; use encrypted vector search APIs instead",
+            )));
+        }
+
         for rule in &encryption.rules {
             match &rule.selector {
                 EncryptionSelector::PayloadPaths { paths } => {
@@ -1462,6 +1470,15 @@ impl Collection {
             return Ok(());
         };
 
+        if let Some(sidecar_path) = encrypted_vector_sidecar_path(&encryption)?
+            && order_by.key.compatible(&sidecar_path)
+        {
+            return Err(CollectionError::bad_input(format!(
+                "cannot order by encrypted vector sidecar field '{}'; use encrypted vector search APIs instead",
+                order_by.key,
+            )));
+        }
+
         for rule in &encryption.rules {
             let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
                 continue;
@@ -1498,6 +1515,14 @@ impl Collection {
         else {
             return Ok(());
         };
+
+        if let Some(sidecar_path) = encrypted_vector_sidecar_path(&encryption)?
+            && group_by.compatible(&sidecar_path)
+        {
+            return Err(CollectionError::bad_input(format!(
+                "cannot group by encrypted vector sidecar field '{group_by}'; use encrypted vector search APIs instead",
+            )));
+        }
 
         for rule in &encryption.rules {
             let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
@@ -1538,6 +1563,28 @@ impl Collection {
             return Ok(());
         };
 
+        if let Some(sidecar_path) = encrypted_vector_sidecar_path(&encryption)? {
+            if let Some(formula_path) = formula
+                .payload_vars
+                .iter()
+                .find(|payload_var| payload_var.compatible(&sidecar_path))
+            {
+                return Err(CollectionError::bad_input(format!(
+                    "cannot use encrypted vector sidecar field '{formula_path}' in formula; use encrypted vector search APIs instead",
+                )));
+            }
+
+            if let Some(condition_path) = formula
+                .conditions
+                .iter()
+                .find_map(|condition| condition_touches_encrypted_payload(condition, &sidecar_path))
+            {
+                return Err(CollectionError::bad_input(format!(
+                    "cannot use formula condition on encrypted vector sidecar field '{condition_path}'; use encrypted vector search APIs instead",
+                )));
+            }
+        }
+
         for rule in &encryption.rules {
             let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
                 continue;
@@ -1572,6 +1619,27 @@ impl Collection {
 
         Ok(())
     }
+}
+
+fn encrypted_vector_sidecar_path(
+    encryption: &crate::config::CollectionEncryptionConfig,
+) -> CollectionResult<Option<JsonPath>> {
+    if !encryption
+        .rules
+        .iter()
+        .any(|rule| matches!(rule.selector, EncryptionSelector::VectorNames { .. }))
+    {
+        return Ok(None);
+    }
+
+    format!("\"{ENCRYPTED_VECTOR_SIDECAR_FIELD}\"")
+        .parse::<JsonPath>()
+        .map(Some)
+        .map_err(|err| {
+            CollectionError::bad_input(format!(
+                "encrypted vector sidecar field path '{ENCRYPTED_VECTOR_SIDECAR_FIELD}' is invalid: {err:?}",
+            ))
+        })
 }
 
 fn client_nonce_replay_cache_key(
