@@ -3887,6 +3887,30 @@ async fn encrypted_vector_rejects_sidecar_payload_query_surfaces() {
                 && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
     ));
 
+    let err = collection
+        .facet(
+            FacetParams {
+                key: format!("\"{ENCRYPTED_VECTOR_SIDECAR_FIELD}\"")
+                    .parse()
+                    .unwrap(),
+                limit: 10,
+                filter: None,
+                exact: true,
+            },
+            ShardSelectorInternal::All,
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot facet on encrypted vector sidecar field")
+                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+    ));
+
     let err = GroupBy::new(
         GroupRequest {
             source: SourceRequest::Search(SearchRequestInternal {

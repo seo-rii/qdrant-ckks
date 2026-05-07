@@ -5,7 +5,9 @@ use std::time::Duration;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use futures::TryStreamExt;
 use futures::stream::FuturesUnordered;
+use qdrant_sec::ENCRYPTED_VECTOR_SIDECAR_FIELD;
 use segment::data_types::facets::{FacetParams, FacetResponse, FacetValue};
+use segment::json_path::JsonPath;
 
 use super::Collection;
 use crate::config::EncryptionSelector;
@@ -33,6 +35,26 @@ impl Collection {
             .params
             .effective_encryption()
         {
+            if encryption
+                .rules
+                .iter()
+                .any(|rule| matches!(rule.selector, EncryptionSelector::VectorNames { .. }))
+            {
+                let sidecar_path = format!("\"{ENCRYPTED_VECTOR_SIDECAR_FIELD}\"")
+                    .parse::<JsonPath>()
+                    .map_err(|err| {
+                        CollectionError::bad_input(format!(
+                            "encrypted vector sidecar field path '{ENCRYPTED_VECTOR_SIDECAR_FIELD}' is invalid: {err:?}",
+                        ))
+                    })?;
+                if request.key.compatible(&sidecar_path) {
+                    return Err(CollectionError::bad_input(format!(
+                        "cannot facet on encrypted vector sidecar field '{}'; use encrypted vector search APIs instead",
+                        request.key,
+                    )));
+                }
+            }
+
             for rule in &encryption.rules {
                 let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
                     continue;
