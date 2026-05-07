@@ -11,9 +11,10 @@ use itertools::Itertools;
 use qdrant_sec::{
     CKKS_SCHEME, CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadNonceReplayKey,
     ClientPayloadValidationContext, ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD,
-    EncryptedCkksVector, ServerPayloadValidationContext, client_payload_envelope_key,
-    client_payload_nonce_replay_key, is_client_encrypted_payload_value, is_encrypted_payload_value,
-    validate_client_payload_value, validate_server_payload_value_metadata,
+    EncryptedCkksVector, ServerPayloadValidationContext, ckks_vector_sidecar_envelope_key,
+    client_payload_envelope_key, client_payload_nonce_replay_key,
+    is_client_encrypted_payload_value, is_encrypted_payload_value, validate_client_payload_value,
+    validate_server_payload_value_metadata,
 };
 use segment::data_types::order_by::{Direction, OrderBy};
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
@@ -395,7 +396,8 @@ impl Collection {
             .and_then(|encryption| encryption.key_id.clone());
 
         let payload_write_touches_vector_sidecar = |payload: &Payload,
-                                                    key: Option<&JsonPath>|
+                                                    key: Option<&JsonPath>,
+                                                    point_id: Option<&str>|
          -> CollectionResult<bool> {
             if let Some(key) = key {
                 if key.first_key == ENCRYPTED_VECTOR_SIDECAR_FIELD {
@@ -490,6 +492,37 @@ impl Collection {
                             "encrypted vector sidecar entry '{vector_name}' ciphertext is too short",
                         )));
                     }
+                    let Some(point_id) = point_id else {
+                        return Err(CollectionError::bad_input(format!(
+                            "encrypted vector sidecar entry '{vector_name}' requires point-specific runtime vector encryption before collection write",
+                        )));
+                    };
+                    let Some(sidecar_key) = ckks_vector_sidecar_envelope_key(
+                        encrypted,
+                        &collection_crypto_id,
+                        point_id,
+                        vector_name,
+                    )
+                    .map_err(|err| {
+                        CollectionError::bad_input(format!(
+                            "encrypted vector sidecar entry '{vector_name}' is invalid for this collection: {err}",
+                        ))
+                    })?
+                    else {
+                        return Err(CollectionError::bad_input(format!(
+                            "encrypted vector sidecar entry '{vector_name}' requires runtime vector encryption before collection write",
+                        )));
+                    };
+                    if !update_provenance.allows_vector_sidecar_key_for_binding(
+                        &sidecar_key,
+                        &collection_crypto_id,
+                        point_id,
+                        vector_name,
+                    ) {
+                        return Err(CollectionError::bad_input(format!(
+                            "encrypted vector sidecar entry '{vector_name}' requires runtime vector encryption before collection write",
+                        )));
+                    }
                 }
             }
             Ok(touches)
@@ -504,33 +537,62 @@ impl Collection {
                         update_mode: _,
                     },
                 ) => match insert_operation {
-                    PointInsertOperationsInternal::PointsBatch(batch) => batch
-                        .payloads
-                        .as_ref()
-                        .into_iter()
-                        .flatten()
-                        .flatten()
-                        .try_fold(false, |touches, payload| {
-                            Ok::<bool, CollectionError>(
-                                touches || payload_write_touches_vector_sidecar(payload, None)?,
-                            )
-                        })?,
+                    PointInsertOperationsInternal::PointsBatch(batch) => {
+                        let mut touches = false;
+                        if let Some(payloads) = batch.payloads.as_ref() {
+                            for (id, payload) in
+                                batch.ids.iter().zip(payloads).filter_map(|(id, payload)| {
+                                    payload.as_ref().map(|payload| (id.to_string(), payload))
+                                })
+                            {
+                                if payload_write_touches_vector_sidecar(
+                                    payload,
+                                    None,
+                                    Some(id.as_str()),
+                                )? {
+                                    touches = true;
+                                    break;
+                                }
+                            }
+                        }
+                        touches
+                    }
                     PointInsertOperationsInternal::PointsList(points) => points
                         .iter()
-                        .filter_map(|point| point.payload.as_ref())
-                        .try_fold(false, |touches, payload| {
+                        .filter_map(|point| {
+                            point
+                                .payload
+                                .as_ref()
+                                .map(|payload| (point.id.to_string(), payload))
+                        })
+                        .try_fold(false, |touches, (id, payload)| {
                             Ok::<bool, CollectionError>(
-                                touches || payload_write_touches_vector_sidecar(payload, None)?,
+                                touches
+                                    || payload_write_touches_vector_sidecar(
+                                        payload,
+                                        None,
+                                        Some(id.as_str()),
+                                    )?,
                             )
                         })?,
                 },
                 PointOperations::SyncPoints(sync_operation) => sync_operation
                     .points
                     .iter()
-                    .filter_map(|point| point.payload.as_ref())
-                    .try_fold(false, |touches, payload| {
+                    .filter_map(|point| {
+                        point
+                            .payload
+                            .as_ref()
+                            .map(|payload| (point.id.to_string(), payload))
+                    })
+                    .try_fold(false, |touches, (id, payload)| {
                         Ok::<bool, CollectionError>(
-                            touches || payload_write_touches_vector_sidecar(payload, None)?,
+                            touches
+                                || payload_write_touches_vector_sidecar(
+                                    payload,
+                                    None,
+                                    Some(id.as_str()),
+                                )?,
                         )
                     })?,
                 PointOperations::DeletePoints { .. } | PointOperations::DeletePointsByFilter(_) => {
@@ -539,7 +601,17 @@ impl Collection {
             },
             CollectionUpdateOperations::PayloadOperation(
                 PayloadOps::SetPayload(operation) | PayloadOps::OverwritePayload(operation),
-            ) => payload_write_touches_vector_sidecar(&operation.payload, operation.key.as_ref())?,
+            ) => {
+                let point_id = operation
+                    .points
+                    .as_ref()
+                    .and_then(|points| (points.len() == 1).then(|| points[0].to_string()));
+                payload_write_touches_vector_sidecar(
+                    &operation.payload,
+                    operation.key.as_ref(),
+                    point_id.as_deref(),
+                )?
+            }
             CollectionUpdateOperations::PayloadOperation(_)
             | CollectionUpdateOperations::VectorOperation(_)
             | CollectionUpdateOperations::FieldIndexOperation(_) => false,

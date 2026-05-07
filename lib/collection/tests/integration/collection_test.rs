@@ -50,8 +50,9 @@ use qdrant_sec::{
     ClientPayloadSignatureVerification, ClientPayloadValidationContext,
     ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_PAYLOAD_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD,
     PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
-    client_payload_signature_message, is_client_encrypted_payload_value,
-    is_encrypted_payload_value, validate_client_payload_value_for_runtime,
+    ckks_vector_verified_sidecar_key, client_payload_signature_message,
+    is_client_encrypted_payload_value, is_encrypted_payload_value,
+    validate_client_payload_value_for_runtime,
 };
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -3269,6 +3270,7 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection =
         encrypted_collection_fixture(collection_dir.path(), 1, vector_encryption_config()).await;
+    let collection_crypto_id = collection.config_snapshot().await.uuid.unwrap().to_string();
 
     let vector_sidecar = |vector_name: &str,
                           key_id: &str,
@@ -3301,15 +3303,34 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
     };
     let valid_nonce = || serde_json::Value::String(BASE64URL_NOPAD.encode(&[1u8; 12]));
     let valid_ciphertext = || serde_json::Value::String(BASE64URL_NOPAD.encode(&[2u8; 16]));
+    let vector_sidecar_provenance = |payload: &Payload, vector_name: &str| {
+        let sidecar_value = payload
+            .0
+            .get(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+            .and_then(|sidecar| sidecar.as_object())
+            .and_then(|sidecar| sidecar.get(vector_name))
+            .unwrap();
+        CollectionUpdateProvenance::runtime_encrypted_vectors(vec![
+            ckks_vector_verified_sidecar_key(
+                sidecar_value,
+                &collection_crypto_id,
+                "1",
+                vector_name,
+            )
+            .unwrap(),
+        ])
+    };
 
+    let wrong_key_payload = vector_sidecar(
+        DEFAULT_VECTOR_NAME,
+        "tenant-a:wrong",
+        valid_nonce(),
+        valid_ciphertext(),
+    );
+    let wrong_key_provenance = vector_sidecar_provenance(&wrong_key_payload, DEFAULT_VECTOR_NAME);
     let wrong_key_sidecar =
         CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
-            payload: vector_sidecar(
-                DEFAULT_VECTOR_NAME,
-                "tenant-a:wrong",
-                valid_nonce(),
-                valid_ciphertext(),
-            ),
+            payload: wrong_key_payload,
             points: Some(vec![1.into()]),
             filter: None,
             key: None,
@@ -3322,7 +3343,7 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::runtime_encrypted_vectors(),
+            wrong_key_provenance,
         )
         .await
         .unwrap_err();
@@ -3333,9 +3354,12 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
                 && description.contains("key id does not match")
     ));
 
+    let unconfigured_payload =
+        vector_sidecar("other", "tenant-a:docs", valid_nonce(), valid_ciphertext());
+    let unconfigured_provenance = vector_sidecar_provenance(&unconfigured_payload, "other");
     let unconfigured_vector_sidecar =
         CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
-            payload: vector_sidecar("other", "tenant-a:docs", valid_nonce(), valid_ciphertext()),
+            payload: unconfigured_payload,
             points: Some(vec![1.into()]),
             filter: None,
             key: None,
@@ -3348,7 +3372,7 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::runtime_encrypted_vectors(),
+            unconfigured_provenance,
         )
         .await
         .unwrap_err();
@@ -3359,14 +3383,17 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
                 && description.contains("not configured")
     ));
 
+    let malformed_nonce_payload = vector_sidecar(
+        DEFAULT_VECTOR_NAME,
+        "tenant-a:docs",
+        serde_json::Value::String("not-base64url".to_string()),
+        valid_ciphertext(),
+    );
+    let malformed_nonce_provenance =
+        vector_sidecar_provenance(&malformed_nonce_payload, DEFAULT_VECTOR_NAME);
     let malformed_nonce_sidecar =
         CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
-            payload: vector_sidecar(
-                DEFAULT_VECTOR_NAME,
-                "tenant-a:docs",
-                serde_json::Value::String("not-base64url".to_string()),
-                valid_ciphertext(),
-            ),
+            payload: malformed_nonce_payload,
             points: Some(vec![1.into()]),
             filter: None,
             key: None,
@@ -3379,7 +3406,7 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::runtime_encrypted_vectors(),
+            malformed_nonce_provenance,
         )
         .await
         .unwrap_err();
@@ -3388,6 +3415,54 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
         CollectionError::BadInput { description }
             if description.contains("encrypted vector sidecar entry")
                 && description.contains("nonce")
+    ));
+
+    let mut tampered_payload = vector_sidecar(
+        DEFAULT_VECTOR_NAME,
+        "tenant-a:docs",
+        valid_nonce(),
+        valid_ciphertext(),
+    );
+    let tampered_provenance = vector_sidecar_provenance(&tampered_payload, DEFAULT_VECTOR_NAME);
+    let sidecar_entry = tampered_payload
+        .0
+        .get_mut(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+        .and_then(|sidecar| sidecar.as_object_mut())
+        .and_then(|sidecar| sidecar.get_mut(DEFAULT_VECTOR_NAME))
+        .and_then(|entry| entry.as_object_mut())
+        .and_then(|entry| entry.get_mut(ENCRYPTED_CKKS_VECTOR_MARKER))
+        .and_then(|marker| marker.as_object_mut())
+        .and_then(|marker| marker.get_mut("envelope"))
+        .and_then(|envelope| envelope.as_object_mut())
+        .unwrap();
+    sidecar_entry.insert(
+        "ciphertext".to_string(),
+        serde_json::Value::String(BASE64URL_NOPAD.encode(&[3u8; 16])),
+    );
+    let tampered_sidecar =
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
+            payload: tampered_payload,
+            points: Some(vec![1.into()]),
+            filter: None,
+            key: None,
+        }));
+    let err = collection
+        .update_from_client(
+            tampered_sidecar,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            tampered_provenance,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("encrypted vector sidecar entry")
+                && description.contains("requires runtime vector encryption")
     ));
 }
 

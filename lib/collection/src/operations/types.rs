@@ -19,7 +19,10 @@ use common::types::ScoreType;
 use common::validation::validate_range_generic;
 use common::{defaults, save_on_disk};
 use issues::IssueRecord;
-use qdrant_sec::{ClientPayloadEnvelopeKey, ClientPayloadVerifiedEnvelopeKey};
+use qdrant_sec::{
+    CkksVectorSidecarEnvelopeKey, CkksVectorVerifiedSidecarKey, ClientPayloadEnvelopeKey,
+    ClientPayloadVerifiedEnvelopeKey,
+};
 use schemars::JsonSchema;
 use segment::common::anonymize::Anonymize;
 use segment::common::operation_error::{CancelledError, OperationError};
@@ -79,7 +82,7 @@ pub enum CollectionStatus {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct CollectionUpdateProvenance {
     server_envelopes: bool,
-    vector_sidecars: bool,
+    vector_sidecars: Option<RuntimeEncryptedVectorSidecars>,
     verified_client_envelopes: Option<RuntimeVerifiedClientEnvelopes>,
 }
 
@@ -92,6 +95,11 @@ impl Default for CollectionUpdateProvenance {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct RuntimeVerifiedClientEnvelopes {
     verified_envelope_keys: Arc<HashSet<ClientPayloadEnvelopeKey>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct RuntimeEncryptedVectorSidecars {
+    verified_sidecar_keys: Arc<HashSet<CkksVectorSidecarEnvelopeKey>>,
 }
 
 impl RuntimeVerifiedClientEnvelopes {
@@ -113,11 +121,30 @@ impl RuntimeVerifiedClientEnvelopes {
     }
 }
 
+impl RuntimeEncryptedVectorSidecars {
+    fn from_verified(
+        verified_sidecar_keys: impl IntoIterator<Item = CkksVectorVerifiedSidecarKey>,
+    ) -> Self {
+        Self {
+            verified_sidecar_keys: Arc::new(
+                verified_sidecar_keys
+                    .into_iter()
+                    .map(|key| key.envelope_key().clone())
+                    .collect(),
+            ),
+        }
+    }
+
+    pub fn contains(&self, sidecar_key: &CkksVectorSidecarEnvelopeKey) -> bool {
+        self.verified_sidecar_keys.contains(sidecar_key)
+    }
+}
+
 impl CollectionUpdateProvenance {
     pub const fn client_plaintext() -> Self {
         Self {
             server_envelopes: false,
-            vector_sidecars: false,
+            vector_sidecars: None,
             verified_client_envelopes: None,
         }
     }
@@ -125,15 +152,21 @@ impl CollectionUpdateProvenance {
     pub fn runtime_encrypted_payloads() -> Self {
         Self {
             server_envelopes: true,
-            vector_sidecars: false,
+            vector_sidecars: None,
             verified_client_envelopes: None,
         }
     }
 
-    pub fn runtime_encrypted_vectors() -> Self {
+    pub fn runtime_encrypted_vectors(
+        verified_sidecar_keys: impl IntoIterator<Item = CkksVectorVerifiedSidecarKey>,
+    ) -> Self {
+        let verified = RuntimeEncryptedVectorSidecars::from_verified(verified_sidecar_keys);
+        if verified.verified_sidecar_keys.is_empty() {
+            return Self::client_plaintext();
+        }
         Self {
             server_envelopes: false,
-            vector_sidecars: true,
+            vector_sidecars: Some(verified),
             verified_client_envelopes: None,
         }
     }
@@ -147,7 +180,7 @@ impl CollectionUpdateProvenance {
         }
         Self {
             server_envelopes: false,
-            vector_sidecars: false,
+            vector_sidecars: None,
             verified_client_envelopes: Some(verified),
         }
     }
@@ -161,13 +194,26 @@ impl CollectionUpdateProvenance {
         }
         Self {
             server_envelopes: true,
-            vector_sidecars: false,
+            vector_sidecars: None,
             verified_client_envelopes: Some(verified),
         }
     }
 
-    pub fn with_runtime_encrypted_vectors(mut self) -> Self {
-        self.vector_sidecars = true;
+    pub fn with_runtime_encrypted_vectors(
+        mut self,
+        verified_sidecar_keys: impl IntoIterator<Item = CkksVectorVerifiedSidecarKey>,
+    ) -> Self {
+        let verified = RuntimeEncryptedVectorSidecars::from_verified(verified_sidecar_keys);
+        if !verified.verified_sidecar_keys.is_empty() {
+            self.vector_sidecars = Some(verified);
+        }
+        self
+    }
+
+    pub fn with_runtime_encrypted_vector_provenance(mut self, provenance: Self) -> Self {
+        if provenance.vector_sidecars.is_some() {
+            self.vector_sidecars = provenance.vector_sidecars;
+        }
         self
     }
 
@@ -176,7 +222,24 @@ impl CollectionUpdateProvenance {
     }
 
     pub const fn allows_vector_sidecars(&self) -> bool {
+        self.vector_sidecars.is_some()
+    }
+
+    pub fn allows_vector_sidecar_key(&self, sidecar_key: &CkksVectorSidecarEnvelopeKey) -> bool {
         self.vector_sidecars
+            .as_ref()
+            .is_some_and(|verified| verified.contains(sidecar_key))
+    }
+
+    pub fn allows_vector_sidecar_key_for_binding(
+        &self,
+        sidecar_key: &CkksVectorSidecarEnvelopeKey,
+        collection_id: &str,
+        point_id: &str,
+        vector_name: &str,
+    ) -> bool {
+        sidecar_key.matches_binding(collection_id, point_id, vector_name)
+            && self.allows_vector_sidecar_key(sidecar_key)
     }
 
     pub fn allows_client_envelope_key(&self, envelope_key: &ClientPayloadEnvelopeKey) -> bool {

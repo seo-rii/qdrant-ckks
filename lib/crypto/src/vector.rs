@@ -248,6 +248,37 @@ pub struct EncryptedCkksVector {
     pub envelope: EncryptedEnvelope,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CkksVectorSidecarEnvelopeKey {
+    collection_id: String,
+    point_id: String,
+    vector_name: String,
+    key_id: String,
+    rk_id: String,
+    rk_epoch: Option<u64>,
+    nonce: String,
+    ciphertext_sha256_b64: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CkksVectorVerifiedSidecarKey {
+    envelope_key: CkksVectorSidecarEnvelopeKey,
+}
+
+impl CkksVectorVerifiedSidecarKey {
+    pub fn envelope_key(&self) -> &CkksVectorSidecarEnvelopeKey {
+        &self.envelope_key
+    }
+}
+
+impl CkksVectorSidecarEnvelopeKey {
+    pub fn matches_binding(&self, collection_id: &str, point_id: &str, vector_name: &str) -> bool {
+        self.collection_id == collection_id
+            && self.point_id == point_id
+            && self.vector_name == vector_name
+    }
+}
+
 pub fn encrypted_ckks_vector_payload_value(
     encrypted: &EncryptedCkksVector,
 ) -> Result<Value, CkksError> {
@@ -261,6 +292,61 @@ pub fn is_encrypted_ckks_vector_payload_value(value: &Value) -> bool {
     value.as_object().is_some_and(|object| {
         object.len() == 1 && object.contains_key(ENCRYPTED_CKKS_VECTOR_MARKER)
     })
+}
+
+pub fn ckks_vector_sidecar_envelope_key(
+    value: &Value,
+    collection_id: &str,
+    point_id: &str,
+    vector_name: &str,
+) -> Result<Option<CkksVectorSidecarEnvelopeKey>, CkksError> {
+    let Some(marker) = value
+        .as_object()
+        .and_then(|object| object.get(ENCRYPTED_CKKS_VECTOR_MARKER))
+    else {
+        return Ok(None);
+    };
+    let encrypted: EncryptedCkksVector = serde_json::from_value(marker.clone())
+        .map_err(|err| CkksError::MalformedEnvelope(err.to_string()))?;
+    if encrypted.version != VERSION {
+        return Err(CkksError::UnsupportedEnvelopeVersion(encrypted.version));
+    }
+    if encrypted.scheme != CKKS_SCHEME {
+        return Err(CkksError::UnsupportedScheme(encrypted.scheme));
+    }
+    let ciphertext = BASE64URL_NOPAD
+        .decode(encrypted.envelope.ciphertext.as_bytes())
+        .map_err(|_| CkksError::MalformedEnvelope("stored ciphertext is invalid".to_string()))?;
+    if ciphertext.is_empty() {
+        return Err(CkksError::MalformedEnvelope(
+            "stored ciphertext is empty".to_string(),
+        ));
+    }
+    let ciphertext_sha256_b64 = BASE64URL_NOPAD.encode(Sha256::digest(&ciphertext).as_ref());
+
+    Ok(Some(CkksVectorSidecarEnvelopeKey {
+        collection_id: collection_id.to_string(),
+        point_id: point_id.to_string(),
+        vector_name: vector_name.to_string(),
+        key_id: encrypted.envelope.key_id,
+        rk_id: encrypted.envelope.rk_id,
+        rk_epoch: encrypted.envelope.rk_epoch,
+        nonce: encrypted.envelope.nonce,
+        ciphertext_sha256_b64,
+    }))
+}
+
+pub fn ckks_vector_verified_sidecar_key(
+    value: &Value,
+    collection_id: &str,
+    point_id: &str,
+    vector_name: &str,
+) -> Result<CkksVectorVerifiedSidecarKey, CkksError> {
+    let envelope_key =
+        ckks_vector_sidecar_envelope_key(value, collection_id, point_id, vector_name)?.ok_or_else(
+            || CkksError::MalformedEnvelope("missing CKKS vector marker".to_string()),
+        )?;
+    Ok(CkksVectorVerifiedSidecarKey { envelope_key })
 }
 
 impl Debug for EncryptedCkksVector {
