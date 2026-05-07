@@ -277,8 +277,7 @@ async fn ckks_vector_search_points(
             )
             .await?;
 
-        let mut encrypted_items = Vec::new();
-        let mut shard_keys_by_point = std::collections::HashMap::new();
+        let mut encrypted_records = Vec::new();
         for record in scroll_result.points {
             let Some(payload) = record.payload.as_ref() else {
                 continue;
@@ -287,11 +286,14 @@ async fn ckks_vector_search_points(
                 continue;
             };
             let point_id = record.id.to_string();
-            shard_keys_by_point.insert(point_id.clone(), (record.id, record.shard_key));
-            encrypted_items.push((point_id, encrypted));
+            encrypted_records.push((record.id, record.shard_key, point_id, encrypted));
         }
 
-        if !encrypted_items.is_empty() {
+        if !encrypted_records.is_empty() {
+            let encrypted_items = encrypted_records
+                .iter()
+                .map(|(_, _, point_id, encrypted)| (point_id.clone(), encrypted.clone()))
+                .collect::<Vec<_>>();
             let scores = plan
                 .score_plaintext_query_batch(
                     collection_name,
@@ -304,16 +306,15 @@ async fn ckks_vector_search_points(
                         "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
                     ))
                 })?;
-            for ((point_id, _encrypted), score) in encrypted_items.into_iter().zip(scores) {
+            for ((id, shard_key, _point_id, _encrypted), score) in
+                encrypted_records.into_iter().zip(scores)
+            {
                 if search
                     .score_threshold
                     .is_some_and(|threshold| score < threshold)
                 {
                     continue;
                 }
-                let Some((id, shard_key)) = shard_keys_by_point.remove(&point_id) else {
-                    continue;
-                };
                 let scored_point = ScoredPoint {
                     id,
                     version: 0,
