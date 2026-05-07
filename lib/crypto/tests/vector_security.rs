@@ -625,7 +625,7 @@ fn command_openfhe_backend_revalidates_bridge_before_spawn() {
         r#"#!/usr/bin/env bash
 set -euo pipefail
 IFS= read -r _request
-printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
+printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
 "#,
     )
     .unwrap();
@@ -645,7 +645,7 @@ printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
         r#"#!/usr/bin/env bash
 set -euo pipefail
 IFS= read -r _request
-printf '{"version":1,"ciphertext":"cmVwbGFjZWQtY2lwaGVy"}\n'
+printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"cmVwbGFjZWQtY2lwaGVy"}\n'
 "#,
     )
     .unwrap();
@@ -721,7 +721,7 @@ for name in (
         raise SystemExit(20)
 
 sys.stdin.readline()
-print('{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}', flush=True)
+print('{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}', flush=True)
 "#,
     )
     .unwrap();
@@ -780,7 +780,7 @@ case "$request" in
   *'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*) ;;
   *) exit 7 ;;
 esac
-printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
+printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
 "#,
     )
     .unwrap();
@@ -884,6 +884,49 @@ printf '{"version":1,"security_profile":"ckks-unsafe-test-profile","ciphertext":
 
 #[cfg(unix)]
 #[test]
+fn command_openfhe_backend_rejects_missing_security_profile() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("missing-profile-openfhe-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+IFS= read -r _request
+printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+        .with_args([script_path.display().to_string()]);
+    let encryptor = test_ckks_encryptor(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+
+    let err = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0, 2.0])
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CkksError::Backend(message)
+            if message.contains("missing security profile")
+                && message.contains(CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50)
+    ));
+}
+
+#[cfg(unix)]
+#[test]
 fn command_openfhe_backend_uses_plaintext_query_score_protocol() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -896,10 +939,10 @@ set -euo pipefail
 while IFS= read -r request; do
   case "$request" in
     *'"operation":"score_plaintext_query"'*'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*'"query_values":[0.5,0.25]'*'"ciphertext":"b3BlbmZoZS1jaXBoZXI"'*)
-      printf '{"version":1,"score":12.5}\n'
+      printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","score":12.5}\n'
       ;;
     *'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*)
-      printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
+      printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
       ;;
     *) exit 7 ;;
   esac
@@ -954,7 +997,7 @@ case "$request" in
   *'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*'"items"'*'"point_id":"point-1"'*'"point_id":"point-2"'*) ;;
   *) exit 7 ;;
 esac
-printf '{"version":1,"ciphertexts":["YmF0Y2gtb25l","YmF0Y2gtdHdv"]}\n'
+printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertexts":["YmF0Y2gtb25l","YmF0Y2gtdHdv"]}\n'
 "#,
     )
     .unwrap();
@@ -1023,7 +1066,7 @@ case "$request" in
   *'"items"'*) ;;
   *) exit 7 ;;
 esac
-printf '{"version":1,"ciphertexts":["b25seS1vbmU"]}\n'
+printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertexts":["b25seS1vbmU"]}\n'
 "#,
     )
     .unwrap();
@@ -1330,7 +1373,7 @@ for _ in {1..128}; do
   printf x >&2 || true
 done
 sleep 0.1
-printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
+printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
 "#,
     )
     .unwrap();
@@ -1428,7 +1471,7 @@ while IFS= read -r request; do
     *) exit 7 ;;
   esac
   printf 'request\n' >> "$count_file"
-  printf '{{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}}\n'
+  printf '{{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}}\n'
 done
 "#,
             count_path.display(),
@@ -1481,7 +1524,7 @@ set -euo pipefail
 	while IFS= read -r _request; do
 	  printf 'request\n' >> "$count_file"
 	  sleep 2
-	  printf '{{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}}\n'
+	  printf '{{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}}\n'
 	done
 "#,
             count_path.display(),

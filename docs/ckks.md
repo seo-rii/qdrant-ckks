@@ -606,11 +606,10 @@ CKKS parameters are restricted to the allowlisted
 `crypto_context_b64` and `public_key_b64`; a missing profile, missing public
 material, or raw profile name is rejected before collection creation.
 `batch_size` may be lower than the profile slot count, but raw
-modulus/depth/scale combinations are rejected. If the OpenFHE bridge reports a
-`security_profile` field in encrypt, batch encrypt, or scoring responses,
-Qdrant verifies that it matches the requested allowlisted profile. Making this
-field mandatory and carrying richer security-level/noise-budget metadata remains
-future hardening.
+modulus/depth/scale combinations are rejected. OpenFHE bridge encrypt, batch
+encrypt, and scoring responses must include `security_profile`; Qdrant verifies
+that it matches the requested allowlisted profile. Carrying richer
+security-level/noise-budget metadata remains future hardening.
 
 Nearest-neighbor search over an encrypted vector name is implemented only for
 REST/gRPC dense query vectors when runtime `crypto` settings are available on
@@ -635,9 +634,10 @@ Vector encryption requests use `operation: encrypt`; plaintext-query scoring
 requests use `operation: score_plaintext_query` and include the profile
 parameters, OpenFHE public material, collection/point/vector routing metadata,
 the plaintext query values, and the stored CKKS ciphertext bytes. Score
-responses must be JSON objects of the form `{"version":1,"score":<finite f64>}`.
-All bridge responses may include `security_profile`; when present it must equal
-the configured allowlisted CKKS profile.
+responses must be JSON objects of the form
+`{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","score":<finite f64>}`.
+All encrypt, batch encrypt, and scoring responses must include
+`security_profile`, and it must equal the configured allowlisted CKKS profile.
 The subprocess backend still enforces a positive `timeout_ms` and caps
 stdout/stderr collection so a hung or noisy bridge cannot block Qdrant
 indefinitely or force unbounded memory growth. Returned errors do not include

@@ -1092,9 +1092,13 @@ fn validate_bridge_security_profile(
     reported: Option<&str>,
     expected: &str,
 ) -> Result<(), CkksError> {
-    if let Some(reported) = reported
-        && reported != expected
-    {
+    let reported = reported.ok_or_else(|| {
+        CkksError::Backend(format!(
+            "OpenFHE bridge response is missing security profile {expected}",
+        ))
+    })?;
+
+    if reported != expected {
         return Err(CkksError::Backend(format!(
             "OpenFHE bridge security profile {reported} does not match expected {expected}",
         )));
