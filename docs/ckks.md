@@ -631,13 +631,13 @@ newline-delimited JSON response per request to stdout. The backend reuses the
 same child process while the bridge stays healthy and respawns it if the worker
 exits between requests.
 Vector encryption requests use `operation: encrypt`; plaintext-query scoring
-requests use `operation: score_plaintext_query` and include the profile
-parameters, OpenFHE public material, collection/point/vector routing metadata,
-the collection `distance` metric (`dot`, `cosine`, `euclid`, or `manhattan`),
-the plaintext query values, and the stored CKKS ciphertext bytes. Score
-responses must be JSON objects of the form
-`{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","score":<finite f64>}`.
-All encrypt, batch encrypt, and scoring responses must include
+requests use `operation: score_plaintext_query` for single-point scoring or
+`operation: score_plaintext_query_batch` for scroll-batch scoring. Both include
+the profile parameters, OpenFHE public material, collection/vector routing
+metadata, the collection `distance` metric (`dot`, `cosine`, `euclid`, or
+`manhattan`), plaintext query values, and stored CKKS ciphertext bytes. Batch
+score responses must preserve request item order and return exactly one finite
+score per item. All encrypt, batch encrypt, and scoring responses must include
 `security_profile`, and it must equal the configured allowlisted CKKS profile.
 The subprocess backend still enforces a positive `timeout_ms` and caps
 stdout/stderr collection so a hung or noisy bridge cannot block Qdrant
@@ -734,6 +734,47 @@ The bridge response must preserve item order:
 
 `CkksVectorEncryptor` still validates each input vector before the backend call
 and seals every returned ciphertext with per-point AAD.
+
+Plaintext-query batch scoring uses the same shared context and query fields,
+but each item carries the stored ciphertext for one point:
+
+```json
+{
+  "version": 1,
+  "operation": "score_plaintext_query_batch",
+  "scheme": "openfhe-ckks",
+  "collection": "docs",
+  "vector_name": "embedding",
+  "distance": "dot",
+  "parameters": {
+    "poly_modulus_degree": 16384,
+    "multiplicative_depth": 4,
+    "scaling_mod_size": 50,
+    "first_mod_size": 60,
+    "batch_size": 8192
+  },
+  "crypto_context": "base64url-no-pad",
+  "public_key": "base64url-no-pad",
+  "query_values": [0.25, -1.5],
+  "items": [
+    { "point_id": "point-1", "ciphertext": "base64url-no-pad-ciphertext-1" },
+    { "point_id": "point-2", "ciphertext": "base64url-no-pad-ciphertext-2" }
+  ]
+}
+```
+
+The bridge response must preserve item order and include the expected profile:
+
+```json
+{
+  "version": 1,
+  "security_profile": "ckks-128-n16384-d4-scale50",
+  "scores": [9.0, 4.0]
+}
+```
+
+If the response score count differs from the request item count, or any score
+is non-finite, Qdrant discards the bridge response and fails the search.
 
 The Rust side does not include request or bridge stderr in returned errors to
 avoid accidentally propagating plaintext embeddings into logs.
