@@ -13,9 +13,10 @@ use segment::types::{
 };
 
 use crate::collection::Collection;
+use crate::config::EncryptionSelector;
 use crate::operations::consistency_params::ReadConsistency;
 use crate::operations::shard_selector_internal::ShardSelectorInternal;
-use crate::operations::types::CollectionResult;
+use crate::operations::types::{CollectionError, CollectionResult};
 use crate::operations::universal_query::collection_query::{
     CollectionQueryRequest, Query, VectorInputInternal, VectorQuery,
 };
@@ -156,11 +157,21 @@ impl Collection {
             return Ok(Default::default());
         }
 
-        self.collection_config
-            .read()
-            .await
-            .params
-            .check_vector_exists(&using)?;
+        let config = self.collection_config.read().await;
+        config.params.check_vector_exists(&using)?;
+        if let Some(encryption) = config.params.effective_encryption() {
+            for rule in &encryption.rules {
+                let EncryptionSelector::VectorNames { names } = &rule.selector else {
+                    continue;
+                };
+                if names.iter().any(|name| name == &using) {
+                    return Err(CollectionError::bad_input(format!(
+                        "cannot build search matrix for encrypted vector '{using}'; CKKS-native vector search is not implemented in this branch",
+                    )));
+                }
+            }
+        }
+        drop(config);
 
         // make sure the vector is present in the point
         let has_vector = Filter::new_must(Condition::HasVector(HasVectorCondition::from(

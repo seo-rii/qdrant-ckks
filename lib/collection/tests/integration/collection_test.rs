@@ -3816,7 +3816,7 @@ async fn encrypted_vector_rejects_search_path() {
     assert!(matches!(
         err,
         CollectionError::BadInput { description }
-            if description.contains("cannot filter on encrypted vector")
+            if description.contains("cannot build search matrix for encrypted vector")
                 && description.contains("CKKS-native vector search is not implemented")
     ));
 }
