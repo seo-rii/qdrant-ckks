@@ -3464,6 +3464,40 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
             if description.contains("encrypted vector sidecar entry")
                 && description.contains("requires runtime vector encryption")
     ));
+
+    let wrong_point_payload = vector_sidecar(
+        DEFAULT_VECTOR_NAME,
+        "tenant-a:docs",
+        valid_nonce(),
+        valid_ciphertext(),
+    );
+    let wrong_point_provenance =
+        vector_sidecar_provenance(&wrong_point_payload, DEFAULT_VECTOR_NAME);
+    let wrong_point_sidecar =
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
+            payload: wrong_point_payload,
+            points: Some(vec![2.into()]),
+            filter: None,
+            key: None,
+        }));
+    let err = collection
+        .update_from_client(
+            wrong_point_sidecar,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            wrong_point_provenance,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("encrypted vector sidecar entry")
+                && description.contains("requires runtime vector encryption")
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread")]
