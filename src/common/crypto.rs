@@ -78,6 +78,8 @@ pub enum CryptoSetupError {
     InlineMaterialDisabled { material: String },
     #[error("crypto backend {backend} of kind {kind} requires program")]
     MissingBackendProgram { backend: String, kind: String },
+    #[error("crypto backend {backend} requires sha256_b64 program pin")]
+    MissingBackendSha256Pin { backend: String },
     #[error("crypto backend {backend} program path is invalid: {program}")]
     InvalidBackendProgram { backend: String, program: String },
     #[error("crypto backend {backend} size is invalid: {reason}")]
@@ -982,16 +984,19 @@ fn openfhe_backend_from_config(
             "crypto backend {backend_name} requires program",
         )));
     };
-    let mut command_backend = if let Some(expected_sha256_b64) = backend.sha256_b64.as_deref() {
-        CommandOpenFheBackend::new_checked_with_sha256_b64(program, expected_sha256_b64)
-    } else {
-        CommandOpenFheBackend::new_checked(program)
-    }
-    .map_err(|err| {
-        StorageError::bad_input(format!(
-            "crypto backend {backend_name} program path is invalid: {err}",
-        ))
-    })?;
+    let Some(expected_sha256_b64) = backend.sha256_b64.as_deref() else {
+        return Err(StorageError::bad_input(format!(
+            "crypto backend {backend_name} requires sha256_b64 program pin",
+        )));
+    };
+    let mut command_backend =
+        CommandOpenFheBackend::new_checked_with_sha256_b64(program, expected_sha256_b64).map_err(
+            |err| {
+                StorageError::bad_input(format!(
+                    "crypto backend {backend_name} program path is invalid: {err}",
+                ))
+            },
+        )?;
     if let Some(timeout_ms) = backend.timeout_ms {
         command_backend = command_backend.with_timeout(Duration::from_millis(timeout_ms));
     }
@@ -2088,11 +2093,12 @@ fn validate_backend(
             kind: backend.kind.clone(),
         });
     };
-    validate_backend_program_path_with_sha256(
-        backend_name,
-        program,
-        backend.sha256_b64.as_deref(),
-    )?;
+    let Some(expected_sha256_b64) = backend.sha256_b64.as_deref() else {
+        return Err(CryptoSetupError::MissingBackendSha256Pin {
+            backend: backend_name.to_string(),
+        });
+    };
+    validate_backend_program_path_with_sha256(backend_name, program, Some(expected_sha256_b64))?;
 
     if backend.timeout_ms == Some(0) {
         return Err(CryptoSetupError::InvalidBackendTimeout {
@@ -3677,7 +3683,13 @@ mod tests {
                         "tenant-a/payload-v1".to_string(),
                     )]),
                     backend_ref: Some("missing-backend".to_string()),
-                    options: json!({}),
+                    options: json!({
+                        "key_id": "tenant-a:docs",
+                        "material_fingerprint_id": "tenant-a/vector@v1",
+                        "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                        "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                        "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                    }),
                 },
             )]),
             materials: HashMap::new(),
@@ -4249,7 +4261,7 @@ mod tests {
                 CryptoBackendConfig {
                     kind: "process".to_string(),
                     program: Some(bridge_program),
-                    sha256_b64: None,
+                    sha256_b64: Some(current_exe_sha256_b64()),
                     size: None,
                     timeout_ms: Some(1000),
                 },
@@ -5383,7 +5395,7 @@ mod tests {
                 &CryptoBackendConfig {
                     kind: "process_pool".to_string(),
                     program: Some("relative-openfhe-bridge".to_string()),
-                    sha256_b64: None,
+                    sha256_b64: Some(BASE64URL_NOPAD.encode(&[0_u8; 32])),
                     size: Some(4),
                     timeout_ms: Some(5_000),
                 },
@@ -5410,6 +5422,11 @@ mod tests {
                 kind: "shell".to_string(),
             }),
         );
+    }
+
+    fn current_exe_sha256_b64() -> String {
+        let program = std::env::current_exe().unwrap();
+        BASE64URL_NOPAD.encode(&Sha256::digest(std::fs::read(program).unwrap()))
     }
 
     #[test]
@@ -5448,6 +5465,22 @@ mod tests {
             Ok(()),
         );
 
+        assert_eq!(
+            validate_backend(
+                "openfhe_local",
+                &CryptoBackendConfig {
+                    kind: "process_pool".to_string(),
+                    program: Some(bridge_path.to_string_lossy().to_string()),
+                    sha256_b64: None,
+                    size: Some(1),
+                    timeout_ms: Some(5_000),
+                },
+            ),
+            Err(CryptoSetupError::MissingBackendSha256Pin {
+                backend: "openfhe_local".to_string(),
+            }),
+        );
+
         assert!(matches!(
             validate_backend(
                 "openfhe_local",
@@ -5460,6 +5493,28 @@ mod tests {
                 },
             ),
             Err(CryptoSetupError::InvalidBackendProgram { .. }),
+        ));
+    }
+
+    #[test]
+    fn openfhe_backend_factory_requires_bridge_sha256_pin() {
+        let program = std::env::current_exe().unwrap();
+        let err = openfhe_backend_from_config(
+            "openfhe_local",
+            &CryptoBackendConfig {
+                kind: "process".to_string(),
+                program: Some(program.to_string_lossy().to_string()),
+                sha256_b64: None,
+                size: None,
+                timeout_ms: Some(5_000),
+            },
+        )
+        .expect_err("backend construction must reject missing bridge sha256 pin");
+
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("requires sha256_b64 program pin")
         ));
     }
 
@@ -5513,7 +5568,7 @@ mod tests {
                 &CryptoBackendConfig {
                     kind: "process".to_string(),
                     program: Some(program),
-                    sha256_b64: None,
+                    sha256_b64: Some(current_exe_sha256_b64()),
                     size: None,
                     timeout_ms: Some(0),
                 },
@@ -8001,12 +8056,12 @@ mod tests {
                 encryption_epoch: 0,
                 migration_state: CryptoMigrationState::Active,
                 rules: vec![EncryptionRuleRef {
-                    id: "embedding_conf".to_string(),
-                    selector: EncryptionSelector::VectorNames {
-                        names: vec!["embedding".to_string()],
+                    id: "metadata_conf".to_string(),
+                    selector: EncryptionSelector::MetadataKeys {
+                        keys: vec!["embedding".to_string()],
                     },
-                    instance: "docs_vector_v1".to_string(),
-                    binding: Some("vector-envelope/v1".to_string()),
+                    instance: "docs_metadata_v1".to_string(),
+                    binding: Some("metadata-value/v1".to_string()),
                 }],
             }),
             ..CollectionParams::empty()
@@ -8091,12 +8146,12 @@ mod tests {
                 encryption_epoch: 0,
                 migration_state: CryptoMigrationState::Active,
                 rules: vec![EncryptionRuleRef {
-                    id: "embedding_conf".to_string(),
-                    selector: EncryptionSelector::VectorNames {
-                        names: vec!["embedding".to_string()],
+                    id: "metadata_conf".to_string(),
+                    selector: EncryptionSelector::MetadataKeys {
+                        keys: vec!["embedding".to_string()],
                     },
-                    instance: "docs_vector_v1".to_string(),
-                    binding: Some("vector-envelope/v1".to_string()),
+                    instance: "docs_metadata_v1".to_string(),
+                    binding: Some("metadata-value/v1".to_string()),
                 }],
             }),
             ..CollectionParams::empty()

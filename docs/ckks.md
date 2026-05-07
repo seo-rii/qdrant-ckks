@@ -655,9 +655,10 @@ plaintext embeddings before producing CKKS ciphertext. Runtime configuration
 therefore accepts only absolute bridge paths that resolve to executable regular
 files, rejects symlinks and group/world-writable binaries or parent directories
 on Unix, and requires the binary plus every parent directory to be owned by root
-or the Qdrant process user. Set `sha256_b64` in the generic backend to pin the
-expected bridge binary digest; generic runtime validation and checked backend
-construction both hash the bridge through a no-follow file descriptor on Unix.
+or the Qdrant process user. Generic process backends must set `sha256_b64` to
+pin the expected bridge binary digest; generic runtime validation and checked
+backend construction both hash the bridge through a no-follow file descriptor
+on Unix.
 Treat any bridge path change as privileged code
 execution under the Qdrant service account. On Linux, the checked bridge spawn path also
 sets `no_new_privs`, parent-death `SIGKILL`, and `RLIMIT_CORE=0` so the
