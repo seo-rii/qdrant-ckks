@@ -277,6 +277,8 @@ async fn ckks_vector_search_points(
             )
             .await?;
 
+        let mut encrypted_items = Vec::new();
+        let mut shard_keys_by_point = std::collections::HashMap::new();
         for record in scroll_result.points {
             let Some(payload) = record.payload.as_ref() else {
                 continue;
@@ -284,12 +286,17 @@ async fn ckks_vector_search_points(
             let Some(encrypted) = encrypted_vector_from_payload(payload, vector_name)? else {
                 continue;
             };
-            let score = plan
-                .score_plaintext_query(
+            let point_id = record.id.to_string();
+            shard_keys_by_point.insert(point_id.clone(), (record.id, record.shard_key));
+            encrypted_items.push((point_id, encrypted));
+        }
+
+        if !encrypted_items.is_empty() {
+            let scores = plan
+                .score_plaintext_query_batch(
                     collection_name,
-                    &record.id.to_string(),
                     vector_name,
-                    &encrypted,
+                    &encrypted_items,
                     query_values,
                 )?
                 .ok_or_else(|| {
@@ -297,29 +304,34 @@ async fn ckks_vector_search_points(
                         "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
                     ))
                 })?;
-            if search
-                .score_threshold
-                .is_some_and(|threshold| score < threshold)
-            {
-                continue;
-            }
-            let scored_point = ScoredPoint {
-                id: record.id,
-                version: 0,
-                score,
-                payload: None,
-                vector: None,
-                shard_key: record.shard_key,
-                order_value: None,
-            };
-            match scored_by_id.entry(scored_point.id) {
-                std::collections::hash_map::Entry::Occupied(mut entry) => {
-                    if scored_point > *entry.get() {
+            for ((point_id, _encrypted), score) in encrypted_items.into_iter().zip(scores) {
+                if search
+                    .score_threshold
+                    .is_some_and(|threshold| score < threshold)
+                {
+                    continue;
+                }
+                let Some((id, shard_key)) = shard_keys_by_point.remove(&point_id) else {
+                    continue;
+                };
+                let scored_point = ScoredPoint {
+                    id,
+                    version: 0,
+                    score,
+                    payload: None,
+                    vector: None,
+                    shard_key,
+                    order_value: None,
+                };
+                match scored_by_id.entry(scored_point.id) {
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        if scored_point > *entry.get() {
+                            entry.insert(scored_point);
+                        }
+                    }
+                    std::collections::hash_map::Entry::Vacant(entry) => {
                         entry.insert(scored_point);
                     }
-                }
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(scored_point);
                 }
             }
         }

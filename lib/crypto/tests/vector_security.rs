@@ -7,9 +7,10 @@ use std::time::{Duration, Instant};
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CkksBatchEncryptionInput,
-    CkksEncryptionInput, CkksError, CkksParameters, CkksPlaintextQueryScoreInput,
-    CkksPublicMaterial, CkksVectorBackend, CkksVectorBatchItem, CkksVectorEncryptor,
-    CommandOpenFheBackend, EncryptedCkksVector, EncryptionContext, EncryptionError, SecretKey,
+    CkksEncryptionInput, CkksError, CkksParameters, CkksPlaintextQueryScoreBatchInput,
+    CkksPlaintextQueryScoreInput, CkksPublicMaterial, CkksVectorBackend, CkksVectorBatchItem,
+    CkksVectorEncryptor, CommandOpenFheBackend, EncryptedCkksVector, EncryptionContext,
+    EncryptionError, SecretKey,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -92,6 +93,65 @@ impl CkksVectorBackend for ScoreTestBackend {
         assert_eq!(input.query_values, &[0.5, 0.25]);
         assert_eq!(input.ciphertext, b"cipher:point-1:2");
         Ok(42.25)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct BatchScoreTestBackend {
+    single_calls: Arc<AtomicUsize>,
+    batch_calls: Arc<AtomicUsize>,
+}
+
+impl BatchScoreTestBackend {
+    fn new() -> Self {
+        Self {
+            single_calls: Arc::new(AtomicUsize::new(0)),
+            batch_calls: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+}
+
+impl CkksVectorBackend for BatchScoreTestBackend {
+    fn encrypt(&self, input: CkksEncryptionInput<'_>) -> Result<Vec<u8>, CkksError> {
+        Ok(format!("cipher:{}:{}", input.point_id, input.values.len()).into_bytes())
+    }
+
+    fn score_plaintext_query(
+        &self,
+        input: CkksPlaintextQueryScoreInput<'_>,
+    ) -> Result<f64, CkksError> {
+        self.single_calls.fetch_add(1, Ordering::Relaxed);
+        Ok(match input.point_id {
+            "point-1" => 10.0,
+            "point-2" => 5.0,
+            _ => 1.0,
+        })
+    }
+
+    fn score_plaintext_query_batch(
+        &self,
+        input: CkksPlaintextQueryScoreBatchInput<'_>,
+    ) -> Result<Vec<f64>, CkksError> {
+        self.batch_calls.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(input.collection, "docs");
+        assert_eq!(input.vector_name, "embedding");
+        assert_eq!(input.distance, "dot");
+        assert_eq!(input.query_values, &[0.5, 0.25]);
+        Ok(input
+            .items
+            .iter()
+            .map(|item| match item.point_id {
+                "point-1" => {
+                    assert_eq!(item.ciphertext, b"cipher:point-1:2");
+                    10.0
+                }
+                "point-2" => {
+                    assert_eq!(item.ciphertext, b"cipher:point-2:2");
+                    5.0
+                }
+                _ => 1.0,
+            })
+            .collect())
     }
 }
 
@@ -207,6 +267,39 @@ fn ckks_vector_plaintext_query_scoring_uses_verified_ciphertext() {
         .unwrap();
 
     assert_eq!(score, 42.25);
+}
+
+#[test]
+fn ckks_vector_plaintext_query_batch_scoring_uses_backend_batch() {
+    let backend = BatchScoreTestBackend::new();
+    let encryptor = test_ckks_encryptor(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend.clone(),
+    )
+    .unwrap();
+    let first = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0, 2.0])
+        .unwrap();
+    let second = encryptor
+        .encrypt("docs", "point-2", &public_material(), &[3.0, 4.0])
+        .unwrap();
+
+    let scores = encryptor
+        .score_plaintext_query_batch(
+            "docs",
+            &public_material(),
+            &[("point-1", &first), ("point-2", &second)],
+            "dot",
+            &[0.5, 0.25],
+        )
+        .unwrap();
+
+    assert_eq!(scores, vec![10.0, 5.0]);
+    assert_eq!(backend.batch_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(backend.single_calls.load(Ordering::Relaxed), 0);
 }
 
 #[test]
@@ -989,6 +1082,65 @@ done
         .unwrap();
 
     assert_eq!(score, 12.5);
+}
+
+#[cfg(unix)]
+#[test]
+fn command_openfhe_backend_uses_plaintext_query_score_batch_protocol() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("fake-openfhe-score-batch-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+while IFS= read -r request; do
+  case "$request" in
+    *'"operation":"score_plaintext_query_batch"'*'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*'"distance":"dot"'*'"query_values":[0.5,0.25]'*'"items":[{"point_id":"point-1","ciphertext":"b3BlbmZoZS1jaXBoZXI"},{"point_id":"point-2","ciphertext":"b3BlbmZoZS1jaXBoZXI"}]'*)
+      printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[12.5,7.25]}\n'
+      ;;
+    *'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*)
+      printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
+      ;;
+    *) exit 7 ;;
+  esac
+done
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+        .with_args([script_path.display().to_string()]);
+    let encryptor = test_ckks_encryptor(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+    let first = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0, 2.0])
+        .unwrap();
+    let second = encryptor
+        .encrypt("docs", "point-2", &public_material(), &[3.0, 4.0])
+        .unwrap();
+
+    let scores = encryptor
+        .score_plaintext_query_batch(
+            "docs",
+            &public_material(),
+            &[("point-1", &first), ("point-2", &second)],
+            "dot",
+            &[0.5, 0.25],
+        )
+        .unwrap();
+
+    assert_eq!(scores, vec![12.5, 7.25]);
 }
 
 #[cfg(unix)]

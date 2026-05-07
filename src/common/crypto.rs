@@ -692,14 +692,13 @@ impl VectorWritePlan {
         .map(Some)
     }
 
-    pub fn score_plaintext_query(
+    pub fn score_plaintext_query_batch(
         &self,
         collection_name: &str,
-        point_id: &str,
         vector_name: &str,
-        encrypted: &EncryptedCkksVector,
+        encrypted_items: &[(String, EncryptedCkksVector)],
         query_values: &[f32],
-    ) -> Result<Option<f32>, StorageError> {
+    ) -> Result<Option<Vec<f32>>, StorageError> {
         let Some(rule) = self
             .rules
             .iter()
@@ -711,29 +710,38 @@ impl VectorWritePlan {
             .iter()
             .map(|value| *value as f64)
             .collect::<Vec<_>>();
-        let score = rule
+        let encrypted_items = encrypted_items
+            .iter()
+            .map(|(point_id, encrypted)| (point_id.as_str(), encrypted))
+            .collect::<Vec<_>>();
+        let scores = rule
             .encryptor
-            .score_plaintext_query(
+            .score_plaintext_query_batch(
                 collection_name,
-                point_id,
                 &rule.public_material,
-                encrypted,
+                &encrypted_items,
                 ckks_score_distance_name(rule.distance),
                 query_values.as_slice(),
             )
             .map_err(|err| {
                 StorageError::service_error(format!(
-                    "CKKS vector plaintext-query scoring failed for vector '{vector_name}' in collection {collection_name}: {err}",
+                    "CKKS vector plaintext-query batch scoring failed for vector '{vector_name}' in collection {collection_name}: {err}",
                 ))
             })?;
-        let score = score as f32;
-        if !score.is_finite() {
-            return Err(StorageError::service_error(format!(
-                "CKKS vector plaintext-query scoring returned non-finite score for vector '{vector_name}' in collection {collection_name}",
-            )));
-        }
+        let scores = scores
+            .into_iter()
+            .map(|score| {
+                let score = score as f32;
+                if !score.is_finite() {
+                    return Err(StorageError::service_error(format!(
+                        "CKKS vector plaintext-query batch scoring returned non-finite score for vector '{vector_name}' in collection {collection_name}",
+                    )));
+                }
+                Ok(score)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(Some(score))
+        Ok(Some(scores))
     }
 }
 

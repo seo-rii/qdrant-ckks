@@ -2469,6 +2469,9 @@ mod tests {
 set -euo pipefail
 IFS= read -r request
 case "$request" in
+  *'"operation":"score_plaintext_query_batch"'*'"distance":"dot"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"},{"point_id":"2","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"}]'*)
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[9.0,4.0]}\n'
+    ;;
   *'"operation":"score_plaintext_query"'*'"distance":"dot"'*'"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","score":9.0}\n'
     ;;

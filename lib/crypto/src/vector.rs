@@ -206,6 +206,23 @@ pub struct CkksPlaintextQueryScoreInput<'a> {
     pub ciphertext: &'a [u8],
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct CkksPlaintextQueryScoreBatchItem<'a> {
+    pub point_id: &'a str,
+    pub ciphertext: &'a [u8],
+}
+
+#[derive(Clone, Debug)]
+pub struct CkksPlaintextQueryScoreBatchInput<'a> {
+    pub parameters: &'a CkksParameters,
+    pub public_material: &'a CkksPublicMaterial,
+    pub collection: &'a str,
+    pub vector_name: &'a str,
+    pub distance: &'a str,
+    pub query_values: &'a [f64],
+    pub items: &'a [CkksPlaintextQueryScoreBatchItem<'a>],
+}
+
 pub trait CkksVectorBackend {
     fn encrypt(&self, input: CkksEncryptionInput<'_>) -> Result<Vec<u8>, CkksError>;
 
@@ -236,6 +253,28 @@ pub trait CkksVectorBackend {
         Err(CkksError::Backend(
             "OpenFHE backend does not support plaintext-query CKKS scoring".to_string(),
         ))
+    }
+
+    fn score_plaintext_query_batch(
+        &self,
+        input: CkksPlaintextQueryScoreBatchInput<'_>,
+    ) -> Result<Vec<f64>, CkksError> {
+        input
+            .items
+            .iter()
+            .map(|item| {
+                self.score_plaintext_query(CkksPlaintextQueryScoreInput {
+                    parameters: input.parameters,
+                    public_material: input.public_material,
+                    collection: input.collection,
+                    point_id: item.point_id,
+                    vector_name: input.vector_name,
+                    distance: input.distance,
+                    query_values: input.query_values,
+                    ciphertext: item.ciphertext,
+                })
+            })
+            .collect()
     }
 }
 
@@ -784,6 +823,67 @@ where
         }
 
         Ok(score)
+    }
+
+    pub fn score_plaintext_query_batch(
+        &self,
+        collection: &str,
+        expected_public_material: &CkksPublicMaterial,
+        encrypted_items: &[(&str, &EncryptedCkksVector)],
+        distance: &str,
+        query_values: &[f64],
+    ) -> Result<Vec<f64>, CkksError> {
+        if encrypted_items.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        self.validate_vector_values(encrypted_items[0].0, query_values)?;
+        let collection_context = self.collection_context(collection)?;
+        let mut ciphertexts = Vec::with_capacity(encrypted_items.len());
+
+        for (point_id, encrypted) in encrypted_items {
+            let verified = self.open(collection, point_id, expected_public_material, encrypted)?;
+            if verified.slots != query_values.len() {
+                return Err(CkksError::QueryDimensionMismatch {
+                    query_len: query_values.len(),
+                    slots: verified.slots,
+                });
+            }
+            ciphertexts.push((*point_id, Self::decode_verified_ciphertext(&verified)?));
+        }
+
+        let items = ciphertexts
+            .iter()
+            .map(|(point_id, ciphertext)| CkksPlaintextQueryScoreBatchItem {
+                point_id,
+                ciphertext,
+            })
+            .collect::<Vec<_>>();
+        let scores =
+            self.backend
+                .score_plaintext_query_batch(CkksPlaintextQueryScoreBatchInput {
+                    parameters: &self.parameters,
+                    public_material: expected_public_material,
+                    collection: collection_context,
+                    vector_name: &self.vector_name,
+                    distance,
+                    query_values,
+                    items: &items,
+                })?;
+        if scores.len() != encrypted_items.len() {
+            return Err(CkksError::Backend(format!(
+                "OpenFHE backend returned {} scores for {} encrypted vectors",
+                scores.len(),
+                encrypted_items.len(),
+            )));
+        }
+        if scores.iter().any(|score| !score.is_finite()) {
+            return Err(CkksError::Backend(
+                "OpenFHE backend returned non-finite score".to_string(),
+            ));
+        }
+
+        Ok(scores)
     }
 }
 
