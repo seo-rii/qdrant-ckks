@@ -199,17 +199,6 @@ impl CollectionUpdateProvenance {
         }
     }
 
-    pub fn with_runtime_encrypted_vectors(
-        mut self,
-        verified_sidecar_keys: impl IntoIterator<Item = CkksVectorVerifiedSidecarKey>,
-    ) -> Self {
-        let verified = RuntimeEncryptedVectorSidecars::from_verified(verified_sidecar_keys);
-        if !verified.verified_sidecar_keys.is_empty() {
-            self.vector_sidecars = Some(verified);
-        }
-        self
-    }
-
     pub fn with_runtime_encrypted_vector_provenance(mut self, provenance: Self) -> Self {
         if provenance.vector_sidecars.is_some() {
             self.vector_sidecars = provenance.vector_sidecars;
