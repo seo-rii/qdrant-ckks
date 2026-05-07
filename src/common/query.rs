@@ -3,6 +3,7 @@ use std::time::Duration;
 use api::rest::SearchGroupsRequestInternal;
 use collection::collection::distance_matrix::*;
 use collection::common::batching::batch_requests;
+use collection::config::EncryptionSelector;
 use collection::grouping::group_by::GroupRequest;
 use collection::operations::consistency_params::ReadConsistency;
 use collection::operations::shard_selector_internal::ShardSelectorInternal;
@@ -12,7 +13,7 @@ use common::counter::hardware_accumulator::HwMeasurementAcc;
 use qdrant_sec::{
     ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD, EncryptedCkksVector,
 };
-use segment::data_types::vectors::{Named, NamedQuery, VectorInternal};
+use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, Named, NamedQuery, VectorInternal};
 use segment::types::{
     Distance, Order, ScoredPoint, SearchParams, WithPayloadInterface, WithVector,
 };
@@ -473,6 +474,14 @@ pub async fn do_search_point_groups(
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
 ) -> Result<GroupsResult, StorageError> {
+    ensure_encrypted_vector_group_request_is_unsupported(
+        toc,
+        collection_name,
+        search_group_vector_name(&request.vector),
+        &auth,
+    )
+    .await?;
+
     toc.group(
         collection_name,
         GroupRequest::from(request),
@@ -496,6 +505,14 @@ pub async fn do_recommend_point_groups(
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
 ) -> Result<GroupsResult, StorageError> {
+    let vector_name = request
+        .using
+        .as_ref()
+        .map(UsingVector::as_name)
+        .unwrap_or_else(|| DEFAULT_VECTOR_NAME.to_string());
+    ensure_encrypted_vector_group_request_is_unsupported(toc, collection_name, &vector_name, &auth)
+        .await?;
+
     toc.group(
         collection_name,
         GroupRequest::from(request),
@@ -782,6 +799,25 @@ pub async fn do_query_point_groups(
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
 ) -> Result<GroupsResult, StorageError> {
+    ensure_encrypted_vector_group_request_is_unsupported(
+        toc,
+        collection_name,
+        &request.using,
+        &auth,
+    )
+    .await?;
+    let mut prefetches: Vec<&CollectionPrefetch> = request.prefetch.iter().collect();
+    while let Some(prefetch) = prefetches.pop() {
+        ensure_encrypted_vector_group_request_is_unsupported(
+            toc,
+            collection_name,
+            &prefetch.using,
+            &auth,
+        )
+        .await?;
+        prefetches.extend(prefetch.prefetch.iter());
+    }
+
     toc.group(
         collection_name,
         GroupRequest::from(request),
@@ -792,6 +828,43 @@ pub async fn do_query_point_groups(
         hw_measurement_acc,
     )
     .await
+}
+
+fn search_group_vector_name(vector: &api::rest::NamedVectorStruct) -> &str {
+    match vector {
+        api::rest::NamedVectorStruct::Default(_) => DEFAULT_VECTOR_NAME,
+        api::rest::NamedVectorStruct::Dense(vector) => &vector.name,
+        api::rest::NamedVectorStruct::Sparse(vector) => &vector.name,
+    }
+}
+
+async fn ensure_encrypted_vector_group_request_is_unsupported(
+    toc: &TableOfContent,
+    collection_name: &str,
+    vector_name: &str,
+    auth: &Auth,
+) -> Result<(), StorageError> {
+    let collection_pass = auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new(),
+        "encrypted_vector_group_guard",
+    )?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let config = collection.config_snapshot().await;
+    if let Some(encryption) = config.params.effective_encryption() {
+        for rule in &encryption.rules {
+            let EncryptionSelector::VectorNames { names } = &rule.selector else {
+                continue;
+            };
+            if names.iter().any(|name| name == vector_name) {
+                return Err(StorageError::bad_input(format!(
+                    "cannot group by search over encrypted vector '{vector_name}'; CKKS-native vector search is not implemented for grouped requests in this branch",
+                )));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
