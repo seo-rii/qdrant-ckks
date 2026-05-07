@@ -2404,6 +2404,7 @@ mod tests {
     };
     use ring::rand::SystemRandom;
     use ring::signature::{Ed25519KeyPair, KeyPair};
+    use segment::data_types::groups::GroupId;
     use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, NamedQuery, VectorInternal};
     use segment::types::{Condition, Distance, FieldCondition, WithPayloadInterface, WithVector};
     use serde_json::json;
@@ -2660,6 +2661,194 @@ esac
             StorageError::BadInput { description }
                 if description.contains("only supports dense vectors")
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ckks_vector_search_groups_uses_sidecar_scores() {
+        let runtime = Runtime::new().unwrap();
+        let storage_dir = Builder::new().prefix("vector-groups").tempdir().unwrap();
+        let storage_config = StorageConfig {
+            storage_path: storage_dir.path().to_path_buf(),
+            snapshots_path: storage_dir.path().join("snapshots"),
+            snapshots_config: Default::default(),
+            temp_path: None,
+            on_disk_payload: false,
+            optimizers: OptimizersConfig {
+                deleted_threshold: 0.5,
+                vacuum_min_vector_number: 100,
+                default_segment_number: 1,
+                max_segment_size: None,
+                #[expect(deprecated)]
+                memmap_threshold: Some(100),
+                indexing_threshold: Some(100),
+                flush_interval_sec: 2,
+                max_optimization_threads: Some(1),
+                prevent_unoptimized: None,
+            },
+            optimizers_overwrite: None,
+            wal: Default::default(),
+            performance: PerformanceConfig {
+                max_search_threads: 1,
+                max_optimization_runtime_threads: 1,
+                optimizer_cpu_budget: 0,
+                optimizer_io_budget: 0,
+                update_rate_limit: None,
+                search_timeout_sec: None,
+                incoming_shard_transfers_limit: Some(1),
+                outgoing_shard_transfers_limit: Some(1),
+                async_scorer: None,
+                load_concurrency: LoadConcurrencyConfig::default(),
+            },
+            hnsw_index: Default::default(),
+            hnsw_global_config: Default::default(),
+            mmap_advice: mmap::Advice::Random,
+            node_type: Default::default(),
+            update_queue_size: Default::default(),
+            handle_collection_load_errors: false,
+            recovery_mode: None,
+            update_concurrency: Some(NonZeroUsize::new(1).unwrap()),
+            shard_transfer_method: None,
+            collection: None,
+            max_collections: None,
+        };
+        let toc = Arc::new(TableOfContent::new(
+            &storage_config,
+            Runtime::new().unwrap(),
+            Runtime::new().unwrap(),
+            Runtime::new().unwrap(),
+            ResourceBudget::default(),
+            ChannelService::new(6333, false, None, None),
+            0,
+            None,
+        ));
+        let dispatcher = Dispatcher::new(toc.clone());
+        let auth = Auth::new_internal(Access::full("For test"));
+
+        runtime.block_on(async {
+            dispatcher
+                .submit_collection_meta_op(
+                    CollectionMetaOperations::CreateCollection(
+                        CreateCollectionOperation::new(
+                            "vector_groups".to_string(),
+                            CreateCollection {
+                                vectors: VectorParamsBuilder::new(2, Distance::Dot).build().into(),
+                                sparse_vectors: None,
+                                hnsw_config: None,
+                                wal_config: None,
+                                optimizers_config: None,
+                                shard_number: Some(1),
+                                on_disk_payload: None,
+                                replication_factor: None,
+                                write_consistency_factor: None,
+                                quantization_config: None,
+                                sharding_method: None,
+                                encryption: Some(CollectionEncryptionConfig {
+                                    version: 1,
+                                    key_id: Some("tenant-a:vector".to_string()),
+                                    crypto_schema_version: 1,
+                                    encryption_epoch: 0,
+                                    migration_state: CryptoMigrationState::Active,
+                                    rules: vec![EncryptionRuleRef {
+                                        id: "vector_conf".to_string(),
+                                        selector: EncryptionSelector::VectorNames {
+                                            names: vec![DEFAULT_VECTOR_NAME.to_string()],
+                                        },
+                                        instance: "docs_vector_v1".to_string(),
+                                        binding: Some("vector-envelope/v1".to_string()),
+                                    }],
+                                }),
+                                ckks: None,
+                                strict_mode_config: None,
+                                uuid: None,
+                                metadata: None,
+                            },
+                        )
+                        .unwrap(),
+                    ),
+                    auth.clone(),
+                    None,
+                )
+                .await
+                .unwrap();
+
+            let bridge = fake_openfhe_bridge();
+            let vector_settings = vector_runtime_settings(&bridge.path().join("openfhe-bridge"));
+            do_upsert_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "vector_groups".to_string(),
+                PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                    points: vec![
+                        api::rest::PointStruct {
+                            id: 1.into(),
+                            vector: api::rest::VectorStruct::Single(vec![0.7, -0.25]),
+                            payload: Some(segment::types::Payload(
+                                json!({ "group": "a" }).as_object().unwrap().clone(),
+                            )),
+                        },
+                        api::rest::PointStruct {
+                            id: 2.into(),
+                            vector: api::rest::VectorStruct::Single(vec![0.1, 0.2]),
+                            payload: Some(segment::types::Payload(
+                                json!({ "group": "b" }).as_object().unwrap().clone(),
+                            )),
+                        },
+                    ],
+                    shard_key: None,
+                    update_filter: None,
+                    update_mode: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+
+            let groups = crate::common::query::do_search_point_groups(
+                &toc,
+                "vector_groups",
+                SearchGroupsRequestInternal {
+                    vector: vec![0.0, 0.0].into(),
+                    filter: None,
+                    params: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                    group_request: BaseGroupRequest {
+                        group_by: "group".parse().unwrap(),
+                        group_size: 1,
+                        limit: 2,
+                        with_lookup: None,
+                    },
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth,
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(groups.groups.len(), 2);
+            assert_eq!(groups.groups[0].id, GroupId::from("a"));
+            assert_eq!(groups.groups[0].hits[0].id, 1.into());
+            assert_eq!(groups.groups[0].hits[0].score, 9.0);
+            assert!(groups.groups[0].hits[0].payload.is_none());
+            assert!(groups.groups[0].hits[0].vector.is_none());
+            assert_eq!(groups.groups[1].id, GroupId::from("b"));
+            assert_eq!(groups.groups[1].hits[0].id, 2.into());
+            assert_eq!(groups.groups[1].hits[0].score, 4.0);
+        });
     }
 
     #[test]
@@ -3419,6 +3608,7 @@ esac
                 auth.clone(),
                 None,
                 HwMeasurementAcc::disposable(),
+                None,
             )
             .await
             .unwrap_err();

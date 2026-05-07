@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use api::rest::SearchGroupsRequestInternal;
+use api::rest::{SearchGroupsRequestInternal, SearchRequestInternal};
 use collection::collection::distance_matrix::*;
 use collection::common::batching::batch_requests;
 use collection::config::EncryptionSelector;
@@ -13,9 +13,11 @@ use common::counter::hardware_accumulator::HwMeasurementAcc;
 use qdrant_sec::{
     ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD, EncryptedCkksVector,
 };
+use segment::data_types::groups::GroupId;
 use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, Named, NamedQuery, VectorInternal};
+use segment::json_path::JsonPath;
 use segment::types::{
-    Distance, Order, ScoredPoint, SearchParams, WithPayloadInterface, WithVector,
+    Distance, Order, PayloadContainer, ScoredPoint, SearchParams, WithPayloadInterface, WithVector,
 };
 use segment::utils::scored_point_ties::ScoredPointTies;
 use shard::query::query_enum::QueryEnum;
@@ -473,7 +475,25 @@ pub async fn do_search_point_groups(
     auth: Auth,
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
 ) -> Result<GroupsResult, StorageError> {
+    if let Some(settings) = runtime_settings
+        && let Some(result) = try_ckks_vector_search_groups(
+            toc,
+            collection_name,
+            &request,
+            read_consistency,
+            &shard_selection,
+            &auth,
+            timeout,
+            hw_measurement_acc.clone(),
+            settings,
+        )
+        .await?
+    {
+        return Ok(result);
+    }
+
     ensure_encrypted_vector_group_request_is_unsupported(
         toc,
         collection_name,
@@ -492,6 +512,187 @@ pub async fn do_search_point_groups(
         hw_measurement_acc,
     )
     .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn try_ckks_vector_search_groups(
+    toc: &TableOfContent,
+    collection_name: &str,
+    request: &SearchGroupsRequestInternal,
+    read_consistency: Option<ReadConsistency>,
+    shard_selection: &ShardSelectorInternal,
+    auth: &Auth,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: &Settings,
+) -> Result<Option<GroupsResult>, StorageError> {
+    let collection_pass = auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new(),
+        "ckks_vector_search_groups",
+    )?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let config = collection.config_snapshot().await;
+    let collection_crypto_id = config.stable_crypto_id(collection_name)?;
+    let Some(plan) = vector_write_plan_for_collection_with_crypto_id(
+        runtime_settings,
+        collection_name,
+        &collection_crypto_id,
+        &config.params,
+    )?
+    else {
+        return Ok(None);
+    };
+
+    let vector_name = search_group_vector_name(&request.vector);
+    if !plan.contains_vector_name(vector_name) {
+        return Ok(None);
+    }
+    if request.group_request.with_lookup.is_some() {
+        return Err(StorageError::bad_input(format!(
+            "cannot use with_lookup for grouped search over encrypted vector '{vector_name}'; CKKS sidecar grouped lookup is not implemented",
+        )));
+    }
+    if request.with_vector.clone().unwrap_or_default().is_enabled() {
+        return Err(StorageError::bad_input(format!(
+            "cannot return encrypted vector '{vector_name}'; CKKS vector ciphertext read path returns payload sidecar only",
+        )));
+    }
+    ensure_group_path_does_not_touch_encrypted_vector_sidecar(&request.group_request.group_by)?;
+
+    let group_by = request.group_request.group_by.clone();
+    let search_request = SearchRequestInternal {
+        vector: request.vector.clone(),
+        filter: request.filter.clone(),
+        params: request.params.clone(),
+        limit: usize::MAX,
+        offset: Some(0),
+        with_payload: Some(WithPayloadInterface::Bool(true)),
+        with_vector: Some(WithVector::Bool(false)),
+        score_threshold: request.score_threshold,
+    };
+    let scored = ckks_vector_search_points(
+        &collection,
+        collection_name,
+        &CoreSearchRequest::from(search_request),
+        &plan,
+        read_consistency,
+        shard_selection,
+        timeout,
+        hw_measurement_acc.clone(),
+    )
+    .await?;
+
+    let grouped = group_ckks_search_points(
+        scored,
+        &group_by,
+        request.group_request.limit as usize,
+        request.group_request.group_size as usize,
+    );
+    let ids = grouped
+        .iter()
+        .flat_map(|(_, points)| points.iter().map(|point| point.id))
+        .collect::<Vec<_>>();
+    let with_payload = request
+        .with_payload
+        .clone()
+        .unwrap_or(WithPayloadInterface::Bool(false));
+    let records = if ids.is_empty() {
+        Vec::new()
+    } else {
+        collection
+            .retrieve(
+                PointRequestInternal {
+                    ids,
+                    with_payload: Some(with_payload),
+                    with_vector: WithVector::Bool(false),
+                },
+                read_consistency,
+                shard_selection,
+                timeout,
+                hw_measurement_acc,
+            )
+            .await?
+    };
+    let records_by_id = records
+        .into_iter()
+        .map(|record| (record.id, record))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let groups = grouped
+        .into_iter()
+        .map(|(id, mut hits)| {
+            for hit in &mut hits {
+                if let Some(record) = records_by_id.get(&hit.id) {
+                    hit.payload.clone_from(&record.payload);
+                    hit.vector.clone_from(&record.vector);
+                    hit.shard_key = record.shard_key.clone().or_else(|| hit.shard_key.clone());
+                }
+            }
+            PointGroup {
+                hits: hits.into_iter().map(api::rest::ScoredPoint::from).collect(),
+                id,
+                lookup: None,
+            }
+        })
+        .collect();
+
+    Ok(Some(GroupsResult { groups }))
+}
+
+fn ensure_group_path_does_not_touch_encrypted_vector_sidecar(
+    group_by: &JsonPath,
+) -> Result<(), StorageError> {
+    let Ok(sidecar_path) = ENCRYPTED_VECTOR_SIDECAR_FIELD.parse::<JsonPath>() else {
+        return Ok(());
+    };
+    if group_by.compatible(&sidecar_path) {
+        return Err(StorageError::bad_input(format!(
+            "cannot group by encrypted vector sidecar field '{group_by}'; use a plaintext group field",
+        )));
+    }
+
+    Ok(())
+}
+
+fn group_ckks_search_points(
+    scored: Vec<ScoredPoint>,
+    group_by: &JsonPath,
+    group_limit: usize,
+    group_size: usize,
+) -> Vec<(GroupId, Vec<ScoredPoint>)> {
+    let mut groups = Vec::<(GroupId, Vec<ScoredPoint>)>::new();
+    for point in scored {
+        let Some(payload) = point.payload.as_ref() else {
+            continue;
+        };
+        let values = payload
+            .get_value(group_by)
+            .into_iter()
+            .flat_map(|value| match value {
+                serde_json::Value::Array(values) => values.iter().collect(),
+                value => vec![value],
+            });
+        for value in values {
+            let Ok(group_id) = GroupId::try_from(value) else {
+                continue;
+            };
+            if let Some((_, hits)) = groups.iter_mut().find(|(id, _)| *id == group_id) {
+                if hits.len() < group_size && !hits.iter().any(|hit| hit.id == point.id) {
+                    hits.push(point.clone());
+                }
+                continue;
+            }
+            if groups.len() >= group_limit {
+                continue;
+            }
+            groups.push((group_id, vec![point.clone()]));
+        }
+        if groups.len() >= group_limit && groups.iter().all(|(_, hits)| hits.len() >= group_size) {
+            break;
+        }
+    }
+    groups
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -892,6 +1093,8 @@ pub async fn do_search_points_matrix(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     fn scored_point(id: u64, score: f32) -> ScoredPoint {
@@ -904,6 +1107,14 @@ mod tests {
             shard_key: None,
             order_value: None,
         }
+    }
+
+    fn scored_point_with_payload(id: u64, score: f32, payload: serde_json::Value) -> ScoredPoint {
+        let mut point = scored_point(id, score);
+        point.payload = Some(segment::types::Payload(
+            payload.as_object().unwrap().clone(),
+        ));
+        point
     }
 
     #[test]
@@ -969,5 +1180,34 @@ mod tests {
             ..SearchParams::default()
         };
         assert!(!ckks_search_params_supported(&indexed_only_params));
+    }
+
+    #[test]
+    fn ckks_sidecar_grouping_uses_ranked_group_order_and_size() {
+        let group_by = "group".parse::<JsonPath>().unwrap();
+        let groups = group_ckks_search_points(
+            vec![
+                scored_point_with_payload(1, 9.0, json!({ "group": "a" })),
+                scored_point_with_payload(2, 8.0, json!({ "group": "a" })),
+                scored_point_with_payload(3, 7.0, json!({ "group": "b" })),
+                scored_point_with_payload(4, 6.0, json!({ "group": "c" })),
+            ],
+            &group_by,
+            2,
+            1,
+        );
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].0, GroupId::from("a"));
+        assert_eq!(groups[0].1.len(), 1);
+        assert_eq!(groups[0].1[0].id, 1.into());
+        assert_eq!(groups[1].0, GroupId::from("b"));
+        assert_eq!(groups[1].1[0].id, 3.into());
+    }
+
+    #[test]
+    fn ckks_sidecar_grouping_allows_plain_group_path() {
+        let group_by = "group".parse::<JsonPath>().unwrap();
+        ensure_group_path_does_not_touch_encrypted_vector_sidecar(&group_by).unwrap();
     }
 }

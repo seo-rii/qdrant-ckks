@@ -170,6 +170,7 @@ async fn search_point_groups(
     request: Json<SearchGroupsRequest>,
     params: Query<ReadParams>,
     service_config: web::Data<ServiceConfig>,
+    settings: web::Data<Settings>,
     ActixAuth(auth): ActixAuth,
 ) -> HttpResponse {
     let SearchGroupsRequest {
@@ -212,6 +213,7 @@ async fn search_point_groups(
         auth,
         params.timeout(),
         request_hw_counter.get_counter(),
+        Some(settings.get_ref()),
     )
     .await;
 

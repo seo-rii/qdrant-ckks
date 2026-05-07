@@ -260,6 +260,7 @@ pub async fn search_groups(
     shard_selection: Option<ShardId>,
     auth: Auth,
     request_hw_counter: RequestHwCounter,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Response<SearchGroupsResponse>, Status> {
     let search_groups_request = search_point_groups.clone().try_into()?;
 
@@ -294,6 +295,7 @@ pub async fn search_groups(
         auth,
         timeout.map(Duration::from_secs),
         request_hw_counter.get_counter(),
+        runtime_settings,
     )
     .await?;
 
