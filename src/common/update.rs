@@ -2407,6 +2407,7 @@ mod tests {
     use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, NamedQuery, VectorInternal};
     use segment::types::{Condition, Distance, FieldCondition, WithPayloadInterface, WithVector};
     use serde_json::json;
+    use sha2::{Digest, Sha256};
     use shard::query::query_enum::QueryEnum;
     use shard::search::CoreSearchRequest;
     use storage::content_manager::collection_meta_ops::{
@@ -2502,6 +2503,7 @@ esac
     }
 
     fn vector_runtime_settings(bridge_path: &std::path::Path) -> Settings {
+        let bridge_digest: [u8; 32] = Sha256::digest(fs::read(bridge_path).unwrap()).into();
         let mut settings = Settings::new(None).unwrap();
         settings.crypto = CryptoSettings {
             allow_inline_key_material: true,
@@ -2539,7 +2541,7 @@ esac
                 CryptoBackendConfig {
                     kind: "process".to_string(),
                     program: Some(bridge_path.display().to_string()),
-                    sha256_b64: None,
+                    sha256_b64: Some(BASE64URL_NOPAD.encode(&bridge_digest)),
                     size: None,
                     timeout_ms: Some(5_000),
                 },
