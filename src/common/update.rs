@@ -3069,7 +3069,53 @@ esac
             .await
             .unwrap();
             assert_eq!(discover_query[0].id, 1.into());
-            assert_eq!(discover_query[0].score, 9.0);
+            assert_eq!(
+                discover_query[0].score,
+                common::math::scaled_fast_sigmoid(9.0)
+            );
+
+            let discover_context_query = crate::common::query::do_query_points(
+                &toc,
+                "vector_groups",
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Discover(
+                        segment::vector_storage::query::DiscoverQuery::new(
+                            VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                            vec![segment::vector_storage::query::ContextPair {
+                                positive: VectorInputInternal::Vector(VectorInternal::Dense(vec![
+                                    0.0, 0.0,
+                                ])),
+                                negative: VectorInputInternal::Vector(VectorInternal::Dense(vec![
+                                    1.0, 1.0,
+                                ])),
+                            }],
+                        ),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(discover_context_query[0].id, 1.into());
+            assert_eq!(
+                discover_context_query[0].score,
+                common::math::scaled_fast_sigmoid(9.0)
+            );
 
             let recommend = crate::common::query::do_recommend_points(
                 &toc,
@@ -3186,7 +3232,10 @@ esac
             .await
             .unwrap();
             assert_eq!(discover[0].id, 1.into());
-            assert_eq!(discover[0].score, 9.0);
+            assert_eq!(
+                discover[0].score,
+                common::math::scaled_fast_sigmoid(9.0)
+            );
 
             let recommend_batch = crate::common::query::do_recommend_batch_points(
                 &toc,
@@ -3435,7 +3484,7 @@ esac
                     if description.contains("cannot resolve point-id")
             ));
 
-            let err = crate::common::query::do_discover_points(
+            let discover_context = crate::common::query::do_discover_points(
                 &toc,
                 "vector_groups",
                 DiscoverRequestInternal {
@@ -3461,12 +3510,12 @@ esac
                 Some(&vector_settings),
             )
             .await
-            .unwrap_err();
-            assert!(matches!(
-                err,
-                StorageError::BadInput { description }
-                    if description.contains("target-only discover")
-            ));
+            .unwrap();
+            assert_eq!(discover_context[0].id, 1.into());
+            assert_eq!(
+                discover_context[0].score,
+                common::math::scaled_fast_sigmoid(9.0)
+            );
         });
     }
 
