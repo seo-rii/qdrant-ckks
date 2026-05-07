@@ -813,13 +813,16 @@ if value.value != signal.SIGKILL:
     raise SystemExit(21)
 
 for name in (
+    "QDRANT",
+    "QDRANT__SERVICE__API_KEY_FOR_TEST",
+    "QDRANT_SERVICE_API_KEY_FOR_TEST",
     "QDRANT__CRYPTO__BRIDGE_ENV_SECRET_FOR_TEST",
     "QDRANT_CRYPTO_BRIDGE_ENV_SECRET_FOR_TEST",
     "QDRANT__CKKS__BRIDGE_ENV_SECRET_FOR_TEST",
     "QDRANT_CKKS_BRIDGE_ENV_SECRET_FOR_TEST",
 ):
     if os.environ.get(name):
-        print(f"qdrant crypto secret env leaked to bridge: {name}", file=sys.stderr)
+        print(f"qdrant env leaked to bridge: {name}", file=sys.stderr)
         raise SystemExit(20)
 
 sys.stdin.readline()
@@ -832,6 +835,9 @@ print('{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext"
     fs::set_permissions(&script_path, permissions).unwrap();
 
     for name in [
+        "QDRANT",
+        "QDRANT__SERVICE__API_KEY_FOR_TEST",
+        "QDRANT_SERVICE_API_KEY_FOR_TEST",
         "QDRANT__CRYPTO__BRIDGE_ENV_SECRET_FOR_TEST",
         "QDRANT_CRYPTO_BRIDGE_ENV_SECRET_FOR_TEST",
         "QDRANT__CKKS__BRIDGE_ENV_SECRET_FOR_TEST",
@@ -853,6 +859,9 @@ print('{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext"
 
     let encrypted = encryptor.encrypt("docs", "point-1", &public_material(), &[1.0]);
     for name in [
+        "QDRANT",
+        "QDRANT__SERVICE__API_KEY_FOR_TEST",
+        "QDRANT_SERVICE_API_KEY_FOR_TEST",
         "QDRANT__CRYPTO__BRIDGE_ENV_SECRET_FOR_TEST",
         "QDRANT_CRYPTO_BRIDGE_ENV_SECRET_FOR_TEST",
         "QDRANT__CKKS__BRIDGE_ENV_SECRET_FOR_TEST",

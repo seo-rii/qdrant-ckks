@@ -665,9 +665,9 @@ sets `no_new_privs`, parent-death `SIGKILL`, and `RLIMIT_CORE=0` so the
 plaintext-bearing bridge cannot gain extra privileges through
 setuid/file-capability execution, is killed if Qdrant exits, and does not
 produce normal core dumps. The bridge child also drops inherited environment
-variables whose names start with `QDRANT__CRYPTO`, `QDRANT_CRYPTO`,
-`QDRANT__CKKS`, or `QDRANT_CKKS`, so env-backed Qdrant crypto material is not
-handed to the bridge process by default.
+variables named `QDRANT` or whose names start with `QDRANT_`, so env-backed
+Qdrant settings and crypto material are not handed to the bridge process by
+default.
 
 Request fields:
 
