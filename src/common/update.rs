@@ -2474,6 +2474,9 @@ mod tests {
 set -euo pipefail
 IFS= read -r request
 case "$request" in
+  *'"operation":"score_plaintext_query_batch"'*'"distance":"dot"'*'"query_values":[1.0,1.0]'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"},{"point_id":"2","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"}]'*)
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[1.0,7.0]}\n'
+    ;;
   *'"operation":"score_plaintext_query_batch"'*'"distance":"dot"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"},{"point_id":"2","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"}]'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[9.0,4.0]}\n'
     ;;
@@ -3114,8 +3117,132 @@ esac
             assert_eq!(discover_context_query[0].id, 1.into());
             assert_eq!(
                 discover_context_query[0].score,
-                common::math::scaled_fast_sigmoid(9.0)
+                1.0 + common::math::scaled_fast_sigmoid(9.0)
             );
+
+            let context_query = crate::common::query::do_query_points(
+                &toc,
+                "vector_groups",
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Context(
+                        segment::vector_storage::query::ContextQuery::new(vec![
+                            segment::vector_storage::query::ContextPair {
+                                positive: VectorInputInternal::Vector(VectorInternal::Dense(vec![
+                                    0.0, 0.0,
+                                ])),
+                                negative: VectorInputInternal::Vector(VectorInternal::Dense(vec![
+                                    1.0, 1.0,
+                                ])),
+                            },
+                        ]),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: Some(0.0),
+                    limit: 2,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(context_query.len(), 1);
+            assert_eq!(context_query[0].id, 1.into());
+            assert_eq!(context_query[0].score, 1.0);
+
+            let context_groups = crate::common::query::do_query_point_groups(
+                &toc,
+                "vector_groups",
+                collection::operations::universal_query::collection_query::CollectionQueryGroupsRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Context(
+                        segment::vector_storage::query::ContextQuery::new(vec![
+                            segment::vector_storage::query::ContextPair {
+                                positive: VectorInputInternal::Vector(VectorInternal::Dense(vec![
+                                    0.0, 0.0,
+                                ])),
+                                negative: VectorInputInternal::Vector(VectorInternal::Dense(vec![
+                                    1.0, 1.0,
+                                ])),
+                            },
+                        ]),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    params: None,
+                    score_threshold: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                    group_by: "group".parse().unwrap(),
+                    group_size: 1,
+                    limit: 2,
+                    with_lookup: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(context_groups.groups.len(), 2);
+            assert_eq!(context_groups.groups[0].id, GroupId::from("a"));
+            assert_eq!(context_groups.groups[0].hits[0].score, 1.0);
+            assert_eq!(context_groups.groups[1].id, GroupId::from("b"));
+            assert_eq!(context_groups.groups[1].hits[0].score, -1.0);
+
+            let context_point_id_err = crate::common::query::do_query_points(
+                &toc,
+                "vector_groups",
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Context(
+                        segment::vector_storage::query::ContextQuery::new(vec![
+                            segment::vector_storage::query::ContextPair {
+                                positive: VectorInputInternal::Id(1.into()),
+                                negative: VectorInputInternal::Vector(VectorInternal::Dense(vec![
+                                    1.0, 1.0,
+                                ])),
+                            },
+                        ]),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                context_point_id_err,
+                StorageError::BadInput { description }
+                    if description.contains("context query cannot resolve point-id")
+            ));
 
             let recommend = crate::common::query::do_recommend_points(
                 &toc,
@@ -3514,7 +3641,7 @@ esac
             assert_eq!(discover_context[0].id, 1.into());
             assert_eq!(
                 discover_context[0].score,
-                common::math::scaled_fast_sigmoid(9.0)
+                1.0 + common::math::scaled_fast_sigmoid(9.0)
             );
         });
     }

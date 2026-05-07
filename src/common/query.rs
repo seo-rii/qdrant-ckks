@@ -261,6 +261,9 @@ async fn ckks_vector_search_points(
             target: &'a [f32],
             pairs: Vec<(&'a [f32], &'a [f32])>,
         },
+        Context {
+            pairs: Vec<(&'a [f32], &'a [f32])>,
+        },
     }
 
     let (vector_name, scoring) = match &search.query {
@@ -324,9 +327,18 @@ async fn ckks_vector_search_points(
                 },
             )
         }
+        QueryEnum::Context(named_query) => (
+            named_query.get_name(),
+            CkksSidecarScoring::Context {
+                pairs: query_context_pairs_as_dense_slices(
+                    &named_query.query.pairs,
+                    named_query.get_name(),
+                )?,
+            },
+        ),
         _ => {
             return Err(StorageError::bad_input(format!(
-                "encrypted vector '{}' only supports dense nearest-neighbor search, raw-dense recommend, and raw-dense discover over the CKKS sidecar",
+                "encrypted vector '{}' only supports dense nearest-neighbor search, raw-dense recommend, raw-dense discover, and raw-dense context over the CKKS sidecar",
                 search.query.get_vector_name(),
             )));
         }
@@ -362,6 +374,19 @@ async fn ckks_vector_search_points(
             if distance.distance_order() != Order::LargeBetter {
                 return Err(StorageError::bad_input(format!(
                     "encrypted vector '{vector_name}' discover with sidecar scoring requires a large-better metric such as dot or cosine",
+                )));
+            }
+            Order::LargeBetter
+        }
+        CkksSidecarScoring::Context { pairs } => {
+            if pairs.is_empty() {
+                return Err(StorageError::bad_input(format!(
+                    "encrypted vector '{vector_name}' context query requires at least one raw dense context pair",
+                )));
+            }
+            if distance.distance_order() != Order::LargeBetter {
+                return Err(StorageError::bad_input(format!(
+                    "encrypted vector '{vector_name}' context query with sidecar scoring requires a large-better metric such as dot or cosine",
                 )));
             }
             Order::LargeBetter
@@ -586,6 +611,47 @@ async fn ckks_vector_search_points(
                             rank as f32 + scaled_fast_sigmoid(target_score)
                         })
                         .collect()
+                }
+                CkksSidecarScoring::Context { pairs } => {
+                    let mut rank_scores = vec![0i32; encrypted_items.len()];
+                    for (positive, negative) in pairs {
+                        let positive_scores = plan
+                            .score_plaintext_query_batch(
+                                collection_name,
+                                vector_name,
+                                &encrypted_items,
+                                positive,
+                            )?
+                            .ok_or_else(|| {
+                                StorageError::service_error(format!(
+                                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
+                                ))
+                            })?;
+                        let negative_scores = plan
+                            .score_plaintext_query_batch(
+                                collection_name,
+                                vector_name,
+                                &encrypted_items,
+                                negative,
+                            )?
+                            .ok_or_else(|| {
+                                StorageError::service_error(format!(
+                                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
+                                ))
+                            })?;
+                        for ((rank, positive), negative) in rank_scores
+                            .iter_mut()
+                            .zip(positive_scores)
+                            .zip(negative_scores)
+                        {
+                            *rank += match positive.total_cmp(&negative) {
+                                std::cmp::Ordering::Greater => 1,
+                                std::cmp::Ordering::Less => -1,
+                                std::cmp::Ordering::Equal => 0,
+                            };
+                        }
+                    }
+                    rank_scores.into_iter().map(|rank| rank as f32).collect()
                 }
             };
             for ((id, shard_key, _point_id, _encrypted), score) in
@@ -1998,6 +2064,10 @@ fn ckks_query_as_core_query(
             ckks_discover_query_as_core_discover(discover, vector_name)
                 .map(|query| QueryEnum::Discover(NamedQuery::new(query, vector_name.to_string())))
         }
+        Some(Query::Vector(VectorQuery::Context(context))) => {
+            ckks_context_query_as_core_context(context, vector_name)
+                .map(|query| QueryEnum::Context(NamedQuery::new(query, vector_name.to_string())))
+        }
         Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::Id(_)))) => {
             Err(StorageError::bad_input(format!(
                 "encrypted vector '{vector_name}' query cannot resolve point-id query vectors because plaintext vectors are not stored",
@@ -2009,7 +2079,7 @@ fn ckks_query_as_core_query(
             )))
         }
         _ => Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' only supports nearest-neighbor dense query, raw-dense recommend, or raw-dense discover",
+            "encrypted vector '{vector_name}' only supports nearest-neighbor dense query, raw-dense recommend, raw-dense discover, or raw-dense context",
         ))),
     }
 }
@@ -2099,6 +2169,34 @@ fn ckks_discover_query_as_core_discover(
         VectorInternal::Dense(target.clone()),
         pairs,
     ))
+}
+
+fn ckks_context_query_as_core_context(
+    context: &segment::vector_storage::query::ContextQuery<VectorInputInternal>,
+    vector_name: &str,
+) -> Result<segment::vector_storage::query::ContextQuery<VectorInternal>, StorageError> {
+    let pairs = context
+        .pairs
+        .iter()
+        .map(|pair| {
+            let VectorInputInternal::Vector(VectorInternal::Dense(positive)) = &pair.positive else {
+                return Err(StorageError::bad_input(format!(
+                    "encrypted vector '{vector_name}' context query cannot resolve point-id or non-dense positive examples because plaintext vectors are not stored",
+                )));
+            };
+            let VectorInputInternal::Vector(VectorInternal::Dense(negative)) = &pair.negative else {
+                return Err(StorageError::bad_input(format!(
+                    "encrypted vector '{vector_name}' context query cannot resolve point-id or non-dense negative examples because plaintext vectors are not stored",
+                )));
+            };
+            Ok(ContextPair {
+                positive: VectorInternal::Dense(positive.clone()),
+                negative: VectorInternal::Dense(negative.clone()),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(segment::vector_storage::query::ContextQuery::new(pairs))
 }
 
 fn search_group_vector_name(vector: &api::rest::NamedVectorStruct) -> &str {

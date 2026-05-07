@@ -12,8 +12,8 @@ removed from the dense vector write. REST/gRPC nearest-neighbor `search` and
 root direct `query` over an encrypted vector name use a brute-force sidecar scan
 and ask the OpenFHE bridge to score each stored ciphertext against the plaintext
 query vector. The same sidecar scorer also handles raw-dense recommend requests
-(`average_vector`, `best_score`, and `sum_scores`) and raw-dense discover
-requests.
+(`average_vector`, `best_score`, and `sum_scores`), raw-dense discover
+requests, and raw-dense universal context queries.
 This branch still does not add encrypted query vectors, client-held CKKS
 search, score decryption, or an HNSW-compatible ciphertext search executor.
 
@@ -41,7 +41,7 @@ implementation.
 | `set_payload` / `overwrite_payload` | Supported for explicit point ids when Qdrant can bind AAD to each point id. Multi-point updates are fanned out into one encrypted operation per point; filter-based and key-path encrypted-field updates fail closed. | Same explicit-point-id limitation as server-side payload writes. Clients must provide one envelope per point/field; filter-based and key-path encrypted-field updates fail closed. | Not applicable. |
 | `update_vectors` | Not applicable. | Not applicable. | Supported for point-specific dense vector updates by writing the encrypted sidecar payload and omitting the plaintext vector update. Sparse and multi-dense encrypted vectors fail closed. |
 | Payload indexes, filters, facets, ordering, grouping, and formulas | Plaintext indexes, read/update filters, facet keys, order-by keys, group-by keys, and formula payload references over encrypted paths, parent paths, or child paths are rejected. Searching, mutating by filter, ordering, grouping, or aggregating encrypted content requires a future blind-index provider. | Same policy. The opaque ciphertext field is not searchable, orderable, groupable, facetable, or usable in mutation filters as plaintext. | The reserved `$qdrant_sec_vectors` sidecar field is not indexable, filterable, orderable, groupable, facetable, or usable in formulas. Payload filtering/faceting over encrypted metadata is unsupported. |
-| `retrieve`, `scroll`, `search`, and `query` result payloads | Stored `$qdrant_sec` markers are returned raw. There is no `decrypt_payload` option or RBAC capability yet. | Stored `$qdrant_client_aead` markers are returned raw for SDK/client decryption. | Stored vector sidecar payload envelopes are returned raw when payloads are requested. REST/gRPC nearest-neighbor dense-vector `search`, `search/groups`, root direct `query`, root direct `query/groups`, raw-dense `recommend` (`average_vector`, `best_score`, `sum_scores`), and raw-dense `discover` are supported through brute-force sidecar scoring with runtime OpenFHE settings. HNSW/quantization/ACORN/indexed-only search params, point-id recommend/discover examples, search matrix, prefetch/fusion/MMR, encrypted query vectors, and mixed encrypted/plaintext batch search remain unsupported. |
+| `retrieve`, `scroll`, `search`, and `query` result payloads | Stored `$qdrant_sec` markers are returned raw. There is no `decrypt_payload` option or RBAC capability yet. | Stored `$qdrant_client_aead` markers are returned raw for SDK/client decryption. | Stored vector sidecar payload envelopes are returned raw when payloads are requested. REST/gRPC nearest-neighbor dense-vector `search`, `search/groups`, root direct `query`, root direct `query/groups`, raw-dense `recommend` (`average_vector`, `best_score`, `sum_scores`), raw-dense `discover`, and raw-dense universal `context` queries are supported through brute-force sidecar scoring with runtime OpenFHE settings. HNSW/quantization/ACORN/indexed-only search params, point-id recommend/discover/context examples, search matrix, prefetch/fusion/MMR, encrypted query vectors, and mixed encrypted/plaintext batch search remain unsupported. |
 | Snapshots | Snapshot archives are expected to contain envelopes only; payload sentinel snapshot leakage is covered by integration tests. Collection, shard, and CLI startup snapshot recover paths preflight runtime crypto settings, including missing material, wrong wrapped-RK key, and provider key-id mismatch cases. | Same stored-value behavior as server-side payloads. Qdrant cannot validate client AEAD tags without client keys. | Restore requires matching OpenFHE context/runtime material; missing runtime instance/material/backend preflight is wired, while wrong-context restore coverage is still missing. |
 | Shard transfer / replication | Encrypted collection data-movement operations require matching non-secret crypto runtime capability fingerprints in peer metadata. Operations fail closed if any involved peer has missing or mismatched metadata. Automatic dead-replica recovery only proposes encrypted shard transfers from source peers with matching parity metadata. | Same policy; client-envelope verifier policy must match across nodes before encrypted transfers are allowed. | Same policy; matching OpenFHE context and metadata AEAD material must be enforced before encrypted transfers are allowed. |
 | Metadata encryption | Not implemented. `metadata_keys` selectors are reserved and rejected. | Not implemented. | Not implemented. |
@@ -642,9 +642,11 @@ bridge exposes raw similarity scores for those metrics. Legacy `discover` and
 universal discover queries are supported when the target and every context pair
 are raw dense vectors supplied by the client. Discover sidecar scoring uses the
 same rank plus scaled-sigmoid target objective as Qdrant's plaintext discover
-path and is accepted only for large-better metrics (`dot`/`cosine`). Direct
-collection-internal calls without runtime settings still fail closed for
-encrypted vector names. The
+path. Universal `context` queries are supported for raw dense context pairs and
+use the same pair-rank objective as Qdrant's plaintext context path. Discover
+and context sidecar scoring are accepted only for large-better metrics
+(`dot`/`cosine`). Direct collection-internal calls without runtime settings
+still fail closed for encrypted vector names. The
 `$qdrant_sec_vectors` payload sidecar is an internal ciphertext container:
 clients may receive it raw when payloads are requested, but Qdrant rejects
 payload indexes, filters, ordering, grouping, facets, and formula references
