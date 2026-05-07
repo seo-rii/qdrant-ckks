@@ -13,8 +13,8 @@ use crate::actix::api::CollectionPath;
 use crate::actix::api::read_params::ReadParams;
 use crate::actix::auth::ActixAuth;
 use crate::actix::helpers::{self, get_request_hardware_counter, process_response_error};
-use crate::common::query::do_discover_batch_points;
-use crate::settings::ServiceConfig;
+use crate::common::query::{do_discover_batch_points, do_discover_points};
+use crate::settings::{ServiceConfig, Settings};
 
 #[post("/collections/{collection_name}/points/discover")]
 async fn discover_points(
@@ -23,6 +23,7 @@ async fn discover_points(
     request: Json<DiscoverRequest>,
     params: Query<ReadParams>,
     service_config: web::Data<ServiceConfig>,
+    settings: web::Data<Settings>,
     ActixAuth(auth): ActixAuth,
 ) -> impl Responder {
     let DiscoverRequest {
@@ -57,24 +58,24 @@ async fn discover_points(
 
     let timing = Instant::now();
 
-    let result = dispatcher
-        .toc(&auth, &pass)
-        .discover(
-            &collection.collection_name,
-            discover_request,
-            params.consistency,
-            shard_selection,
-            auth,
-            params.timeout(),
-            request_hw_counter.get_counter(),
-        )
-        .await
-        .map(|scored_points| {
-            scored_points
-                .into_iter()
-                .map(api::rest::ScoredPoint::from)
-                .collect_vec()
-        });
+    let result = do_discover_points(
+        dispatcher.toc(&auth, &pass),
+        &collection.collection_name,
+        discover_request,
+        params.consistency,
+        shard_selection,
+        auth,
+        params.timeout(),
+        request_hw_counter.get_counter(),
+        Some(settings.get_ref()),
+    )
+    .await
+    .map(|scored_points| {
+        scored_points
+            .into_iter()
+            .map(api::rest::ScoredPoint::from)
+            .collect_vec()
+    });
 
     helpers::process_response(result, timing, request_hw_counter.to_rest_api())
 }
@@ -86,6 +87,7 @@ async fn discover_batch_points(
     request: Json<DiscoverRequestBatch>,
     params: Query<ReadParams>,
     service_config: web::Data<ServiceConfig>,
+    settings: web::Data<Settings>,
     ActixAuth(auth): ActixAuth,
 ) -> impl Responder {
     let request = request.into_inner();
@@ -115,11 +117,23 @@ async fn discover_batch_points(
     let result = do_discover_batch_points(
         dispatcher.toc(&auth, &pass),
         &collection.collection_name,
-        request,
+        request
+            .searches
+            .into_iter()
+            .map(|req| {
+                let shard_selector = match req.shard_key {
+                    None => ShardSelectorInternal::All,
+                    Some(shard_key) => ShardSelectorInternal::from(shard_key),
+                };
+
+                (req.discover_request, shard_selector)
+            })
+            .collect(),
         params.consistency,
         auth,
         params.timeout(),
         request_hw_counter.get_counter(),
+        Some(settings.get_ref()),
     )
     .await
     .map(|batch_scored_points| {

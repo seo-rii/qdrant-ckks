@@ -757,6 +757,7 @@ impl PointsInternal for PointsInternalService {
             recommend_points,
             full_internal_auth(),
             hw_data,
+            None,
         )
         .await?;
 

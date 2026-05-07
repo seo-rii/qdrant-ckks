@@ -316,6 +316,7 @@ pub async fn recommend(
     recommend_points: RecommendPoints,
     auth: Auth,
     request_hw_counter: RequestHwCounter,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Response<RecommendResponse>, Status> {
     // extract a few fields from the request and convert to internal request
     let collection_name = recommend_points.collection_name.clone();
@@ -340,17 +341,18 @@ pub async fn recommend(
     let timeout = timeout.map(Duration::from_secs);
 
     let timing = Instant::now();
-    let recommended_points = toc
-        .recommend(
-            &collection_name,
-            request,
-            read_consistency,
-            shard_selector,
-            auth,
-            timeout,
-            request_hw_counter.get_counter(),
-        )
-        .await?;
+    let recommended_points = do_recommend_points(
+        toc,
+        &collection_name,
+        request,
+        read_consistency,
+        shard_selector,
+        auth,
+        timeout,
+        request_hw_counter.get_counter(),
+        runtime_settings,
+    )
+    .await?;
 
     let response = RecommendResponse {
         result: recommended_points
@@ -372,6 +374,7 @@ pub async fn recommend_batch(
     auth: Auth,
     timeout: Option<Duration>,
     request_hw_counter: RequestHwCounter,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Response<RecommendBatchResponse>, Status> {
     let mut requests = Vec::with_capacity(recommend_points.len());
 
@@ -396,16 +399,17 @@ pub async fn recommend_batch(
     let read_consistency = ReadConsistency::try_from_optional(read_consistency)?;
 
     let timing = Instant::now();
-    let scored_points = toc
-        .recommend_batch(
-            collection_name,
-            requests,
-            read_consistency,
-            auth,
-            timeout,
-            request_hw_counter.get_counter(),
-        )
-        .await?;
+    let scored_points = do_recommend_batch_points(
+        toc,
+        collection_name,
+        requests,
+        read_consistency,
+        auth,
+        timeout,
+        request_hw_counter.get_counter(),
+        runtime_settings,
+    )
+    .await?;
 
     let response = RecommendBatchResponse {
         result: scored_points
@@ -426,6 +430,7 @@ pub async fn recommend_groups(
     recommend_point_groups: RecommendPointGroups,
     auth: Auth,
     request_hw_counter: RequestHwCounter,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Response<RecommendGroupsResponse>, Status> {
     let recommend_groups_request = recommend_point_groups.clone().try_into()?;
 
@@ -460,6 +465,7 @@ pub async fn recommend_groups(
         auth,
         timeout.map(Duration::from_secs),
         request_hw_counter.get_counter(),
+        runtime_settings,
     )
     .await?;
 
@@ -480,6 +486,7 @@ pub async fn discover(
     discover_points: DiscoverPoints,
     auth: Auth,
     request_hw_counter: RequestHwCounter,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Response<DiscoverResponse>, Status> {
     let (request, collection_name, read_consistency, timeout, shard_key_selector) =
         try_discover_request_from_grpc(discover_points)?;
@@ -497,17 +504,18 @@ pub async fn discover(
 
     let shard_selector = convert_shard_selector_for_read(None, shard_key_selector)?;
 
-    let discovered_points = toc
-        .discover(
-            &collection_name,
-            request,
-            read_consistency,
-            shard_selector,
-            auth,
-            timeout,
-            request_hw_counter.get_counter(),
-        )
-        .await?;
+    let discovered_points = do_discover_points(
+        toc,
+        &collection_name,
+        request,
+        read_consistency,
+        shard_selector,
+        auth,
+        timeout,
+        request_hw_counter.get_counter(),
+        runtime_settings,
+    )
+    .await?;
 
     let response = DiscoverResponse {
         result: discovered_points
@@ -529,6 +537,7 @@ pub async fn discover_batch(
     auth: Auth,
     timeout: Option<Duration>,
     request_hw_counter: RequestHwCounter,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Response<DiscoverBatchResponse>, Status> {
     let mut requests = Vec::with_capacity(discover_points.len());
 
@@ -552,16 +561,17 @@ pub async fn discover_batch(
         .await?;
 
     let timing = Instant::now();
-    let scored_points = toc
-        .discover_batch(
-            collection_name,
-            requests,
-            read_consistency,
-            auth,
-            timeout,
-            request_hw_counter.get_counter(),
-        )
-        .await?;
+    let scored_points = do_discover_batch_points(
+        toc,
+        collection_name,
+        requests,
+        read_consistency,
+        auth,
+        timeout,
+        request_hw_counter.get_counter(),
+        runtime_settings,
+    )
+    .await?;
 
     let response = DiscoverBatchResponse {
         result: scored_points

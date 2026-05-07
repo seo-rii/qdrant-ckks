@@ -470,6 +470,7 @@ impl Points for PointsService {
             request.into_inner(),
             auth,
             hw_metrics,
+            Some(&self.settings),
         )
         .await?;
 
@@ -500,6 +501,7 @@ impl Points for PointsService {
             auth,
             timeout.map(Duration::from_secs),
             hw_metrics,
+            Some(&self.settings),
         )
         .await?;
 
@@ -520,6 +522,7 @@ impl Points for PointsService {
             request.into_inner(),
             auth,
             hw_metrics,
+            Some(&self.settings),
         )
         .await?;
 
@@ -540,6 +543,7 @@ impl Points for PointsService {
             request.into_inner(),
             auth,
             hw_metrics,
+            Some(&self.settings),
         )
         .await?;
 
@@ -569,6 +573,7 @@ impl Points for PointsService {
             auth,
             timeout.map(Duration::from_secs),
             hw_metrics,
+            Some(&self.settings),
         )
         .await?;
 

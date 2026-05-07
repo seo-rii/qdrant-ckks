@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use api::rest::{BaseGroupRequest, SearchGroupsRequestInternal, SearchRequestInternal};
+use api::rest::{
+    BaseGroupRequest, RecommendStrategy, SearchGroupsRequestInternal, SearchRequestInternal,
+};
 use collection::collection::distance_matrix::*;
 use collection::common::batching::batch_requests;
 use collection::config::EncryptionSelector;
@@ -9,13 +11,14 @@ use collection::operations::consistency_params::ReadConsistency;
 use collection::operations::shard_selector_internal::ShardSelectorInternal;
 use collection::operations::types::*;
 use collection::operations::universal_query::collection_query::*;
+use collection::recommendations::avg_vector_for_recommendation;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use qdrant_sec::{
     ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD, EncryptedCkksVector,
 };
 use segment::data_types::groups::GroupId;
 use segment::data_types::vectors::{
-    DEFAULT_VECTOR_NAME, Named, NamedQuery, NamedVector, VectorInternal,
+    DEFAULT_VECTOR_NAME, Named, NamedQuery, NamedVector, VectorInternal, VectorRef,
 };
 use segment::json_path::JsonPath;
 use segment::types::{
@@ -698,6 +701,218 @@ fn group_ckks_search_points(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub async fn do_recommend_points(
+    toc: &TableOfContent,
+    collection_name: &str,
+    request: RecommendRequestInternal,
+    read_consistency: Option<ReadConsistency>,
+    shard_selection: ShardSelectorInternal,
+    auth: Auth,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
+) -> Result<Vec<ScoredPoint>, StorageError> {
+    let results = do_recommend_batch_points(
+        toc,
+        collection_name,
+        vec![(request, shard_selection)],
+        read_consistency,
+        auth,
+        timeout,
+        hw_measurement_acc,
+        runtime_settings,
+    )
+    .await?;
+    results
+        .into_iter()
+        .next()
+        .ok_or_else(|| StorageError::service_error("Empty recommend result"))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn do_recommend_batch_points(
+    toc: &TableOfContent,
+    collection_name: &str,
+    requests: Vec<(RecommendRequestInternal, ShardSelectorInternal)>,
+    read_consistency: Option<ReadConsistency>,
+    auth: Auth,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
+) -> Result<Vec<Vec<ScoredPoint>>, StorageError> {
+    if let Some(settings) = runtime_settings
+        && let Some(results) = try_ckks_vector_recommend_batch_points(
+            toc,
+            collection_name,
+            &requests,
+            read_consistency,
+            &auth,
+            timeout,
+            hw_measurement_acc.clone(),
+            settings,
+        )
+        .await?
+    {
+        return Ok(results);
+    }
+
+    toc.recommend_batch(
+        collection_name,
+        requests,
+        read_consistency,
+        auth,
+        timeout,
+        hw_measurement_acc,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn try_ckks_vector_recommend_batch_points(
+    toc: &TableOfContent,
+    collection_name: &str,
+    requests: &[(RecommendRequestInternal, ShardSelectorInternal)],
+    read_consistency: Option<ReadConsistency>,
+    auth: &Auth,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: &Settings,
+) -> Result<Option<Vec<Vec<ScoredPoint>>>, StorageError> {
+    if requests.is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+
+    let collection_pass = auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new(),
+        "ckks_vector_recommend",
+    )?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let config = collection.config_snapshot().await;
+    let collection_crypto_id = config.stable_crypto_id(collection_name)?;
+    let Some(plan) = vector_write_plan_for_collection_with_crypto_id(
+        runtime_settings,
+        collection_name,
+        &collection_crypto_id,
+        &config.params,
+    )?
+    else {
+        return Ok(None);
+    };
+
+    let mut has_encrypted_recommend = false;
+    let mut has_plain_recommend = false;
+    let mut core_requests = Vec::with_capacity(requests.len());
+    for (request, shard_selection) in requests {
+        let vector_name = recommend_vector_name(request);
+        if !plan.contains_vector_name(&vector_name) {
+            has_plain_recommend = true;
+            core_requests.push(None);
+            continue;
+        }
+
+        has_encrypted_recommend = true;
+        core_requests.push(Some((
+            recommend_request_as_ckks_search_request(request, &vector_name)?,
+            shard_selection.clone(),
+        )));
+    }
+
+    if !has_encrypted_recommend {
+        return Ok(None);
+    }
+    if has_plain_recommend {
+        return Err(StorageError::bad_input(
+            "cannot mix CKKS encrypted vector recommend with plaintext vector recommend in the same batch",
+        ));
+    }
+
+    let mut results = Vec::with_capacity(core_requests.len());
+    for request in core_requests {
+        let Some((request, shard_selection)) = request else {
+            unreachable!("plain recommend was rejected above");
+        };
+        results.push(
+            ckks_vector_search_points(
+                &collection,
+                collection_name,
+                &request,
+                &plan,
+                read_consistency,
+                &shard_selection,
+                timeout,
+                hw_measurement_acc.clone(),
+            )
+            .await?,
+        );
+    }
+
+    Ok(Some(results))
+}
+
+fn recommend_request_as_ckks_search_request(
+    request: &RecommendRequestInternal,
+    vector_name: &str,
+) -> Result<CoreSearchRequest, StorageError> {
+    if request.lookup_from.is_some() {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' recommend does not support lookup_from or point-id examples; provide raw dense vectors",
+        )));
+    }
+    if request.strategy.unwrap_or_default() != RecommendStrategy::AverageVector {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' only supports average-vector recommendations with raw dense examples",
+        )));
+    }
+
+    let positive = recommend_examples_as_dense_vectors(&request.positive, vector_name, "positive")?;
+    let negative = recommend_examples_as_dense_vectors(&request.negative, vector_name, "negative")?;
+    let search_vector = avg_vector_for_recommendation(
+        positive.iter().map(VectorRef::from),
+        negative.iter().map(VectorRef::from).peekable(),
+    )
+    .map_err(|err| StorageError::bad_input(err.to_string()))?;
+
+    Ok(CoreSearchRequest {
+        query: QueryEnum::Nearest(NamedQuery::new(search_vector, vector_name.to_string())),
+        filter: request.filter.clone(),
+        params: request.params.clone(),
+        limit: request.limit,
+        offset: request.offset.unwrap_or_default(),
+        with_payload: request.with_payload.clone(),
+        with_vector: request.with_vector.clone(),
+        score_threshold: request.score_threshold,
+    })
+}
+
+fn recommend_examples_as_dense_vectors(
+    examples: &[RecommendExample],
+    vector_name: &str,
+    role: &str,
+) -> Result<Vec<VectorInternal>, StorageError> {
+    examples
+        .iter()
+        .map(|example| match example {
+            RecommendExample::Dense(vector) => Ok(VectorInternal::Dense(vector.clone())),
+            RecommendExample::Sparse(_) => Err(StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' recommend only supports raw dense {role} examples",
+            ))),
+            RecommendExample::PointId(_) => Err(StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' recommend cannot resolve point-id {role} examples because plaintext vectors are not stored",
+            ))),
+        })
+        .collect()
+}
+
+fn recommend_vector_name(request: &RecommendRequestInternal) -> String {
+    request
+        .using
+        .as_ref()
+        .map(UsingVector::as_name)
+        .unwrap_or_else(|| DEFAULT_VECTOR_NAME.to_string())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn do_recommend_point_groups(
     toc: &TableOfContent,
     collection_name: &str,
@@ -707,7 +922,25 @@ pub async fn do_recommend_point_groups(
     auth: Auth,
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
 ) -> Result<GroupsResult, StorageError> {
+    if let Some(settings) = runtime_settings
+        && let Some(result) = try_ckks_vector_recommend_groups(
+            toc,
+            collection_name,
+            &request,
+            read_consistency,
+            &shard_selection,
+            &auth,
+            timeout,
+            hw_measurement_acc.clone(),
+            settings,
+        )
+        .await?
+    {
+        return Ok(result);
+    }
+
     let vector_name = request
         .using
         .as_ref()
@@ -728,27 +961,165 @@ pub async fn do_recommend_point_groups(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn try_ckks_vector_recommend_groups(
+    toc: &TableOfContent,
+    collection_name: &str,
+    request: &RecommendGroupsRequestInternal,
+    read_consistency: Option<ReadConsistency>,
+    shard_selection: &ShardSelectorInternal,
+    auth: &Auth,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: &Settings,
+) -> Result<Option<GroupsResult>, StorageError> {
+    let vector_name = request
+        .using
+        .as_ref()
+        .map(UsingVector::as_name)
+        .unwrap_or_else(|| DEFAULT_VECTOR_NAME.to_string());
+    let collection_pass = auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new(),
+        "ckks_vector_recommend_groups",
+    )?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let config = collection.config_snapshot().await;
+    let collection_crypto_id = config.stable_crypto_id(collection_name)?;
+    let Some(plan) = vector_write_plan_for_collection_with_crypto_id(
+        runtime_settings,
+        collection_name,
+        &collection_crypto_id,
+        &config.params,
+    )?
+    else {
+        return Ok(None);
+    };
+    if !plan.contains_vector_name(&vector_name) {
+        return Ok(None);
+    }
+
+    let recommend_request = RecommendRequestInternal {
+        positive: request.positive.clone(),
+        negative: request.negative.clone(),
+        strategy: request.strategy,
+        filter: request.filter.clone(),
+        params: request.params.clone(),
+        limit: usize::MAX,
+        offset: Some(0),
+        with_payload: Some(WithPayloadInterface::Bool(true)),
+        with_vector: Some(WithVector::Bool(false)),
+        score_threshold: request.score_threshold,
+        using: request.using.clone(),
+        lookup_from: request.lookup_from.clone(),
+    };
+    let core_request = recommend_request_as_ckks_search_request(&recommend_request, &vector_name)?;
+    let search_groups_request = SearchGroupsRequestInternal {
+        vector: core_search_request_as_search_vector(&core_request)?,
+        filter: core_request.filter,
+        params: core_request.params,
+        with_payload: Some(
+            request
+                .with_payload
+                .clone()
+                .unwrap_or(WithPayloadInterface::Bool(false)),
+        ),
+        with_vector: request.with_vector.clone(),
+        score_threshold: core_request.score_threshold,
+        group_request: request.group_request.clone(),
+    };
+
+    try_ckks_vector_search_groups(
+        toc,
+        collection_name,
+        &search_groups_request,
+        read_consistency,
+        shard_selection,
+        auth,
+        timeout,
+        hw_measurement_acc,
+        runtime_settings,
+    )
+    .await
+}
+
+fn core_search_request_as_search_vector(
+    request: &CoreSearchRequest,
+) -> Result<api::rest::NamedVectorStruct, StorageError> {
+    let QueryEnum::Nearest(named) = &request.query else {
+        return Err(StorageError::service_error(
+            "CKKS sidecar recommend group conversion produced non-nearest query",
+        ));
+    };
+    let VectorInternal::Dense(vector) = &named.query else {
+        return Err(StorageError::service_error(
+            "CKKS sidecar recommend group conversion produced non-dense query",
+        ));
+    };
+    Ok(if named.get_name() == DEFAULT_VECTOR_NAME {
+        api::rest::NamedVectorStruct::Default(vector.clone())
+    } else {
+        api::rest::NamedVectorStruct::Dense(NamedVector {
+            name: named.get_name().to_string(),
+            vector: vector.clone(),
+        })
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn do_discover_points(
+    toc: &TableOfContent,
+    collection_name: &str,
+    request: DiscoverRequestInternal,
+    read_consistency: Option<ReadConsistency>,
+    shard_selection: ShardSelectorInternal,
+    auth: Auth,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
+) -> Result<Vec<ScoredPoint>, StorageError> {
+    let results = do_discover_batch_points(
+        toc,
+        collection_name,
+        vec![(request, shard_selection)],
+        read_consistency,
+        auth,
+        timeout,
+        hw_measurement_acc,
+        runtime_settings,
+    )
+    .await?;
+    results
+        .into_iter()
+        .next()
+        .ok_or_else(|| StorageError::service_error("Empty discover result"))
+}
+
 pub async fn do_discover_batch_points(
     toc: &TableOfContent,
     collection_name: &str,
-    request: DiscoverRequestBatch,
+    requests: Vec<(DiscoverRequestInternal, ShardSelectorInternal)>,
     read_consistency: Option<ReadConsistency>,
     auth: Auth,
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Vec<Vec<ScoredPoint>>, StorageError> {
-    let requests = request
-        .searches
-        .into_iter()
-        .map(|req| {
-            let shard_selector = match req.shard_key {
-                None => ShardSelectorInternal::All,
-                Some(shard_key) => ShardSelectorInternal::from(shard_key),
-            };
-
-            (req.discover_request, shard_selector)
-        })
-        .collect();
+    if let Some(settings) = runtime_settings
+        && let Some(results) = try_ckks_vector_discover_batch_points(
+            toc,
+            collection_name,
+            &requests,
+            read_consistency,
+            &auth,
+            timeout,
+            hw_measurement_acc.clone(),
+            settings,
+        )
+        .await?
+    {
+        return Ok(results);
+    }
 
     toc.discover_batch(
         collection_name,
@@ -759,6 +1130,141 @@ pub async fn do_discover_batch_points(
         hw_measurement_acc,
     )
     .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn try_ckks_vector_discover_batch_points(
+    toc: &TableOfContent,
+    collection_name: &str,
+    requests: &[(DiscoverRequestInternal, ShardSelectorInternal)],
+    read_consistency: Option<ReadConsistency>,
+    auth: &Auth,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: &Settings,
+) -> Result<Option<Vec<Vec<ScoredPoint>>>, StorageError> {
+    if requests.is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+
+    let collection_pass = auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new(),
+        "ckks_vector_discover",
+    )?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let config = collection.config_snapshot().await;
+    let collection_crypto_id = config.stable_crypto_id(collection_name)?;
+    let Some(plan) = vector_write_plan_for_collection_with_crypto_id(
+        runtime_settings,
+        collection_name,
+        &collection_crypto_id,
+        &config.params,
+    )?
+    else {
+        return Ok(None);
+    };
+
+    let mut has_encrypted_discover = false;
+    let mut has_plain_discover = false;
+    let mut core_requests = Vec::with_capacity(requests.len());
+    for (request, shard_selection) in requests {
+        let vector_name = discover_vector_name(request);
+        if !plan.contains_vector_name(&vector_name) {
+            has_plain_discover = true;
+            core_requests.push(None);
+            continue;
+        }
+
+        has_encrypted_discover = true;
+        core_requests.push(Some((
+            discover_request_as_ckks_search_request(request, &vector_name)?,
+            shard_selection.clone(),
+        )));
+    }
+
+    if !has_encrypted_discover {
+        return Ok(None);
+    }
+    if has_plain_discover {
+        return Err(StorageError::bad_input(
+            "cannot mix CKKS encrypted vector discover with plaintext vector discover in the same batch",
+        ));
+    }
+
+    let mut results = Vec::with_capacity(core_requests.len());
+    for request in core_requests {
+        let Some((request, shard_selection)) = request else {
+            unreachable!("plain discover was rejected above");
+        };
+        results.push(
+            ckks_vector_search_points(
+                &collection,
+                collection_name,
+                &request,
+                &plan,
+                read_consistency,
+                &shard_selection,
+                timeout,
+                hw_measurement_acc.clone(),
+            )
+            .await?,
+        );
+    }
+
+    Ok(Some(results))
+}
+
+fn discover_request_as_ckks_search_request(
+    request: &DiscoverRequestInternal,
+    vector_name: &str,
+) -> Result<CoreSearchRequest, StorageError> {
+    if request.lookup_from.is_some() {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' discover does not support lookup_from or point-id examples; provide a raw dense target vector",
+        )));
+    }
+    if request
+        .context
+        .as_ref()
+        .is_some_and(|context| !context.is_empty())
+    {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' only supports target-only discover with a raw dense target vector",
+        )));
+    }
+    let Some(target) = request.target.as_ref() else {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' discover requires a raw dense target vector",
+        )));
+    };
+    let RecommendExample::Dense(query_values) = target else {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' discover cannot resolve point-id or sparse target examples because plaintext vectors are not stored",
+        )));
+    };
+
+    Ok(CoreSearchRequest {
+        query: QueryEnum::Nearest(NamedQuery::new(
+            VectorInternal::Dense(query_values.clone()),
+            vector_name.to_string(),
+        )),
+        filter: request.filter.clone(),
+        params: request.params.clone(),
+        limit: request.limit,
+        offset: request.offset.unwrap_or_default(),
+        with_payload: request.with_payload.clone(),
+        with_vector: request.with_vector.clone(),
+        score_threshold: None,
+    })
+}
+
+fn discover_vector_name(request: &DiscoverRequestInternal) -> String {
+    request
+        .using
+        .as_ref()
+        .map(UsingVector::as_name)
+        .unwrap_or_else(|| DEFAULT_VECTOR_NAME.to_string())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -921,20 +1427,13 @@ pub async fn do_query_batch_points(
                         request.using,
                     )));
                 }
-                let Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::Vector(
-                    VectorInternal::Dense(query_values),
-                )))) = &request.query
-                else {
-                    return Err(StorageError::bad_input(format!(
-                        "encrypted vector '{}' only supports nearest-neighbor dense query vectors",
-                        request.using,
-                    )));
-                };
+                let query_values =
+                    ckks_query_as_dense_search_vector(&request.query, &request.using)?;
 
                 core_requests.push(Some((
                     CoreSearchRequest {
                         query: QueryEnum::Nearest(NamedQuery::new(
-                            VectorInternal::Dense(query_values.clone()),
+                            VectorInternal::Dense(query_values),
                             request.using.clone(),
                         )),
                         filter: request.filter.clone(),
@@ -1131,22 +1630,14 @@ async fn try_ckks_vector_query_groups(
 fn query_groups_as_search_groups_request(
     request: &CollectionQueryGroupsRequest,
 ) -> Result<SearchGroupsRequestInternal, StorageError> {
-    let Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::Vector(
-        VectorInternal::Dense(query_values),
-    )))) = &request.query
-    else {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{}' only supports nearest-neighbor dense query group vectors",
-            request.using,
-        )));
-    };
+    let query_values = ckks_query_as_dense_search_vector(&request.query, &request.using)?;
 
     let vector = if request.using == DEFAULT_VECTOR_NAME {
-        api::rest::NamedVectorStruct::Default(query_values.clone())
+        api::rest::NamedVectorStruct::Default(query_values)
     } else {
         api::rest::NamedVectorStruct::Dense(NamedVector {
             name: request.using.clone(),
-            vector: query_values.clone(),
+            vector: query_values,
         })
     };
 
@@ -1164,6 +1655,93 @@ fn query_groups_as_search_groups_request(
             with_lookup: None,
         },
     })
+}
+
+fn ckks_query_as_dense_search_vector(
+    query: &Option<Query>,
+    vector_name: &str,
+) -> Result<Vec<f32>, StorageError> {
+    match query {
+        Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::Vector(
+            VectorInternal::Dense(query_values),
+        )))) => Ok(query_values.clone()),
+        Some(Query::Vector(VectorQuery::RecommendAverageVector(recommend))) => {
+            ckks_recommend_query_as_dense_search_vector(recommend, vector_name)
+        }
+        Some(Query::Vector(VectorQuery::Discover(discover))) => {
+            ckks_discover_query_as_dense_search_vector(discover, vector_name)
+        }
+        Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::Id(_)))) => {
+            Err(StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' query cannot resolve point-id query vectors because plaintext vectors are not stored",
+            )))
+        }
+        Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::Vector(_)))) => {
+            Err(StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' only supports dense query vectors",
+            )))
+        }
+        _ => Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' only supports nearest-neighbor dense query, average-vector recommend with raw dense examples, or target-only discover with a raw dense target",
+        ))),
+    }
+}
+
+fn ckks_recommend_query_as_dense_search_vector(
+    recommend: &segment::vector_storage::query::RecoQuery<VectorInputInternal>,
+    vector_name: &str,
+) -> Result<Vec<f32>, StorageError> {
+    let positive = vector_inputs_as_dense_vectors(&recommend.positives, vector_name, "positive")?;
+    let negative = vector_inputs_as_dense_vectors(&recommend.negatives, vector_name, "negative")?;
+    let search_vector = avg_vector_for_recommendation(
+        positive.iter().map(VectorRef::from),
+        negative.iter().map(VectorRef::from).peekable(),
+    )
+    .map_err(|err| StorageError::bad_input(err.to_string()))?;
+    let VectorInternal::Dense(query_values) = search_vector else {
+        return Err(StorageError::service_error(
+            "CKKS sidecar recommend query conversion produced non-dense query",
+        ));
+    };
+    Ok(query_values)
+}
+
+fn vector_inputs_as_dense_vectors(
+    inputs: &[VectorInputInternal],
+    vector_name: &str,
+    role: &str,
+) -> Result<Vec<VectorInternal>, StorageError> {
+    inputs
+        .iter()
+        .map(|input| match input {
+            VectorInputInternal::Vector(VectorInternal::Dense(vector)) => {
+                Ok(VectorInternal::Dense(vector.clone()))
+            }
+            VectorInputInternal::Vector(_) => Err(StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' query only supports raw dense {role} examples",
+            ))),
+            VectorInputInternal::Id(_) => Err(StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' query cannot resolve point-id {role} examples because plaintext vectors are not stored",
+            ))),
+        })
+        .collect()
+}
+
+fn ckks_discover_query_as_dense_search_vector(
+    discover: &segment::vector_storage::query::DiscoverQuery<VectorInputInternal>,
+    vector_name: &str,
+) -> Result<Vec<f32>, StorageError> {
+    if !discover.pairs.is_empty() {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' only supports target-only discover with a raw dense target vector",
+        )));
+    }
+    let VectorInputInternal::Vector(VectorInternal::Dense(query_values)) = &discover.target else {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' discover cannot resolve point-id or non-dense target examples because plaintext vectors are not stored",
+        )));
+    };
+    Ok(query_values.clone())
 }
 
 fn search_group_vector_name(vector: &api::rest::NamedVectorStruct) -> &str {
