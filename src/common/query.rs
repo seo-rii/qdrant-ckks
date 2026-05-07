@@ -1,8 +1,6 @@
 use std::time::Duration;
 
-use api::rest::{
-    BaseGroupRequest, RecommendStrategy, SearchGroupsRequestInternal, SearchRequestInternal,
-};
+use api::rest::{RecommendStrategy, SearchGroupsRequestInternal, SearchRequestInternal};
 use collection::collection::distance_matrix::*;
 use collection::common::batching::batch_requests;
 use collection::config::EncryptionSelector;
@@ -13,16 +11,17 @@ use collection::operations::types::*;
 use collection::operations::universal_query::collection_query::*;
 use collection::recommendations::avg_vector_for_recommendation;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
+use common::math::scaled_fast_sigmoid;
 use qdrant_sec::{
     ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD, EncryptedCkksVector,
 };
 use segment::data_types::groups::GroupId;
 use segment::data_types::vectors::{
-    DEFAULT_VECTOR_NAME, Named, NamedQuery, NamedVector, VectorInternal, VectorRef,
+    DEFAULT_VECTOR_NAME, Named, NamedQuery, VectorInternal, VectorRef,
 };
 use segment::json_path::JsonPath;
 use segment::types::{
-    Distance, Order, PayloadContainer, ScoredPoint, SearchParams, WithPayloadInterface, WithVector,
+    Order, PayloadContainer, ScoredPoint, SearchParams, WithPayloadInterface, WithVector,
 };
 use segment::utils::scored_point_ties::ScoredPointTies;
 use shard::query::query_enum::QueryEnum;
@@ -245,24 +244,98 @@ async fn ckks_vector_search_points(
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
 ) -> Result<Vec<ScoredPoint>, StorageError> {
-    let QueryEnum::Nearest(named_query) = &search.query else {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{}' only supports nearest-neighbor dense query search; recommend, discover, context, and MMR over CKKS ciphertext are not implemented",
-            search.query.get_vector_name(),
-        )));
-    };
-    let VectorInternal::Dense(query_values) = &named_query.query else {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{}' only supports dense query vectors",
+    enum CkksSidecarScoring<'a> {
+        Nearest {
+            query_values: &'a [f32],
+        },
+        RecommendBestScore {
+            positives: Vec<&'a [f32]>,
+            negatives: Vec<&'a [f32]>,
+        },
+        RecommendSumScores {
+            positives: Vec<&'a [f32]>,
+            negatives: Vec<&'a [f32]>,
+        },
+    }
+
+    let (vector_name, scoring) = match &search.query {
+        QueryEnum::Nearest(named_query) => {
+            let VectorInternal::Dense(query_values) = &named_query.query else {
+                return Err(StorageError::bad_input(format!(
+                    "encrypted vector '{}' only supports dense query vectors",
+                    named_query.get_name(),
+                )));
+            };
+            (
+                named_query.get_name(),
+                CkksSidecarScoring::Nearest { query_values },
+            )
+        }
+        QueryEnum::RecommendBestScore(named_query) => (
             named_query.get_name(),
-        )));
+            CkksSidecarScoring::RecommendBestScore {
+                positives: query_vectors_as_dense_slices(
+                    &named_query.query.positives,
+                    named_query.get_name(),
+                    "positive",
+                )?,
+                negatives: query_vectors_as_dense_slices(
+                    &named_query.query.negatives,
+                    named_query.get_name(),
+                    "negative",
+                )?,
+            },
+        ),
+        QueryEnum::RecommendSumScores(named_query) => (
+            named_query.get_name(),
+            CkksSidecarScoring::RecommendSumScores {
+                positives: query_vectors_as_dense_slices(
+                    &named_query.query.positives,
+                    named_query.get_name(),
+                    "positive",
+                )?,
+                negatives: query_vectors_as_dense_slices(
+                    &named_query.query.negatives,
+                    named_query.get_name(),
+                    "negative",
+                )?,
+            },
+        ),
+        _ => {
+            return Err(StorageError::bad_input(format!(
+                "encrypted vector '{}' only supports dense nearest-neighbor search, raw-dense recommend, and target-only discover over the CKKS sidecar",
+                search.query.get_vector_name(),
+            )));
+        }
     };
-    let vector_name = named_query.get_name();
     let distance = plan.distance_for_vector(vector_name).ok_or_else(|| {
         StorageError::service_error(format!(
             "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
         ))
     })?;
+    let score_order = match &scoring {
+        CkksSidecarScoring::Nearest { .. } => distance.distance_order(),
+        CkksSidecarScoring::RecommendBestScore {
+            positives,
+            negatives,
+        }
+        | CkksSidecarScoring::RecommendSumScores {
+            positives,
+            negatives,
+        } => {
+            if positives.is_empty() && negatives.is_empty() {
+                return Err(StorageError::bad_input(format!(
+                    "encrypted vector '{vector_name}' recommend requires at least one raw dense example",
+                )));
+            }
+            if distance.distance_order() != Order::LargeBetter {
+                return Err(StorageError::bad_input(format!(
+                    "encrypted vector '{vector_name}' recommend best-score and sum-scores require a large-better metric such as dot or cosine",
+                )));
+            }
+            Order::LargeBetter
+        }
+    };
     let with_vector = search.with_vector.clone().unwrap_or_default();
     if with_vector.is_enabled() {
         return Err(StorageError::bad_input(format!(
@@ -316,22 +389,119 @@ async fn ckks_vector_search_points(
                 .iter()
                 .map(|(_, _, point_id, encrypted)| (point_id.clone(), encrypted.clone()))
                 .collect::<Vec<_>>();
-            let scores = plan
-                .score_plaintext_query_batch(
-                    collection_name,
-                    vector_name,
-                    &encrypted_items,
-                    query_values,
-                )?
-                .ok_or_else(|| {
-                    StorageError::service_error(format!(
-                        "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-                    ))
-                })?;
+            let scores = match &scoring {
+                CkksSidecarScoring::Nearest { query_values } => plan
+                    .score_plaintext_query_batch(
+                        collection_name,
+                        vector_name,
+                        &encrypted_items,
+                        query_values,
+                    )?
+                    .ok_or_else(|| {
+                        StorageError::service_error(format!(
+                            "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
+                        ))
+                    })?,
+                CkksSidecarScoring::RecommendBestScore {
+                    positives,
+                    negatives,
+                } => {
+                    let mut positive_scores = vec![f32::NEG_INFINITY; encrypted_items.len()];
+                    for query_values in positives {
+                        let batch_scores = plan
+                            .score_plaintext_query_batch(
+                                collection_name,
+                                vector_name,
+                                &encrypted_items,
+                                query_values,
+                            )?
+                            .ok_or_else(|| {
+                                StorageError::service_error(format!(
+                                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
+                                ))
+                            })?;
+                        for (current, score) in positive_scores.iter_mut().zip(batch_scores) {
+                            *current = current.max(score);
+                        }
+                    }
+
+                    let mut negative_scores = vec![f32::NEG_INFINITY; encrypted_items.len()];
+                    for query_values in negatives {
+                        let batch_scores = plan
+                            .score_plaintext_query_batch(
+                                collection_name,
+                                vector_name,
+                                &encrypted_items,
+                                query_values,
+                            )?
+                            .ok_or_else(|| {
+                                StorageError::service_error(format!(
+                                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
+                                ))
+                            })?;
+                        for (current, score) in negative_scores.iter_mut().zip(batch_scores) {
+                            *current = current.max(score);
+                        }
+                    }
+
+                    positive_scores
+                        .into_iter()
+                        .zip(negative_scores)
+                        .map(|(positive, negative)| {
+                            if positive > negative {
+                                scaled_fast_sigmoid(positive)
+                            } else {
+                                -scaled_fast_sigmoid(negative)
+                            }
+                        })
+                        .collect()
+                }
+                CkksSidecarScoring::RecommendSumScores {
+                    positives,
+                    negatives,
+                } => {
+                    let mut total_scores = vec![0.0; encrypted_items.len()];
+                    for query_values in positives {
+                        let batch_scores = plan
+                            .score_plaintext_query_batch(
+                                collection_name,
+                                vector_name,
+                                &encrypted_items,
+                                query_values,
+                            )?
+                            .ok_or_else(|| {
+                                StorageError::service_error(format!(
+                                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
+                                ))
+                            })?;
+                        for (total, score) in total_scores.iter_mut().zip(batch_scores) {
+                            *total += score;
+                        }
+                    }
+                    for query_values in negatives {
+                        let batch_scores = plan
+                            .score_plaintext_query_batch(
+                                collection_name,
+                                vector_name,
+                                &encrypted_items,
+                                query_values,
+                            )?
+                            .ok_or_else(|| {
+                                StorageError::service_error(format!(
+                                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
+                                ))
+                            })?;
+                        for (total, score) in total_scores.iter_mut().zip(batch_scores) {
+                            *total -= score;
+                        }
+                    }
+                    total_scores
+                }
+            };
             for ((id, shard_key, _point_id, _encrypted), score) in
                 encrypted_records.into_iter().zip(scores)
             {
-                if !ckks_score_passes_threshold(distance, score, search.score_threshold) {
+                if !ckks_score_passes_threshold(score_order, score, search.score_threshold) {
                     continue;
                 }
                 let scored_point = ScoredPoint {
@@ -345,7 +515,7 @@ async fn ckks_vector_search_points(
                 };
                 match scored_by_id.entry(scored_point.id) {
                     std::collections::hash_map::Entry::Occupied(mut entry) => {
-                        if ckks_scored_point_is_better(distance, &scored_point, entry.get()) {
+                        if ckks_scored_point_is_better(score_order, &scored_point, entry.get()) {
                             entry.insert(scored_point);
                         }
                     }
@@ -363,7 +533,7 @@ async fn ckks_vector_search_points(
     }
 
     let mut scored = scored_by_id.into_values().collect::<Vec<_>>();
-    sort_ckks_scored_points(distance, &mut scored);
+    sort_ckks_scored_points(score_order, &mut scored);
     let mut top = scored
         .into_iter()
         .skip(search.offset)
@@ -406,30 +576,45 @@ async fn ckks_vector_search_points(
     Ok(top)
 }
 
-fn ckks_score_passes_threshold(
-    distance: Distance,
-    score: f32,
-    score_threshold: Option<f32>,
-) -> bool {
-    score_threshold.is_none_or(|threshold| distance.check_threshold(score, threshold))
+fn ckks_score_passes_threshold(order: Order, score: f32, score_threshold: Option<f32>) -> bool {
+    score_threshold.is_none_or(|threshold| match order {
+        Order::LargeBetter => score > threshold,
+        Order::SmallBetter => score < threshold,
+    })
 }
 
 fn ckks_scored_point_is_better(
-    distance: Distance,
+    order: Order,
     candidate: &ScoredPoint,
     current: &ScoredPoint,
 ) -> bool {
-    match distance.distance_order() {
+    match order {
         Order::LargeBetter => ScoredPointTies(candidate) > ScoredPointTies(current),
         Order::SmallBetter => ScoredPointTies(candidate) < ScoredPointTies(current),
     }
 }
 
-fn sort_ckks_scored_points(distance: Distance, scored: &mut [ScoredPoint]) {
-    scored.sort_unstable_by(|a, b| match distance.distance_order() {
+fn sort_ckks_scored_points(order: Order, scored: &mut [ScoredPoint]) {
+    scored.sort_unstable_by(|a, b| match order {
         Order::LargeBetter => ScoredPointTies(b).cmp(&ScoredPointTies(a)),
         Order::SmallBetter => ScoredPointTies(a).cmp(&ScoredPointTies(b)),
     });
+}
+
+fn query_vectors_as_dense_slices<'a>(
+    vectors: &'a [VectorInternal],
+    vector_name: &str,
+    role: &str,
+) -> Result<Vec<&'a [f32]>, StorageError> {
+    vectors
+        .iter()
+        .map(|vector| match vector {
+            VectorInternal::Dense(values) => Ok(values.as_slice()),
+            _ => Err(StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' recommend only supports raw dense {role} examples",
+            ))),
+        })
+        .collect()
 }
 
 fn ckks_search_params_supported(params: &SearchParams) -> bool {
@@ -566,7 +751,7 @@ async fn try_ckks_vector_search_groups(
     ensure_group_path_does_not_touch_encrypted_vector_sidecar(&request.group_request.group_by)?;
 
     let group_by = request.group_request.group_by.clone();
-    let search_request = SearchRequestInternal {
+    let search_request = CoreSearchRequest::from(SearchRequestInternal {
         vector: request.vector.clone(),
         filter: request.filter.clone(),
         params: request.params.clone(),
@@ -575,74 +760,26 @@ async fn try_ckks_vector_search_groups(
         with_payload: Some(WithPayloadInterface::Bool(true)),
         with_vector: Some(WithVector::Bool(false)),
         score_threshold: request.score_threshold,
-    };
-    let scored = ckks_vector_search_points(
+    });
+    ckks_vector_group_points(
         &collection,
         collection_name,
-        &CoreSearchRequest::from(search_request),
+        &search_request,
         &plan,
-        read_consistency,
-        shard_selection,
-        timeout,
-        hw_measurement_acc.clone(),
-    )
-    .await?;
-
-    let grouped = group_ckks_search_points(
-        scored,
         &group_by,
         request.group_request.limit as usize,
         request.group_request.group_size as usize,
-    );
-    let ids = grouped
-        .iter()
-        .flat_map(|(_, points)| points.iter().map(|point| point.id))
-        .collect::<Vec<_>>();
-    let with_payload = request
-        .with_payload
-        .clone()
-        .unwrap_or(WithPayloadInterface::Bool(false));
-    let records = if ids.is_empty() {
-        Vec::new()
-    } else {
-        collection
-            .retrieve(
-                PointRequestInternal {
-                    ids,
-                    with_payload: Some(with_payload),
-                    with_vector: WithVector::Bool(false),
-                },
-                read_consistency,
-                shard_selection,
-                timeout,
-                hw_measurement_acc,
-            )
-            .await?
-    };
-    let records_by_id = records
-        .into_iter()
-        .map(|record| (record.id, record))
-        .collect::<std::collections::HashMap<_, _>>();
-
-    let groups = grouped
-        .into_iter()
-        .map(|(id, mut hits)| {
-            for hit in &mut hits {
-                if let Some(record) = records_by_id.get(&hit.id) {
-                    hit.payload.clone_from(&record.payload);
-                    hit.vector.clone_from(&record.vector);
-                    hit.shard_key = record.shard_key.clone().or_else(|| hit.shard_key.clone());
-                }
-            }
-            PointGroup {
-                hits: hits.into_iter().map(api::rest::ScoredPoint::from).collect(),
-                id,
-                lookup: None,
-            }
-        })
-        .collect();
-
-    Ok(Some(GroupsResult { groups }))
+        request
+            .with_payload
+            .clone()
+            .unwrap_or(WithPayloadInterface::Bool(false)),
+        read_consistency,
+        shard_selection,
+        timeout,
+        hw_measurement_acc,
+    )
+    .await
+    .map(Some)
 }
 
 fn ensure_group_path_does_not_touch_encrypted_vector_sidecar(
@@ -698,6 +835,81 @@ fn group_ckks_search_points(
         }
     }
     groups
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn ckks_vector_group_points(
+    collection: &collection::collection::Collection,
+    collection_name: &str,
+    search_request: &CoreSearchRequest,
+    plan: &crate::common::crypto::VectorWritePlan,
+    group_by: &JsonPath,
+    group_limit: usize,
+    group_size: usize,
+    with_payload: WithPayloadInterface,
+    read_consistency: Option<ReadConsistency>,
+    shard_selection: &ShardSelectorInternal,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+) -> Result<GroupsResult, StorageError> {
+    let scored = ckks_vector_search_points(
+        collection,
+        collection_name,
+        search_request,
+        plan,
+        read_consistency,
+        shard_selection,
+        timeout,
+        hw_measurement_acc.clone(),
+    )
+    .await?;
+
+    let grouped = group_ckks_search_points(scored, group_by, group_limit, group_size);
+    let ids = grouped
+        .iter()
+        .flat_map(|(_, points)| points.iter().map(|point| point.id))
+        .collect::<Vec<_>>();
+    let records = if ids.is_empty() {
+        Vec::new()
+    } else {
+        collection
+            .retrieve(
+                PointRequestInternal {
+                    ids,
+                    with_payload: Some(with_payload),
+                    with_vector: WithVector::Bool(false),
+                },
+                read_consistency,
+                shard_selection,
+                timeout,
+                hw_measurement_acc,
+            )
+            .await?
+    };
+    let records_by_id = records
+        .into_iter()
+        .map(|record| (record.id, record))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let groups = grouped
+        .into_iter()
+        .map(|(id, mut hits)| {
+            for hit in &mut hits {
+                if let Some(record) = records_by_id.get(&hit.id) {
+                    hit.payload.clone_from(&record.payload);
+                    hit.vector.clone_from(&record.vector);
+                    hit.shard_key = record.shard_key.clone().or_else(|| hit.shard_key.clone());
+                }
+            }
+            PointGroup {
+                hits: hits.into_iter().map(api::rest::ScoredPoint::from).collect(),
+                id,
+                lookup: None,
+            }
+        })
+        .collect();
+
+    Ok(GroupsResult { groups })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -859,22 +1071,29 @@ fn recommend_request_as_ckks_search_request(
             "encrypted vector '{vector_name}' recommend does not support lookup_from or point-id examples; provide raw dense vectors",
         )));
     }
-    if request.strategy.unwrap_or_default() != RecommendStrategy::AverageVector {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' only supports average-vector recommendations with raw dense examples",
-        )));
-    }
-
     let positive = recommend_examples_as_dense_vectors(&request.positive, vector_name, "positive")?;
     let negative = recommend_examples_as_dense_vectors(&request.negative, vector_name, "negative")?;
-    let search_vector = avg_vector_for_recommendation(
-        positive.iter().map(VectorRef::from),
-        negative.iter().map(VectorRef::from).peekable(),
-    )
-    .map_err(|err| StorageError::bad_input(err.to_string()))?;
+    let query = match request.strategy.unwrap_or_default() {
+        RecommendStrategy::AverageVector => {
+            let search_vector = avg_vector_for_recommendation(
+                positive.iter().map(VectorRef::from),
+                negative.iter().map(VectorRef::from).peekable(),
+            )
+            .map_err(|err| StorageError::bad_input(err.to_string()))?;
+            QueryEnum::Nearest(NamedQuery::new(search_vector, vector_name.to_string()))
+        }
+        RecommendStrategy::BestScore => QueryEnum::RecommendBestScore(NamedQuery::new(
+            segment::vector_storage::query::RecoQuery::new(positive, negative),
+            vector_name.to_string(),
+        )),
+        RecommendStrategy::SumScores => QueryEnum::RecommendSumScores(NamedQuery::new(
+            segment::vector_storage::query::RecoQuery::new(positive, negative),
+            vector_name.to_string(),
+        )),
+    };
 
     Ok(CoreSearchRequest {
-        query: QueryEnum::Nearest(NamedQuery::new(search_vector, vector_name.to_string())),
+        query,
         filter: request.filter.clone(),
         params: request.params.clone(),
         limit: request.limit,
@@ -1014,56 +1233,37 @@ async fn try_ckks_vector_recommend_groups(
         lookup_from: request.lookup_from.clone(),
     };
     let core_request = recommend_request_as_ckks_search_request(&recommend_request, &vector_name)?;
-    let search_groups_request = SearchGroupsRequestInternal {
-        vector: core_search_request_as_search_vector(&core_request)?,
-        filter: core_request.filter,
-        params: core_request.params,
-        with_payload: Some(
-            request
-                .with_payload
-                .clone()
-                .unwrap_or(WithPayloadInterface::Bool(false)),
-        ),
-        with_vector: request.with_vector.clone(),
-        score_threshold: core_request.score_threshold,
-        group_request: request.group_request.clone(),
-    };
+    if request.group_request.with_lookup.is_some() {
+        return Err(StorageError::bad_input(format!(
+            "cannot use with_lookup for grouped recommend over encrypted vector '{vector_name}'; CKKS sidecar grouped lookup is not implemented",
+        )));
+    }
+    if request.with_vector.clone().unwrap_or_default().is_enabled() {
+        return Err(StorageError::bad_input(format!(
+            "cannot return encrypted vector '{vector_name}'; CKKS vector ciphertext read path returns payload sidecar only",
+        )));
+    }
+    ensure_group_path_does_not_touch_encrypted_vector_sidecar(&request.group_request.group_by)?;
 
-    try_ckks_vector_search_groups(
-        toc,
+    ckks_vector_group_points(
+        &collection,
         collection_name,
-        &search_groups_request,
+        &core_request,
+        &plan,
+        &request.group_request.group_by,
+        request.group_request.limit as usize,
+        request.group_request.group_size as usize,
+        request
+            .with_payload
+            .clone()
+            .unwrap_or(WithPayloadInterface::Bool(false)),
         read_consistency,
         shard_selection,
-        auth,
         timeout,
         hw_measurement_acc,
-        runtime_settings,
     )
     .await
-}
-
-fn core_search_request_as_search_vector(
-    request: &CoreSearchRequest,
-) -> Result<api::rest::NamedVectorStruct, StorageError> {
-    let QueryEnum::Nearest(named) = &request.query else {
-        return Err(StorageError::service_error(
-            "CKKS sidecar recommend group conversion produced non-nearest query",
-        ));
-    };
-    let VectorInternal::Dense(vector) = &named.query else {
-        return Err(StorageError::service_error(
-            "CKKS sidecar recommend group conversion produced non-dense query",
-        ));
-    };
-    Ok(if named.get_name() == DEFAULT_VECTOR_NAME {
-        api::rest::NamedVectorStruct::Default(vector.clone())
-    } else {
-        api::rest::NamedVectorStruct::Dense(NamedVector {
-            name: named.get_name().to_string(),
-            vector: vector.clone(),
-        })
-    })
+    .map(Some)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1427,15 +1627,11 @@ pub async fn do_query_batch_points(
                         request.using,
                     )));
                 }
-                let query_values =
-                    ckks_query_as_dense_search_vector(&request.query, &request.using)?;
+                let query = ckks_query_as_core_query(&request.query, &request.using)?;
 
                 core_requests.push(Some((
                     CoreSearchRequest {
-                        query: QueryEnum::Nearest(NamedQuery::new(
-                            VectorInternal::Dense(query_values),
-                            request.using.clone(),
-                        )),
+                        query,
                         filter: request.filter.clone(),
                         params: request.params.clone(),
                         limit: request.limit,
@@ -1612,64 +1808,71 @@ async fn try_ckks_vector_query_groups(
         )));
     }
 
-    let search_request = query_groups_as_search_groups_request(request)?;
-    try_ckks_vector_search_groups(
-        toc,
-        collection_name,
-        &search_request,
-        read_consistency,
-        shard_selection,
-        auth,
-        timeout,
-        hw_measurement_acc,
-        runtime_settings,
-    )
-    .await
-}
-
-fn query_groups_as_search_groups_request(
-    request: &CollectionQueryGroupsRequest,
-) -> Result<SearchGroupsRequestInternal, StorageError> {
-    let query_values = ckks_query_as_dense_search_vector(&request.query, &request.using)?;
-
-    let vector = if request.using == DEFAULT_VECTOR_NAME {
-        api::rest::NamedVectorStruct::Default(query_values)
-    } else {
-        api::rest::NamedVectorStruct::Dense(NamedVector {
-            name: request.using.clone(),
-            vector: query_values,
-        })
-    };
-
-    Ok(SearchGroupsRequestInternal {
-        vector,
+    let search_request = CoreSearchRequest {
+        query: ckks_query_as_core_query(&request.query, &request.using)?,
         filter: request.filter.clone(),
         params: request.params.clone(),
-        with_payload: Some(request.with_payload.clone()),
-        with_vector: Some(request.with_vector.clone()),
+        limit: usize::MAX,
+        offset: 0,
+        with_payload: Some(WithPayloadInterface::Bool(true)),
+        with_vector: Some(WithVector::Bool(false)),
         score_threshold: request.score_threshold,
-        group_request: BaseGroupRequest {
-            group_by: request.group_by.clone(),
-            group_size: request.group_size as u32,
-            limit: request.limit as u32,
-            with_lookup: None,
-        },
-    })
+    };
+    ensure_group_path_does_not_touch_encrypted_vector_sidecar(&request.group_by)?;
+    ckks_vector_group_points(
+        &collection,
+        collection_name,
+        &search_request,
+        &plan,
+        &request.group_by,
+        request.limit,
+        request.group_size,
+        request.with_payload.clone(),
+        read_consistency,
+        shard_selection,
+        timeout,
+        hw_measurement_acc,
+    )
+    .await
+    .map(Some)
 }
 
-fn ckks_query_as_dense_search_vector(
+fn ckks_query_as_core_query(
     query: &Option<Query>,
     vector_name: &str,
-) -> Result<Vec<f32>, StorageError> {
+) -> Result<QueryEnum, StorageError> {
     match query {
         Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::Vector(
             VectorInternal::Dense(query_values),
-        )))) => Ok(query_values.clone()),
+        )))) => Ok(QueryEnum::Nearest(NamedQuery::new(
+            VectorInternal::Dense(query_values.clone()),
+            vector_name.to_string(),
+        ))),
         Some(Query::Vector(VectorQuery::RecommendAverageVector(recommend))) => {
-            ckks_recommend_query_as_dense_search_vector(recommend, vector_name)
+            ckks_recommend_query_as_dense_search_vector(recommend, vector_name).map(|values| {
+                QueryEnum::Nearest(NamedQuery::new(
+                    VectorInternal::Dense(values),
+                    vector_name.to_string(),
+                ))
+            })
+        }
+        Some(Query::Vector(VectorQuery::RecommendBestScore(recommend))) => {
+            ckks_recommend_query_as_core_recommend(recommend, vector_name).map(|query| {
+                QueryEnum::RecommendBestScore(NamedQuery::new(query, vector_name.to_string()))
+            })
+        }
+        Some(Query::Vector(VectorQuery::RecommendSumScores(recommend))) => {
+            ckks_recommend_query_as_core_recommend(recommend, vector_name).map(|query| {
+                QueryEnum::RecommendSumScores(NamedQuery::new(query, vector_name.to_string()))
+            })
         }
         Some(Query::Vector(VectorQuery::Discover(discover))) => {
-            ckks_discover_query_as_dense_search_vector(discover, vector_name)
+            ckks_discover_query_as_dense_search_vector(discover, vector_name).map(|values| {
+                QueryEnum::Nearest(NamedQuery::new(
+                    VectorInternal::Dense(values),
+                    vector_name.to_string(),
+                ))
+            })
         }
         Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::Id(_)))) => {
             Err(StorageError::bad_input(format!(
@@ -1682,7 +1885,7 @@ fn ckks_query_as_dense_search_vector(
             )))
         }
         _ => Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' only supports nearest-neighbor dense query, average-vector recommend with raw dense examples, or target-only discover with a raw dense target",
+            "encrypted vector '{vector_name}' only supports nearest-neighbor dense query, raw-dense recommend, or target-only discover with a raw dense target",
         ))),
     }
 }
@@ -1725,6 +1928,17 @@ fn vector_inputs_as_dense_vectors(
             ))),
         })
         .collect()
+}
+
+fn ckks_recommend_query_as_core_recommend(
+    recommend: &segment::vector_storage::query::RecoQuery<VectorInputInternal>,
+    vector_name: &str,
+) -> Result<segment::vector_storage::query::RecoQuery<VectorInternal>, StorageError> {
+    let positive = vector_inputs_as_dense_vectors(&recommend.positives, vector_name, "positive")?;
+    let negative = vector_inputs_as_dense_vectors(&recommend.negatives, vector_name, "negative")?;
+    Ok(segment::vector_storage::query::RecoQuery::new(
+        positive, negative,
+    ))
 }
 
 fn ckks_discover_query_as_dense_search_vector(
@@ -1806,6 +2020,7 @@ pub async fn do_search_points_matrix(
 
 #[cfg(test)]
 mod tests {
+    use segment::types::Distance;
     use serde_json::json;
 
     use super::*;
@@ -1833,28 +2048,36 @@ mod tests {
     #[test]
     fn ckks_sidecar_search_uses_distance_order_for_ranking() {
         let mut dot = vec![scored_point(1, 9.0), scored_point(2, 4.0)];
-        sort_ckks_scored_points(Distance::Dot, &mut dot);
+        sort_ckks_scored_points(Distance::Dot.distance_order(), &mut dot);
         assert_eq!(dot[0].id, 1.into());
         assert_eq!(dot[1].id, 2.into());
 
         let mut euclid = vec![scored_point(1, 9.0), scored_point(2, 4.0)];
-        sort_ckks_scored_points(Distance::Euclid, &mut euclid);
+        sort_ckks_scored_points(Distance::Euclid.distance_order(), &mut euclid);
         assert_eq!(euclid[0].id, 2.into());
         assert_eq!(euclid[1].id, 1.into());
     }
 
     #[test]
     fn ckks_sidecar_search_uses_distance_order_for_thresholds() {
-        assert!(ckks_score_passes_threshold(Distance::Dot, 9.0, Some(5.0)));
-        assert!(!ckks_score_passes_threshold(Distance::Dot, 4.0, Some(5.0)));
+        assert!(ckks_score_passes_threshold(
+            Distance::Dot.distance_order(),
+            9.0,
+            Some(5.0)
+        ));
+        assert!(!ckks_score_passes_threshold(
+            Distance::Dot.distance_order(),
+            4.0,
+            Some(5.0)
+        ));
 
         assert!(ckks_score_passes_threshold(
-            Distance::Euclid,
+            Distance::Euclid.distance_order(),
             4.0,
             Some(5.0)
         ));
         assert!(!ckks_score_passes_threshold(
-            Distance::Euclid,
+            Distance::Euclid.distance_order(),
             9.0,
             Some(5.0)
         ));
@@ -1863,12 +2086,12 @@ mod tests {
     #[test]
     fn ckks_sidecar_search_replaces_duplicates_using_distance_order() {
         assert!(ckks_scored_point_is_better(
-            Distance::Dot,
+            Distance::Dot.distance_order(),
             &scored_point(1, 9.0),
             &scored_point(1, 4.0),
         ));
         assert!(ckks_scored_point_is_better(
-            Distance::Euclid,
+            Distance::Euclid.distance_order(),
             &scored_point(1, 4.0),
             &scored_point(1, 9.0),
         ));
