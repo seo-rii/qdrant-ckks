@@ -695,10 +695,15 @@ ciphertext plus stored sidecar ciphertexts. Result ordering and
 smaller-is-better. If `hnsw_ef` is set and `exact=false`, nearest-neighbor
 search builds and searches a ciphertext sidecar candidate graph with
 stored-ciphertext-to-stored-ciphertext bridge scoring for graph links and
-encrypted-query bridge scoring for traversal candidates. `search/groups` and
-root direct `query/groups` are supported only when the group field is plaintext
-payload, `with_lookup` is disabled, and runtime OpenFHE settings are available;
-grouped paths still use brute-force sidecar scoring. Quantization,
+encrypted-query bridge scoring for traversal candidates. The sidecar graph is
+cached in process by collection, vector name, score direction, graph parameters,
+and a fingerprint of the stored ciphertext sidecars, so payload/vector changes
+build a new graph instead of reusing stale links. The cache is an acceleration
+for the current serving process, not persistent segment-native index state.
+`search/groups` and root direct `query/groups` are supported only when the
+group field is plaintext payload, `with_lookup` is disabled, and runtime OpenFHE
+settings are available; grouped paths still use brute-force sidecar scoring.
+Quantization,
 ACORN/indexed-only params, search matrix, prefetch/fusion/MMR, or
 client-supplied encrypted query ciphertexts remain unsupported. REST and gRPC
 search matrix requests whose `using` vector is encrypted fail closed instead of
