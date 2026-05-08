@@ -3915,6 +3915,40 @@ async fn try_ckks_vector_query_groups(
 
     ensure_group_path_does_not_touch_encrypted_vector_sidecar(&request.group_by)?;
 
+    if let Some(Query::Vector(VectorQuery::Context(context))) = &request.query {
+        let scoring = ckks_context_query_as_scoring(
+            &collection,
+            &request.using,
+            context,
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        return ckks_vector_group_points_with_scoring(
+            &collection,
+            collection_name,
+            &collection_crypto_id,
+            &request.using,
+            scoring,
+            request.filter.clone(),
+            request.params.clone(),
+            request.score_threshold,
+            &plan,
+            &request.group_by,
+            request.limit,
+            request.group_size,
+            request.with_payload.clone(),
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc,
+        )
+        .await
+        .map(Some);
+    }
+
     if let Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::Id(point_id)))) =
         &request.query
     {
