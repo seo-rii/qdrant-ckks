@@ -2860,6 +2860,76 @@ esac
                 .await
                 .unwrap();
 
+            dispatcher
+                .submit_collection_meta_op(
+                    CollectionMetaOperations::CreateCollection(
+                        CreateCollectionOperation::new(
+                            "vector_group_lookup".to_string(),
+                            CreateCollection {
+                                vectors: VectorParamsBuilder::new(2, Distance::Dot).build().into(),
+                                sparse_vectors: None,
+                                hnsw_config: None,
+                                wal_config: None,
+                                optimizers_config: None,
+                                shard_number: Some(1),
+                                on_disk_payload: None,
+                                replication_factor: None,
+                                write_consistency_factor: None,
+                                quantization_config: None,
+                                sharding_method: None,
+                                encryption: None,
+                                ckks: None,
+                                strict_mode_config: None,
+                                uuid: None,
+                                metadata: None,
+                            },
+                        )
+                        .unwrap(),
+                    ),
+                    auth.clone(),
+                    None,
+                )
+                .await
+                .unwrap();
+
+            do_upsert_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "vector_group_lookup".to_string(),
+                PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                    points: vec![
+                        api::rest::PointStruct {
+                            id: 1.into(),
+                            vector: api::rest::VectorStruct::Single(vec![0.0, 0.0]),
+                            payload: Some(segment::types::Payload(
+                                json!({ "label": "lookup-a" }).as_object().unwrap().clone(),
+                            )),
+                        },
+                        api::rest::PointStruct {
+                            id: 2.into(),
+                            vector: api::rest::VectorStruct::Single(vec![0.0, 0.0]),
+                            payload: Some(segment::types::Payload(
+                                json!({ "label": "lookup-b" }).as_object().unwrap().clone(),
+                            )),
+                        },
+                    ],
+                    shard_key: None,
+                    update_filter: None,
+                    update_mode: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap();
+
             let small_better_recommend_err = crate::common::query::do_query_points(
                 &toc,
                 "vector_small_better",
@@ -2994,7 +3064,10 @@ esac
                                 ),
                             ])),
                             payload: Some(segment::types::Payload(
-                                json!({ "group": "a" }).as_object().unwrap().clone(),
+                                json!({ "group": "a", "group_id": 1 })
+                                    .as_object()
+                                    .unwrap()
+                                    .clone(),
                             )),
                         },
                         api::rest::PointStruct {
@@ -3010,7 +3083,10 @@ esac
                                 ),
                             ])),
                             payload: Some(segment::types::Payload(
-                                json!({ "group": "b" }).as_object().unwrap().clone(),
+                                json!({ "group": "b", "group_id": 2 })
+                                    .as_object()
+                                    .unwrap()
+                                    .clone(),
                             )),
                         },
                     ],
@@ -3068,6 +3144,56 @@ esac
             assert_eq!(groups.groups[1].id, GroupId::from("b"));
             assert_eq!(groups.groups[1].hits[0].id, 2.into());
             assert_eq!(groups.groups[1].hits[0].score, 4.0);
+
+            let groups_with_lookup = crate::common::query::do_search_point_groups(
+                &toc,
+                "vector_groups",
+                SearchGroupsRequestInternal {
+                    vector: vec![0.0, 0.0].into(),
+                    filter: None,
+                    params: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                    group_request: BaseGroupRequest {
+                        group_by: "group_id".parse().unwrap(),
+                        group_size: 1,
+                        limit: 2,
+                        with_lookup: Some(api::rest::WithLookupInterface::Collection(
+                            "vector_group_lookup".to_string(),
+                        )),
+                    },
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(groups_with_lookup.groups.len(), 2);
+            assert_eq!(groups_with_lookup.groups[0].id, GroupId::from(1_u64));
+            assert_eq!(
+                groups_with_lookup.groups[0]
+                    .lookup
+                    .as_ref()
+                    .and_then(|lookup| lookup.payload.as_ref())
+                    .and_then(|payload| payload.0.get("label"))
+                    .and_then(Value::as_str),
+                Some("lookup-a")
+            );
+            assert_eq!(groups_with_lookup.groups[1].id, GroupId::from(2_u64));
+            assert_eq!(
+                groups_with_lookup.groups[1]
+                    .lookup
+                    .as_ref()
+                    .and_then(|lookup| lookup.payload.as_ref())
+                    .and_then(|payload| payload.0.get("label"))
+                    .and_then(Value::as_str),
+                Some("lookup-b")
+            );
 
             let query_groups = crate::common::query::do_query_point_groups(
                 &toc,

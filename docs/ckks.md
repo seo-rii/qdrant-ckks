@@ -35,7 +35,7 @@ Unsupported search/index features for CKKS ciphertext vectors in this branch:
 - quantization over CKKS ciphertext
 - recommend/discover/context flows that require client-supplied encrypted query
   ciphertexts or server-side vector arithmetic over encrypted values
-- grouped lookup over CKKS ciphertext sidecars
+- grouped lookup that requests encrypted vectors from the lookup collection
 - mixed plaintext and encrypted vector searches in one batch
 - payload filtering over encrypted metadata
 - shard transfer or snapshot restore without matching runtime keys and OpenFHE
@@ -725,9 +725,11 @@ mismatches or disconnected/non-reciprocal graphs are ignored before Qdrant
 rebuilds the graph. Qdrant prunes old persisted graph cache files by count and
 total size after writing a new graph. It is still not Qdrant segment-native
 index state.
-`search/groups` and root direct `query/groups` are supported only when the
-group field is plaintext payload, `with_lookup` is disabled, and runtime OpenFHE
-settings are available; grouped paths still use brute-force sidecar scoring.
+`search/groups`, `recommend/groups`, and root direct `query/groups` are
+supported when the group field is plaintext payload and runtime OpenFHE settings
+are available. `with_lookup` is supported for lookup payloads and plaintext
+vectors; lookup requests that ask for encrypted vectors fail closed. Grouped
+paths still use brute-force sidecar scoring.
 REST and gRPC search matrix requests over an encrypted vector name sample stored
 sidecar envelopes and use stored-ciphertext-to-stored-ciphertext bridge scoring
 for pairwise nearests inside the sample; encrypted matrix sampling is

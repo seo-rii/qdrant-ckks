@@ -10,6 +10,8 @@ use collection::collection::distance_matrix::*;
 use collection::common::batching::batch_requests;
 use collection::config::EncryptionSelector;
 use collection::grouping::group_by::GroupRequest;
+use collection::lookup::lookup_ids;
+use collection::lookup::types::PseudoId;
 use collection::operations::consistency_params::ReadConsistency;
 use collection::operations::shard_selector_internal::ShardSelectorInternal;
 use collection::operations::types::*;
@@ -197,7 +199,7 @@ pub async fn do_core_search_points(
         shard_selection,
         auth,
         timeout,
-        hw_measurement_acc,
+        hw_measurement_acc.clone(),
         runtime_settings,
     )
     .await?;
@@ -307,7 +309,7 @@ pub async fn do_core_search_batch_points(
         shard_selection,
         auth,
         timeout,
-        hw_measurement_acc,
+        hw_measurement_acc.clone(),
     )
     .await
 }
@@ -514,7 +516,7 @@ async fn ckks_vector_search_points(
         read_consistency,
         shard_selection,
         timeout,
-        hw_measurement_acc,
+        hw_measurement_acc.clone(),
     )
     .await
 }
@@ -2131,7 +2133,7 @@ pub async fn do_search_point_groups(
         shard_selection,
         auth,
         timeout,
-        hw_measurement_acc,
+        hw_measurement_acc.clone(),
     )
     .await
 }
@@ -2170,11 +2172,6 @@ async fn try_ckks_vector_search_groups(
     if !plan.contains_vector_name(vector_name) {
         return Ok(None);
     }
-    if request.group_request.with_lookup.is_some() {
-        return Err(StorageError::bad_input(format!(
-            "cannot use with_lookup for grouped search over encrypted vector '{vector_name}'; CKKS sidecar grouped lookup is not implemented",
-        )));
-    }
     if request.with_vector.clone().unwrap_or_default().is_enabled() {
         return Err(StorageError::bad_input(format!(
             "cannot return encrypted vector '{vector_name}'; CKKS vector ciphertext read path returns payload sidecar only",
@@ -2193,7 +2190,7 @@ async fn try_ckks_vector_search_groups(
         with_vector: Some(WithVector::Bool(false)),
         score_threshold: request.score_threshold,
     });
-    ckks_vector_group_points(
+    let result = ckks_vector_group_points(
         &collection,
         collection_name,
         &collection_crypto_id,
@@ -2208,6 +2205,17 @@ async fn try_ckks_vector_search_groups(
             .unwrap_or(WithPayloadInterface::Bool(false)),
         read_consistency,
         shard_selection,
+        timeout,
+        hw_measurement_acc.clone(),
+    )
+    .await?;
+    attach_ckks_group_lookup(
+        toc,
+        result,
+        request.group_request.with_lookup.clone().map(Into::into),
+        read_consistency,
+        shard_selection,
+        auth,
         timeout,
         hw_measurement_acc,
     )
@@ -2429,6 +2437,59 @@ async fn ckks_vector_group_scored_points(
         .collect();
 
     Ok(GroupsResult { groups })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn attach_ckks_group_lookup(
+    toc: &TableOfContent,
+    mut result: GroupsResult,
+    with_lookup: Option<collection::lookup::WithLookup>,
+    read_consistency: Option<ReadConsistency>,
+    shard_selection: &ShardSelectorInternal,
+    auth: &Auth,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+) -> Result<GroupsResult, StorageError> {
+    let Some(with_lookup) = with_lookup else {
+        return Ok(result);
+    };
+    let lookup = with_lookup;
+    ensure_with_vector_does_not_request_encrypted_vectors(
+        toc,
+        &lookup.collection_name,
+        &lookup.with_vectors.clone().unwrap_or_default(),
+        auth,
+        "group lookup",
+    )
+    .await?;
+    let pseudo_ids = result
+        .groups
+        .iter()
+        .map(|group| PseudoId::from(group.id.clone()))
+        .collect::<Vec<_>>();
+    let mut lookups: std::collections::HashMap<PseudoId, RecordInternal> = lookup_ids(
+        lookup,
+        pseudo_ids,
+        |name| async move {
+            let collection_pass = auth
+                .check_collection_access(&name, AccessRequirements::new(), "group_lookup")
+                .ok()?;
+            toc.get_collection(&collection_pass).await.ok()
+        },
+        read_consistency,
+        shard_selection,
+        timeout,
+        hw_measurement_acc,
+    )
+    .await?;
+
+    for group in &mut result.groups {
+        group.lookup = lookups
+            .remove(&PseudoId::from(group.id.clone()))
+            .map(api::rest::Record::from);
+    }
+
+    Ok(result)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3059,11 +3120,6 @@ async fn try_ckks_vector_recommend_groups(
         using: request.using.clone(),
         lookup_from: request.lookup_from.clone(),
     };
-    if request.group_request.with_lookup.is_some() {
-        return Err(StorageError::bad_input(format!(
-            "cannot use with_lookup for grouped recommend over encrypted vector '{vector_name}'; CKKS sidecar grouped lookup is not implemented",
-        )));
-    }
     if request.with_vector.clone().unwrap_or_default().is_enabled() {
         return Err(StorageError::bad_input(format!(
             "cannot return encrypted vector '{vector_name}'; CKKS vector ciphertext read path returns payload sidecar only",
@@ -3082,7 +3138,7 @@ async fn try_ckks_vector_recommend_groups(
             hw_measurement_acc.clone(),
         )
         .await?;
-        return ckks_vector_group_points_with_scoring(
+        let result = ckks_vector_group_points_with_scoring(
             &collection,
             collection_name,
             &collection_crypto_id,
@@ -3105,6 +3161,17 @@ async fn try_ckks_vector_recommend_groups(
             read_consistency,
             shard_selection,
             timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        return attach_ckks_group_lookup(
+            toc,
+            result,
+            request.group_request.with_lookup.clone().map(Into::into),
+            read_consistency,
+            shard_selection,
+            auth,
+            timeout,
             hw_measurement_acc,
         )
         .await
@@ -3122,7 +3189,7 @@ async fn try_ckks_vector_recommend_groups(
             hw_measurement_acc.clone(),
         )
         .await?;
-        return ckks_vector_group_points_with_scoring(
+        let result = ckks_vector_group_points_with_scoring(
             &collection,
             collection_name,
             &collection_crypto_id,
@@ -3142,6 +3209,17 @@ async fn try_ckks_vector_recommend_groups(
             read_consistency,
             shard_selection,
             timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        return attach_ckks_group_lookup(
+            toc,
+            result,
+            request.group_request.with_lookup.clone().map(Into::into),
+            read_consistency,
+            shard_selection,
+            auth,
+            timeout,
             hw_measurement_acc,
         )
         .await
@@ -3149,7 +3227,7 @@ async fn try_ckks_vector_recommend_groups(
     }
 
     let core_request = recommend_request_as_ckks_search_request(&recommend_request, &vector_name)?;
-    ckks_vector_group_points(
+    let result = ckks_vector_group_points(
         &collection,
         collection_name,
         &collection_crypto_id,
@@ -3164,6 +3242,17 @@ async fn try_ckks_vector_recommend_groups(
             .unwrap_or(WithPayloadInterface::Bool(false)),
         read_consistency,
         shard_selection,
+        timeout,
+        hw_measurement_acc.clone(),
+    )
+    .await?;
+    attach_ckks_group_lookup(
+        toc,
+        result,
+        request.group_request.with_lookup.clone().map(Into::into),
+        read_consistency,
+        shard_selection,
+        auth,
         timeout,
         hw_measurement_acc,
     )
@@ -4603,13 +4692,6 @@ async fn try_ckks_vector_query_groups(
             request.using,
         )));
     }
-    if request.with_lookup.is_some() {
-        return Err(StorageError::bad_input(format!(
-            "cannot use with_lookup for grouped query over encrypted vector '{}'; CKKS sidecar grouped lookup is not implemented",
-            request.using,
-        )));
-    }
-
     ensure_group_path_does_not_touch_encrypted_vector_sidecar(&request.group_by)?;
 
     if let Some(Query::Vector(VectorQuery::RecommendAverageVector(recommend))) = &request.query
@@ -4625,7 +4707,7 @@ async fn try_ckks_vector_query_groups(
             hw_measurement_acc.clone(),
         )
         .await?;
-        return ckks_vector_group_points_with_scoring(
+        let result = ckks_vector_group_points_with_scoring(
             &collection,
             collection_name,
             &collection_crypto_id,
@@ -4644,6 +4726,17 @@ async fn try_ckks_vector_query_groups(
             request.with_payload.clone(),
             read_consistency,
             shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        return attach_ckks_group_lookup(
+            toc,
+            result,
+            request.with_lookup.clone(),
+            read_consistency,
+            shard_selection,
+            auth,
             timeout,
             hw_measurement_acc,
         )
@@ -4665,7 +4758,7 @@ async fn try_ckks_vector_query_groups(
             hw_measurement_acc.clone(),
         )
         .await?;
-        return ckks_vector_group_points_with_scoring(
+        let result = ckks_vector_group_points_with_scoring(
             &collection,
             collection_name,
             &collection_crypto_id,
@@ -4681,6 +4774,17 @@ async fn try_ckks_vector_query_groups(
             request.with_payload.clone(),
             read_consistency,
             shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        return attach_ckks_group_lookup(
+            toc,
+            result,
+            request.with_lookup.clone(),
+            read_consistency,
+            shard_selection,
+            auth,
             timeout,
             hw_measurement_acc,
         )
@@ -4702,7 +4806,7 @@ async fn try_ckks_vector_query_groups(
             hw_measurement_acc.clone(),
         )
         .await?;
-        return ckks_vector_group_points_with_scoring(
+        let result = ckks_vector_group_points_with_scoring(
             &collection,
             collection_name,
             &collection_crypto_id,
@@ -4718,6 +4822,17 @@ async fn try_ckks_vector_query_groups(
             request.with_payload.clone(),
             read_consistency,
             shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        return attach_ckks_group_lookup(
+            toc,
+            result,
+            request.with_lookup.clone(),
+            read_consistency,
+            shard_selection,
+            auth,
             timeout,
             hw_measurement_acc,
         )
@@ -4736,7 +4851,7 @@ async fn try_ckks_vector_query_groups(
             hw_measurement_acc.clone(),
         )
         .await?;
-        return ckks_vector_group_points_with_scoring(
+        let result = ckks_vector_group_points_with_scoring(
             &collection,
             collection_name,
             &collection_crypto_id,
@@ -4752,6 +4867,17 @@ async fn try_ckks_vector_query_groups(
             request.with_payload.clone(),
             read_consistency,
             shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        return attach_ckks_group_lookup(
+            toc,
+            result,
+            request.with_lookup.clone(),
+            read_consistency,
+            shard_selection,
+            auth,
             timeout,
             hw_measurement_acc,
         )
@@ -4770,7 +4896,7 @@ async fn try_ckks_vector_query_groups(
             hw_measurement_acc.clone(),
         )
         .await?;
-        return ckks_vector_group_points_with_scoring(
+        let result = ckks_vector_group_points_with_scoring(
             &collection,
             collection_name,
             &collection_crypto_id,
@@ -4786,6 +4912,17 @@ async fn try_ckks_vector_query_groups(
             request.with_payload.clone(),
             read_consistency,
             shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        return attach_ckks_group_lookup(
+            toc,
+            result,
+            request.with_lookup.clone(),
+            read_consistency,
+            shard_selection,
+            auth,
             timeout,
             hw_measurement_acc,
         )
@@ -4806,7 +4943,7 @@ async fn try_ckks_vector_query_groups(
             hw_measurement_acc.clone(),
         )
         .await?;
-        return ckks_vector_group_points_with_scoring(
+        let result = ckks_vector_group_points_with_scoring(
             &collection,
             collection_name,
             &collection_crypto_id,
@@ -4826,6 +4963,17 @@ async fn try_ckks_vector_query_groups(
             read_consistency,
             shard_selection,
             timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        return attach_ckks_group_lookup(
+            toc,
+            result,
+            request.with_lookup.clone(),
+            read_consistency,
+            shard_selection,
+            auth,
+            timeout,
             hw_measurement_acc,
         )
         .await
@@ -4842,7 +4990,7 @@ async fn try_ckks_vector_query_groups(
         with_vector: Some(WithVector::Bool(false)),
         score_threshold: request.score_threshold,
     };
-    ckks_vector_group_points(
+    let result = ckks_vector_group_points(
         &collection,
         collection_name,
         &collection_crypto_id,
@@ -4854,6 +5002,17 @@ async fn try_ckks_vector_query_groups(
         request.with_payload.clone(),
         read_consistency,
         shard_selection,
+        timeout,
+        hw_measurement_acc.clone(),
+    )
+    .await?;
+    attach_ckks_group_lookup(
+        toc,
+        result,
+        request.with_lookup.clone(),
+        read_consistency,
+        shard_selection,
+        auth,
         timeout,
         hw_measurement_acc,
     )
