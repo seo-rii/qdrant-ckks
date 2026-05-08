@@ -2759,7 +2759,18 @@ esac
                         CreateCollectionOperation::new(
                             "vector_groups".to_string(),
                             CreateCollection {
-                                vectors: VectorParamsBuilder::new(2, Distance::Dot).build().into(),
+                                vectors: collection::operations::types::VectorsConfig::Multi(
+                                    BTreeMap::from([
+                                        (
+                                            DEFAULT_VECTOR_NAME.to_string(),
+                                            VectorParamsBuilder::new(2, Distance::Dot).build(),
+                                        ),
+                                        (
+                                            "plain".to_string(),
+                                            VectorParamsBuilder::new(2, Distance::Dot).build(),
+                                        ),
+                                    ]),
+                                ),
                                 sparse_vectors: None,
                                 hnsw_config: None,
                                 wal_config: None,
@@ -2972,14 +2983,32 @@ esac
                     points: vec![
                         api::rest::PointStruct {
                             id: 1.into(),
-                            vector: api::rest::VectorStruct::Single(vec![0.7, -0.25]),
+                            vector: api::rest::VectorStruct::Named(HashMap::from([
+                                (
+                                    DEFAULT_VECTOR_NAME.to_string(),
+                                    api::rest::Vector::Dense(vec![0.7, -0.25]),
+                                ),
+                                (
+                                    "plain".to_string(),
+                                    api::rest::Vector::Dense(vec![0.3, 0.4]),
+                                ),
+                            ])),
                             payload: Some(segment::types::Payload(
                                 json!({ "group": "a" }).as_object().unwrap().clone(),
                             )),
                         },
                         api::rest::PointStruct {
                             id: 2.into(),
-                            vector: api::rest::VectorStruct::Single(vec![0.1, 0.2]),
+                            vector: api::rest::VectorStruct::Named(HashMap::from([
+                                (
+                                    DEFAULT_VECTOR_NAME.to_string(),
+                                    api::rest::Vector::Dense(vec![0.1, 0.2]),
+                                ),
+                                (
+                                    "plain".to_string(),
+                                    api::rest::Vector::Dense(vec![0.5, 0.6]),
+                                ),
+                            ])),
                             payload: Some(segment::types::Payload(
                                 json!({ "group": "b" }).as_object().unwrap().clone(),
                             )),
@@ -3934,6 +3963,59 @@ esac
             assert_eq!(recommend_batch[0][0].id, 1.into());
             assert_eq!(recommend_batch[1][0].id, 1.into());
 
+            let mixed_recommend_batch = crate::common::query::do_recommend_batch_points(
+                &toc,
+                "vector_groups",
+                vec![
+                    (
+                        RecommendRequestInternal {
+                            positive: vec![RecommendExample::Dense(vec![0.0, 0.0])],
+                            negative: Vec::new(),
+                            strategy: Some(api::rest::RecommendStrategy::AverageVector),
+                            filter: None,
+                            params: None,
+                            limit: 1,
+                            offset: None,
+                            with_payload: Some(WithPayloadInterface::Bool(false)),
+                            with_vector: Some(WithVector::Bool(false)),
+                            score_threshold: None,
+                            using: Some(DEFAULT_VECTOR_NAME.to_string().into()),
+                            lookup_from: None,
+                        },
+                        ShardSelectorInternal::All,
+                    ),
+                    (
+                        RecommendRequestInternal {
+                            positive: vec![RecommendExample::Dense(vec![1.0, 0.0])],
+                            negative: Vec::new(),
+                            strategy: Some(api::rest::RecommendStrategy::AverageVector),
+                            filter: None,
+                            params: None,
+                            limit: 1,
+                            offset: None,
+                            with_payload: Some(WithPayloadInterface::Bool(false)),
+                            with_vector: Some(WithVector::Bool(false)),
+                            score_threshold: None,
+                            using: Some("plain".to_string().into()),
+                            lookup_from: None,
+                        },
+                        ShardSelectorInternal::All,
+                    ),
+                ],
+                None,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(mixed_recommend_batch.len(), 2);
+            assert_eq!(mixed_recommend_batch[0][0].id, 1.into());
+            assert_eq!(mixed_recommend_batch[0][0].score, 9.0);
+            assert_eq!(mixed_recommend_batch[1][0].id, 2.into());
+            assert_eq!(mixed_recommend_batch[1][0].score, 0.5);
+
             let recommend_groups = crate::common::query::do_recommend_point_groups(
                 &toc,
                 "vector_groups",
@@ -4133,7 +4215,7 @@ esac
             assert_eq!(discover_batch[0][0].id, 1.into());
             assert_eq!(discover_batch[1][0].id, 1.into());
 
-            let err = crate::common::query::do_discover_batch_points(
+            let mixed_discover = crate::common::query::do_discover_batch_points(
                 &toc,
                 "vector_groups",
                 vec![
@@ -4154,7 +4236,7 @@ esac
                     ),
                     (
                         DiscoverRequestInternal {
-                            target: Some(RecommendExample::Dense(vec![0.0, 0.0])),
+                            target: Some(RecommendExample::Dense(vec![1.0, 0.0])),
                             context: None,
                             filter: None,
                             params: None,
@@ -4175,12 +4257,18 @@ esac
                 Some(&vector_settings),
             )
             .await
-            .unwrap_err();
-            assert!(matches!(
-                err,
-                StorageError::BadInput { description }
-                    if description.contains("cannot mix CKKS encrypted vector discover")
-            ));
+            .unwrap();
+            assert_eq!(mixed_discover.len(), 2);
+            assert_eq!(mixed_discover[0][0].id, 1.into());
+            assert_eq!(
+                mixed_discover[0][0].score,
+                common::math::scaled_fast_sigmoid(9.0)
+            );
+            assert_eq!(mixed_discover[1][0].id, 2.into());
+            assert_eq!(
+                mixed_discover[1][0].score,
+                common::math::scaled_fast_sigmoid(0.5)
+            );
 
             let point_id_recommend = crate::common::query::do_recommend_points(
                 &toc,
@@ -4586,7 +4674,18 @@ esac
                         CreateCollectionOperation::new(
                             "vector_docs".to_string(),
                             CreateCollection {
-                                vectors: VectorParamsBuilder::new(2, Distance::Dot).build().into(),
+                                vectors: collection::operations::types::VectorsConfig::Multi(
+                                    BTreeMap::from([
+                                        (
+                                            DEFAULT_VECTOR_NAME.to_string(),
+                                            VectorParamsBuilder::new(2, Distance::Dot).build(),
+                                        ),
+                                        (
+                                            "plain".to_string(),
+                                            VectorParamsBuilder::new(2, Distance::Dot).build(),
+                                        ),
+                                    ]),
+                                ),
                                 sparse_vectors: None,
                                 hnsw_config: None,
                                 wal_config: None,
@@ -4634,11 +4733,29 @@ esac
                 PointInsertOperations::PointsList(api::rest::schema::PointsList {
                     points: vec![api::rest::PointStruct {
                         id: 1.into(),
-                        vector: api::rest::VectorStruct::Single(vec![0.7, -0.25]),
+                        vector: api::rest::VectorStruct::Named(HashMap::from([
+                            (
+                                DEFAULT_VECTOR_NAME.to_string(),
+                                api::rest::Vector::Dense(vec![0.7, -0.25]),
+                            ),
+                            (
+                                "plain".to_string(),
+                                api::rest::Vector::Dense(vec![0.3, 0.4]),
+                            ),
+                        ])),
                         payload: None,
                     }, api::rest::PointStruct {
                         id: 2.into(),
-                        vector: api::rest::VectorStruct::Single(vec![0.1, 0.2]),
+                        vector: api::rest::VectorStruct::Named(HashMap::from([
+                            (
+                                DEFAULT_VECTOR_NAME.to_string(),
+                                api::rest::Vector::Dense(vec![0.1, 0.2]),
+                            ),
+                            (
+                                "plain".to_string(),
+                                api::rest::Vector::Dense(vec![0.5, 0.6]),
+                            ),
+                        ])),
                         payload: None,
                     }],
                     shard_key: None,
@@ -5663,7 +5780,7 @@ esac
             let plaintext_query = CollectionQueryRequest {
                 prefetch: Vec::new(),
                 query: Some(Query::Vector(VectorQuery::Nearest(
-                    VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                    VectorInputInternal::Vector(VectorInternal::Dense(vec![1.0, 0.0])),
                 ))),
                 using: "plain".to_string(),
                 filter: None,
@@ -5675,7 +5792,7 @@ esac
                 with_payload: WithPayloadInterface::Bool(false),
                 lookup_from: None,
             };
-            let err = crate::common::query::do_query_batch_points(
+            let mixed_query = crate::common::query::do_query_batch_points(
                 &toc,
                 "vector_docs",
                 vec![
@@ -5689,12 +5806,12 @@ esac
                 Some(&vector_settings),
             )
             .await
-            .unwrap_err();
-            assert!(matches!(
-                err,
-                StorageError::BadInput { description }
-                    if description.contains("cannot mix CKKS encrypted vector query")
-            ));
+            .unwrap();
+            assert_eq!(mixed_query.len(), 2);
+            assert_eq!(mixed_query[0][0].id, 1.into());
+            assert_eq!(mixed_query[0][0].score, 9.0);
+            assert_eq!(mixed_query[1][0].id, 2.into());
+            assert_eq!(mixed_query[1][0].score, 0.5);
 
             let err = crate::common::query::do_query_points(
                 &toc,
@@ -5782,7 +5899,7 @@ esac
             .into();
             let plaintext_search = CoreSearchRequest {
                 query: QueryEnum::Nearest(NamedQuery::new(
-                    VectorInternal::Dense(vec![0.0, 0.0]),
+                    VectorInternal::Dense(vec![1.0, 0.0]),
                     "plain",
                 )),
                 filter: None,
@@ -5793,7 +5910,7 @@ esac
                 with_vector: Some(WithVector::Bool(false)),
                 score_threshold: None,
             };
-            let err = crate::common::query::do_search_batch_points(
+            let mixed_search = crate::common::query::do_search_batch_points(
                 &toc,
                 "vector_docs",
                 vec![
@@ -5807,12 +5924,12 @@ esac
                 Some(&vector_settings),
             )
             .await
-            .unwrap_err();
-            assert!(matches!(
-                err,
-                StorageError::BadInput { description }
-                    if description.contains("cannot mix CKKS encrypted vector search")
-            ));
+            .unwrap();
+            assert_eq!(mixed_search.len(), 2);
+            assert_eq!(mixed_search[0][0].id, 1.into());
+            assert_eq!(mixed_search[0][0].score, 9.0);
+            assert_eq!(mixed_search[1][0].id, 2.into());
+            assert_eq!(mixed_search[1][0].score, 0.5);
 
             let err = do_upsert_points(
                 UncheckedTocProvider::new_unchecked(&toc),

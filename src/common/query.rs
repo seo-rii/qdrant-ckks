@@ -347,40 +347,62 @@ async fn try_ckks_vector_search_batch_points(
     };
 
     let mut has_encrypted_search = false;
-    let mut has_plain_search = false;
     for search in &request.searches {
         if plan.contains_vector_name(search.query.get_vector_name()) {
             has_encrypted_search = true;
-        } else {
-            has_plain_search = true;
         }
     }
 
     if !has_encrypted_search {
         return Ok(None);
     }
-    if has_plain_search {
-        return Err(StorageError::bad_input(
-            "cannot mix CKKS encrypted vector search with plaintext vector search in the same batch",
-        ));
-    }
 
     let mut results = Vec::with_capacity(request.searches.len());
     for search in &request.searches {
-        results.push(
-            ckks_vector_search_points(
-                &collection,
+        if plan.contains_vector_name(search.query.get_vector_name()) {
+            results.push(
+                ckks_vector_search_points(
+                    &collection,
+                    collection_name,
+                    &collection_crypto_id,
+                    search,
+                    &plan,
+                    read_consistency,
+                    shard_selection,
+                    timeout,
+                    hw_measurement_acc.clone(),
+                )
+                .await?,
+            );
+        } else {
+            let with_vector = search.with_vector.clone().unwrap_or_default();
+            ensure_with_vector_does_not_request_encrypted_vectors(
+                toc,
                 collection_name,
-                &collection_crypto_id,
-                search,
-                &plan,
-                read_consistency,
-                shard_selection,
-                timeout,
-                hw_measurement_acc.clone(),
+                &with_vector,
+                auth,
+                "search",
             )
-            .await?,
-        );
+            .await?;
+            let mut plain_results = toc
+                .core_search_batch(
+                    collection_name,
+                    CoreSearchRequestBatch {
+                        searches: vec![search.clone()],
+                    },
+                    read_consistency,
+                    shard_selection.clone(),
+                    auth.clone(),
+                    timeout,
+                    hw_measurement_acc.clone(),
+                )
+                .await?;
+            results.push(plain_results.pop().ok_or_else(|| {
+                StorageError::service_error(
+                    "plaintext search result missing from mixed CKKS vector batch",
+                )
+            })?);
+        }
     }
 
     Ok(Some(results))
@@ -2522,9 +2544,9 @@ async fn try_ckks_vector_recommend_batch_points(
     };
 
     let mut has_encrypted_recommend = false;
-    let mut has_plain_recommend = false;
     let mut core_requests = Vec::with_capacity(requests.len());
     enum CkksResolvedRecommendRequest<'a> {
+        Plain(RecommendRequestInternal, ShardSelectorInternal),
         Core(CoreSearchRequest, ShardSelectorInternal),
         StoredNearest {
             vector_name: String,
@@ -2556,8 +2578,10 @@ async fn try_ckks_vector_recommend_batch_points(
     for (request, shard_selection) in requests {
         let vector_name = recommend_vector_name(request);
         if !plan.contains_vector_name(&vector_name) {
-            has_plain_recommend = true;
-            core_requests.push(None);
+            core_requests.push(Some(CkksResolvedRecommendRequest::Plain(
+                request.clone(),
+                shard_selection.clone(),
+            )));
             continue;
         }
 
@@ -2620,18 +2644,39 @@ async fn try_ckks_vector_recommend_batch_points(
     if !has_encrypted_recommend {
         return Ok(None);
     }
-    if has_plain_recommend {
-        return Err(StorageError::bad_input(
-            "cannot mix CKKS encrypted vector recommend with plaintext vector recommend in the same batch",
-        ));
-    }
 
     let mut results = Vec::with_capacity(core_requests.len());
     for request in core_requests {
         let Some(request) = request else {
-            unreachable!("plain recommend was rejected above");
+            unreachable!("plain recommend requests are represented explicitly");
         };
         let result = match request {
+            CkksResolvedRecommendRequest::Plain(request, shard_selection) => {
+                let with_vector = request.with_vector.clone().unwrap_or_default();
+                ensure_with_vector_does_not_request_encrypted_vectors(
+                    toc,
+                    collection_name,
+                    &with_vector,
+                    auth,
+                    "recommend",
+                )
+                .await?;
+                let mut plain_results = toc
+                    .recommend_batch(
+                        collection_name,
+                        vec![(request, shard_selection)],
+                        read_consistency,
+                        auth.clone(),
+                        timeout,
+                        hw_measurement_acc.clone(),
+                    )
+                    .await?;
+                plain_results.pop().ok_or_else(|| {
+                    StorageError::service_error(
+                        "plaintext recommend result missing from mixed CKKS vector batch",
+                    )
+                })?
+            }
             CkksResolvedRecommendRequest::Core(request, shard_selection) => {
                 ckks_vector_search_points(
                     &collection,
@@ -3238,9 +3283,9 @@ async fn try_ckks_vector_discover_batch_points(
     };
 
     let mut has_encrypted_discover = false;
-    let mut has_plain_discover = false;
     let mut core_requests = Vec::with_capacity(requests.len());
     enum CkksResolvedDiscoverRequest<'a> {
+        Plain(DiscoverRequestInternal, ShardSelectorInternal),
         Core(CoreSearchRequest, ShardSelectorInternal),
         Resolved {
             vector_name: String,
@@ -3259,8 +3304,10 @@ async fn try_ckks_vector_discover_batch_points(
     for (request, shard_selection) in requests {
         let vector_name = discover_vector_name(request);
         if !plan.contains_vector_name(&vector_name) {
-            has_plain_discover = true;
-            core_requests.push(None);
+            core_requests.push(Some(CkksResolvedDiscoverRequest::Plain(
+                request.clone(),
+                shard_selection.clone(),
+            )));
             continue;
         }
 
@@ -3304,18 +3351,39 @@ async fn try_ckks_vector_discover_batch_points(
     if !has_encrypted_discover {
         return Ok(None);
     }
-    if has_plain_discover {
-        return Err(StorageError::bad_input(
-            "cannot mix CKKS encrypted vector discover with plaintext vector discover in the same batch",
-        ));
-    }
 
     let mut results = Vec::with_capacity(core_requests.len());
     for request in core_requests {
         let Some(request) = request else {
-            unreachable!("plain discover was rejected above");
+            unreachable!("plain discover requests are represented explicitly");
         };
         let result = match request {
+            CkksResolvedDiscoverRequest::Plain(request, shard_selection) => {
+                let with_vector = request.with_vector.clone().unwrap_or_default();
+                ensure_with_vector_does_not_request_encrypted_vectors(
+                    toc,
+                    collection_name,
+                    &with_vector,
+                    auth,
+                    "discover",
+                )
+                .await?;
+                let mut plain_results = toc
+                    .discover_batch(
+                        collection_name,
+                        vec![(request, shard_selection)],
+                        read_consistency,
+                        auth.clone(),
+                        timeout,
+                        hw_measurement_acc.clone(),
+                    )
+                    .await?;
+                plain_results.pop().ok_or_else(|| {
+                    StorageError::service_error(
+                        "plaintext discover result missing from mixed CKKS vector batch",
+                    )
+                })?
+            }
             CkksResolvedDiscoverRequest::Core(request, shard_selection) => {
                 ckks_vector_search_points(
                     &collection,
@@ -4021,6 +4089,7 @@ pub async fn do_query_batch_points(
             &config.params,
         )? {
             enum CkksResolvedQueryRequest<'a> {
+                Plain(CollectionQueryRequest, ShardSelectorInternal),
                 Core(CoreSearchRequest, ShardSelectorInternal),
                 StoredNearest {
                     vector_name: String,
@@ -4050,7 +4119,6 @@ pub async fn do_query_batch_points(
             }
 
             let mut has_encrypted_query = false;
-            let mut has_plain_query = false;
             let mut core_requests = Vec::with_capacity(requests.len());
 
             for (request, shard_selection) in &requests {
@@ -4066,8 +4134,10 @@ pub async fn do_query_batch_points(
                 }
 
                 if !plan.contains_vector_name(&request.using) {
-                    has_plain_query = true;
-                    core_requests.push(None);
+                    core_requests.push(Some(CkksResolvedQueryRequest::Plain(
+                        request.clone(),
+                        shard_selection.clone(),
+                    )));
                     continue;
                 }
 
@@ -4265,18 +4335,37 @@ pub async fn do_query_batch_points(
             }
 
             if has_encrypted_query {
-                if has_plain_query {
-                    return Err(StorageError::bad_input(
-                        "cannot mix CKKS encrypted vector query with plaintext vector query in the same batch",
-                    ));
-                }
-
                 let mut results = Vec::with_capacity(core_requests.len());
                 for request in core_requests {
                     let Some(request) = request else {
-                        unreachable!("plain query was rejected above");
+                        unreachable!("plain query requests are represented explicitly");
                     };
                     let result = match request {
+                        CkksResolvedQueryRequest::Plain(request, shard_selection) => {
+                            ensure_with_vector_does_not_request_encrypted_vectors(
+                                toc,
+                                collection_name,
+                                &request.with_vector,
+                                &auth,
+                                "query",
+                            )
+                            .await?;
+                            let mut plain_results = toc
+                                .query_batch(
+                                    collection_name,
+                                    vec![(request, shard_selection)],
+                                    read_consistency,
+                                    auth.clone(),
+                                    timeout,
+                                    hw_measurement_acc.clone(),
+                                )
+                                .await?;
+                            plain_results.pop().ok_or_else(|| {
+                                StorageError::service_error(
+                                    "plaintext query result missing from mixed CKKS vector batch",
+                                )
+                            })?
+                        }
                         CkksResolvedQueryRequest::Core(request, shard_selection) => {
                             ckks_vector_search_points(
                                 &collection,
