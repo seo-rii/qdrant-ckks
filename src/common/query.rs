@@ -938,6 +938,28 @@ fn ckks_sidecar_hnsw_add_bounded_directed_link(
     links[removed].retain(|neighbor| *neighbor != from);
 }
 
+fn ckks_sidecar_hnsw_add_unbounded_undirected_link(
+    links: &mut [Vec<usize>],
+    first: usize,
+    second: usize,
+) {
+    if first == second {
+        return;
+    }
+    if !links[first].contains(&second) {
+        links[first].push(second);
+    }
+    if !links[second].contains(&first) {
+        links[second].push(first);
+    }
+}
+
+fn ckks_sidecar_hnsw_add_connectivity_backbone(links: &mut [Vec<usize>]) {
+    for idx in 1..links.len() {
+        ckks_sidecar_hnsw_add_unbounded_undirected_link(links, idx - 1, idx);
+    }
+}
+
 fn ckks_sidecar_hnsw_links_are_reciprocal(links: &[Vec<usize>]) -> bool {
     links.iter().enumerate().all(|(from, neighbors)| {
         let mut unique_neighbors = std::collections::HashSet::with_capacity(neighbors.len());
@@ -947,6 +969,28 @@ fn ckks_sidecar_hnsw_links_are_reciprocal(links: &[Vec<usize>]) -> bool {
                 && links[*neighbor].iter().any(|candidate| *candidate == from)
         })
     })
+}
+
+fn ckks_sidecar_hnsw_links_are_connected(links: &[Vec<usize>]) -> bool {
+    if links.is_empty() {
+        return true;
+    }
+
+    let mut visited = vec![false; links.len()];
+    let mut stack = vec![0usize];
+    while let Some(idx) = stack.pop() {
+        if visited[idx] {
+            continue;
+        }
+        visited[idx] = true;
+        for neighbor in &links[idx] {
+            if !visited[*neighbor] {
+                stack.push(*neighbor);
+            }
+        }
+    }
+
+    visited.into_iter().all(|seen| seen)
 }
 
 fn query_vectors_as_dense_slices<'a>(
@@ -1181,6 +1225,7 @@ fn ckks_sidecar_hnsw_load_persisted_graph(
             .iter()
             .any(|neighbors| neighbors.iter().any(|neighbor| *neighbor >= records_len))
         || !ckks_sidecar_hnsw_links_are_reciprocal(&disk.links)
+        || !ckks_sidecar_hnsw_links_are_connected(&disk.links)
     {
         return Ok(None);
     }
@@ -1532,6 +1577,7 @@ fn ckks_sidecar_hnsw_search_points(
                         );
                     }
                 }
+                ckks_sidecar_hnsw_add_connectivity_backbone(&mut links);
 
                 let graph = Arc::new(CkksSidecarHnswGraph {
                     links: Arc::new(links),
@@ -3379,6 +3425,20 @@ mod tests {
         assert!(links[3].contains(&0));
     }
 
+    #[test]
+    fn ckks_sidecar_hnsw_connectivity_backbone_restores_pruned_graph() {
+        let mut links = vec![Vec::<usize>::new(); 4];
+        ckks_sidecar_hnsw_add_bounded_undirected_link(&mut links, 1, 0, 2);
+        ckks_sidecar_hnsw_add_bounded_undirected_link(&mut links, 2, 0, 2);
+        ckks_sidecar_hnsw_add_bounded_undirected_link(&mut links, 3, 0, 2);
+
+        assert!(!ckks_sidecar_hnsw_links_are_connected(&links));
+        ckks_sidecar_hnsw_add_connectivity_backbone(&mut links);
+
+        assert!(ckks_sidecar_hnsw_links_are_reciprocal(&links));
+        assert!(ckks_sidecar_hnsw_links_are_connected(&links));
+    }
+
     fn ckks_sidecar_test_record(point_id: u64, ciphertext: &str) -> CkksSidecarSearchRecord {
         CkksSidecarSearchRecord {
             id: point_id.into(),
@@ -3595,6 +3655,20 @@ mod tests {
 
         assert!(
             ckks_sidecar_hnsw_load_persisted_graph(dir.path(), &key, 2)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_ignores_disconnected_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = ckks_sidecar_test_graph_cache_key("fingerprint-a");
+        let disk = ckks_sidecar_test_graph_disk(&key, vec![vec![1], vec![0], Vec::new()]);
+        write_ckks_sidecar_test_graph_disk(dir.path(), &key, &disk);
+
+        assert!(
+            ckks_sidecar_hnsw_load_persisted_graph(dir.path(), &key, 3)
                 .unwrap()
                 .is_none()
         );
