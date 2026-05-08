@@ -4188,6 +4188,55 @@ esac
             assert!(!serialized_vector_payload.contains("0.7"));
             assert!(!serialized_vector_payload.contains("-0.25"));
 
+            let err = crate::common::query::do_get_points(
+                &toc,
+                "vector_docs",
+                PointRequestInternal {
+                    ids: vec![1.into()],
+                    with_payload: Some(WithPayloadInterface::Bool(true)),
+                    with_vector: WithVector::Selector(vec![DEFAULT_VECTOR_NAME.to_string()]),
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cannot retrieve encrypted vector")
+                        && description.contains("payload sidecar only")
+            ));
+
+            let err = crate::common::query::do_scroll_points(
+                &toc,
+                "vector_docs",
+                shard::scroll::ScrollRequestInternal {
+                    offset: None,
+                    limit: Some(1),
+                    filter: None,
+                    with_payload: Some(WithPayloadInterface::Bool(true)),
+                    with_vector: WithVector::Bool(true),
+                    order_by: None,
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cannot scroll encrypted vectors")
+                        && description.contains("payload sidecar only")
+            ));
+
             let search_result = crate::common::query::do_core_search_points(
                 &toc,
                 "vector_docs",

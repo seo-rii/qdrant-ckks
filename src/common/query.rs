@@ -1695,6 +1695,15 @@ pub async fn do_get_points(
     auth: Auth,
     hw_measurement_acc: HwMeasurementAcc,
 ) -> Result<Vec<RecordInternal>, StorageError> {
+    ensure_with_vector_does_not_request_encrypted_vectors(
+        toc,
+        collection_name,
+        &request.with_vector,
+        &auth,
+        "retrieve",
+    )
+    .await?;
+
     toc.retrieve(
         collection_name,
         request,
@@ -1718,6 +1727,15 @@ pub async fn do_scroll_points(
     auth: Auth,
     hw_measurement_acc: HwMeasurementAcc,
 ) -> Result<ScrollResult, StorageError> {
+    ensure_with_vector_does_not_request_encrypted_vectors(
+        toc,
+        collection_name,
+        &request.with_vector,
+        &auth,
+        "scroll",
+    )
+    .await?;
+
     toc.scroll(
         collection_name,
         request,
@@ -1728,6 +1746,61 @@ pub async fn do_scroll_points(
         hw_measurement_acc,
     )
     .await
+}
+
+async fn ensure_with_vector_does_not_request_encrypted_vectors(
+    toc: &TableOfContent,
+    collection_name: &str,
+    with_vector: &WithVector,
+    auth: &Auth,
+    operation: &str,
+) -> Result<(), StorageError> {
+    if !with_vector.is_enabled() {
+        return Ok(());
+    }
+
+    let collection_pass = auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new(),
+        "encrypted_vector_read_guard",
+    )?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let config = collection.config_snapshot().await;
+    let Some(encryption) = config.params.effective_encryption() else {
+        return Ok(());
+    };
+
+    let encrypted_names = encryption
+        .rules
+        .iter()
+        .filter_map(|rule| match &rule.selector {
+            EncryptionSelector::VectorNames { names } => Some(names),
+            _ => None,
+        })
+        .flat_map(|names| names.iter().map(String::as_str))
+        .collect::<std::collections::HashSet<_>>();
+    if encrypted_names.is_empty() {
+        return Ok(());
+    }
+
+    match with_vector {
+        WithVector::Bool(false) => Ok(()),
+        WithVector::Bool(true) => Err(StorageError::bad_input(format!(
+            "cannot {operation} encrypted vectors for collection '{collection_name}'; CKKS vector ciphertext read path returns payload sidecar only",
+        ))),
+        WithVector::Selector(vector_names) => {
+            if let Some(vector_name) = vector_names
+                .iter()
+                .map(String::as_str)
+                .find(|vector_name| encrypted_names.contains(vector_name))
+            {
+                return Err(StorageError::bad_input(format!(
+                    "cannot {operation} encrypted vector '{vector_name}'; CKKS vector ciphertext read path returns payload sidecar only",
+                )));
+            }
+            Ok(())
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
