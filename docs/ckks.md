@@ -705,7 +705,9 @@ for the current serving process and is also persisted under the collection
 directory for restart reuse. Persisted graph cache files are treated as
 untrusted hints: symlinks, group/world-accessible files, oversized files, and
 metadata/fingerprint mismatches are ignored or rejected before Qdrant rebuilds
-the graph. It is still not Qdrant segment-native index state.
+the graph. Qdrant prunes old persisted graph cache files by count and total
+size after writing a new graph. It is still not Qdrant segment-native index
+state.
 `search/groups` and root direct `query/groups` are supported only when the
 group field is plaintext payload, `with_lookup` is disabled, and runtime OpenFHE
 settings are available; grouped paths still use brute-force sidecar scoring.

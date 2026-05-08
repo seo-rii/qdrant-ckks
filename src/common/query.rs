@@ -3,7 +3,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use api::rest::{RecommendStrategy, SearchGroupsRequestInternal, SearchRequestInternal};
 use collection::collection::distance_matrix::*;
@@ -57,6 +57,8 @@ const CKKS_SIDECAR_HNSW_GRAPH_CACHE_CAPACITY: usize = 16;
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_DIR: &str = "ckks_sidecar_hnsw_graphs";
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_VERSION: u8 = 1;
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES: u64 = 64 * 1024 * 1024;
+const CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_FILES: usize = 32;
+const CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 
 static CKKS_SIDECAR_HNSW_GRAPH_CACHE: LazyLock<Mutex<CkksSidecarHnswGraphCache>> =
     LazyLock::new(|| Mutex::new(CkksSidecarHnswGraphCache::default()));
@@ -1173,11 +1175,86 @@ fn ckks_sidecar_hnsw_persist_graph(
             "failed to replace CKKS sidecar HNSW graph cache {path:?}: {err}",
         ))
     })?;
+    ckks_sidecar_hnsw_prune_persisted_graphs(&directory, &path)?;
     ckks_sidecar_hnsw_sync_parent(&path).map_err(|err| {
         StorageError::service_error(format!(
             "failed to sync CKKS sidecar HNSW graph cache directory for {path:?}: {err}",
         ))
     })
+}
+
+fn ckks_sidecar_hnsw_prune_persisted_graphs(
+    directory: &Path,
+    keep_path: &Path,
+) -> Result<(), StorageError> {
+    struct CacheFile {
+        path: PathBuf,
+        len: u64,
+        modified: SystemTime,
+    }
+
+    let keep_len = fs::metadata(keep_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let mut files = Vec::new();
+    let entries = fs::read_dir(directory).map_err(|err| {
+        StorageError::service_error(format!(
+            "failed to read CKKS sidecar HNSW graph cache directory {directory:?}: {err}",
+        ))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|err| {
+            StorageError::service_error(format!(
+                "failed to read CKKS sidecar HNSW graph cache directory entry {directory:?}: {err}",
+            ))
+        })?;
+        let path = entry.path();
+        if path == keep_path
+            || path.extension().and_then(|extension| extension.to_str()) != Some("json")
+        {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&path).map_err(|err| {
+            StorageError::service_error(format!(
+                "failed to inspect CKKS sidecar HNSW graph cache file {path:?}: {err}",
+            ))
+        })?;
+        if !metadata.is_file() && !metadata.file_type().is_symlink() {
+            continue;
+        }
+        files.push(CacheFile {
+            path,
+            len: metadata.len(),
+            modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+        });
+    }
+
+    files.sort_unstable_by(|left, right| {
+        right
+            .modified
+            .cmp(&left.modified)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+
+    let mut kept_files = 1usize;
+    let mut kept_bytes = keep_len;
+    for file in files {
+        let keep_file = kept_files < CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_FILES
+            && kept_bytes.saturating_add(file.len) <= CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_TOTAL_BYTES;
+        if keep_file {
+            kept_files += 1;
+            kept_bytes = kept_bytes.saturating_add(file.len);
+            continue;
+        }
+        fs::remove_file(&file.path).map_err(|err| {
+            StorageError::service_error(format!(
+                "failed to prune CKKS sidecar HNSW graph cache file {:?}: {err}",
+                file.path,
+            ))
+        })?;
+    }
+
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -3356,6 +3433,47 @@ mod tests {
 
         let err = ckks_sidecar_hnsw_load_persisted_graph(dir.path(), &key, 0).unwrap_err();
         assert!(format!("{err}").contains("exceeds maximum size"));
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_prunes_old_cache_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let graph = CkksSidecarHnswGraph {
+            links: Arc::new(vec![Vec::new()]),
+        };
+        let mut newest_key = None;
+        for idx in 0..(CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_FILES + 5) {
+            let key = CkksSidecarHnswGraphCacheKey {
+                collection_name: "collection".to_string(),
+                vector_name: "vector".to_string(),
+                score_order: "large",
+                m: 16,
+                records_fingerprint: format!("fingerprint-{idx}"),
+            };
+            ckks_sidecar_hnsw_persist_graph(dir.path(), &key, &graph).unwrap();
+            newest_key = Some(key);
+        }
+
+        let cache_dir = dir.path().join(CKKS_SIDECAR_HNSW_GRAPH_CACHE_DIR);
+        let cache_files = std::fs::read_dir(cache_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    == Some("json")
+            })
+            .count();
+        assert!(cache_files <= CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_FILES);
+
+        let newest_key = newest_key.unwrap();
+        assert!(
+            ckks_sidecar_hnsw_load_persisted_graph(dir.path(), &newest_key, 1)
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
