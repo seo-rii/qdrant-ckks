@@ -78,6 +78,15 @@ enum CkksSidecarScoring<'a> {
     },
 }
 
+#[derive(Clone, Copy)]
+enum CkksSidecarHnswQuery<'a> {
+    Dense(&'a [f32]),
+    Stored {
+        query_point_id: &'a str,
+        query_encrypted: &'a EncryptedCkksVector,
+    },
+}
+
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_CAPACITY: usize = 16;
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_DIR: &str = "ckks_sidecar_hnsw_graphs";
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_VERSION: u8 = 1;
@@ -552,9 +561,14 @@ async fn ckks_vector_search_points_with_scoring(
     let hnsw_ef = params
         .as_ref()
         .and_then(|params| (!params.exact).then_some(params.hnsw_ef).flatten());
-    if hnsw_ef.is_some() && !matches!(&scoring, CkksSidecarScoring::Nearest { .. }) {
+    if hnsw_ef.is_some()
+        && !matches!(
+            &scoring,
+            CkksSidecarScoring::Nearest { .. } | CkksSidecarScoring::StoredNearest { .. }
+        )
+    {
         return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' HNSW sidecar search currently supports only dense nearest-neighbor queries",
+            "encrypted vector '{vector_name}' HNSW sidecar search currently supports only dense or point-id nearest-neighbor queries",
         )));
     }
 
@@ -870,8 +884,18 @@ async fn ckks_vector_search_points_with_scoring(
     }
 
     if let Some(hnsw_ef) = hnsw_ef {
-        let CkksSidecarScoring::Nearest { query_values } = scoring else {
-            unreachable!("non-nearest CKKS HNSW sidecar search was rejected before scrolling");
+        let hnsw_query = match &scoring {
+            CkksSidecarScoring::Nearest { query_values } => {
+                CkksSidecarHnswQuery::Dense(query_values)
+            }
+            CkksSidecarScoring::StoredNearest {
+                query_point_id,
+                query_encrypted,
+            } => CkksSidecarHnswQuery::Stored {
+                query_point_id,
+                query_encrypted,
+            },
+            _ => unreachable!("non-nearest CKKS HNSW sidecar search was rejected before scrolling"),
         };
         for scored_point in ckks_sidecar_hnsw_search_points(
             collection_name,
@@ -880,7 +904,7 @@ async fn ckks_vector_search_points_with_scoring(
             collection.path(),
             plan,
             &hnsw_records,
-            query_values,
+            hnsw_query,
             score_order,
             score_threshold,
             hnsw_ef,
@@ -1467,6 +1491,40 @@ fn ckks_sidecar_hnsw_sync_parent(_path: &Path) -> std::io::Result<()> {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn ckks_sidecar_score_hnsw_query_batch(
+    collection_name: &str,
+    vector_name: &str,
+    plan: &crate::common::crypto::VectorWritePlan,
+    query: CkksSidecarHnswQuery<'_>,
+    encrypted_items: &[(String, EncryptedCkksVector)],
+) -> Result<Vec<f32>, StorageError> {
+    let scores = match query {
+        CkksSidecarHnswQuery::Dense(query_values) => plan.score_encrypted_query_batch(
+            collection_name,
+            vector_name,
+            encrypted_items,
+            query_values,
+        )?,
+        CkksSidecarHnswQuery::Stored {
+            query_point_id,
+            query_encrypted,
+        } => plan.score_stored_query_batch(
+            collection_name,
+            vector_name,
+            query_point_id,
+            query_encrypted,
+            encrypted_items,
+        )?,
+    };
+
+    scores.ok_or_else(|| {
+        StorageError::service_error(format!(
+            "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
+        ))
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 fn ckks_sidecar_hnsw_search_points(
     collection_name: &str,
     collection_crypto_id: &str,
@@ -1474,7 +1532,7 @@ fn ckks_sidecar_hnsw_search_points(
     collection_path: &Path,
     plan: &crate::common::crypto::VectorWritePlan,
     records: &[CkksSidecarSearchRecord],
-    query_values: &[f32],
+    query: CkksSidecarHnswQuery<'_>,
     score_order: Order,
     score_threshold: Option<f32>,
     hnsw_ef: usize,
@@ -1485,18 +1543,13 @@ fn ckks_sidecar_hnsw_search_points(
     }
     if records.len() == 1 {
         let encrypted_items = [(records[0].point_id.clone(), records[0].encrypted.clone())];
-        let scores = plan
-            .score_encrypted_query_batch(
-                collection_name,
-                vector_name,
-                &encrypted_items,
-                query_values,
-            )?
-            .ok_or_else(|| {
-                StorageError::service_error(format!(
-                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-                ))
-            })?;
+        let scores = ckks_sidecar_score_hnsw_query_batch(
+            collection_name,
+            vector_name,
+            plan,
+            query,
+            &encrypted_items,
+        )?;
         let score = scores[0];
         if !ckks_score_passes_threshold(score_order, score, score_threshold) {
             return Ok(Vec::new());
@@ -1518,18 +1571,13 @@ fn ckks_sidecar_hnsw_search_points(
             .iter()
             .map(|record| (record.point_id.clone(), record.encrypted.clone()))
             .collect::<Vec<_>>();
-        let scores = plan
-            .score_encrypted_query_batch(
-                collection_name,
-                vector_name,
-                &encrypted_items,
-                query_values,
-            )?
-            .ok_or_else(|| {
-                StorageError::service_error(format!(
-                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-                ))
-            })?;
+        let scores = ckks_sidecar_score_hnsw_query_batch(
+            collection_name,
+            vector_name,
+            plan,
+            query,
+            &encrypted_items,
+        )?;
         let mut scored = records
             .iter()
             .zip(scores)
@@ -1683,18 +1731,13 @@ fn ckks_sidecar_hnsw_search_points(
                 )
             })
             .collect::<Vec<_>>();
-        let scores = plan
-            .score_encrypted_query_batch(
-                collection_name,
-                vector_name,
-                &encrypted_items,
-                query_values,
-            )?
-            .ok_or_else(|| {
-                StorageError::service_error(format!(
-                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-                ))
-            })?;
+        let scores = ckks_sidecar_score_hnsw_query_batch(
+            collection_name,
+            vector_name,
+            plan,
+            query,
+            &encrypted_items,
+        )?;
 
         let mut batch = frontier
             .into_iter()

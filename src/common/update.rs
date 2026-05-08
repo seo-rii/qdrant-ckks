@@ -4723,6 +4723,41 @@ esac
             assert_eq!(hnsw_graph_search_result.len(), 1);
             assert_eq!(hnsw_graph_search_result[0].id, 1.into());
             assert_eq!(hnsw_graph_search_result[0].score, 9.0);
+
+            let point_id_hnsw_query_result = crate::common::query::do_query_points(
+                &toc,
+                "vector_docs",
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::Id(
+                        2.into(),
+                    )))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: Some(SearchParams {
+                        hnsw_ef: Some(128),
+                        ..SearchParams::default()
+                    }),
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(point_id_hnsw_query_result.len(), 1);
+            assert_eq!(point_id_hnsw_query_result[0].id, 2.into());
+            assert_eq!(point_id_hnsw_query_result[0].score, 10.0);
+
             let vector_cache_dir = vector_collection.path().join("ckks_sidecar_hnsw_graphs");
             assert!(
                 fs::read_dir(&vector_cache_dir)
