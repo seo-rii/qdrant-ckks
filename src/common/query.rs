@@ -1995,6 +1995,90 @@ async fn ckks_vector_group_points(
     )
     .await?;
 
+    ckks_vector_group_scored_points(
+        collection,
+        scored,
+        group_by,
+        group_limit,
+        group_size,
+        with_payload,
+        read_consistency,
+        shard_selection,
+        timeout,
+        hw_measurement_acc,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn ckks_vector_group_points_with_scoring(
+    collection: &collection::collection::Collection,
+    collection_name: &str,
+    collection_crypto_id: &str,
+    vector_name: &str,
+    scoring: CkksSidecarScoring<'_>,
+    filter: Option<Filter>,
+    params: Option<SearchParams>,
+    score_threshold: Option<f32>,
+    plan: &crate::common::crypto::VectorWritePlan,
+    group_by: &JsonPath,
+    group_limit: usize,
+    group_size: usize,
+    with_payload: WithPayloadInterface,
+    read_consistency: Option<ReadConsistency>,
+    shard_selection: &ShardSelectorInternal,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+) -> Result<GroupsResult, StorageError> {
+    let scored = ckks_vector_search_points_with_scoring(
+        collection,
+        collection_name,
+        collection_crypto_id,
+        vector_name,
+        scoring,
+        filter,
+        params,
+        usize::MAX,
+        0,
+        Some(WithPayloadInterface::Bool(true)),
+        Some(WithVector::Bool(false)),
+        score_threshold,
+        plan,
+        read_consistency,
+        shard_selection,
+        timeout,
+        hw_measurement_acc.clone(),
+    )
+    .await?;
+
+    ckks_vector_group_scored_points(
+        collection,
+        scored,
+        group_by,
+        group_limit,
+        group_size,
+        with_payload,
+        read_consistency,
+        shard_selection,
+        timeout,
+        hw_measurement_acc,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn ckks_vector_group_scored_points(
+    collection: &collection::collection::Collection,
+    scored: Vec<ScoredPoint>,
+    group_by: &JsonPath,
+    group_limit: usize,
+    group_size: usize,
+    with_payload: WithPayloadInterface,
+    read_consistency: Option<ReadConsistency>,
+    shard_selection: &ShardSelectorInternal,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+) -> Result<GroupsResult, StorageError> {
     let grouped = group_ckks_search_points(scored, group_by, group_limit, group_size);
     let ids = grouped
         .iter()
@@ -3190,7 +3274,7 @@ async fn try_ckks_vector_query_groups(
     while let Some(prefetch) = prefetches.pop() {
         if plan.contains_vector_name(&prefetch.using) {
             return Err(StorageError::bad_input(format!(
-                "encrypted vector '{}' only supports root nearest-neighbor dense query groups; prefetch/fusion/MMR over CKKS ciphertext are not implemented",
+                "encrypted vector '{}' only supports root nearest-neighbor dense or point-id query groups; prefetch/fusion/MMR over CKKS ciphertext are not implemented",
                 prefetch.using,
             )));
         }
@@ -3201,7 +3285,7 @@ async fn try_ckks_vector_query_groups(
     }
     if !request.prefetch.is_empty() {
         return Err(StorageError::bad_input(format!(
-            "encrypted vector '{}' only supports root nearest-neighbor dense query groups; prefetch/fusion/MMR over CKKS ciphertext are not implemented",
+            "encrypted vector '{}' only supports root nearest-neighbor dense or point-id query groups; prefetch/fusion/MMR over CKKS ciphertext are not implemented",
             request.using,
         )));
     }
@@ -3218,6 +3302,47 @@ async fn try_ckks_vector_query_groups(
         )));
     }
 
+    ensure_group_path_does_not_touch_encrypted_vector_sidecar(&request.group_by)?;
+
+    if let Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::Id(point_id)))) =
+        &request.query
+    {
+        let query_encrypted = ckks_vector_sidecar_for_point_id(
+            &collection,
+            &request.using,
+            *point_id,
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        return ckks_vector_group_points_with_scoring(
+            &collection,
+            collection_name,
+            &collection_crypto_id,
+            &request.using,
+            CkksSidecarScoring::StoredNearest {
+                query_point_id: point_id.to_string(),
+                query_encrypted,
+            },
+            request.filter.clone(),
+            request.params.clone(),
+            request.score_threshold,
+            &plan,
+            &request.group_by,
+            request.limit,
+            request.group_size,
+            request.with_payload.clone(),
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc,
+        )
+        .await
+        .map(Some);
+    }
+
     let search_request = CoreSearchRequest {
         query: ckks_query_as_core_query(&request.query, &request.using)?,
         filter: request.filter.clone(),
@@ -3228,7 +3353,6 @@ async fn try_ckks_vector_query_groups(
         with_vector: Some(WithVector::Bool(false)),
         score_threshold: request.score_threshold,
     };
-    ensure_group_path_does_not_touch_encrypted_vector_sidecar(&request.group_by)?;
     ckks_vector_group_points(
         &collection,
         collection_name,

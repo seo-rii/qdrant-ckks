@@ -3457,6 +3457,41 @@ esac
             assert_eq!(point_id_nearest_query[0].id, 2.into());
             assert_eq!(point_id_nearest_query[0].score, 10.0);
 
+            let point_id_nearest_groups = crate::common::query::do_query_point_groups(
+                &toc,
+                "vector_groups",
+                collection::operations::universal_query::collection_query::CollectionQueryGroupsRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::Id(
+                        2.into(),
+                    )))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    params: None,
+                    score_threshold: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                    group_by: "group".parse().unwrap(),
+                    group_size: 1,
+                    limit: 2,
+                    with_lookup: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(point_id_nearest_groups.groups.len(), 2);
+            assert_eq!(point_id_nearest_groups.groups[0].id, GroupId::from("b"));
+            assert_eq!(point_id_nearest_groups.groups[0].hits[0].score, 10.0);
+            assert_eq!(point_id_nearest_groups.groups[1].id, GroupId::from("a"));
+            assert_eq!(point_id_nearest_groups.groups[1].hits[0].score, 8.0);
+
             let recommend = crate::common::query::do_recommend_points(
                 &toc,
                 "vector_groups",
