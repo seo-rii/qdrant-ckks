@@ -3,7 +3,7 @@
 이 문서는 `RISK_REGISTER.md`의 대형 작업을 구현 순서대로 정리한다. 작은 방어 패치는 이미 별도 커밋으로 일부 처리됐고, 여기서는 설계, migration, 테스트 인프라, 구조 변경이 필요한 작업만 다룬다.
 
 기준 브랜치: `sec`
-최종 갱신: 2026-05-05
+최종 갱신: 2026-05-08
 
 ## 작업 원칙
 
@@ -23,13 +23,16 @@
 - Generic MK/RK material, wrapped RK, explicit opaque `material_fingerprint_id`, `rk_id`/`rk_epoch` envelope metadata, retired-material decrypt path, MK rewrap primitive가 들어가 있다.
 - Public params diff와 direct config validation은 encryption/ckks mutation을 migration path 밖에서 거부한다.
 - `ApplyCryptoMigration` meta operation과 migration plan validation/apply primitive가 있으며, dry-run은 config를 변경하지 않는다.
-- Payload index/filter/order/group/formula/facet 및 encrypted vector write/search/recommend/discover/query/matrix paths는 unsupported 상태에서 fail-closed 된다.
+- Payload index/filter/order/group/formula/facet은 encrypted content에 대해 fail-closed 된다.
+- CKKS encrypted vector dense ingest/update는 payload sidecar storage로 연결되어 있고, plaintext vector는 dense vector storage에서 제거된다.
+- REST/gRPC legacy `search`, root direct `query`, raw-dense recommend/discover/context는 CKKS sidecar scoring으로 연결되어 있다. Nearest-neighbor `hnsw_ef` 요청은 experimental sidecar HNSW graph cache를 사용하며, graph cache는 in-memory와 collection-local disk cache로 보존된다.
+- Quantization/search matrix/prefetch/fusion/MMR, point-id recommend/discover/context examples, encrypted query vectors, native segment `HNSWIndex` over CKKS ciphertext, grouped lookup은 unsupported 상태에서 fail-closed 된다.
 - Snapshot/restore preflight, shard-transfer/replication/resharding start, dead-replica recovery source selection, readiness gate는 encrypted collection의 runtime crypto parity mismatch를 fail-closed 한다.
 - OpenFHE bridge path/hash validation, parent-dir checks, env secret stripping, timeout/stdout/stderr malicious-behavior coverage, worker pool, batch protocol이 들어가 있다.
 
 남은 대형 작업:
 
-- CKKS encrypted vector storage/search 자체 구현: sidecar/custom segment/surrogate-vector 중 하나를 선택해야 하며, 현재는 의도적으로 unsupported다.
+- CKKS encrypted vector production-grade indexing: sidecar storage/search는 구현됐지만 native segment `HNSWIndex` 통합, client-supplied encrypted query vectors, score decryption, broader distributed rebuild/recovery coverage는 아직 없다.
 - Background migration/re-encrypt job: plan/state primitive는 있지만 point scan, checkpoint resume, verification, rollback, old-key disable/destroy job은 아직 없다.
 - Cluster-wide client nonce replay ledger: request/process/collection-local/reload cache는 있지만 consensus-backed global ledger는 없다.
 - Blind index: client-side exact-match search를 위한 token provider/query integration은 아직 없다.
@@ -258,28 +261,29 @@
 
 - A안: at-rest encryption only. 검색은 plaintext vector 또는 별도 surrogate vector만 사용한다.
 - B안: similarity-preserving/searchable encryption. 별도 보안 모델과 leakage profile을 문서화한다.
-- C안: CKKS homomorphic scoring. HNSW pruning과 분리된 brute-force/rerank executor를 구현한다.
+- C안: CKKS sidecar scoring. Qdrant dense vector storage에는 plaintext를 남기지 않고 `$qdrant_sec_vectors` sidecar ciphertext를 score한다.
+- D안: native segment `HNSWIndex` over CKKS ciphertext. 현재는 미구현이며 별도 index/executor 설계가 필요하다.
 
 작업 순서:
 
-- 프로젝트 목표를 A/B/C 중 하나 이상으로 결정한다.
-- `VectorCryptoBackend` capability를 `encrypt_point_vector`, `encrypt_query_vector`, `score_ciphertext`, `decrypt_score`, `supports_indexing`, `supports_filtering`로 나눈다.
-- collection create 시 encrypted vector가 dense index에 들어가는지, payload/envelope로 빠지는지 강제한다.
-- query API가 plaintext vector, surrogate vector, encrypted query vector 중 무엇을 받는지 분리한다.
-- C안을 선택하면 HNSW 대신 brute-force/rerank executor를 별도로 추가한다.
-- retrieve with/without decrypt, query failure modes, unsupported Qdrant flows를 문서화한다.
+- C안 sidecar storage/search는 현재 canonical 구현으로 선택됐다.
+- `VectorCryptoBackend` capability는 encrypt, batch encrypt, encrypted-query scoring, stored-ciphertext scoring을 제공한다.
+- collection create/update path는 encrypted dense vectors를 payload sidecar envelope로 저장하고 plaintext vector write를 제거한다. Sparse/multi-dense vector는 fail-closed 한다.
+- query API는 현재 plaintext dense query vectors를 받아 bridge에서 encrypted query ciphertext로 변환한다. Client-supplied encrypted query ciphertext는 아직 unsupported다.
+- Nearest-neighbor `search`/root direct `query`는 brute-force sidecar scoring 또는 `hnsw_ef` 기반 experimental sidecar graph cache를 사용한다. 이 graph는 native segment `HNSWIndex`가 아니다.
+- retrieve with/without decrypt, query failure modes, unsupported Qdrant flows는 `docs/ckks.md` 지원 matrix에 맞춰 계속 유지한다.
 
 테스트:
 
 - encrypted vector collection에서 unsupported search path는 명확한 error를 반환한다.
-- A안이면 surrogate/plaintext path만 검색된다.
-- C안이면 encrypted query, score_ciphertext, decrypt_score lifecycle이 end-to-end로 검증된다.
-- recommend/discover/quantization/HNSW 지원 여부가 contract test로 고정된다.
+- Sidecar ingest/search/query/recommend/discover/context는 raw sidecar payload 반환, `with_vector` fail-closed, score threshold, wrong OpenFHE context fail-closed, plaintext vector leakage scan으로 검증된다.
+- Experimental sidecar HNSW graph cache는 build, in-memory cache, disk persistence, pruning, hardening, snapshot exclusion, stale/asymmetric cache ignore 테스트로 검증된다.
+- Native segment `HNSWIndex`, encrypted query vector, score decrypt lifecycle은 아직 unsupported contract로 남긴다.
 
 완료 조건:
 
-- 사용자가 CKKS vector envelope를 Qdrant HNSW가 검색한다고 오해할 수 없다.
-- 지원되는 검색 모델이 API 타입과 runtime capability로 강제된다.
+- 사용자가 sidecar HNSW graph cache를 native Qdrant segment `HNSWIndex`로 오해할 수 없다.
+- 지원되는 검색 모델과 unsupported 모델이 API validation, runtime capability, docs matrix, regression tests로 강제된다.
 
 ## Phase 9: Internal Crypto Module Split
 
