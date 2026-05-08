@@ -6663,8 +6663,42 @@ esac
                     .exists()
             );
 
+            let vector_cache_dir = vector_collection.path().join("ckks_sidecar_hnsw_graphs");
+            fs::create_dir_all(&vector_cache_dir).unwrap();
+            fs::write(
+                vector_cache_dir.join("should-not-be-snapshotted.json"),
+                b"ckks sidecar graph cache snapshot sentinel",
+            )
+            .unwrap();
+            let vector_snapshot_temp_dir = Builder::new()
+                .prefix("vector-snapshot-temp")
+                .tempdir()
+                .unwrap();
+            let vector_snapshot = vector_collection
+                .create_snapshot(vector_snapshot_temp_dir.path(), 0)
+                .await
+                .unwrap();
+            let vector_snapshot_path = vector_collection
+                .snapshots_path()
+                .join(&vector_snapshot.name);
+            assert!(vector_snapshot_path.exists());
+            let vector_snapshot_bytes = fs::read(&vector_snapshot_path).unwrap();
+            for forbidden in [
+                b"ckks_sidecar_hnsw_graphs".as_slice(),
+                b"should-not-be-snapshotted.json".as_slice(),
+                b"ckks sidecar graph cache snapshot sentinel".as_slice(),
+            ] {
+                assert!(
+                    !vector_snapshot_bytes
+                        .windows(forbidden.len())
+                        .any(|window| window == forbidden),
+                    "CKKS sidecar HNSW cache data leaked into vector collection snapshot",
+                );
+            }
+
             client_collection.stop_gracefully().await;
             client_uuid_collection.stop_gracefully().await;
+            vector_collection.stop_gracefully().await;
             collection.stop_gracefully().await;
         });
 
