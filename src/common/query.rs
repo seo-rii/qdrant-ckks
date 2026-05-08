@@ -149,6 +149,18 @@ pub async fn do_core_search_batch_points(
         return Ok(results);
     }
 
+    for search in &request.searches {
+        let with_vector = search.with_vector.clone().unwrap_or_default();
+        ensure_with_vector_does_not_request_encrypted_vectors(
+            toc,
+            collection_name,
+            &with_vector,
+            &auth,
+            "search",
+        )
+        .await?;
+    }
+
     toc.core_search_batch(
         collection_name,
         request,
@@ -1940,6 +1952,17 @@ pub async fn do_query_batch_points(
                 return Ok(results);
             }
         }
+    }
+
+    for (request, _) in &requests {
+        ensure_with_vector_does_not_request_encrypted_vectors(
+            toc,
+            collection_name,
+            &request.with_vector,
+            &auth,
+            "query",
+        )
+        .await?;
     }
 
     toc.query_batch(
