@@ -3830,7 +3830,7 @@ esac
                     if description.contains("cannot mix CKKS encrypted vector discover")
             ));
 
-            let err = crate::common::query::do_recommend_points(
+            let point_id_recommend = crate::common::query::do_recommend_points(
                 &toc,
                 "vector_groups",
                 RecommendRequestInternal {
@@ -3855,12 +3855,10 @@ esac
                 Some(&vector_settings),
             )
             .await
-            .unwrap_err();
-            assert!(matches!(
-                err,
-                StorageError::BadInput { description }
-                    if description.contains("cannot resolve point-id")
-            ));
+            .unwrap();
+            assert_eq!(point_id_recommend.len(), 1);
+            assert_eq!(point_id_recommend[0].id, 1.into());
+            assert_eq!(point_id_recommend[0].score, 10.0);
 
             let discover_context = crate::common::query::do_discover_points(
                 &toc,

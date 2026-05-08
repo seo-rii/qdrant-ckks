@@ -2285,6 +2285,23 @@ async fn try_ckks_vector_recommend_batch_points(
     let mut has_encrypted_recommend = false;
     let mut has_plain_recommend = false;
     let mut core_requests = Vec::with_capacity(requests.len());
+    enum CkksResolvedRecommendRequest {
+        Core(CoreSearchRequest, ShardSelectorInternal),
+        StoredNearest {
+            vector_name: String,
+            query_point_id: String,
+            query_encrypted: EncryptedCkksVector,
+            filter: Option<Filter>,
+            params: Option<SearchParams>,
+            limit: usize,
+            offset: usize,
+            with_payload: Option<WithPayloadInterface>,
+            with_vector: Option<WithVector>,
+            score_threshold: Option<f32>,
+            shard_selection: ShardSelectorInternal,
+        },
+    }
+
     for (request, shard_selection) in requests {
         let vector_name = recommend_vector_name(request);
         if !plan.contains_vector_name(&vector_name) {
@@ -2294,10 +2311,36 @@ async fn try_ckks_vector_recommend_batch_points(
         }
 
         has_encrypted_recommend = true;
-        core_requests.push(Some((
-            recommend_request_as_ckks_search_request(request, &vector_name)?,
-            shard_selection.clone(),
-        )));
+        if let Some(point_id) = recommend_request_single_positive_point_id(request) {
+            let query_encrypted = ckks_vector_sidecar_for_point_id(
+                &collection,
+                &vector_name,
+                point_id,
+                read_consistency,
+                shard_selection,
+                timeout,
+                hw_measurement_acc.clone(),
+            )
+            .await?;
+            core_requests.push(Some(CkksResolvedRecommendRequest::StoredNearest {
+                vector_name,
+                query_point_id: point_id.to_string(),
+                query_encrypted,
+                filter: request.filter.clone(),
+                params: request.params.clone(),
+                limit: request.limit,
+                offset: request.offset.unwrap_or_default(),
+                with_payload: request.with_payload.clone(),
+                with_vector: request.with_vector.clone(),
+                score_threshold: request.score_threshold,
+                shard_selection: shard_selection.clone(),
+            }));
+        } else {
+            core_requests.push(Some(CkksResolvedRecommendRequest::Core(
+                recommend_request_as_ckks_search_request(request, &vector_name)?,
+                shard_selection.clone(),
+            )));
+        }
     }
 
     if !has_encrypted_recommend {
@@ -2311,26 +2354,83 @@ async fn try_ckks_vector_recommend_batch_points(
 
     let mut results = Vec::with_capacity(core_requests.len());
     for request in core_requests {
-        let Some((request, shard_selection)) = request else {
+        let Some(request) = request else {
             unreachable!("plain recommend was rejected above");
         };
-        results.push(
-            ckks_vector_search_points(
-                &collection,
-                collection_name,
-                &collection_crypto_id,
-                &request,
-                &plan,
-                read_consistency,
-                &shard_selection,
-                timeout,
-                hw_measurement_acc.clone(),
-            )
-            .await?,
-        );
+        let result = match request {
+            CkksResolvedRecommendRequest::Core(request, shard_selection) => {
+                ckks_vector_search_points(
+                    &collection,
+                    collection_name,
+                    &collection_crypto_id,
+                    &request,
+                    &plan,
+                    read_consistency,
+                    &shard_selection,
+                    timeout,
+                    hw_measurement_acc.clone(),
+                )
+                .await?
+            }
+            CkksResolvedRecommendRequest::StoredNearest {
+                vector_name,
+                query_point_id,
+                query_encrypted,
+                filter,
+                params,
+                limit,
+                offset,
+                with_payload,
+                with_vector,
+                score_threshold,
+                shard_selection,
+            } => {
+                ckks_vector_search_points_with_scoring(
+                    &collection,
+                    collection_name,
+                    &collection_crypto_id,
+                    &vector_name,
+                    CkksSidecarScoring::StoredNearest {
+                        query_point_id,
+                        query_encrypted,
+                    },
+                    filter,
+                    params,
+                    limit,
+                    offset,
+                    with_payload,
+                    with_vector,
+                    score_threshold,
+                    &plan,
+                    read_consistency,
+                    &shard_selection,
+                    timeout,
+                    hw_measurement_acc.clone(),
+                )
+                .await?
+            }
+        };
+        results.push(result);
     }
 
     Ok(Some(results))
+}
+
+fn recommend_request_single_positive_point_id(
+    request: &RecommendRequestInternal,
+) -> Option<PointIdType> {
+    if request.lookup_from.is_some()
+        || !request.negative.is_empty()
+        || request.strategy.unwrap_or_default() != RecommendStrategy::AverageVector
+        || request.positive.len() != 1
+    {
+        return None;
+    }
+
+    let RecommendExample::PointId(point_id) = request.positive[0] else {
+        return None;
+    };
+    Some(point_id)
 }
 
 fn recommend_request_as_ckks_search_request(
