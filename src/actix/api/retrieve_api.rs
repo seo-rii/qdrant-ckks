@@ -27,7 +27,7 @@ use crate::actix::auth::ActixAuth;
 use crate::actix::helpers::{
     get_request_hardware_counter, process_response, process_response_error,
 };
-use crate::common::query::do_get_points;
+use crate::common::query::{do_get_points, do_scroll_points};
 use crate::settings::ServiceConfig;
 
 #[derive(Deserialize, Validate)]
@@ -224,18 +224,17 @@ async fn scroll_points(
     );
     let timing = Instant::now();
 
-    let res = dispatcher
-        .toc(&auth, &pass)
-        .scroll(
-            &collection.collection_name,
-            scroll_request,
-            params.consistency,
-            params.timeout(),
-            shard_selection,
-            auth,
-            request_hw_counter.get_counter(),
-        )
-        .await;
+    let res = do_scroll_points(
+        dispatcher.toc(&auth, &pass),
+        &collection.collection_name,
+        scroll_request,
+        params.consistency,
+        params.timeout(),
+        shard_selection,
+        auth,
+        request_hw_counter.get_counter(),
+    )
+    .await;
 
     process_response(res, timing, request_hw_counter.to_rest_api())
 }

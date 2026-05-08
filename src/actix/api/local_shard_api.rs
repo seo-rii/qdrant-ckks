@@ -131,7 +131,8 @@ async fn scroll_points(
     let res_future = hash_ring_filter.map(|hash_ring_filter| {
         request.filter = merge_with_optional_filter(request.filter.take(), hash_ring_filter);
 
-        dispatcher.toc(&auth, &pass).scroll(
+        query::do_scroll_points(
+            dispatcher.toc(&auth, &pass),
             &path.collection_name,
             request,
             params.consistency,
