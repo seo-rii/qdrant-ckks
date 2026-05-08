@@ -1083,17 +1083,17 @@ pub async fn search_points_matrix(
 
     let shard_selector = convert_shard_selector_for_read(None, shard_key_selector)?;
 
-    let search_matrix_response = toc
-        .search_points_matrix(
-            &collection_name,
-            search_matrix_request,
-            read_consistency,
-            shard_selector,
-            auth,
-            timeout,
-            hw_measurement_acc,
-        )
-        .await?;
+    let search_matrix_response = do_search_points_matrix(
+        toc,
+        &collection_name,
+        search_matrix_request,
+        read_consistency,
+        shard_selector,
+        auth,
+        timeout,
+        hw_measurement_acc,
+    )
+    .await?;
 
     Ok(search_matrix_response)
 }
