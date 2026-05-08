@@ -81,6 +81,17 @@ enum CkksSidecarScoring<'a> {
     Context {
         pairs: Vec<(&'a [f32], &'a [f32])>,
     },
+    ContextResolved {
+        pairs: Vec<(CkksSidecarQuerySource<'a>, CkksSidecarQuerySource<'a>)>,
+    },
+}
+
+enum CkksSidecarQuerySource<'a> {
+    Dense(&'a [f32]),
+    Stored {
+        point_id: String,
+        encrypted: EncryptedCkksVector,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -549,6 +560,19 @@ async fn ckks_vector_search_points_with_scoring(
             }
             Order::LargeBetter
         }
+        CkksSidecarScoring::ContextResolved { pairs } => {
+            if pairs.is_empty() {
+                return Err(StorageError::bad_input(format!(
+                    "encrypted vector '{vector_name}' context query requires at least one context pair",
+                )));
+            }
+            if distance.distance_order() != Order::LargeBetter {
+                return Err(StorageError::bad_input(format!(
+                    "encrypted vector '{vector_name}' context query with sidecar scoring requires a large-better metric such as dot or cosine",
+                )));
+            }
+            Order::LargeBetter
+        }
     };
     let with_vector = with_vector.unwrap_or_default();
     if with_vector.is_enabled() {
@@ -919,6 +943,37 @@ async fn ckks_vector_search_points_with_scoring(
                     }
                     rank_scores.into_iter().map(|rank| rank as f32).collect()
                 }
+                CkksSidecarScoring::ContextResolved { pairs } => {
+                    let mut rank_scores = vec![0i32; encrypted_items.len()];
+                    for (positive, negative) in pairs {
+                        let positive_scores = ckks_score_query_source_batch(
+                            collection_name,
+                            vector_name,
+                            plan,
+                            positive,
+                            &encrypted_items,
+                        )?;
+                        let negative_scores = ckks_score_query_source_batch(
+                            collection_name,
+                            vector_name,
+                            plan,
+                            negative,
+                            &encrypted_items,
+                        )?;
+                        for ((rank, positive), negative) in rank_scores
+                            .iter_mut()
+                            .zip(positive_scores)
+                            .zip(negative_scores)
+                        {
+                            *rank += match positive.total_cmp(&negative) {
+                                std::cmp::Ordering::Greater => 1,
+                                std::cmp::Ordering::Less => -1,
+                                std::cmp::Ordering::Equal => 0,
+                            };
+                        }
+                    }
+                    rank_scores.into_iter().map(|rank| rank as f32).collect()
+                }
             };
             for (record, score) in encrypted_records.into_iter().zip(scores) {
                 if !ckks_score_passes_threshold(score_order, score, score_threshold) {
@@ -1182,6 +1237,39 @@ fn query_context_pairs_as_dense_slices<'a>(
             Ok((positive.as_slice(), negative.as_slice()))
         })
         .collect()
+}
+
+fn ckks_score_query_source_batch(
+    collection_name: &str,
+    vector_name: &str,
+    plan: &crate::common::crypto::VectorWritePlan,
+    source: &CkksSidecarQuerySource<'_>,
+    encrypted_items: &[(String, EncryptedCkksVector)],
+) -> Result<Vec<f32>, StorageError> {
+    let scores = match source {
+        CkksSidecarQuerySource::Dense(query_values) => plan.score_encrypted_query_batch(
+            collection_name,
+            vector_name,
+            encrypted_items,
+            query_values,
+        )?,
+        CkksSidecarQuerySource::Stored {
+            point_id,
+            encrypted,
+        } => plan.score_stored_query_batch(
+            collection_name,
+            vector_name,
+            point_id,
+            encrypted,
+            encrypted_items,
+        )?,
+    };
+
+    scores.ok_or_else(|| {
+        StorageError::service_error(format!(
+            "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
+        ))
+    })
 }
 
 fn ckks_search_params_supported(params: &SearchParams) -> bool {
@@ -3329,6 +3417,83 @@ async fn ckks_vector_sidecar_for_point_id(
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn ckks_vector_input_as_query_source<'a>(
+    collection: &collection::collection::Collection,
+    vector_name: &str,
+    role: &str,
+    input: &'a VectorInputInternal,
+    read_consistency: Option<ReadConsistency>,
+    shard_selection: &ShardSelectorInternal,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+) -> Result<CkksSidecarQuerySource<'a>, StorageError> {
+    match input {
+        VectorInputInternal::Vector(VectorInternal::Dense(values)) => {
+            Ok(CkksSidecarQuerySource::Dense(values))
+        }
+        VectorInputInternal::Vector(_) => Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' context query only supports raw dense or point-id {role} examples",
+        ))),
+        VectorInputInternal::Id(point_id) => {
+            let encrypted = ckks_vector_sidecar_for_point_id(
+                collection,
+                vector_name,
+                *point_id,
+                read_consistency,
+                shard_selection,
+                timeout,
+                hw_measurement_acc,
+            )
+            .await?;
+            Ok(CkksSidecarQuerySource::Stored {
+                point_id: point_id.to_string(),
+                encrypted,
+            })
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn ckks_context_query_as_scoring<'a>(
+    collection: &collection::collection::Collection,
+    vector_name: &str,
+    context: &'a segment::vector_storage::query::ContextQuery<VectorInputInternal>,
+    read_consistency: Option<ReadConsistency>,
+    shard_selection: &ShardSelectorInternal,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+) -> Result<CkksSidecarScoring<'a>, StorageError> {
+    let mut pairs = Vec::with_capacity(context.pairs.len());
+    for pair in &context.pairs {
+        let positive = ckks_vector_input_as_query_source(
+            collection,
+            vector_name,
+            "positive",
+            &pair.positive,
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        let negative = ckks_vector_input_as_query_source(
+            collection,
+            vector_name,
+            "negative",
+            &pair.negative,
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        pairs.push((positive, negative));
+    }
+
+    Ok(CkksSidecarScoring::ContextResolved { pairs })
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn do_query_batch_points(
     toc: &TableOfContent,
     collection_name: &str,
@@ -3354,12 +3519,24 @@ pub async fn do_query_batch_points(
             &collection_crypto_id,
             &config.params,
         )? {
-            enum CkksResolvedQueryRequest {
+            enum CkksResolvedQueryRequest<'a> {
                 Core(CoreSearchRequest, ShardSelectorInternal),
                 StoredNearest {
                     vector_name: String,
                     query_point_id: String,
                     query_encrypted: EncryptedCkksVector,
+                    filter: Option<Filter>,
+                    params: Option<SearchParams>,
+                    limit: usize,
+                    offset: usize,
+                    with_payload: WithPayloadInterface,
+                    with_vector: WithVector,
+                    score_threshold: Option<f32>,
+                    shard_selection: ShardSelectorInternal,
+                },
+                Scoring {
+                    vector_name: String,
+                    scoring: CkksSidecarScoring<'a>,
                     filter: Option<Filter>,
                     params: Option<SearchParams>,
                     limit: usize,
@@ -3424,6 +3601,30 @@ pub async fn do_query_batch_points(
                             vector_name: request.using.clone(),
                             query_point_id: point_id.to_string(),
                             query_encrypted,
+                            filter: request.filter.clone(),
+                            params: request.params.clone(),
+                            limit: request.limit,
+                            offset: request.offset,
+                            with_payload: request.with_payload.clone(),
+                            with_vector: request.with_vector.clone(),
+                            score_threshold: request.score_threshold,
+                            shard_selection: shard_selection.clone(),
+                        }
+                    }
+                    Some(Query::Vector(VectorQuery::Context(context))) => {
+                        let scoring = ckks_context_query_as_scoring(
+                            &collection,
+                            &request.using,
+                            context,
+                            read_consistency,
+                            shard_selection,
+                            timeout,
+                            hw_measurement_acc.clone(),
+                        )
+                        .await?;
+                        CkksResolvedQueryRequest::Scoring {
+                            vector_name: request.using.clone(),
+                            scoring,
                             filter: request.filter.clone(),
                             params: request.params.clone(),
                             limit: request.limit,
@@ -3504,6 +3705,39 @@ pub async fn do_query_batch_points(
                                     query_point_id,
                                     query_encrypted,
                                 },
+                                filter,
+                                params,
+                                limit,
+                                offset,
+                                Some(with_payload),
+                                Some(with_vector),
+                                score_threshold,
+                                &plan,
+                                read_consistency,
+                                &shard_selection,
+                                timeout,
+                                hw_measurement_acc.clone(),
+                            )
+                            .await?
+                        }
+                        CkksResolvedQueryRequest::Scoring {
+                            vector_name,
+                            scoring,
+                            filter,
+                            params,
+                            limit,
+                            offset,
+                            with_payload,
+                            with_vector,
+                            score_threshold,
+                            shard_selection,
+                        } => {
+                            ckks_vector_search_points_with_scoring(
+                                &collection,
+                                collection_name,
+                                &collection_crypto_id,
+                                &vector_name,
+                                scoring,
                                 filter,
                                 params,
                                 limit,

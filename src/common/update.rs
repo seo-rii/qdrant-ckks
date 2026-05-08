@@ -3389,7 +3389,7 @@ esac
             assert_eq!(context_groups.groups[1].id, GroupId::from("b"));
             assert_eq!(context_groups.groups[1].hits[0].score, -1.0);
 
-            let context_point_id_err = crate::common::query::do_query_points(
+            let context_point_id_query = crate::common::query::do_query_points(
                 &toc,
                 "vector_groups",
                 CollectionQueryRequest {
@@ -3397,10 +3397,10 @@ esac
                     query: Some(Query::Vector(VectorQuery::Context(
                         segment::vector_storage::query::ContextQuery::new(vec![
                             segment::vector_storage::query::ContextPair {
-                                positive: VectorInputInternal::Id(1.into()),
-                                negative: VectorInputInternal::Vector(VectorInternal::Dense(vec![
-                                    1.0, 1.0,
+                                positive: VectorInputInternal::Vector(VectorInternal::Dense(vec![
+                                    0.0, 0.0,
                                 ])),
+                                negative: VectorInputInternal::Id(2.into()),
                             },
                         ]),
                     ))),
@@ -3422,12 +3422,10 @@ esac
                 Some(&vector_settings),
             )
             .await
-            .unwrap_err();
-            assert!(matches!(
-                context_point_id_err,
-                StorageError::BadInput { description }
-                    if description.contains("context query cannot resolve point-id")
-            ));
+            .unwrap();
+            assert_eq!(context_point_id_query.len(), 1);
+            assert_eq!(context_point_id_query[0].id, 1.into());
+            assert_eq!(context_point_id_query[0].score, 1.0);
 
             let point_id_nearest_query = crate::common::query::do_query_points(
                 &toc,
