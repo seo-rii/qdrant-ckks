@@ -54,7 +54,8 @@ async fn do_get_point(
 
     let shard_selection = ShardSelectorInternal::All;
 
-    toc.retrieve(
+    do_get_points(
+        toc,
         collection_name,
         request,
         read_consistency,
