@@ -2486,6 +2486,12 @@ case "$request" in
   *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"encrypted_query":"ZmFrZS1ja2tzLXF1ZXJ5OjE"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"},{"point_id":"2","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"}]'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[1.0,7.0]}\n'
     ;;
+  *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"encrypted_query":"ZmFrZS1ja2tzLXF1ZXJ5OjI"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"}]'*)
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[9.0]}\n'
+    ;;
+  *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"encrypted_query":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"}]'*)
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[8.0]}\n'
+    ;;
   *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"},{"point_id":"2","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"}]'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[9.0,4.0]}\n'
     ;;
@@ -4619,6 +4625,48 @@ esac
             assert_eq!(hnsw_search_result[0].id, 2.into());
             assert_eq!(hnsw_search_result[0].score, 7.0);
 
+            let hnsw_graph_search_result = crate::common::query::do_core_search_points(
+                &toc,
+                "vector_docs",
+                SearchRequestInternal {
+                    vector: vec![0.0, 0.0].into(),
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    filter: None,
+                    params: Some(SearchParams {
+                        hnsw_ef: Some(1),
+                        ..SearchParams::default()
+                    }),
+                    limit: 1,
+                    offset: None,
+                    score_threshold: None,
+                }
+                .into(),
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(hnsw_graph_search_result.len(), 1);
+            assert_eq!(hnsw_graph_search_result[0].id, 1.into());
+            assert_eq!(hnsw_graph_search_result[0].score, 9.0);
+            let vector_cache_dir = vector_collection.path().join("ckks_sidecar_hnsw_graphs");
+            assert!(
+                fs::read_dir(&vector_cache_dir)
+                    .unwrap()
+                    .any(|entry| entry
+                        .unwrap()
+                        .path()
+                        .extension()
+                        .and_then(|extension| extension.to_str())
+                        .is_some_and(|extension| extension == "json")),
+                "CKKS sidecar HNSW graph search did not persist a graph cache file",
+            );
+
             let search_with_payload = crate::common::query::do_core_search_points(
                 &toc,
                 "vector_docs",
@@ -6663,7 +6711,6 @@ esac
                     .exists()
             );
 
-            let vector_cache_dir = vector_collection.path().join("ckks_sidecar_hnsw_graphs");
             fs::create_dir_all(&vector_cache_dir).unwrap();
             fs::write(
                 vector_cache_dir.join("should-not-be-snapshotted.json"),
