@@ -3305,6 +3305,47 @@ esac
                 1.0 + common::math::scaled_fast_sigmoid(9.0)
             );
 
+            let discover_point_id_context_query = crate::common::query::do_query_points(
+                &toc,
+                "vector_groups",
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Discover(
+                        segment::vector_storage::query::DiscoverQuery::new(
+                            VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                            vec![segment::vector_storage::query::ContextPair {
+                                positive: VectorInputInternal::Vector(VectorInternal::Dense(vec![
+                                    0.0, 0.0,
+                                ])),
+                                negative: VectorInputInternal::Id(2.into()),
+                            }],
+                        ),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(discover_point_id_context_query[0].id, 1.into());
+            assert_eq!(
+                discover_point_id_context_query[0].score,
+                1.0 + common::math::scaled_fast_sigmoid(9.0)
+            );
+
             let context_query = crate::common::query::do_query_points(
                 &toc,
                 "vector_groups",
@@ -3430,6 +3471,61 @@ esac
             assert_eq!(context_point_id_groups.groups[0].hits[0].score, 1.0);
             assert_eq!(context_point_id_groups.groups[1].id, GroupId::from("b"));
             assert_eq!(context_point_id_groups.groups[1].hits[0].score, -1.0);
+
+            let discover_point_id_context_groups = crate::common::query::do_query_point_groups(
+                &toc,
+                "vector_groups",
+                collection::operations::universal_query::collection_query::CollectionQueryGroupsRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Discover(
+                        segment::vector_storage::query::DiscoverQuery::new(
+                            VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                            vec![segment::vector_storage::query::ContextPair {
+                                positive: VectorInputInternal::Vector(VectorInternal::Dense(vec![
+                                    0.0, 0.0,
+                                ])),
+                                negative: VectorInputInternal::Id(2.into()),
+                            }],
+                        ),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    params: None,
+                    score_threshold: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                    group_by: "group".parse().unwrap(),
+                    group_size: 1,
+                    limit: 2,
+                    with_lookup: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(discover_point_id_context_groups.groups.len(), 2);
+            assert_eq!(
+                discover_point_id_context_groups.groups[0].id,
+                GroupId::from("a")
+            );
+            assert_eq!(
+                discover_point_id_context_groups.groups[0].hits[0].score,
+                1.0 + common::math::scaled_fast_sigmoid(9.0)
+            );
+            assert_eq!(
+                discover_point_id_context_groups.groups[1].id,
+                GroupId::from("b")
+            );
+            assert_eq!(
+                discover_point_id_context_groups.groups[1].hits[0].score,
+                -1.0 + common::math::scaled_fast_sigmoid(4.0)
+            );
 
             let context_point_id_query = crate::common::query::do_query_points(
                 &toc,

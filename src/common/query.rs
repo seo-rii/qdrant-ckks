@@ -3537,6 +3537,57 @@ async fn ckks_context_query_as_scoring<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn ckks_discover_query_as_scoring<'a>(
+    collection: &collection::collection::Collection,
+    vector_name: &str,
+    discover: &'a segment::vector_storage::query::DiscoverQuery<VectorInputInternal>,
+    read_consistency: Option<ReadConsistency>,
+    shard_selection: &ShardSelectorInternal,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+) -> Result<CkksSidecarScoring<'a>, StorageError> {
+    let target = ckks_vector_input_as_query_source(
+        collection,
+        vector_name,
+        "target",
+        &discover.target,
+        read_consistency,
+        shard_selection,
+        timeout,
+        hw_measurement_acc.clone(),
+    )
+    .await?;
+    let mut pairs = Vec::with_capacity(discover.pairs.len());
+    for pair in &discover.pairs {
+        let positive = ckks_vector_input_as_query_source(
+            collection,
+            vector_name,
+            "positive context",
+            &pair.positive,
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        let negative = ckks_vector_input_as_query_source(
+            collection,
+            vector_name,
+            "negative context",
+            &pair.negative,
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        pairs.push((positive, negative));
+    }
+
+    Ok(CkksSidecarScoring::DiscoverResolved { target, pairs })
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn do_query_batch_points(
     toc: &TableOfContent,
     collection_name: &str,
@@ -3659,6 +3710,30 @@ pub async fn do_query_batch_points(
                             &collection,
                             &request.using,
                             context,
+                            read_consistency,
+                            shard_selection,
+                            timeout,
+                            hw_measurement_acc.clone(),
+                        )
+                        .await?;
+                        CkksResolvedQueryRequest::Scoring {
+                            vector_name: request.using.clone(),
+                            scoring,
+                            filter: request.filter.clone(),
+                            params: request.params.clone(),
+                            limit: request.limit,
+                            offset: request.offset,
+                            with_payload: request.with_payload.clone(),
+                            with_vector: request.with_vector.clone(),
+                            score_threshold: request.score_threshold,
+                            shard_selection: shard_selection.clone(),
+                        }
+                    }
+                    Some(Query::Vector(VectorQuery::Discover(discover))) => {
+                        let scoring = ckks_discover_query_as_scoring(
+                            &collection,
+                            &request.using,
+                            discover,
                             read_consistency,
                             shard_selection,
                             timeout,
@@ -3957,6 +4032,40 @@ async fn try_ckks_vector_query_groups(
     }
 
     ensure_group_path_does_not_touch_encrypted_vector_sidecar(&request.group_by)?;
+
+    if let Some(Query::Vector(VectorQuery::Discover(discover))) = &request.query {
+        let scoring = ckks_discover_query_as_scoring(
+            &collection,
+            &request.using,
+            discover,
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        return ckks_vector_group_points_with_scoring(
+            &collection,
+            collection_name,
+            &collection_crypto_id,
+            &request.using,
+            scoring,
+            request.filter.clone(),
+            request.params.clone(),
+            request.score_threshold,
+            &plan,
+            &request.group_by,
+            request.limit,
+            request.group_size,
+            request.with_payload.clone(),
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc,
+        )
+        .await
+        .map(Some);
+    }
 
     if let Some(Query::Vector(VectorQuery::Context(context))) = &request.query {
         let scoring = ckks_context_query_as_scoring(
