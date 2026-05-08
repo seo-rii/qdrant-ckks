@@ -2495,6 +2495,9 @@ case "$request" in
   *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"encrypted_query":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"},{"point_id":"2","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"}]'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[8.0,10.0]}\n'
     ;;
+  *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"encrypted_query":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"},{"point_id":"2","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"}]'*)
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[10.0,8.0]}\n'
+    ;;
   *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"},{"point_id":"2","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"}]'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[9.0,4.0]}\n'
     ;;
@@ -4371,6 +4374,7 @@ esac
                 auth.clone(),
                 None,
                 HwMeasurementAcc::disposable(),
+                None,
             )
             .await
             .unwrap_err();
@@ -4381,7 +4385,32 @@ esac
                         && description.contains("CKKS-native vector search matrix is not implemented")
             ));
 
-            let err = crate::tonic::api::query_common::search_points_matrix(
+            let matrix = crate::common::query::do_search_points_matrix(
+                &toc,
+                "vector_docs",
+                collection::collection::distance_matrix::CollectionSearchMatrixRequest {
+                    filter: None,
+                    sample_size: 2,
+                    limit_per_sample: 1,
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(matrix.sample_ids, vec![1.into(), 2.into()]);
+            assert_eq!(matrix.nearests.len(), 2);
+            assert_eq!(matrix.nearests[0][0].id, 2.into());
+            assert_eq!(matrix.nearests[0][0].score, 8.0);
+            assert_eq!(matrix.nearests[1][0].id, 1.into());
+            assert_eq!(matrix.nearests[1][0].score, 8.0);
+
+            let grpc_matrix = crate::tonic::api::query_common::search_points_matrix(
                 UncheckedTocProvider::new_unchecked(&toc),
                 api::grpc::qdrant::SearchMatrixPoints {
                     collection_name: "vector_docs".to_string(),
@@ -4395,13 +4424,12 @@ esac
                 },
                 auth.clone(),
                 HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
             )
             .await
-            .unwrap_err();
-            assert!(
-                err.message()
-                    .contains("cannot search matrix using encrypted vector")
-            );
+            .unwrap();
+            assert_eq!(grpc_matrix.sample_ids, vec![1.into(), 2.into()]);
+            assert_eq!(grpc_matrix.nearests.len(), 2);
 
             let err = crate::common::query::do_core_search_points(
                 &toc,

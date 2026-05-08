@@ -1042,6 +1042,7 @@ pub async fn search_points_matrix(
     search_matrix_points: SearchMatrixPoints,
     auth: Auth,
     hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
 ) -> Result<CollectionSearchMatrixResponse, Status> {
     let SearchMatrixPoints {
         collection_name,
@@ -1092,6 +1093,7 @@ pub async fn search_points_matrix(
         auth,
         timeout,
         hw_measurement_acc,
+        runtime_settings,
     )
     .await?;
 

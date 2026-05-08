@@ -3649,7 +3649,38 @@ pub async fn do_search_points_matrix(
     auth: Auth,
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
 ) -> Result<CollectionSearchMatrixResponse, StorageError> {
+    if let Some(settings) = runtime_settings {
+        let collection_pass = auth.check_collection_access(
+            collection_name,
+            AccessRequirements::new(),
+            "ckks_vector_search_matrix",
+        )?;
+        let collection = toc.get_collection(&collection_pass).await?;
+        let config = collection.config_snapshot().await;
+        let collection_crypto_id = config.stable_crypto_id(collection_name)?;
+        if let Some(plan) = vector_write_plan_for_collection_with_crypto_id(
+            settings,
+            collection_name,
+            &collection_crypto_id,
+            &config.params,
+        )? && plan.contains_vector_name(&request.using)
+        {
+            return ckks_vector_search_points_matrix(
+                &collection,
+                collection_name,
+                &request,
+                &plan,
+                read_consistency,
+                &shard_selection,
+                timeout,
+                hw_measurement_acc,
+            )
+            .await;
+        }
+    }
+
     ensure_encrypted_vector_name_is_unsupported(
         toc,
         collection_name,
@@ -3670,6 +3701,126 @@ pub async fn do_search_points_matrix(
         hw_measurement_acc,
     )
     .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn ckks_vector_search_points_matrix(
+    collection: &collection::collection::Collection,
+    collection_name: &str,
+    request: &CollectionSearchMatrixRequest,
+    plan: &crate::common::crypto::VectorWritePlan,
+    read_consistency: Option<ReadConsistency>,
+    shard_selection: &ShardSelectorInternal,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+) -> Result<CollectionSearchMatrixResponse, StorageError> {
+    if request.sample_size == 0 || request.limit_per_sample == 0 {
+        return Ok(CollectionSearchMatrixResponse::default());
+    }
+
+    let vector_name = request.using.as_str();
+    let distance = plan.distance_for_vector(vector_name).ok_or_else(|| {
+        StorageError::service_error(format!(
+            "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
+        ))
+    })?;
+    let score_order = distance.distance_order();
+    let mut next_offset = None;
+    let mut sampled = Vec::with_capacity(request.sample_size);
+    const BATCH_SIZE: usize = 512;
+
+    while sampled.len() < request.sample_size {
+        let scroll_result = collection
+            .scroll_by(
+                ScrollRequestInternal {
+                    offset: next_offset,
+                    limit: Some(BATCH_SIZE),
+                    filter: request.filter.clone(),
+                    with_payload: Some(WithPayloadInterface::Bool(true)),
+                    with_vector: WithVector::Bool(false),
+                    order_by: None,
+                },
+                read_consistency,
+                shard_selection,
+                timeout,
+                hw_measurement_acc.clone(),
+            )
+            .await?;
+
+        for record in scroll_result.points {
+            let Some(payload) = record.payload.as_ref() else {
+                continue;
+            };
+            let Some(encrypted) = encrypted_vector_from_payload(payload, vector_name)? else {
+                continue;
+            };
+            sampled.push(CkksSidecarSearchRecord {
+                id: record.id,
+                shard_key: record.shard_key,
+                point_id: record.id.to_string(),
+                encrypted,
+            });
+            if sampled.len() >= request.sample_size {
+                break;
+            }
+        }
+
+        let Some(offset) = scroll_result.next_page_offset else {
+            break;
+        };
+        next_offset = Some(offset);
+    }
+
+    if sampled.len() < 2 {
+        return Ok(CollectionSearchMatrixResponse::default());
+    }
+
+    sampled.sort_unstable_by_key(|record| record.id);
+    let sample_ids = sampled.iter().map(|record| record.id).collect::<Vec<_>>();
+    let encrypted_items = sampled
+        .iter()
+        .map(|record| (record.point_id.clone(), record.encrypted.clone()))
+        .collect::<Vec<_>>();
+    let mut nearests = Vec::with_capacity(sampled.len());
+
+    for query in &sampled {
+        let scores = plan
+            .score_stored_query_batch(
+                collection_name,
+                vector_name,
+                &query.point_id,
+                &query.encrypted,
+                &encrypted_items,
+            )?
+            .ok_or_else(|| {
+                StorageError::service_error(format!(
+                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
+                ))
+            })?;
+        let mut scored = sampled
+            .iter()
+            .zip(scores)
+            .filter_map(|(record, score)| {
+                (record.id != query.id).then(|| ScoredPoint {
+                    id: record.id,
+                    version: 0,
+                    score,
+                    payload: None,
+                    vector: None,
+                    shard_key: record.shard_key.clone(),
+                    order_value: None,
+                })
+            })
+            .collect::<Vec<_>>();
+        sort_ckks_scored_points(score_order, &mut scored);
+        scored.truncate(request.limit_per_sample);
+        nearests.push(scored);
+    }
+
+    Ok(CollectionSearchMatrixResponse {
+        sample_ids,
+        nearests,
+    })
 }
 
 #[cfg(test)]

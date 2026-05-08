@@ -719,6 +719,7 @@ impl Points for PointsService {
             request.into_inner(),
             auth,
             hw_metrics.get_counter(),
+            Some(&self.settings),
         )
         .await?;
 
@@ -745,6 +746,7 @@ impl Points for PointsService {
             request.into_inner(),
             auth,
             hw_metrics.get_counter(),
+            Some(&self.settings),
         )
         .await?;
 

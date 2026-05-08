@@ -227,6 +227,7 @@ async fn search_points_matrix_pairs(
     request: Json<SearchMatrixRequest>,
     params: Query<ReadParams>,
     service_config: web::Data<ServiceConfig>,
+    settings: web::Data<Settings>,
     ActixAuth(auth): ActixAuth,
 ) -> impl Responder {
     let SearchMatrixRequest {
@@ -269,6 +270,7 @@ async fn search_points_matrix_pairs(
         auth,
         params.timeout(),
         request_hw_counter.get_counter(),
+        Some(settings.get_ref()),
     )
     .await
     .map(SearchMatrixPairsResponse::from);
@@ -283,6 +285,7 @@ async fn search_points_matrix_offsets(
     request: Json<SearchMatrixRequest>,
     params: Query<ReadParams>,
     service_config: web::Data<ServiceConfig>,
+    settings: web::Data<Settings>,
     ActixAuth(auth): ActixAuth,
 ) -> impl Responder {
     let SearchMatrixRequest {
@@ -325,6 +328,7 @@ async fn search_points_matrix_offsets(
         auth,
         params.timeout(),
         request_hw_counter.get_counter(),
+        Some(settings.get_ref()),
     )
     .await
     .map(SearchMatrixOffsetsResponse::from);
