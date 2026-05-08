@@ -4189,6 +4189,42 @@ esac
             assert!(!serialized_vector_payload.contains("0.7"));
             assert!(!serialized_vector_payload.contains("-0.25"));
 
+            let plaintext_vector_patterns = [
+                vec![0.7_f32, -0.25]
+                    .into_iter()
+                    .flat_map(f32::to_le_bytes)
+                    .collect::<Vec<_>>(),
+                vec![0.1_f32, 0.2]
+                    .into_iter()
+                    .flat_map(f32::to_le_bytes)
+                    .collect::<Vec<_>>(),
+                vec![0.7_f64, -0.25]
+                    .into_iter()
+                    .flat_map(f64::to_le_bytes)
+                    .collect::<Vec<_>>(),
+                vec![0.1_f64, 0.2]
+                    .into_iter()
+                    .flat_map(f64::to_le_bytes)
+                    .collect::<Vec<_>>(),
+            ];
+            let mut files = vec![storage_dir.path().to_path_buf()];
+            while let Some(path) = files.pop() {
+                if path.is_dir() {
+                    for entry in fs::read_dir(&path).unwrap() {
+                        files.push(entry.unwrap().path());
+                    }
+                    continue;
+                }
+                let bytes = fs::read(&path).unwrap_or_default();
+                for pattern in &plaintext_vector_patterns {
+                    assert!(
+                        !bytes.windows(pattern.len()).any(|window| window == pattern),
+                        "plaintext vector byte pattern leaked into {}",
+                        path.display(),
+                    );
+                }
+            }
+
             let err = crate::common::query::do_get_points(
                 &toc,
                 "vector_docs",
