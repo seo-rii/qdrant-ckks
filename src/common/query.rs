@@ -459,7 +459,7 @@ async fn ckks_vector_search_points(
                 .collect::<Vec<_>>();
             let scores = match &scoring {
                 CkksSidecarScoring::Nearest { query_values } => plan
-                    .score_plaintext_query_batch(
+                    .score_encrypted_query_batch(
                         collection_name,
                         vector_name,
                         &encrypted_items,
@@ -477,7 +477,7 @@ async fn ckks_vector_search_points(
                     let mut positive_scores = vec![f32::NEG_INFINITY; encrypted_items.len()];
                     for query_values in positives {
                         let batch_scores = plan
-                            .score_plaintext_query_batch(
+                            .score_encrypted_query_batch(
                                 collection_name,
                                 vector_name,
                                 &encrypted_items,
@@ -496,7 +496,7 @@ async fn ckks_vector_search_points(
                     let mut negative_scores = vec![f32::NEG_INFINITY; encrypted_items.len()];
                     for query_values in negatives {
                         let batch_scores = plan
-                            .score_plaintext_query_batch(
+                            .score_encrypted_query_batch(
                                 collection_name,
                                 vector_name,
                                 &encrypted_items,
@@ -531,7 +531,7 @@ async fn ckks_vector_search_points(
                     let mut total_scores = vec![0.0; encrypted_items.len()];
                     for query_values in positives {
                         let batch_scores = plan
-                            .score_plaintext_query_batch(
+                            .score_encrypted_query_batch(
                                 collection_name,
                                 vector_name,
                                 &encrypted_items,
@@ -548,7 +548,7 @@ async fn ckks_vector_search_points(
                     }
                     for query_values in negatives {
                         let batch_scores = plan
-                            .score_plaintext_query_batch(
+                            .score_encrypted_query_batch(
                                 collection_name,
                                 vector_name,
                                 &encrypted_items,
@@ -567,7 +567,7 @@ async fn ckks_vector_search_points(
                 }
                 CkksSidecarScoring::Discover { target, pairs } => {
                     let target_scores = plan
-                        .score_plaintext_query_batch(
+                        .score_encrypted_query_batch(
                             collection_name,
                             vector_name,
                             &encrypted_items,
@@ -581,7 +581,7 @@ async fn ckks_vector_search_points(
                     let mut rank_scores = vec![0i32; encrypted_items.len()];
                     for (positive, negative) in pairs {
                         let positive_scores = plan
-                            .score_plaintext_query_batch(
+                            .score_encrypted_query_batch(
                                 collection_name,
                                 vector_name,
                                 &encrypted_items,
@@ -593,7 +593,7 @@ async fn ckks_vector_search_points(
                                 ))
                             })?;
                         let negative_scores = plan
-                            .score_plaintext_query_batch(
+                            .score_encrypted_query_batch(
                                 collection_name,
                                 vector_name,
                                 &encrypted_items,
@@ -628,7 +628,7 @@ async fn ckks_vector_search_points(
                     let mut rank_scores = vec![0i32; encrypted_items.len()];
                     for (positive, negative) in pairs {
                         let positive_scores = plan
-                            .score_plaintext_query_batch(
+                            .score_encrypted_query_batch(
                                 collection_name,
                                 vector_name,
                                 &encrypted_items,
@@ -640,7 +640,7 @@ async fn ckks_vector_search_points(
                                 ))
                             })?;
                         let negative_scores = plan
-                            .score_plaintext_query_batch(
+                            .score_encrypted_query_batch(
                                 collection_name,
                                 vector_name,
                                 &encrypted_items,

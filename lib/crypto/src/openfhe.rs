@@ -14,8 +14,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::vector::{
-    CKKS_SCHEME, CkksBatchEncryptionInput, CkksEncryptionInput, CkksError, CkksParameters,
-    CkksPlaintextQueryScoreBatchInput, CkksPlaintextQueryScoreInput, CkksVectorBackend,
+    CKKS_SCHEME, CkksBatchEncryptionInput, CkksEncryptedQueryScoreBatchInput,
+    CkksEncryptedQueryScoreInput, CkksEncryptionInput, CkksError, CkksParameters,
+    CkksPlaintextQueryScoreBatchInput, CkksPlaintextQueryScoreInput, CkksQueryEncryptionInput,
+    CkksVectorBackend,
 };
 
 const DEFAULT_BRIDGE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -499,6 +501,32 @@ impl CkksVectorBackend for CommandOpenFheBackend {
         })
     }
 
+    fn encrypt_query(&self, input: CkksQueryEncryptionInput<'_>) -> Result<Vec<u8>, CkksError> {
+        let context_id = input.public_material.digest_for(input.parameters);
+        let request = CommandOpenFheQueryRequest {
+            version: 1,
+            operation: "encrypt_query",
+            scheme: CKKS_SCHEME,
+            collection: input.collection,
+            vector_name: input.vector_name,
+            context_id,
+            parameters: input.parameters,
+            crypto_context: BASE64URL_NOPAD.encode(input.public_material.crypto_context()),
+            public_key: BASE64URL_NOPAD.encode(input.public_material.public_key()),
+            values: input.values,
+        };
+        let request_bytes = serde_json::to_vec(&request).map_err(|err| {
+            CkksError::Backend(format!(
+                "failed to serialize OpenFHE bridge query encryption request: {err}"
+            ))
+        })?;
+
+        let expected_security_profile = expected_security_profile(input.parameters)?;
+        self.send_bridge_request(&request_bytes, |response_bytes| {
+            decode_single_bridge_response(response_bytes, expected_security_profile)
+        })
+    }
+
     fn score_plaintext_query(
         &self,
         input: CkksPlaintextQueryScoreInput<'_>,
@@ -580,6 +608,100 @@ impl CkksVectorBackend for CommandOpenFheBackend {
         let request_bytes = serde_json::to_vec(&request).map_err(|err| {
             CkksError::Backend(format!(
                 "failed to serialize OpenFHE bridge score batch request: {err}"
+            ))
+        })?;
+
+        let expected_security_profile = expected_security_profile(input.parameters)?;
+        self.send_bridge_request(&request_bytes, |response_bytes| {
+            decode_score_batch_bridge_response(
+                response_bytes,
+                input.items.len(),
+                expected_security_profile,
+            )
+        })
+    }
+
+    fn score_encrypted_query(
+        &self,
+        input: CkksEncryptedQueryScoreInput<'_>,
+    ) -> Result<f64, CkksError> {
+        let context_id = input.public_material.digest_for(input.parameters);
+        let request = CommandOpenFheEncryptedScoreRequest {
+            version: 1,
+            operation: "score_encrypted_query",
+            scheme: CKKS_SCHEME,
+            collection: input.collection,
+            point_id: input.point_id,
+            vector_name: input.vector_name,
+            distance: input.distance,
+            context_id,
+            parameters: input.parameters,
+            crypto_context: BASE64URL_NOPAD.encode(input.public_material.crypto_context()),
+            public_key: BASE64URL_NOPAD.encode(input.public_material.public_key()),
+            encrypted_query: BASE64URL_NOPAD.encode(input.encrypted_query),
+            ciphertext: BASE64URL_NOPAD.encode(input.ciphertext),
+        };
+        let request_bytes = serde_json::to_vec(&request).map_err(|err| {
+            CkksError::Backend(format!(
+                "failed to serialize OpenFHE bridge encrypted-query score request: {err}"
+            ))
+        })?;
+
+        let expected_security_profile = expected_security_profile(input.parameters)?;
+        self.send_bridge_request(&request_bytes, |response_bytes| {
+            decode_score_bridge_response(response_bytes, expected_security_profile)
+        })
+    }
+
+    fn score_encrypted_query_batch(
+        &self,
+        input: CkksEncryptedQueryScoreBatchInput<'_>,
+    ) -> Result<Vec<f64>, CkksError> {
+        if input.items.is_empty() {
+            return Ok(Vec::new());
+        }
+        if input.items.len() == 1 {
+            let item = input.items[0];
+            return self
+                .score_encrypted_query(CkksEncryptedQueryScoreInput {
+                    parameters: input.parameters,
+                    public_material: input.public_material,
+                    collection: input.collection,
+                    point_id: item.point_id,
+                    vector_name: input.vector_name,
+                    distance: input.distance,
+                    encrypted_query: input.encrypted_query,
+                    ciphertext: item.ciphertext,
+                })
+                .map(|score| vec![score]);
+        }
+
+        let items = input
+            .items
+            .iter()
+            .map(|item| CommandOpenFheScoreBatchItem {
+                point_id: item.point_id,
+                ciphertext: BASE64URL_NOPAD.encode(item.ciphertext),
+            })
+            .collect::<Vec<_>>();
+        let context_id = input.public_material.digest_for(input.parameters);
+        let request = CommandOpenFheEncryptedScoreBatchRequest {
+            version: 1,
+            operation: "score_encrypted_query_batch",
+            scheme: CKKS_SCHEME,
+            collection: input.collection,
+            vector_name: input.vector_name,
+            distance: input.distance,
+            context_id,
+            parameters: input.parameters,
+            crypto_context: BASE64URL_NOPAD.encode(input.public_material.crypto_context()),
+            public_key: BASE64URL_NOPAD.encode(input.public_material.public_key()),
+            encrypted_query: BASE64URL_NOPAD.encode(input.encrypted_query),
+            items,
+        };
+        let request_bytes = serde_json::to_vec(&request).map_err(|err| {
+            CkksError::Backend(format!(
+                "failed to serialize OpenFHE bridge encrypted-query score batch request: {err}"
             ))
         })?;
 
@@ -1017,6 +1139,21 @@ struct CommandOpenFheBatchItem<'a> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
+struct CommandOpenFheQueryRequest<'a> {
+    version: u8,
+    operation: &'static str,
+    scheme: &'static str,
+    collection: &'a str,
+    vector_name: &'a str,
+    context_id: String,
+    parameters: &'a CkksParameters,
+    crypto_context: String,
+    public_key: String,
+    values: &'a [f64],
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
 struct CommandOpenFheScoreRequest<'a> {
     version: u8,
     operation: &'static str,
@@ -1055,6 +1192,41 @@ struct CommandOpenFheScoreBatchRequest<'a> {
 struct CommandOpenFheScoreBatchItem<'a> {
     point_id: &'a str,
     ciphertext: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+struct CommandOpenFheEncryptedScoreRequest<'a> {
+    version: u8,
+    operation: &'static str,
+    scheme: &'static str,
+    collection: &'a str,
+    point_id: &'a str,
+    vector_name: &'a str,
+    distance: &'a str,
+    context_id: String,
+    parameters: &'a CkksParameters,
+    crypto_context: String,
+    public_key: String,
+    encrypted_query: String,
+    ciphertext: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+struct CommandOpenFheEncryptedScoreBatchRequest<'a> {
+    version: u8,
+    operation: &'static str,
+    scheme: &'static str,
+    collection: &'a str,
+    vector_name: &'a str,
+    distance: &'a str,
+    context_id: String,
+    parameters: &'a CkksParameters,
+    crypto_context: String,
+    public_key: String,
+    encrypted_query: String,
+    items: Vec<CommandOpenFheScoreBatchItem<'a>>,
 }
 
 #[derive(Deserialize)]

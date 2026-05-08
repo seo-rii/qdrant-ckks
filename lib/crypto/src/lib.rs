@@ -38,10 +38,12 @@ pub use payload::{
 };
 pub use vector::{
     CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_SCHEME, CkksBatchEncryptionInput,
-    CkksEncryptionInput, CkksError, CkksParameters, CkksPlaintextQueryScoreBatchInput,
-    CkksPlaintextQueryScoreInput, CkksPublicMaterial, CkksVectorBackend, CkksVectorBatchItem,
-    CkksVectorEncryptor, CkksVectorSidecarEnvelopeKey, CkksVectorVerifiedSidecarKey,
-    ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD, EncryptedCkksVector,
-    VerifiedCkksVector, ckks_vector_sidecar_envelope_key, ckks_vector_verified_sidecar_key,
+    CkksEncryptedQueryScoreBatchInput, CkksEncryptedQueryScoreBatchItem,
+    CkksEncryptedQueryScoreInput, CkksEncryptionInput, CkksError, CkksParameters,
+    CkksPlaintextQueryScoreBatchInput, CkksPlaintextQueryScoreInput, CkksPublicMaterial,
+    CkksQueryEncryptionInput, CkksVectorBackend, CkksVectorBatchItem, CkksVectorEncryptor,
+    CkksVectorSidecarEnvelopeKey, CkksVectorVerifiedSidecarKey, ENCRYPTED_CKKS_VECTOR_MARKER,
+    ENCRYPTED_VECTOR_SIDECAR_FIELD, EncryptedCkksVector, VerifiedCkksVector,
+    ckks_vector_sidecar_envelope_key, ckks_vector_verified_sidecar_key,
     encrypted_ckks_vector_payload_value, is_encrypted_ckks_vector_payload_value,
 };

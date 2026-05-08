@@ -2475,19 +2475,25 @@ mod tests {
 set -euo pipefail
 IFS= read -r request
 case "$request" in
-  *'"operation":"score_plaintext_query_batch"'*'"distance":"dot"'*'"query_values":[1.0,1.0]'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"},{"point_id":"2","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"}]'*)
+  *'"operation":"encrypt_query"'*'"values":[1.0,1.0]'*)
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"ZmFrZS1ja2tzLXF1ZXJ5OjE"}\n'
+    ;;
+  *'"operation":"encrypt_query"'*)
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"ZmFrZS1ja2tzLXF1ZXJ5OjI"}\n'
+    ;;
+  *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"encrypted_query":"ZmFrZS1ja2tzLXF1ZXJ5OjE"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"},{"point_id":"2","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"}]'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[1.0,7.0]}\n'
     ;;
-  *'"operation":"score_plaintext_query_batch"'*'"distance":"dot"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"},{"point_id":"2","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"}]'*)
+  *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"},{"point_id":"2","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"}]'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[9.0,4.0]}\n'
     ;;
-  *'"operation":"score_plaintext_query"'*'"distance":"dot"'*'"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"'*)
+  *'"operation":"score_encrypted_query"'*'"distance":"dot"'*'"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","score":9.0}\n'
     ;;
-  *'"operation":"score_plaintext_query"'*'"distance":"dot"'*'"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"'*)
+  *'"operation":"score_encrypted_query"'*'"distance":"dot"'*'"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","score":4.0}\n'
     ;;
-  *'"operation":"score_plaintext_query"'*)
+  *'"operation":"score_encrypted_query"'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","score":1.0}\n'
     ;;
   *'"scheme":"openfhe-ckks"'*'"point_id":"1"'*)

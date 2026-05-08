@@ -708,7 +708,7 @@ impl VectorWritePlan {
         .map(Some)
     }
 
-    pub fn score_plaintext_query_batch(
+    pub fn score_encrypted_query_batch(
         &self,
         collection_name: &str,
         vector_name: &str,
@@ -732,7 +732,7 @@ impl VectorWritePlan {
             .collect::<Vec<_>>();
         let scores = rule
             .encryptor
-            .score_plaintext_query_batch(
+            .score_encrypted_query_batch(
                 collection_name,
                 &rule.public_material,
                 &encrypted_items,
@@ -741,7 +741,7 @@ impl VectorWritePlan {
             )
             .map_err(|err| {
                 StorageError::service_error(format!(
-                    "CKKS vector plaintext-query batch scoring failed for vector '{vector_name}' in collection {collection_name}: {err}",
+                    "CKKS vector encrypted-query batch scoring failed for vector '{vector_name}' in collection {collection_name}: {err}",
                 ))
             })?;
         let scores = scores
@@ -750,7 +750,7 @@ impl VectorWritePlan {
                 let score = score as f32;
                 if !score.is_finite() {
                     return Err(StorageError::service_error(format!(
-                        "CKKS vector plaintext-query batch scoring returned non-finite score for vector '{vector_name}' in collection {collection_name}",
+                        "CKKS vector encrypted-query batch scoring returned non-finite score for vector '{vector_name}' in collection {collection_name}",
                     )));
                 }
                 Ok(score)

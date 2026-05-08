@@ -10,19 +10,21 @@ selected dense vectors are encrypted through the configured OpenFHE bridge and
 stored as reserved payload sidecar envelopes, while the plaintext vector is
 removed from the dense vector write. REST/gRPC nearest-neighbor `search` and
 root direct `query` over an encrypted vector name use a brute-force sidecar scan
-and ask the OpenFHE bridge to score each stored ciphertext against the plaintext
-query vector. The same sidecar scorer also handles raw-dense recommend requests
+that first asks the OpenFHE bridge to encrypt the query vector, then scores each
+stored ciphertext against that encrypted query ciphertext. The same sidecar
+scorer also handles raw-dense recommend requests
 (`average_vector`, `best_score`, and `sum_scores`), raw-dense discover
 requests, and raw-dense universal context queries.
-This branch still does not add encrypted query vectors, client-held CKKS
-search, score decryption, or an HNSW-compatible ciphertext search executor.
+This branch still does not add client-supplied encrypted query vectors,
+client-held CKKS search, score decryption, or an HNSW-compatible ciphertext
+search executor.
 
 Unsupported search/index features for CKKS ciphertext vectors in this branch:
 
 - HNSW similarity search directly over CKKS ciphertext
 - quantization over CKKS ciphertext
-- recommend/discover flows that require point-id examples, encrypted query
-  ciphertexts, or vector arithmetic over encrypted values
+- recommend/discover flows that require point-id examples, client-supplied
+  encrypted query ciphertexts, or vector arithmetic over encrypted values
 - grouped lookup over CKKS ciphertext sidecars
 - mixed plaintext and encrypted vector searches in one batch
 - payload filtering over encrypted metadata
@@ -626,7 +628,7 @@ row.
 | WAL | Selected payload strings and CKKS vector metadata should be stored only as envelopes after encryption. | Payload sentinel leakage scans cover public server-side/client-side payload ingress and collection directory files, including WAL files. CKKS vector sidecar coverage verifies plaintext vectors are removed before storage and scans collection files for successful encrypted-vector f32/f64 byte patterns. | Add optimizer temp-path coverage and broaden cluster storage scans. |
 | Segment files | Selected payload strings should appear as marker/envelope JSON; CKKS vector plaintext should not be stored by the CKKS envelope path. | Payload sentinel leakage scans cover persisted collection files after graceful stop. Optimizer temp-path scans are still missing. | Add optimizer temp-path leakage tests. |
 | Payload indexes | AEAD-encrypted fields are not searchable as plaintext. | Index creation over encrypted payload paths and parent/child overlaps is rejected. | Keep rejecting plaintext indexes until a blind index provider exists. |
-| HNSW graph and quantization | CKKS ciphertext vectors are searched through a brute-force sidecar scan, not through HNSW or quantization. | REST/gRPC nearest-neighbor search can score stored CKKS ciphertext envelopes through the OpenFHE bridge using the collection distance metric. Raw-dense recommend and raw-dense discover use the same plaintext-query sidecar scoring path. HNSW/quantization paths remain unsupported for encrypted vectors. | Reject/avoid CKKS ciphertext vectors in HNSW, quantization, and point-id recommend/discover flows until a dedicated encrypted index/executor exists. |
+| HNSW graph and quantization | CKKS ciphertext vectors are searched through a brute-force sidecar scan, not through HNSW or quantization. | REST/gRPC nearest-neighbor search can score stored CKKS ciphertext envelopes through the OpenFHE bridge using the collection distance metric. Raw-dense recommend and raw-dense discover use the same encrypted-query sidecar scoring path. HNSW/quantization paths remain unsupported for encrypted vectors. | Reject/avoid CKKS ciphertext vectors in HNSW, quantization, and point-id recommend/discover flows until a dedicated encrypted index/executor exists. |
 | Snapshots | Snapshot archives should contain encrypted payload/vector envelopes and enough metadata to preflight required keys/context and stable collection identity. | Payload sentinel leakage scan now creates and scans a collection snapshot archive. Collection, shard, and CLI startup snapshot recover paths preflight runtime crypto settings for missing instance/material/backend, wrong wrapped-RK key, provider key-id mismatch, missing encrypted collection UUID, and UUID mismatch. Wrong CKKS context restore tests are still missing. | Add restore tests for wrong CKKS context and broaden restore coverage across cluster paths. |
 | Shard transfer and replication | Sender and receiver must have matching crypto runtime material and CKKS context. | App telemetry, peer metadata, and distributed telemetry expose a non-secret crypto runtime capability fingerprint. Encrypted collection data-movement operations validate involved peer metadata and fail closed on missing or mismatched fingerprints. Automatic dead-replica recovery skips source peers without matching parity metadata. `/readyz` does not mark the node ready for encrypted collections while peer metadata fingerprints are missing or mismatched. | Broaden distributed integration coverage and cluster-wide parity tests. |
 | Telemetry, logs, and audit | No plaintext payload bodies or embeddings should be emitted. | Bridge request bodies and stderr are not included in returned errors. Collection telemetry and slow-request log-value/request-hash smoke tests cover payload/vector/filter/query sentinels. | Broaden audit/log capture coverage around any new request logging surfaces. |
@@ -682,8 +684,10 @@ REST/gRPC dense query vectors when runtime `crypto` settings are available on
 the serving node. This includes legacy `search` requests and root direct
 nearest-neighbor `query` requests. Qdrant scrolls the encrypted sidecar payloads,
 validates each CKKS envelope against the active OpenFHE public material/context
-digest, and sends `score_plaintext_query` requests to the bridge. Result
-ordering and `score_threshold` follow the configured Qdrant distance metric:
+digest, sends `encrypt_query` to the bridge for each raw dense query vector, and
+then sends `score_encrypted_query_batch` requests over the encrypted query
+ciphertext plus stored sidecar ciphertexts. Result ordering and
+`score_threshold` follow the configured Qdrant distance metric:
 `dot`/`cosine` are larger-is-better, while `euclid`/`manhattan` are
 smaller-is-better. `search/groups` and root direct `query/groups` are supported
 only when the group field is plaintext payload, `with_lookup` is disabled, and
@@ -691,13 +695,14 @@ runtime OpenFHE settings are available; Qdrant scores the sidecar brute-force,
 groups the ranked hits, and returns the requested payload without returning
 plaintext vectors. This executor is intentionally brute-force: it does not use
 HNSW pruning, quantization, ACORN/indexed-only params, search matrix,
-prefetch/fusion/MMR, or encrypted query ciphertexts. REST and gRPC search
+prefetch/fusion/MMR, or client-supplied encrypted query ciphertexts. REST and gRPC search
 matrix requests whose `using` vector is encrypted fail closed instead of
 falling back to dense storage. Legacy `recommend` and
 universal recommend queries are supported for `average_vector`, `best_score`,
 and `sum_scores` only when every positive/negative example is a raw dense vector
 supplied by the client. `average_vector` is reduced to one plaintext query
-vector; `best_score` and `sum_scores` score each raw dense example against the
+vector which is encrypted through the bridge before scoring; `best_score` and
+`sum_scores` encrypt each raw dense example and score it against the
 stored sidecar ciphertexts and combine the scores with the same objective as
 Qdrant's plaintext recommend path. Point-id and sparse examples fail closed
 because Qdrant does not retain plaintext vectors. `best_score` and `sum_scores`
@@ -725,16 +730,19 @@ newline-delimited JSON response per request to stdout. The backend reuses the
 same child process while the bridge stays healthy and respawns it if the worker
 exits between requests.
 Single vector encryption requests use `operation: encrypt`; batch vector
-encryption requests use `operation: encrypt_batch`. Plaintext-query scoring
-requests use `operation: score_plaintext_query` for single-point scoring or
-`operation: score_plaintext_query_batch` for scroll-batch scoring. All bridge
+encryption requests use `operation: encrypt_batch`; query-vector encryption
+requests use `operation: encrypt_query`. Encrypted-query scoring requests use
+`operation: score_encrypted_query` for single-point scoring or
+`operation: score_encrypted_query_batch` for scroll-batch scoring. Legacy
+`score_plaintext_query` operations are kept as a backend compatibility API but
+the Qdrant search path uses encrypted-query scoring. All bridge
 requests include a deterministic `context_id`, the profile parameters, OpenFHE
 public material, and collection/vector routing metadata. The `context_id` is
 the base64url SHA-256 digest Qdrant also stores in CKKS vector envelopes, so a
 bridge can cache OpenFHE contexts/public keys by id while still validating the
 full material sent in the request. Scoring requests additionally include the
-collection `distance` metric (`dot`, `cosine`, `euclid`, or `manhattan`),
-plaintext query values, and stored CKKS ciphertext bytes. Batch responses must
+collection `distance` metric (`dot`, `cosine`, `euclid`, or `manhattan`), an
+encrypted query ciphertext, and stored CKKS ciphertext bytes. Batch responses must
 preserve request item order and return exactly one ciphertext or finite score
 per item. All encrypt, batch encrypt, and scoring responses must include
 `security_profile`, and it must equal the configured allowlisted CKKS profile.
@@ -841,13 +849,13 @@ The bridge response must preserve item order:
 `CkksVectorEncryptor` still validates each input vector before the backend call
 and seals every returned ciphertext with per-point AAD.
 
-Plaintext-query batch scoring uses the same shared context and query fields,
-but each item carries the stored ciphertext for one point:
+Encrypted-query batch scoring uses the same shared context and query ciphertext,
+while each item carries the stored ciphertext for one point:
 
 ```json
 {
   "version": 1,
-  "operation": "score_plaintext_query_batch",
+  "operation": "score_encrypted_query_batch",
   "scheme": "openfhe-ckks",
   "collection": "docs",
   "vector_name": "embedding",
@@ -862,7 +870,7 @@ but each item carries the stored ciphertext for one point:
   },
   "crypto_context": "base64url-no-pad",
   "public_key": "base64url-no-pad",
-  "query_values": [0.25, -1.5],
+  "encrypted_query": "base64url-no-pad-query-ciphertext",
   "items": [
     { "point_id": "point-1", "ciphertext": "base64url-no-pad-ciphertext-1" },
     { "point_id": "point-2", "ciphertext": "base64url-no-pad-ciphertext-2" }
