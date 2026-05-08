@@ -888,7 +888,7 @@ fn command_openfhe_backend_uses_bridge_protocol() {
 set -euo pipefail
 IFS= read -r request
 case "$request" in
-  *'"operation":"encrypt"'*'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*) ;;
+  *'"operation":"encrypt"'*'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*'"context_id"'*) ;;
   *) exit 7 ;;
 esac
 printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
@@ -1049,7 +1049,7 @@ fn command_openfhe_backend_uses_plaintext_query_score_protocol() {
 set -euo pipefail
 while IFS= read -r request; do
   case "$request" in
-    *'"operation":"score_plaintext_query"'*'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*'"distance":"dot"'*'"query_values":[0.5,0.25]'*'"ciphertext":"b3BlbmZoZS1jaXBoZXI"'*)
+    *'"operation":"score_plaintext_query"'*'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*'"distance":"dot"'*'"context_id"'*'"query_values":[0.5,0.25]'*'"ciphertext":"b3BlbmZoZS1jaXBoZXI"'*)
       printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","score":12.5}\n'
       ;;
     *'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*)
@@ -1106,7 +1106,7 @@ fn command_openfhe_backend_uses_plaintext_query_score_batch_protocol() {
 set -euo pipefail
 while IFS= read -r request; do
   case "$request" in
-    *'"operation":"score_plaintext_query_batch"'*'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*'"distance":"dot"'*'"query_values":[0.5,0.25]'*'"items":[{"point_id":"point-1","ciphertext":"b3BlbmZoZS1jaXBoZXI"},{"point_id":"point-2","ciphertext":"b3BlbmZoZS1jaXBoZXI"}]'*)
+    *'"operation":"score_plaintext_query_batch"'*'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*'"distance":"dot"'*'"context_id"'*'"query_values":[0.5,0.25]'*'"items":[{"point_id":"point-1","ciphertext":"b3BlbmZoZS1jaXBoZXI"},{"point_id":"point-2","ciphertext":"b3BlbmZoZS1jaXBoZXI"}]'*)
       printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[12.5,7.25]}\n'
       ;;
     *'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*)
@@ -1228,7 +1228,7 @@ fn command_openfhe_backend_passes_plaintext_query_distance_metric() {
 set -euo pipefail
 while IFS= read -r request; do
   case "$request" in
-    *'"operation":"score_plaintext_query"'*'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*'"distance":"cosine"'*'"query_values":[0.5,0.25]'*'"ciphertext":"b3BlbmZoZS1jaXBoZXI"'*)
+    *'"operation":"score_plaintext_query"'*'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*'"distance":"cosine"'*'"context_id"'*'"query_values":[0.5,0.25]'*'"ciphertext":"b3BlbmZoZS1jaXBoZXI"'*)
       printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","score":0.875}\n'
       ;;
     *'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*)
@@ -1285,7 +1285,7 @@ fn command_openfhe_backend_uses_batch_bridge_protocol() {
 set -euo pipefail
 IFS= read -r request
 case "$request" in
-  *'"operation":"encrypt_batch"'*'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*'"items"'*'"point_id":"point-1"'*'"point_id":"point-2"'*) ;;
+  *'"operation":"encrypt_batch"'*'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*'"context_id"'*'"items"'*'"point_id":"point-1"'*'"point_id":"point-2"'*) ;;
   *) exit 7 ;;
 esac
 printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertexts":["YmF0Y2gtb25l","YmF0Y2gtdHdv"]}\n'

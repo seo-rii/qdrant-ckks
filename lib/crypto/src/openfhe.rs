@@ -417,6 +417,7 @@ impl Drop for CommandOpenFheBackend {
 
 impl CkksVectorBackend for CommandOpenFheBackend {
     fn encrypt(&self, input: CkksEncryptionInput<'_>) -> Result<Vec<u8>, CkksError> {
+        let context_id = input.public_material.digest_for(input.parameters);
         let request = CommandOpenFheRequest {
             version: 1,
             operation: "encrypt",
@@ -424,6 +425,7 @@ impl CkksVectorBackend for CommandOpenFheBackend {
             collection: input.collection,
             point_id: input.point_id,
             vector_name: input.vector_name,
+            context_id,
             parameters: input.parameters,
             crypto_context: BASE64URL_NOPAD.encode(input.public_material.crypto_context()),
             public_key: BASE64URL_NOPAD.encode(input.public_material.public_key()),
@@ -468,12 +470,14 @@ impl CkksVectorBackend for CommandOpenFheBackend {
                 values: item.values,
             })
             .collect();
+        let context_id = input.public_material.digest_for(input.parameters);
         let request = CommandOpenFheBatchRequest {
             version: 1,
             operation: "encrypt_batch",
             scheme: CKKS_SCHEME,
             collection: input.collection,
             vector_name: input.vector_name,
+            context_id,
             parameters: input.parameters,
             crypto_context: BASE64URL_NOPAD.encode(input.public_material.crypto_context()),
             public_key: BASE64URL_NOPAD.encode(input.public_material.public_key()),
@@ -499,6 +503,7 @@ impl CkksVectorBackend for CommandOpenFheBackend {
         &self,
         input: CkksPlaintextQueryScoreInput<'_>,
     ) -> Result<f64, CkksError> {
+        let context_id = input.public_material.digest_for(input.parameters);
         let request = CommandOpenFheScoreRequest {
             version: 1,
             operation: "score_plaintext_query",
@@ -507,6 +512,7 @@ impl CkksVectorBackend for CommandOpenFheBackend {
             point_id: input.point_id,
             vector_name: input.vector_name,
             distance: input.distance,
+            context_id,
             parameters: input.parameters,
             crypto_context: BASE64URL_NOPAD.encode(input.public_material.crypto_context()),
             public_key: BASE64URL_NOPAD.encode(input.public_material.public_key()),
@@ -556,6 +562,7 @@ impl CkksVectorBackend for CommandOpenFheBackend {
                 ciphertext: BASE64URL_NOPAD.encode(item.ciphertext),
             })
             .collect::<Vec<_>>();
+        let context_id = input.public_material.digest_for(input.parameters);
         let request = CommandOpenFheScoreBatchRequest {
             version: 1,
             operation: "score_plaintext_query_batch",
@@ -563,6 +570,7 @@ impl CkksVectorBackend for CommandOpenFheBackend {
             collection: input.collection,
             vector_name: input.vector_name,
             distance: input.distance,
+            context_id,
             parameters: input.parameters,
             crypto_context: BASE64URL_NOPAD.encode(input.public_material.crypto_context()),
             public_key: BASE64URL_NOPAD.encode(input.public_material.public_key()),
@@ -978,6 +986,7 @@ struct CommandOpenFheRequest<'a> {
     collection: &'a str,
     point_id: &'a str,
     vector_name: &'a str,
+    context_id: String,
     parameters: &'a CkksParameters,
     crypto_context: String,
     public_key: String,
@@ -992,6 +1001,7 @@ struct CommandOpenFheBatchRequest<'a> {
     scheme: &'static str,
     collection: &'a str,
     vector_name: &'a str,
+    context_id: String,
     parameters: &'a CkksParameters,
     crypto_context: String,
     public_key: String,
@@ -1015,6 +1025,7 @@ struct CommandOpenFheScoreRequest<'a> {
     point_id: &'a str,
     vector_name: &'a str,
     distance: &'a str,
+    context_id: String,
     parameters: &'a CkksParameters,
     crypto_context: String,
     public_key: String,
@@ -1031,6 +1042,7 @@ struct CommandOpenFheScoreBatchRequest<'a> {
     collection: &'a str,
     vector_name: &'a str,
     distance: &'a str,
+    context_id: String,
     parameters: &'a CkksParameters,
     crypto_context: String,
     public_key: String,

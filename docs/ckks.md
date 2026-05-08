@@ -665,8 +665,11 @@ Single vector encryption requests use `operation: encrypt`; batch vector
 encryption requests use `operation: encrypt_batch`. Plaintext-query scoring
 requests use `operation: score_plaintext_query` for single-point scoring or
 `operation: score_plaintext_query_batch` for scroll-batch scoring. All bridge
-requests include the profile parameters, OpenFHE public material, and
-collection/vector routing metadata. Scoring requests additionally include the
+requests include a deterministic `context_id`, the profile parameters, OpenFHE
+public material, and collection/vector routing metadata. The `context_id` is
+the base64url SHA-256 digest Qdrant also stores in CKKS vector envelopes, so a
+bridge can cache OpenFHE contexts/public keys by id while still validating the
+full material sent in the request. Scoring requests additionally include the
 collection `distance` metric (`dot`, `cosine`, `euclid`, or `manhattan`),
 plaintext query values, and stored CKKS ciphertext bytes. Batch responses must
 preserve request item order and return exactly one ciphertext or finite score
@@ -706,6 +709,7 @@ Request fields:
   "collection": "docs",
   "point_id": "point-1",
   "vector_name": "embedding",
+  "context_id": "base64url-no-pad-context-digest",
   "parameters": {
     "poly_modulus_degree": 16384,
     "multiplicative_depth": 4,
@@ -741,6 +745,7 @@ items:
   "scheme": "openfhe-ckks",
   "collection": "docs",
   "vector_name": "embedding",
+  "context_id": "base64url-no-pad-context-digest",
   "parameters": {
     "poly_modulus_degree": 16384,
     "multiplicative_depth": 4,
@@ -784,6 +789,7 @@ but each item carries the stored ciphertext for one point:
   "collection": "docs",
   "vector_name": "embedding",
   "distance": "dot",
+  "context_id": "base64url-no-pad-context-digest",
   "parameters": {
     "poly_modulus_degree": 16384,
     "multiplicative_depth": 4,
