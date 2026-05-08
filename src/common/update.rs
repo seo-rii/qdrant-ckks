@@ -4238,6 +4238,30 @@ esac
                         && description.contains("payload sidecar only")
             ));
 
+            let err = crate::common::query::do_search_points_matrix(
+                &toc,
+                "vector_docs",
+                collection::collection::distance_matrix::CollectionSearchMatrixRequest {
+                    filter: None,
+                    sample_size: 2,
+                    limit_per_sample: 2,
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cannot search matrix using encrypted vector")
+                        && description.contains("CKKS-native vector search matrix is not implemented")
+            ));
+
             let err = crate::common::query::do_core_search_points(
                 &toc,
                 "vector_docs",

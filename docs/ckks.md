@@ -628,7 +628,9 @@ runtime OpenFHE settings are available; Qdrant scores the sidecar brute-force,
 groups the ranked hits, and returns the requested payload without returning
 plaintext vectors. This executor is intentionally brute-force: it does not use
 HNSW pruning, quantization, ACORN/indexed-only params, search matrix,
-prefetch/fusion/MMR, or encrypted query ciphertexts. Legacy `recommend` and
+prefetch/fusion/MMR, or encrypted query ciphertexts. Search matrix requests
+whose `using` vector is encrypted fail closed instead of falling back to dense
+storage. Legacy `recommend` and
 universal recommend queries are supported for `average_vector`, `best_score`,
 and `sum_scores` only when every positive/negative example is a raw dense vector
 supplied by the client. `average_vector` is reduced to one plaintext query

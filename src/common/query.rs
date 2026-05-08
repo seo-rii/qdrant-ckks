@@ -2359,10 +2359,29 @@ async fn ensure_encrypted_vector_group_request_is_unsupported(
     vector_name: &str,
     auth: &Auth,
 ) -> Result<(), StorageError> {
+    ensure_encrypted_vector_name_is_unsupported(
+        toc,
+        collection_name,
+        vector_name,
+        auth,
+        "group by search over",
+        "CKKS-native vector search is not implemented for grouped requests in this branch",
+    )
+    .await
+}
+
+async fn ensure_encrypted_vector_name_is_unsupported(
+    toc: &TableOfContent,
+    collection_name: &str,
+    vector_name: &str,
+    auth: &Auth,
+    operation: &str,
+    reason: &str,
+) -> Result<(), StorageError> {
     let collection_pass = auth.check_collection_access(
         collection_name,
         AccessRequirements::new(),
-        "encrypted_vector_group_guard",
+        "encrypted_vector_operation_guard",
     )?;
     let collection = toc.get_collection(&collection_pass).await?;
     let config = collection.config_snapshot().await;
@@ -2373,7 +2392,7 @@ async fn ensure_encrypted_vector_group_request_is_unsupported(
             };
             if names.iter().any(|name| name == vector_name) {
                 return Err(StorageError::bad_input(format!(
-                    "cannot group by search over encrypted vector '{vector_name}'; CKKS-native vector search is not implemented for grouped requests in this branch",
+                    "cannot {operation} encrypted vector '{vector_name}'; {reason}",
                 )));
             }
         }
@@ -2393,6 +2412,16 @@ pub async fn do_search_points_matrix(
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
 ) -> Result<CollectionSearchMatrixResponse, StorageError> {
+    ensure_encrypted_vector_name_is_unsupported(
+        toc,
+        collection_name,
+        &request.using,
+        &auth,
+        "search matrix using",
+        "CKKS-native vector search matrix is not implemented for encrypted vectors in this branch",
+    )
+    .await?;
+
     toc.search_points_matrix(
         collection_name,
         request,
