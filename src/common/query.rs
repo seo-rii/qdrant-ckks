@@ -902,6 +902,39 @@ fn sort_ckks_scored_points(order: Order, scored: &mut [ScoredPoint]) {
     });
 }
 
+fn ckks_sidecar_hnsw_add_bounded_undirected_link(
+    links: &mut [Vec<usize>],
+    first: usize,
+    second: usize,
+    max_degree: usize,
+) {
+    if first == second {
+        return;
+    }
+    ckks_sidecar_hnsw_add_bounded_directed_link(links, first, second, max_degree);
+    ckks_sidecar_hnsw_add_bounded_directed_link(links, second, first, max_degree);
+}
+
+fn ckks_sidecar_hnsw_add_bounded_directed_link(
+    links: &mut [Vec<usize>],
+    from: usize,
+    to: usize,
+    max_degree: usize,
+) {
+    let removed = {
+        let neighbors = &mut links[from];
+        if neighbors.contains(&to) {
+            return;
+        }
+        neighbors.push(to);
+        if neighbors.len() <= max_degree {
+            return;
+        }
+        neighbors.remove(0)
+    };
+    links[removed].retain(|neighbor| *neighbor != from);
+}
+
 fn query_vectors_as_dense_slices<'a>(
     vectors: &'a [VectorInternal],
     vector_name: &str,
@@ -1432,11 +1465,12 @@ fn ckks_sidecar_hnsw_search_points(
                             PointIdType::NumId(candidate) => candidate as usize,
                             PointIdType::Uuid(_) => unreachable!("candidate indexes are numeric"),
                         };
-                        links[idx].push(candidate);
-                        links[candidate].push(idx);
-                        if links[candidate].len() > m * 2 {
-                            links[candidate].remove(0);
-                        }
+                        ckks_sidecar_hnsw_add_bounded_undirected_link(
+                            &mut links,
+                            idx,
+                            candidate,
+                            m * 2,
+                        );
                     }
                 }
 
@@ -3262,6 +3296,20 @@ mod tests {
             ..SearchParams::default()
         };
         assert!(!ckks_search_params_supported(&indexed_only_params));
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_links_remain_reciprocal_when_pruned() {
+        let mut links = vec![Vec::<usize>::new(); 4];
+        ckks_sidecar_hnsw_add_bounded_undirected_link(&mut links, 1, 0, 2);
+        ckks_sidecar_hnsw_add_bounded_undirected_link(&mut links, 2, 0, 2);
+        ckks_sidecar_hnsw_add_bounded_undirected_link(&mut links, 3, 0, 2);
+
+        assert_eq!(links[0], vec![2, 3]);
+        assert!(!links[1].contains(&0));
+        assert!(!links[0].contains(&1));
+        assert!(links[2].contains(&0));
+        assert!(links[3].contains(&0));
     }
 
     fn ckks_sidecar_test_record(point_id: u64, ciphertext: &str) -> CkksSidecarSearchRecord {
