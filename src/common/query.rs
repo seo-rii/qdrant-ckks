@@ -65,7 +65,7 @@ static CKKS_SIDECAR_HNSW_GRAPH_CACHE: LazyLock<Mutex<CkksSidecarHnswGraphCache>>
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct CkksSidecarHnswGraphCacheKey {
-    collection_name: String,
+    collection_identity: String,
     vector_name: String,
     score_order: &'static str,
     m: usize,
@@ -81,7 +81,7 @@ struct CkksSidecarHnswGraph {
 #[serde(deny_unknown_fields)]
 struct CkksSidecarHnswGraphDisk {
     version: u8,
-    collection_name: String,
+    collection_identity: String,
     vector_name: String,
     score_order: String,
     m: usize,
@@ -314,6 +314,7 @@ async fn try_ckks_vector_search_batch_points(
             ckks_vector_search_points(
                 &collection,
                 collection_name,
+                &collection_crypto_id,
                 search,
                 &plan,
                 read_consistency,
@@ -332,6 +333,7 @@ async fn try_ckks_vector_search_batch_points(
 async fn ckks_vector_search_points(
     collection: &collection::collection::Collection,
     collection_name: &str,
+    collection_crypto_id: &str,
     search: &CoreSearchRequest,
     plan: &crate::common::crypto::VectorWritePlan,
     read_consistency: Option<ReadConsistency>,
@@ -810,6 +812,7 @@ async fn ckks_vector_search_points(
         };
         for scored_point in ckks_sidecar_hnsw_search_points(
             collection_name,
+            collection_crypto_id,
             vector_name,
             collection.path(),
             plan,
@@ -1035,7 +1038,7 @@ fn ckks_sidecar_hnsw_records_fingerprint(records: &[CkksSidecarSearchRecord]) ->
 fn ckks_sidecar_hnsw_graph_cache_file_name(key: &CkksSidecarHnswGraphCacheKey) -> String {
     let mut hasher = Sha256::new();
     for value in [
-        key.collection_name.as_str(),
+        key.collection_identity.as_str(),
         key.vector_name.as_str(),
         key.score_order,
         key.records_fingerprint.as_str(),
@@ -1164,7 +1167,7 @@ fn ckks_sidecar_hnsw_load_persisted_graph(
         ))
     })?;
     if disk.version != CKKS_SIDECAR_HNSW_GRAPH_CACHE_VERSION
-        || disk.collection_name != key.collection_name
+        || disk.collection_identity != key.collection_identity
         || disk.vector_name != key.vector_name
         || disk.score_order != key.score_order
         || disk.m != key.m
@@ -1216,7 +1219,7 @@ fn ckks_sidecar_hnsw_persist_graph(
     let temp_path = path.with_extension("json.tmp");
     let disk = CkksSidecarHnswGraphDisk {
         version: CKKS_SIDECAR_HNSW_GRAPH_CACHE_VERSION,
-        collection_name: key.collection_name.clone(),
+        collection_identity: key.collection_identity.clone(),
         vector_name: key.vector_name.clone(),
         score_order: key.score_order.to_string(),
         m: key.m,
@@ -1361,6 +1364,7 @@ fn ckks_sidecar_hnsw_sync_parent(_path: &Path) -> std::io::Result<()> {
 #[allow(clippy::too_many_arguments)]
 fn ckks_sidecar_hnsw_search_points(
     collection_name: &str,
+    collection_crypto_id: &str,
     vector_name: &str,
     collection_path: &Path,
     plan: &crate::common::crypto::VectorWritePlan,
@@ -1445,7 +1449,7 @@ fn ckks_sidecar_hnsw_search_points(
 
     let m = 16.min(records.len().saturating_sub(1)).max(1);
     let cache_key = CkksSidecarHnswGraphCacheKey {
-        collection_name: collection_name.to_string(),
+        collection_identity: collection_crypto_id.to_string(),
         vector_name: vector_name.to_string(),
         score_order: ckks_sidecar_hnsw_score_order_cache_tag(score_order),
         m,
@@ -1782,6 +1786,7 @@ async fn try_ckks_vector_search_groups(
     ckks_vector_group_points(
         &collection,
         collection_name,
+        &collection_crypto_id,
         &search_request,
         &plan,
         &group_by,
@@ -1859,6 +1864,7 @@ fn group_ckks_search_points(
 async fn ckks_vector_group_points(
     collection: &collection::collection::Collection,
     collection_name: &str,
+    collection_crypto_id: &str,
     search_request: &CoreSearchRequest,
     plan: &crate::common::crypto::VectorWritePlan,
     group_by: &JsonPath,
@@ -1873,6 +1879,7 @@ async fn ckks_vector_group_points(
     let scored = ckks_vector_search_points(
         collection,
         collection_name,
+        collection_crypto_id,
         search_request,
         plan,
         read_consistency,
@@ -2078,6 +2085,7 @@ async fn try_ckks_vector_recommend_batch_points(
             ckks_vector_search_points(
                 &collection,
                 collection_name,
+                &collection_crypto_id,
                 &request,
                 &plan,
                 read_consistency,
@@ -2287,6 +2295,7 @@ async fn try_ckks_vector_recommend_groups(
     ckks_vector_group_points(
         &collection,
         collection_name,
+        &collection_crypto_id,
         &core_request,
         &plan,
         &request.group_request.group_by,
@@ -2452,6 +2461,7 @@ async fn try_ckks_vector_discover_batch_points(
             ckks_vector_search_points(
                 &collection,
                 collection_name,
+                &collection_crypto_id,
                 &request,
                 &plan,
                 read_consistency,
@@ -2800,6 +2810,7 @@ pub async fn do_query_batch_points(
                         ckks_vector_search_points(
                             &collection,
                             collection_name,
+                            &collection_crypto_id,
                             &request,
                             &plan,
                             read_consistency,
@@ -2981,6 +2992,7 @@ async fn try_ckks_vector_query_groups(
     ckks_vector_group_points(
         &collection,
         collection_name,
+        &collection_crypto_id,
         &search_request,
         &plan,
         &request.group_by,
@@ -3404,6 +3416,26 @@ mod tests {
     }
 
     #[test]
+    fn ckks_sidecar_hnsw_graph_cache_key_uses_collection_identity() {
+        let first = CkksSidecarHnswGraphCacheKey {
+            collection_identity: "collection-uuid-a".to_string(),
+            vector_name: "vector".to_string(),
+            score_order: "large",
+            m: 16,
+            records_fingerprint: "fingerprint-a".to_string(),
+        };
+        let second = CkksSidecarHnswGraphCacheKey {
+            collection_identity: "collection-uuid-b".to_string(),
+            ..first.clone()
+        };
+
+        assert_ne!(
+            ckks_sidecar_hnsw_graph_cache_file_name(&first),
+            ckks_sidecar_hnsw_graph_cache_file_name(&second),
+        );
+    }
+
+    #[test]
     fn ckks_sidecar_hnsw_graph_cache_evicts_old_entries() {
         let mut cache = CkksSidecarHnswGraphCache::default();
         let original_key = ckks_sidecar_test_graph_cache_key("original");
@@ -3432,7 +3464,7 @@ mod tests {
         records_fingerprint: impl Into<String>,
     ) -> CkksSidecarHnswGraphCacheKey {
         CkksSidecarHnswGraphCacheKey {
-            collection_name: "collection".to_string(),
+            collection_identity: "collection-uuid".to_string(),
             vector_name: "vector".to_string(),
             score_order: "large",
             m: 16,
@@ -3446,7 +3478,7 @@ mod tests {
     ) -> CkksSidecarHnswGraphDisk {
         CkksSidecarHnswGraphDisk {
             version: CKKS_SIDECAR_HNSW_GRAPH_CACHE_VERSION,
-            collection_name: key.collection_name.clone(),
+            collection_identity: key.collection_identity.clone(),
             vector_name: key.vector_name.clone(),
             score_order: key.score_order.to_string(),
             m: key.m,
@@ -3516,7 +3548,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let key = ckks_sidecar_test_graph_cache_key("fingerprint-a");
         let mut disk = ckks_sidecar_test_graph_disk(&key, vec![vec![1], vec![0]]);
-        disk.collection_name = "other-collection".to_string();
+        disk.collection_identity = "other-collection-uuid".to_string();
         write_ckks_sidecar_test_graph_disk(dir.path(), &key, &disk);
 
         assert!(
