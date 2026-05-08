@@ -935,6 +935,14 @@ fn ckks_sidecar_hnsw_add_bounded_directed_link(
     links[removed].retain(|neighbor| *neighbor != from);
 }
 
+fn ckks_sidecar_hnsw_links_are_reciprocal(links: &[Vec<usize>]) -> bool {
+    links.iter().enumerate().all(|(from, neighbors)| {
+        neighbors.iter().all(|neighbor| {
+            *neighbor < links.len() && links[*neighbor].iter().any(|candidate| *candidate == from)
+        })
+    })
+}
+
 fn query_vectors_as_dense_slices<'a>(
     vectors: &'a [VectorInternal],
     vector_name: &str,
@@ -1126,6 +1134,7 @@ fn ckks_sidecar_hnsw_load_persisted_graph(
             .links
             .iter()
             .any(|neighbors| neighbors.iter().any(|neighbor| *neighbor >= records_len))
+        || !ckks_sidecar_hnsw_links_are_reciprocal(&disk.links)
     {
         return Ok(None);
     }
@@ -3465,6 +3474,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let key = ckks_sidecar_test_graph_cache_key("fingerprint-a");
         let disk = ckks_sidecar_test_graph_disk(&key, vec![vec![2], vec![0]]);
+        write_ckks_sidecar_test_graph_disk(dir.path(), &key, &disk);
+
+        assert!(
+            ckks_sidecar_hnsw_load_persisted_graph(dir.path(), &key, 2)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_ignores_asymmetric_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = ckks_sidecar_test_graph_cache_key("fingerprint-a");
+        let disk = ckks_sidecar_test_graph_disk(&key, vec![vec![1], Vec::new()]);
         write_ckks_sidecar_test_graph_disk(dir.path(), &key, &disk);
 
         assert!(
