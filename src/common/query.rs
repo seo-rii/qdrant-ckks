@@ -2681,7 +2681,6 @@ async fn try_ckks_vector_recommend_groups(
         using: request.using.clone(),
         lookup_from: request.lookup_from.clone(),
     };
-    let core_request = recommend_request_as_ckks_search_request(&recommend_request, &vector_name)?;
     if request.group_request.with_lookup.is_some() {
         return Err(StorageError::bad_input(format!(
             "cannot use with_lookup for grouped recommend over encrypted vector '{vector_name}'; CKKS sidecar grouped lookup is not implemented",
@@ -2694,6 +2693,47 @@ async fn try_ckks_vector_recommend_groups(
     }
     ensure_group_path_does_not_touch_encrypted_vector_sidecar(&request.group_request.group_by)?;
 
+    if let Some(point_id) = recommend_request_single_positive_point_id(&recommend_request) {
+        let query_encrypted = ckks_vector_sidecar_for_point_id(
+            &collection,
+            &vector_name,
+            point_id,
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        return ckks_vector_group_points_with_scoring(
+            &collection,
+            collection_name,
+            &collection_crypto_id,
+            &vector_name,
+            CkksSidecarScoring::StoredNearest {
+                query_point_id: point_id.to_string(),
+                query_encrypted,
+            },
+            recommend_request.filter.clone(),
+            recommend_request.params.clone(),
+            recommend_request.score_threshold,
+            &plan,
+            &request.group_request.group_by,
+            request.group_request.limit as usize,
+            request.group_request.group_size as usize,
+            request
+                .with_payload
+                .clone()
+                .unwrap_or(WithPayloadInterface::Bool(false)),
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc,
+        )
+        .await
+        .map(Some);
+    }
+
+    let core_request = recommend_request_as_ckks_search_request(&recommend_request, &vector_name)?;
     ckks_vector_group_points(
         &collection,
         collection_name,

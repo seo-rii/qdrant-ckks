@@ -3700,6 +3700,42 @@ esac
             assert_eq!(recommend_groups.groups[0].id, GroupId::from("a"));
             assert_eq!(recommend_groups.groups[1].id, GroupId::from("b"));
 
+            let point_id_recommend_groups = crate::common::query::do_recommend_point_groups(
+                &toc,
+                "vector_groups",
+                RecommendGroupsRequestInternal {
+                    positive: vec![RecommendExample::PointId(2.into())],
+                    negative: Vec::new(),
+                    strategy: Some(api::rest::RecommendStrategy::AverageVector),
+                    filter: None,
+                    params: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                    using: Some(DEFAULT_VECTOR_NAME.to_string().into()),
+                    lookup_from: None,
+                    group_request: BaseGroupRequest {
+                        group_by: "group".parse().unwrap(),
+                        group_size: 1,
+                        limit: 2,
+                        with_lookup: None,
+                    },
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(point_id_recommend_groups.groups.len(), 2);
+            assert_eq!(point_id_recommend_groups.groups[0].id, GroupId::from("b"));
+            assert_eq!(point_id_recommend_groups.groups[0].hits[0].score, 10.0);
+            assert_eq!(point_id_recommend_groups.groups[1].id, GroupId::from("a"));
+            assert_eq!(point_id_recommend_groups.groups[1].hits[0].score, 8.0);
+
             let recommend_best_groups = crate::common::query::do_recommend_point_groups(
                 &toc,
                 "vector_groups",
