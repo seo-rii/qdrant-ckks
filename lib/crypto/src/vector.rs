@@ -1049,6 +1049,74 @@ where
 
         Ok(scores)
     }
+
+    pub fn score_stored_query_batch(
+        &self,
+        collection: &str,
+        expected_public_material: &CkksPublicMaterial,
+        query_point_id: &str,
+        query_encrypted: &EncryptedCkksVector,
+        encrypted_items: &[(&str, &EncryptedCkksVector)],
+        distance: &str,
+    ) -> Result<Vec<f64>, CkksError> {
+        if encrypted_items.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let query_verified = self.open(
+            collection,
+            query_point_id,
+            expected_public_material,
+            query_encrypted,
+        )?;
+        let encrypted_query = Self::decode_verified_ciphertext(&query_verified)?;
+        let collection_context = self.collection_context(collection)?;
+        let mut ciphertexts = Vec::with_capacity(encrypted_items.len());
+
+        for (point_id, encrypted) in encrypted_items {
+            let verified = self.open(collection, point_id, expected_public_material, encrypted)?;
+            if verified.slots != query_verified.slots {
+                return Err(CkksError::QueryDimensionMismatch {
+                    query_len: query_verified.slots,
+                    slots: verified.slots,
+                });
+            }
+            ciphertexts.push((*point_id, Self::decode_verified_ciphertext(&verified)?));
+        }
+
+        let items = ciphertexts
+            .iter()
+            .map(|(point_id, ciphertext)| CkksEncryptedQueryScoreBatchItem {
+                point_id,
+                ciphertext,
+            })
+            .collect::<Vec<_>>();
+        let scores =
+            self.backend
+                .score_encrypted_query_batch(CkksEncryptedQueryScoreBatchInput {
+                    parameters: &self.parameters,
+                    public_material: expected_public_material,
+                    collection: collection_context,
+                    vector_name: &self.vector_name,
+                    distance,
+                    encrypted_query: &encrypted_query,
+                    items: &items,
+                })?;
+        if scores.len() != encrypted_items.len() {
+            return Err(CkksError::Backend(format!(
+                "OpenFHE backend returned {} scores for {} encrypted vectors",
+                scores.len(),
+                encrypted_items.len(),
+            )));
+        }
+        if scores.iter().any(|score| !score.is_finite()) {
+            return Err(CkksError::Backend(
+                "OpenFHE backend returned non-finite score".to_string(),
+            ));
+        }
+
+        Ok(scores)
+    }
 }
 
 fn vector_metadata_aad(version: u8, scheme: &str) -> Vec<u8> {

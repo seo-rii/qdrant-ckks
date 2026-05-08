@@ -2410,7 +2410,9 @@ mod tests {
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use segment::data_types::groups::GroupId;
     use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, NamedQuery, VectorInternal};
-    use segment::types::{Condition, Distance, FieldCondition, WithPayloadInterface, WithVector};
+    use segment::types::{
+        Condition, Distance, FieldCondition, SearchParams, WithPayloadInterface, WithVector,
+    };
     use serde_json::json;
     use sha2::{Digest, Sha256};
     use shard::query::query_enum::QueryEnum;
@@ -4586,6 +4588,36 @@ esac
             assert_eq!(search_result.len(), 1);
             assert_eq!(search_result[0].id, 1.into());
             assert_eq!(search_result[0].score, 9.0);
+
+            let hnsw_search_result = crate::common::query::do_core_search_points(
+                &toc,
+                "vector_docs",
+                SearchRequestInternal {
+                    vector: vec![1.0, 1.0].into(),
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    filter: None,
+                    params: Some(SearchParams {
+                        hnsw_ef: Some(128),
+                        ..SearchParams::default()
+                    }),
+                    limit: 1,
+                    offset: None,
+                    score_threshold: None,
+                }
+                .into(),
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(hnsw_search_result.len(), 1);
+            assert_eq!(hnsw_search_result[0].id, 2.into());
+            assert_eq!(hnsw_search_result[0].score, 7.0);
 
             let search_with_payload = crate::common::query::do_core_search_points(
                 &toc,

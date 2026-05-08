@@ -1218,6 +1218,69 @@ done
 
 #[cfg(unix)]
 #[test]
+fn command_openfhe_backend_scores_stored_ciphertext_as_query() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("fake-openfhe-stored-score-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+while IFS= read -r request; do
+  case "$request" in
+    *'"operation":"score_encrypted_query"'*'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*'"distance":"dot"'*'"encrypted_query":"c3RvcmVkLXF1ZXJ5"'*'"ciphertext":"c3RvcmVkLWNhbmRpZGF0ZQ"'*)
+      printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","score":8.5}\n'
+      ;;
+    *'"scheme":"openfhe-ckks"'*'"point_id":"point-1"'*)
+      printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"c3RvcmVkLXF1ZXJ5"}\n'
+      ;;
+    *'"scheme":"openfhe-ckks"'*'"point_id":"point-2"'*)
+      printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"c3RvcmVkLWNhbmRpZGF0ZQ"}\n'
+      ;;
+    *) exit 7 ;;
+  esac
+done
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+        .with_args([script_path.display().to_string()]);
+    let encryptor = test_ckks_encryptor(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+    let query = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0, 2.0])
+        .unwrap();
+    let candidate = encryptor
+        .encrypt("docs", "point-2", &public_material(), &[3.0, 4.0])
+        .unwrap();
+
+    let scores = encryptor
+        .score_stored_query_batch(
+            "docs",
+            &public_material(),
+            "point-1",
+            &query,
+            &[("point-2", &candidate)],
+            "dot",
+        )
+        .unwrap();
+
+    assert_eq!(scores, vec![8.5]);
+}
+
+#[cfg(unix)]
+#[test]
 fn command_openfhe_backend_rejects_score_batch_response_size_mismatch() {
     use std::os::unix::fs::PermissionsExt;
 

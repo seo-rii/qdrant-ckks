@@ -21,7 +21,8 @@ use segment::data_types::vectors::{
 };
 use segment::json_path::JsonPath;
 use segment::types::{
-    Order, PayloadContainer, ScoredPoint, SearchParams, WithPayloadInterface, WithVector,
+    Order, PayloadContainer, PointIdType, ScoredPoint, SearchParams, ShardKey,
+    WithPayloadInterface, WithVector,
 };
 use segment::utils::scored_point_ties::ScoredPointTies;
 use segment::vector_storage::query::ContextPair;
@@ -35,6 +36,14 @@ use storage::rbac::{AccessRequirements, Auth};
 
 use crate::common::crypto::vector_write_plan_for_collection_with_crypto_id;
 use crate::settings::Settings;
+
+#[derive(Clone)]
+struct CkksSidecarSearchRecord {
+    id: PointIdType,
+    shard_key: Option<ShardKey>,
+    point_id: String,
+    encrypted: EncryptedCkksVector,
+}
 
 #[allow(clippy::too_many_arguments)]
 pub async fn do_core_search_points(
@@ -414,12 +423,22 @@ async fn ckks_vector_search_points(
         && !ckks_search_params_supported(params)
     {
         return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' uses brute-force CKKS sidecar scoring and does not support HNSW, quantization, indexed_only, or ACORN search params",
+            "encrypted vector '{vector_name}' uses CKKS sidecar scoring and does not support quantization, indexed_only, or ACORN search params",
+        )));
+    }
+    let hnsw_ef = search
+        .params
+        .as_ref()
+        .and_then(|params| (!params.exact).then_some(params.hnsw_ef).flatten());
+    if hnsw_ef.is_some() && !matches!(&scoring, CkksSidecarScoring::Nearest { .. }) {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' HNSW sidecar search currently supports only dense nearest-neighbor queries",
         )));
     }
 
     let mut next_offset = None;
     let mut scored_by_id = std::collections::HashMap::<_, ScoredPoint>::new();
+    let mut hnsw_records = Vec::new();
     const BATCH_SIZE: usize = 512;
 
     loop {
@@ -449,13 +468,27 @@ async fn ckks_vector_search_points(
                 continue;
             };
             let point_id = record.id.to_string();
-            encrypted_records.push((record.id, record.shard_key, point_id, encrypted));
+            encrypted_records.push(CkksSidecarSearchRecord {
+                id: record.id,
+                shard_key: record.shard_key,
+                point_id,
+                encrypted,
+            });
+        }
+
+        if hnsw_ef.is_some() {
+            hnsw_records.extend(encrypted_records);
+            let Some(offset) = scroll_result.next_page_offset else {
+                break;
+            };
+            next_offset = Some(offset);
+            continue;
         }
 
         if !encrypted_records.is_empty() {
             let encrypted_items = encrypted_records
                 .iter()
-                .map(|(_, _, point_id, encrypted)| (point_id.clone(), encrypted.clone()))
+                .map(|record| (record.point_id.clone(), record.encrypted.clone()))
                 .collect::<Vec<_>>();
             let scores = match &scoring {
                 CkksSidecarScoring::Nearest { query_values } => plan
@@ -666,19 +699,17 @@ async fn ckks_vector_search_points(
                     rank_scores.into_iter().map(|rank| rank as f32).collect()
                 }
             };
-            for ((id, shard_key, _point_id, _encrypted), score) in
-                encrypted_records.into_iter().zip(scores)
-            {
+            for (record, score) in encrypted_records.into_iter().zip(scores) {
                 if !ckks_score_passes_threshold(score_order, score, search.score_threshold) {
                     continue;
                 }
                 let scored_point = ScoredPoint {
-                    id,
+                    id: record.id,
                     version: 0,
                     score,
                     payload: None,
                     vector: None,
-                    shard_key,
+                    shard_key: record.shard_key,
                     order_value: None,
                 };
                 match scored_by_id.entry(scored_point.id) {
@@ -698,6 +729,34 @@ async fn ckks_vector_search_points(
             break;
         };
         next_offset = Some(offset);
+    }
+
+    if let Some(hnsw_ef) = hnsw_ef {
+        let CkksSidecarScoring::Nearest { query_values } = scoring else {
+            unreachable!("non-nearest CKKS HNSW sidecar search was rejected before scrolling");
+        };
+        for scored_point in ckks_sidecar_hnsw_search_points(
+            collection_name,
+            vector_name,
+            plan,
+            &hnsw_records,
+            query_values,
+            score_order,
+            search.score_threshold,
+            hnsw_ef,
+            search.offset.saturating_add(search.limit),
+        )? {
+            match scored_by_id.entry(scored_point.id) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    if ckks_scored_point_is_better(score_order, &scored_point, entry.get()) {
+                        entry.insert(scored_point);
+                    }
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(scored_point);
+                }
+            }
+        }
     }
 
     let mut scored = scored_by_id.into_values().collect::<Vec<_>>();
@@ -808,10 +867,227 @@ fn query_context_pairs_as_dense_slices<'a>(
 }
 
 fn ckks_search_params_supported(params: &SearchParams) -> bool {
-    params.hnsw_ef.is_none()
-        && params.quantization.is_none()
-        && !params.indexed_only
-        && params.acorn.is_none()
+    params.quantization.is_none() && !params.indexed_only && params.acorn.is_none()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ckks_sidecar_hnsw_search_points(
+    collection_name: &str,
+    vector_name: &str,
+    plan: &crate::common::crypto::VectorWritePlan,
+    records: &[CkksSidecarSearchRecord],
+    query_values: &[f32],
+    score_order: Order,
+    score_threshold: Option<f32>,
+    hnsw_ef: usize,
+    top: usize,
+) -> Result<Vec<ScoredPoint>, StorageError> {
+    if records.is_empty() || top == 0 {
+        return Ok(Vec::new());
+    }
+    if records.len() == 1 {
+        let encrypted_items = [(records[0].point_id.clone(), records[0].encrypted.clone())];
+        let scores = plan
+            .score_encrypted_query_batch(
+                collection_name,
+                vector_name,
+                &encrypted_items,
+                query_values,
+            )?
+            .ok_or_else(|| {
+                StorageError::service_error(format!(
+                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
+                ))
+            })?;
+        let score = scores[0];
+        if !ckks_score_passes_threshold(score_order, score, score_threshold) {
+            return Ok(Vec::new());
+        }
+        return Ok(vec![ScoredPoint {
+            id: records[0].id,
+            version: 0,
+            score,
+            payload: None,
+            vector: None,
+            shard_key: records[0].shard_key.clone(),
+            order_value: None,
+        }]);
+    }
+
+    let ef = hnsw_ef.max(top).max(1).min(records.len());
+    if records.len() <= ef {
+        let encrypted_items = records
+            .iter()
+            .map(|record| (record.point_id.clone(), record.encrypted.clone()))
+            .collect::<Vec<_>>();
+        let scores = plan
+            .score_encrypted_query_batch(
+                collection_name,
+                vector_name,
+                &encrypted_items,
+                query_values,
+            )?
+            .ok_or_else(|| {
+                StorageError::service_error(format!(
+                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
+                ))
+            })?;
+        let mut scored = records
+            .iter()
+            .zip(scores)
+            .filter_map(|(record, score)| {
+                ckks_score_passes_threshold(score_order, score, score_threshold).then(|| {
+                    ScoredPoint {
+                        id: record.id,
+                        version: 0,
+                        score,
+                        payload: None,
+                        vector: None,
+                        shard_key: record.shard_key.clone(),
+                        order_value: None,
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        sort_ckks_scored_points(score_order, &mut scored);
+        scored.truncate(top);
+        return Ok(scored);
+    }
+
+    let m = 16.min(records.len().saturating_sub(1)).max(1);
+    let mut links = vec![Vec::<usize>::new(); records.len()];
+    for idx in 1..records.len() {
+        let candidates = (0..idx)
+            .map(|candidate| {
+                (
+                    records[candidate].point_id.clone(),
+                    records[candidate].encrypted.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let scores = plan
+            .score_stored_query_batch(
+                collection_name,
+                vector_name,
+                &records[idx].point_id,
+                &records[idx].encrypted,
+                &candidates,
+            )?
+            .ok_or_else(|| {
+                StorageError::service_error(format!(
+                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
+                ))
+            })?;
+        let mut neighbors = scores
+            .into_iter()
+            .enumerate()
+            .map(|(candidate, score)| ScoredPoint {
+                id: PointIdType::NumId(candidate as u64),
+                version: 0,
+                score,
+                payload: None,
+                vector: None,
+                shard_key: None,
+                order_value: None,
+            })
+            .collect::<Vec<_>>();
+        sort_ckks_scored_points(score_order, &mut neighbors);
+        for neighbor in neighbors.into_iter().take(m) {
+            let candidate = match neighbor.id {
+                PointIdType::NumId(candidate) => candidate as usize,
+                PointIdType::Uuid(_) => unreachable!("candidate indexes are numeric"),
+            };
+            links[idx].push(candidate);
+            links[candidate].push(idx);
+            if links[candidate].len() > m * 2 {
+                links[candidate].remove(0);
+            }
+        }
+    }
+
+    let mut visited = vec![false; records.len()];
+    let mut frontier = vec![0usize];
+    let mut scored = Vec::<ScoredPoint>::new();
+
+    while !frontier.is_empty() && scored.len() < ef {
+        frontier.sort_unstable();
+        frontier.dedup();
+        frontier.retain(|candidate| {
+            let fresh = !visited[*candidate];
+            visited[*candidate] = true;
+            fresh
+        });
+        if frontier.is_empty() {
+            break;
+        }
+
+        let encrypted_items = frontier
+            .iter()
+            .map(|candidate| {
+                (
+                    records[*candidate].point_id.clone(),
+                    records[*candidate].encrypted.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let scores = plan
+            .score_encrypted_query_batch(
+                collection_name,
+                vector_name,
+                &encrypted_items,
+                query_values,
+            )?
+            .ok_or_else(|| {
+                StorageError::service_error(format!(
+                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
+                ))
+            })?;
+
+        let mut batch = frontier
+            .into_iter()
+            .zip(scores)
+            .map(|(candidate, score)| ScoredPoint {
+                id: PointIdType::NumId(candidate as u64),
+                version: 0,
+                score,
+                payload: None,
+                vector: None,
+                shard_key: None,
+                order_value: None,
+            })
+            .collect::<Vec<_>>();
+        sort_ckks_scored_points(score_order, &mut batch);
+        frontier = Vec::new();
+        for point in batch {
+            let candidate = match point.id {
+                PointIdType::NumId(candidate) => candidate as usize,
+                PointIdType::Uuid(_) => unreachable!("candidate indexes are numeric"),
+            };
+            if ckks_score_passes_threshold(score_order, point.score, score_threshold) {
+                scored.push(ScoredPoint {
+                    id: records[candidate].id,
+                    version: 0,
+                    score: point.score,
+                    payload: None,
+                    vector: None,
+                    shard_key: records[candidate].shard_key.clone(),
+                    order_value: None,
+                });
+            }
+            for neighbor in &links[candidate] {
+                if !visited[*neighbor] {
+                    frontier.push(*neighbor);
+                }
+            }
+            if scored.len() >= ef {
+                break;
+            }
+        }
+    }
+
+    sort_ckks_scored_points(score_order, &mut scored);
+    scored.truncate(top);
+    Ok(scored)
 }
 
 fn encrypted_vector_from_payload(
@@ -2525,7 +2801,7 @@ mod tests {
             hnsw_ef: Some(128),
             ..SearchParams::default()
         };
-        assert!(!ckks_search_params_supported(&hnsw_params));
+        assert!(ckks_search_params_supported(&hnsw_params));
 
         let indexed_only_params = SearchParams {
             indexed_only: true,

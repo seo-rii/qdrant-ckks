@@ -3,25 +3,28 @@
 The `sec` branch adds a small `qdrant-sec` workspace crate for encrypted
 payload text and OpenFHE CKKS vector ciphertext envelopes.
 
-Current scope is encrypted storage plus a conservative CKKS sidecar search path,
-not HNSW-native encrypted vector indexing. Payload text encryption happens
-before storage. CKKS vector selectors have a server-side ingest/storage path:
+Current scope is encrypted storage plus CKKS sidecar search. Payload text
+encryption happens before storage. CKKS vector selectors have a server-side
+ingest/storage path:
 selected dense vectors are encrypted through the configured OpenFHE bridge and
 stored as reserved payload sidecar envelopes, while the plaintext vector is
 removed from the dense vector write. REST/gRPC nearest-neighbor `search` and
-root direct `query` over an encrypted vector name use a brute-force sidecar scan
-that first asks the OpenFHE bridge to encrypt the query vector, then scores each
-stored ciphertext against that encrypted query ciphertext. The same sidecar
-scorer also handles raw-dense recommend requests
+root direct `query` over an encrypted vector name use sidecar scoring that first
+asks the OpenFHE bridge to encrypt the query vector, then scores stored
+ciphertexts against that encrypted query ciphertext. When `hnsw_ef` is provided
+on a nearest-neighbor request, Qdrant builds an experimental ciphertext sidecar
+candidate graph and searches it with encrypted-query scores; otherwise it uses
+the exact brute-force sidecar scan. The same sidecar scorer also handles
+raw-dense recommend requests
 (`average_vector`, `best_score`, and `sum_scores`), raw-dense discover
 requests, and raw-dense universal context queries.
 This branch still does not add client-supplied encrypted query vectors,
-client-held CKKS search, score decryption, or an HNSW-compatible ciphertext
-search executor.
+client-held CKKS search, score decryption, or persistent segment-native HNSW
+storage for CKKS ciphertexts.
 
 Unsupported search/index features for CKKS ciphertext vectors in this branch:
 
-- HNSW similarity search directly over CKKS ciphertext
+- persistent segment-native HNSW graph files directly over CKKS ciphertext
 - quantization over CKKS ciphertext
 - recommend/discover flows that require point-id examples, client-supplied
   encrypted query ciphertexts, or vector arithmetic over encrypted values
@@ -43,7 +46,7 @@ implementation.
 | `set_payload` / `overwrite_payload` | Supported for explicit point ids when Qdrant can bind AAD to each point id. Multi-point updates are fanned out into one encrypted operation per point; filter-based and key-path encrypted-field updates fail closed. | Same explicit-point-id limitation as server-side payload writes. Clients must provide one envelope per point/field; filter-based and key-path encrypted-field updates fail closed. | Not applicable. |
 | `update_vectors` | Not applicable. | Not applicable. | Supported for point-specific dense vector updates by writing the encrypted sidecar payload and omitting the plaintext vector update. Sparse and multi-dense encrypted vectors fail closed. |
 | Payload indexes, filters, facets, ordering, grouping, and formulas | Plaintext indexes, read/update filters, facet keys, order-by keys, group-by keys, and formula payload references over encrypted paths, parent paths, or child paths are rejected. Searching, mutating by filter, ordering, grouping, or aggregating encrypted content requires a future blind-index provider. | Same policy. The opaque ciphertext field is not searchable, orderable, groupable, facetable, or usable in mutation filters as plaintext. | The reserved `$qdrant_sec_vectors` sidecar field is not indexable, filterable, orderable, groupable, facetable, or usable in formulas. Payload filtering/faceting over encrypted metadata is unsupported. |
-| `retrieve`, `scroll`, `search`, and `query` result payloads | Stored `$qdrant_sec` markers are returned raw. There is no `decrypt_payload` option or RBAC capability yet. | Stored `$qdrant_client_aead` markers are returned raw for SDK/client decryption. | Stored vector sidecar payload envelopes are returned raw when payloads are requested. Read/search/query/recommend/discover paths, including grouped variants, reject `with_vector=true` or selectors that request encrypted vector names; clients must request the payload sidecar instead. REST/gRPC nearest-neighbor dense-vector `search`, `search/groups`, root direct `query`, root direct `query/groups`, raw-dense `recommend` (`average_vector`, `best_score`, `sum_scores`), raw-dense `discover`, and raw-dense universal `context` queries are supported through brute-force sidecar scoring with runtime OpenFHE settings. HNSW/quantization/ACORN/indexed-only search params, point-id recommend/discover/context examples, search matrix, prefetch/fusion/MMR, encrypted query vectors, and mixed encrypted/plaintext batch search remain unsupported. |
+| `retrieve`, `scroll`, `search`, and `query` result payloads | Stored `$qdrant_sec` markers are returned raw. There is no `decrypt_payload` option or RBAC capability yet. | Stored `$qdrant_client_aead` markers are returned raw for SDK/client decryption. | Stored vector sidecar payload envelopes are returned raw when payloads are requested. Read/search/query/recommend/discover paths, including grouped variants, reject `with_vector=true` or selectors that request encrypted vector names; clients must request the payload sidecar instead. REST/gRPC nearest-neighbor dense-vector `search`, `search/groups`, root direct `query`, root direct `query/groups`, raw-dense `recommend` (`average_vector`, `best_score`, `sum_scores`), raw-dense `discover`, and raw-dense universal `context` queries are supported with runtime OpenFHE settings. Nearest-neighbor requests may set `hnsw_ef` to use the ciphertext sidecar candidate graph; exact requests and non-HNSW requests use brute-force sidecar scoring. Quantization/ACORN/indexed-only search params, point-id recommend/discover/context examples, search matrix, prefetch/fusion/MMR, encrypted query vectors, and mixed encrypted/plaintext batch search remain unsupported. |
 | Snapshots | Snapshot archives are expected to contain envelopes only; payload sentinel snapshot leakage is covered by integration tests. Collection, shard, and CLI startup snapshot recover paths preflight runtime crypto settings, including missing material, wrong wrapped-RK key, and provider key-id mismatch cases. | Same stored-value behavior as server-side payloads. Qdrant cannot validate client AEAD tags without client keys. | Restore requires matching OpenFHE context/runtime material; missing runtime instance/material/backend preflight is wired, while wrong-context restore coverage is still missing. |
 | Shard transfer / replication | Encrypted collection data-movement operations require matching non-secret crypto runtime capability fingerprints in peer metadata. Operations fail closed if any involved peer has missing or mismatched metadata. Automatic dead-replica recovery only proposes encrypted shard transfers from source peers with matching parity metadata. | Same policy; client-envelope verifier policy must match across nodes before encrypted transfers are allowed. | Same policy; matching OpenFHE context and metadata AEAD material must be enforced before encrypted transfers are allowed. |
 | Metadata encryption | Not implemented. `metadata_keys` selectors are reserved and rejected. | Not implemented. | Not implemented. |
@@ -628,7 +631,7 @@ row.
 | WAL | Selected payload strings and CKKS vector metadata should be stored only as envelopes after encryption. | Payload sentinel leakage scans cover public server-side/client-side payload ingress and collection directory files, including WAL files. CKKS vector sidecar coverage verifies plaintext vectors are removed before storage and scans collection files for successful encrypted-vector f32/f64 byte patterns. | Add optimizer temp-path coverage and broaden cluster storage scans. |
 | Segment files | Selected payload strings should appear as marker/envelope JSON; CKKS vector plaintext should not be stored by the CKKS envelope path. | Payload sentinel leakage scans cover persisted collection files after graceful stop. Optimizer temp-path scans are still missing. | Add optimizer temp-path leakage tests. |
 | Payload indexes | AEAD-encrypted fields are not searchable as plaintext. | Index creation over encrypted payload paths and parent/child overlaps is rejected. | Keep rejecting plaintext indexes until a blind index provider exists. |
-| HNSW graph and quantization | CKKS ciphertext vectors are searched through a brute-force sidecar scan, not through HNSW or quantization. | REST/gRPC nearest-neighbor search can score stored CKKS ciphertext envelopes through the OpenFHE bridge using the collection distance metric. Raw-dense recommend and raw-dense discover use the same encrypted-query sidecar scoring path. HNSW/quantization paths remain unsupported for encrypted vectors. | Reject/avoid CKKS ciphertext vectors in HNSW, quantization, and point-id recommend/discover flows until a dedicated encrypted index/executor exists. |
+| HNSW graph and quantization | CKKS ciphertext vectors are searched through sidecar ciphertext scoring, not through plaintext dense vector storage. | REST/gRPC nearest-neighbor search can score stored CKKS ciphertext envelopes through the OpenFHE bridge using the collection distance metric. `hnsw_ef` enables an experimental ciphertext sidecar candidate graph for nearest-neighbor queries; exact and non-HNSW requests use brute force. Raw-dense recommend and raw-dense discover use the same encrypted-query sidecar scoring path but remain brute-force. Quantization remains unsupported for encrypted vectors. | Persist the ciphertext graph alongside segment state and broaden distributed rebuild/recovery coverage before treating it as a production-grade segment-native HNSW index. |
 | Snapshots | Snapshot archives should contain encrypted payload/vector envelopes and enough metadata to preflight required keys/context and stable collection identity. | Payload sentinel leakage scan now creates and scans a collection snapshot archive. Collection, shard, and CLI startup snapshot recover paths preflight runtime crypto settings for missing instance/material/backend, wrong wrapped-RK key, provider key-id mismatch, missing encrypted collection UUID, and UUID mismatch. Wrong CKKS context restore tests are still missing. | Add restore tests for wrong CKKS context and broaden restore coverage across cluster paths. |
 | Shard transfer and replication | Sender and receiver must have matching crypto runtime material and CKKS context. | App telemetry, peer metadata, and distributed telemetry expose a non-secret crypto runtime capability fingerprint. Encrypted collection data-movement operations validate involved peer metadata and fail closed on missing or mismatched fingerprints. Automatic dead-replica recovery skips source peers without matching parity metadata. `/readyz` does not mark the node ready for encrypted collections while peer metadata fingerprints are missing or mismatched. | Broaden distributed integration coverage and cluster-wide parity tests. |
 | Telemetry, logs, and audit | No plaintext payload bodies or embeddings should be emitted. | Bridge request bodies and stderr are not included in returned errors. Collection telemetry and slow-request log-value/request-hash smoke tests cover payload/vector/filter/query sentinels. | Broaden audit/log capture coverage around any new request logging surfaces. |
@@ -689,14 +692,16 @@ then sends `score_encrypted_query_batch` requests over the encrypted query
 ciphertext plus stored sidecar ciphertexts. Result ordering and
 `score_threshold` follow the configured Qdrant distance metric:
 `dot`/`cosine` are larger-is-better, while `euclid`/`manhattan` are
-smaller-is-better. `search/groups` and root direct `query/groups` are supported
-only when the group field is plaintext payload, `with_lookup` is disabled, and
-runtime OpenFHE settings are available; Qdrant scores the sidecar brute-force,
-groups the ranked hits, and returns the requested payload without returning
-plaintext vectors. This executor is intentionally brute-force: it does not use
-HNSW pruning, quantization, ACORN/indexed-only params, search matrix,
-prefetch/fusion/MMR, or client-supplied encrypted query ciphertexts. REST and gRPC search
-matrix requests whose `using` vector is encrypted fail closed instead of
+smaller-is-better. If `hnsw_ef` is set and `exact=false`, nearest-neighbor
+search builds and searches a ciphertext sidecar candidate graph with
+stored-ciphertext-to-stored-ciphertext bridge scoring for graph links and
+encrypted-query bridge scoring for traversal candidates. `search/groups` and
+root direct `query/groups` are supported only when the group field is plaintext
+payload, `with_lookup` is disabled, and runtime OpenFHE settings are available;
+grouped paths still use brute-force sidecar scoring. Quantization,
+ACORN/indexed-only params, search matrix, prefetch/fusion/MMR, or
+client-supplied encrypted query ciphertexts remain unsupported. REST and gRPC
+search matrix requests whose `using` vector is encrypted fail closed instead of
 falling back to dense storage. Legacy `recommend` and
 universal recommend queries are supported for `average_vector`, `best_score`,
 and `sum_scores` only when every positive/negative example is a raw dense vector
