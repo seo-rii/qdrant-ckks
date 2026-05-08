@@ -79,8 +79,9 @@ Selector components that collide with reserved envelope markers
 `$qdrant_sec`, `$qdrant_client_aead`, or `$qdrant_ciphertext` are rejected.
 
 Runtime crypto instances currently accept only these provider IDs:
-`payload/aes-256-gcm@v1`, `payload/client-aead@v1`, and
-`vector/openfhe-ckks@v1`. Unknown provider IDs fail runtime settings
+`payload/aes-256-gcm@v1`, `payload/client-aead@v1`,
+`metadata/blind-index-hmac@v1`, and `vector/openfhe-ckks@v1`.
+Unknown provider IDs fail runtime settings
 validation instead of being treated as extension points.
 `payload/aes-256-gcm@v1` must bind a `materials.sym_key` resource key and set
 an explicit `options.material_fingerprint_id`; it must not configure
@@ -88,6 +89,9 @@ an explicit `options.material_fingerprint_id`; it must not configure
 `vector/openfhe-ckks@v1` must bind `materials.sym_key` for vector envelope
 metadata sealing, set `options.material_fingerprint_id`, and configure
 `backend_ref` for the OpenFHE bridge.
+`metadata/blind-index-hmac@v1` is server-blind: clients compute exact-match
+tokens outside Qdrant, and the runtime instance only pins non-secret key lineage
+metadata with `key_id`, `expected_rk_id`, `min_rk_epoch`, and `max_rk_epoch`.
 Runtime crypto materials currently accept only `symmetric_key_32`,
 `wrapping_key_32`, and `wrapped_symmetric_key_32` kinds.
 
@@ -114,6 +118,16 @@ crypto:
         signature_public_keys:
           tenant-a/client-signing-v1: base64url-no-pad-ed25519-public-key
           tenant-a/client-signing-v2: base64url-no-pad-ed25519-public-key
+    docs_body_blind_v1:
+      provider: metadata/blind-index-hmac@v1
+      materials: {}
+      # backend_ref must be omitted. The HMAC/blind-index key is client-held;
+      # Qdrant only stores and indexes the resulting opaque exact-match token.
+      options:
+        key_id: tenant-a/client-rk-2026-04
+        expected_rk_id: tenant-a/client-rk-2026-04
+        min_rk_epoch: 3
+        max_rk_epoch: 3
 params:
   encryption:
     version: 1
@@ -130,6 +144,12 @@ params:
           paths: [body]
         instance: docs_payload_client_v1
         binding: client-payload-envelope/v1
+      - id: body_blind_eq
+        selector:
+          kind: metadata_keys
+          keys: [body__blind_eq]
+        instance: docs_body_blind_v1
+        binding: metadata-exact-match-token/v1
 ```
 
 `payload/client-aead@v1` fails runtime validation if `materials` is non-empty,
@@ -242,9 +262,10 @@ point id, field path, key id, `rk_id`, `rk_epoch`, nonce, ciphertext digest, and
 signature digest. The collection write guard recomputes that identity from the
 stored marker and accepts the write only when it matches the runtime proof.
 
-Blind-index query integration is not implemented yet. Exact-match search
-requires a future client blind-index field, and range, geo, or full-text search
-over client ciphertext remains unsupported.
+Exact-match search over client-side ciphertext uses a separate client-generated
+blind-index token field. Qdrant stores and indexes the opaque token, not the
+plaintext, and filters must target that token field directly. Range, geo, and
+full-text search over client ciphertext remain unsupported.
 
 SDKs that implement this mode must do all cryptographic data-key operations
 outside Qdrant:
@@ -260,8 +281,9 @@ outside Qdrant:
 - Verify and decrypt raw `$qdrant_client_aead` envelopes on read. Qdrant will
   return the opaque envelope, not plaintext.
 - If exact-match filtering is required, generate a separate blind-index token
-  with a different client key/HKDF domain. Plain Qdrant payload indexes remain
-  unsupported for encrypted fields.
+  with a different client key/HKDF domain and store it in a configured
+  `metadata-exact-match-token/v1` field. Plain Qdrant payload indexes remain
+  unsupported for encrypted fields themselves.
 
 Collection encryption rules are configured only through the canonical
 `params.encryption` section. The old `params.ckks` shape is no longer accepted
@@ -283,11 +305,50 @@ params:
         binding: payload-field/v1
 ```
 
-Metadata encryption is not implemented yet. The generic control-plane types
-reserve a `metadata_keys` selector for future value encryption and exact-match
-token designs, but collection validation rejects metadata selectors in this
-branch. Payload filtering over encrypted metadata, including range, geo, and
-full-text filtering, is unsupported until a separate blind-index design exists.
+Metadata value encryption is not implemented yet. The `metadata_keys` selector
+is currently limited to exact-match blind-index token fields using
+`metadata-exact-match-token/v1` with the `metadata/blind-index-hmac@v1`
+provider. Payload filtering over encrypted metadata, including range, geo, and
+full-text filtering, remains unsupported unless the client supplies and queries
+a separate blind-index token.
+
+```yaml
+params:
+  encryption:
+    version: 1
+    key_id: tenant-a:docs
+    crypto_schema_version: 1
+    encryption_epoch: 3
+    migration_state: active
+    rules:
+      - id: docs_body
+        selector:
+          payload_paths: [body]
+        instance: docs_payload_client_v1
+        binding: client-payload-envelope/v1
+      - id: docs_body_blind_eq
+        selector:
+          metadata_keys: [body__blind_eq]
+        instance: docs_body_blind_v1
+        binding: metadata-exact-match-token/v1
+```
+
+Clients should compute `body__blind_eq` outside Qdrant with a domain-separated
+blind-index key such as `qdrant-sec/client-payload-blind-index/v1`, then query
+that token field with ordinary exact-match payload filters.
+
+```json
+{
+  "filter": {
+    "must": [
+      {
+        "key": "body__blind_eq",
+        "match": { "value": "base64url-no-pad-client-blind-index-token" }
+      }
+    ]
+  }
+}
+```
 
 Runtime settings provide key material and providers through the canonical
 `crypto` section. The old runtime `ckks` section and `master_key_b64` /
@@ -333,15 +394,17 @@ The generic `crypto` control plane supports a safer MK/RK hierarchy:
 Provider `options` are allowlisted per provider. `payload/aes-256-gcm@v1`
 accepts only `key_id`, `material_fingerprint_id`, and `retired_materials`;
 `payload/client-aead@v1` accepts only its client envelope policy and signature
-options; `vector/openfhe-ckks@v1` accepts only `key_id`,
-`material_fingerprint_id`, `profile`, `crypto_context_b64`, and
-`public_key_b64`. Unknown options fail startup/runtime validation instead of
-being silently ignored.
+options; `metadata/blind-index-hmac@v1` accepts only `key_id`,
+`expected_rk_id`, `min_rk_epoch`, and `max_rk_epoch`; `vector/openfhe-ckks@v1`
+accepts only `key_id`, `material_fingerprint_id`, `profile`,
+`crypto_context_b64`, and `public_key_b64`. Unknown options fail startup/runtime
+validation instead of being silently ignored.
 
 Provider `materials` roles are also allowlisted. Server-side payload AEAD and
-OpenFHE CKKS vector-envelope providers accept only `materials.sym_key`; the
-client-side AEAD provider must not configure any server material or backend.
-Unexpected material roles fail validation instead of being silently ignored.
+OpenFHE CKKS vector-envelope providers accept only `materials.sym_key`;
+client-side AEAD and blind-index token providers must not configure any server
+material or backend. Unexpected material roles fail validation instead of being
+silently ignored.
 
 For tests and future vector-envelope work, a generic OpenFHE backend is
 configured under `crypto.backends` and referenced from a

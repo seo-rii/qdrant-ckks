@@ -49,10 +49,10 @@ use qdrant_sec::{
     AeadCipher, CLIENT_ENCRYPTED_PAYLOAD_MARKER, CLIENT_PAYLOAD_ENVELOPE_BINDING,
     ClientPayloadSignatureVerification, ClientPayloadValidationContext,
     ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_PAYLOAD_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD,
-    PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
-    ckks_vector_verified_sidecar_key, client_payload_signature_message,
-    is_client_encrypted_payload_value, is_encrypted_payload_value,
-    validate_client_payload_value_for_runtime,
+    METADATA_EXACT_MATCH_TOKEN_BINDING, PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionPolicy,
+    PayloadTextEncryptor, SecretKey, ckks_vector_verified_sidecar_key,
+    client_payload_signature_message, is_client_encrypted_payload_value,
+    is_encrypted_payload_value, validate_client_payload_value_for_runtime,
 };
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -174,6 +174,19 @@ fn payload_encryption_config() -> CollectionEncryptionConfig {
             binding: Some("payload-field/v1".to_string()),
         }],
     }
+}
+
+fn payload_encryption_with_blind_index_config() -> CollectionEncryptionConfig {
+    let mut config = payload_encryption_config();
+    config.rules.push(EncryptionRuleRef {
+        id: "document_body_blind_eq".to_string(),
+        selector: EncryptionSelector::MetadataKeys {
+            keys: vec!["document_body__blind_eq".to_string()],
+        },
+        instance: "docs_body_blind_v1".to_string(),
+        binding: Some(METADATA_EXACT_MATCH_TOKEN_BINDING.to_string()),
+    });
+    config
 }
 
 fn client_payload_encryption_config() -> CollectionEncryptionConfig {
@@ -1377,6 +1390,63 @@ async fn encrypted_payload_field_rejects_plaintext_filters() {
                 && description.contains("document.body")
                 && description.contains("blind index")
     ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn encrypted_payload_blind_index_token_filter_is_searchable() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection = encrypted_collection_fixture(
+        collection_dir.path(),
+        1,
+        payload_encryption_with_blind_index_config(),
+    )
+    .await;
+    let blind_filter = Filter::new_must(Condition::Field(FieldCondition::new_match(
+        "document_body__blind_eq".parse().unwrap(),
+        serde_json::from_str(r#"{ "value": "client-token-v1" }"#).unwrap(),
+    )));
+
+    collection
+        .create_payload_index_with_wait(
+            "document_body__blind_eq".parse().unwrap(),
+            PayloadFieldSchema::FieldType(PayloadSchemaType::Keyword),
+            true,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+
+    collection
+        .scroll_by(
+            ScrollRequestInternal {
+                offset: None,
+                limit: Some(10),
+                filter: Some(blind_filter.clone()),
+                with_payload: Some(WithPayloadInterface::Bool(true)),
+                with_vector: false.into(),
+                order_by: None,
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+
+    collection
+        .count(
+            CountRequestInternal {
+                filter: Some(blind_filter),
+                exact: true,
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]

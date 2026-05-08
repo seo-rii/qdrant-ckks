@@ -15,6 +15,7 @@ pub const PAYLOAD_FIELD_BINDING: &str = "payload-field/v1";
 pub const CLIENT_PAYLOAD_ENVELOPE_BINDING: &str = "client-payload-envelope/v1";
 pub const VECTOR_ENVELOPE_BINDING: &str = "vector-envelope/v1";
 pub const METADATA_VALUE_BINDING: &str = "metadata-value/v1";
+pub const METADATA_EXACT_MATCH_TOKEN_BINDING: &str = "metadata-exact-match-token/v1";
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum ControlPlaneError {
@@ -473,6 +474,13 @@ mod tests {
             provider: VECTOR_OPENFHE_CKKS_PROVIDER.to_string(),
             binding: Some(VECTOR_ENVELOPE_BINDING.to_string()),
         });
+        plan.add_metadata_rule(CompiledMetadataRule {
+            rule_id: "body_blind_eq".to_string(),
+            key: "body__blind_eq".to_string(),
+            instance: "docs_body_blind_v1".to_string(),
+            provider: METADATA_BLIND_INDEX_PROVIDER.to_string(),
+            binding: Some(METADATA_EXACT_MATCH_TOKEN_BINDING.to_string()),
+        });
 
         assert_eq!(plan.payload_rules().len(), 1);
         assert_eq!(
@@ -480,5 +488,6 @@ mod tests {
                 .map(|rule| rule.provider.as_str()),
             Some(VECTOR_OPENFHE_CKKS_PROVIDER),
         );
+        assert_eq!(plan.metadata_rules().len(), 1);
     }
 }

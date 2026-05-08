@@ -14,7 +14,8 @@ use qdrant_sec::{
     CLIENT_PAYLOAD_ENVELOPE_BINDING, CkksParameters, CkksPublicMaterial, CkksVectorEncryptor,
     ClientPayloadNonceReplayKey, ClientPayloadSignatureVerification,
     ClientPayloadValidationContext, ClientPayloadVerifiedEnvelopeKey, CommandOpenFheBackend,
-    EncryptedCkksVector, ExistingPayloadMode, LocalMasterKeyProvider, MasterKeyProvider,
+    EncryptedCkksVector, ExistingPayloadMode, LocalMasterKeyProvider,
+    METADATA_BLIND_INDEX_PROVIDER, METADATA_EXACT_MATCH_TOKEN_BINDING, MasterKeyProvider,
     PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER, PAYLOAD_FIELD_BINDING,
     PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
     RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER,
@@ -162,6 +163,12 @@ const VECTOR_OPENFHE_CKKS_ALLOWED_OPTIONS: &[&str] = &[
     CKKS_PUBLIC_KEY_B64_OPTION,
 ];
 const VECTOR_OPENFHE_CKKS_ALLOWED_MATERIAL_ROLES: &[&str] = &[PAYLOAD_SYM_KEY_ROLE];
+const METADATA_BLIND_INDEX_ALLOWED_OPTIONS: &[&str] = &[
+    "key_id",
+    EXPECTED_RK_ID_OPTION,
+    MIN_RK_EPOCH_OPTION,
+    MAX_RK_EPOCH_OPTION,
+];
 
 fn unsupported_instance_option(options: &Value, allowed_options: &[&str]) -> Option<String> {
     let options = options.as_object()?;
@@ -1298,7 +1305,10 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
         }
         if !matches!(
             instance.provider.as_str(),
-            PAYLOAD_AES_GCM_PROVIDER | PAYLOAD_CLIENT_AEAD_PROVIDER | VECTOR_OPENFHE_CKKS_PROVIDER
+            PAYLOAD_AES_GCM_PROVIDER
+                | PAYLOAD_CLIENT_AEAD_PROVIDER
+                | VECTOR_OPENFHE_CKKS_PROVIDER
+                | METADATA_BLIND_INDEX_PROVIDER
         ) {
             return Err(CryptoSetupError::InvalidInstanceOption {
                 instance: instance_name.clone(),
@@ -1434,6 +1444,111 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                     reason: err.to_string(),
                 }
             })?;
+        }
+        if instance.provider == METADATA_BLIND_INDEX_PROVIDER {
+            if !instance.materials.is_empty() || instance.backend_ref.is_some() {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: "provider".to_string(),
+                    reason:
+                        "metadata/blind-index-hmac@v1 stores client-generated tokens and must not configure server materials or backend"
+                            .to_string(),
+                });
+            }
+            if let Some(option) =
+                unsupported_instance_option(&instance.options, METADATA_BLIND_INDEX_ALLOWED_OPTIONS)
+            {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option,
+                    reason: "unsupported option for metadata/blind-index-hmac@v1".to_string(),
+                });
+            }
+            let configured_key_id = match instance.options.get("key_id") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(key_id)) if is_crypto_identifier(key_id) => {
+                    Some(key_id.as_str())
+                }
+                Some(_) => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: "key_id".to_string(),
+                        reason: "expected a crypto identifier string".to_string(),
+                    });
+                }
+            };
+            let expected_rk_id = match instance.options.get(EXPECTED_RK_ID_OPTION) {
+                Some(Value::String(expected_rk_id)) if is_crypto_identifier(expected_rk_id) => {
+                    expected_rk_id.as_str()
+                }
+                Some(_) => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: EXPECTED_RK_ID_OPTION.to_string(),
+                        reason: "expected a crypto identifier string".to_string(),
+                    });
+                }
+                None => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: EXPECTED_RK_ID_OPTION.to_string(),
+                        reason: "missing expected_rk_id".to_string(),
+                    });
+                }
+            };
+            if let Some(configured_key_id) = configured_key_id
+                && configured_key_id != expected_rk_id
+            {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: EXPECTED_RK_ID_OPTION.to_string(),
+                    reason: "expected_rk_id must match key_id when both are configured".to_string(),
+                });
+            }
+            let min_rk_epoch = match instance.options.get(MIN_RK_EPOCH_OPTION) {
+                Some(Value::Number(min_rk_epoch)) => min_rk_epoch.as_u64(),
+                Some(_) => None,
+                None => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: MIN_RK_EPOCH_OPTION.to_string(),
+                        reason: "missing min_rk_epoch".to_string(),
+                    });
+                }
+            };
+            let Some(min_rk_epoch) = min_rk_epoch else {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: MIN_RK_EPOCH_OPTION.to_string(),
+                    reason: "expected an unsigned integer".to_string(),
+                });
+            };
+            let max_rk_epoch = match instance.options.get(MAX_RK_EPOCH_OPTION) {
+                Some(Value::Number(max_rk_epoch)) => max_rk_epoch.as_u64(),
+                Some(_) => None,
+                None => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: MAX_RK_EPOCH_OPTION.to_string(),
+                        reason: "missing max_rk_epoch".to_string(),
+                    });
+                }
+            };
+            let Some(max_rk_epoch) = max_rk_epoch else {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: MAX_RK_EPOCH_OPTION.to_string(),
+                    reason: "expected an unsigned integer".to_string(),
+                });
+            };
+            if min_rk_epoch != max_rk_epoch {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: MAX_RK_EPOCH_OPTION.to_string(),
+                    reason: "metadata blind-index provider must pin one active rk_epoch"
+                        .to_string(),
+                });
+            }
         }
         if instance.provider == PAYLOAD_AES_GCM_PROVIDER
             && let Some(option) =
@@ -2706,6 +2821,126 @@ fn validate_generic_collection_crypto_runtime(
                 "collection {collection_name} payload crypto runtime validation failed: {err}"
             ))
         })?;
+    }
+
+    for rule in &encryption.rules {
+        let EncryptionSelector::MetadataKeys { keys } = &rule.selector else {
+            continue;
+        };
+
+        if rule.binding.as_deref() != Some(METADATA_EXACT_MATCH_TOKEN_BINDING) {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} metadata rule {} must use binding {METADATA_EXACT_MATCH_TOKEN_BINDING}",
+                rule.id
+            )));
+        }
+
+        let Some(instance) = runtime_settings.instances.get(&rule.instance) else {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} references unknown crypto instance {}",
+                rule.instance
+            )));
+        };
+        if instance.provider != METADATA_BLIND_INDEX_PROVIDER {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} rule {} must use provider {METADATA_BLIND_INDEX_PROVIDER}, found {}",
+                rule.id, instance.provider
+            )));
+        }
+        if !instance.materials.is_empty() || instance.backend_ref.is_some() {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} metadata blind-index instance {} must not configure server materials or backend_ref",
+                rule.instance
+            )));
+        }
+        if let Some(option) =
+            unsupported_instance_option(&instance.options, METADATA_BLIND_INDEX_ALLOWED_OPTIONS)
+        {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} metadata blind-index instance {} uses unsupported option {option}",
+                rule.instance
+            )));
+        }
+
+        let instance_key_id = match instance.options.get("key_id") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(key_id)) if is_crypto_identifier(key_id) => Some(key_id.as_str()),
+            Some(_) => {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} metadata blind-index instance {} key_id option must be a crypto identifier string",
+                    rule.instance
+                )));
+            }
+        };
+        let key_id = match (encryption.key_id.as_deref(), instance_key_id) {
+            (Some(collection_key_id), Some(runtime_key_id))
+                if collection_key_id != runtime_key_id =>
+            {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} key id does not match metadata blind-index instance {} key id",
+                    rule.instance
+                )));
+            }
+            (Some(collection_key_id), _) => collection_key_id,
+            (None, Some(runtime_key_id)) => runtime_key_id,
+            (None, None) => {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} metadata blind-index instance {} is missing a key id",
+                    rule.instance
+                )));
+            }
+        };
+
+        let expected_rk_id = match instance.options.get(EXPECTED_RK_ID_OPTION) {
+            Some(Value::String(value)) if is_crypto_identifier(value) => value.as_str(),
+            Some(_) => {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} metadata blind-index instance {} expected_rk_id option must be a crypto identifier string",
+                    rule.instance
+                )));
+            }
+            None => {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} metadata blind-index instance {} must set expected_rk_id",
+                    rule.instance
+                )));
+            }
+        };
+        if expected_rk_id != key_id {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} metadata blind-index instance {} expected_rk_id must match key id",
+                rule.instance
+            )));
+        }
+
+        let min_rk_epoch = match instance.options.get(MIN_RK_EPOCH_OPTION) {
+            Some(Value::Number(value)) => value.as_u64(),
+            Some(_) | None => None,
+        };
+        let max_rk_epoch = match instance.options.get(MAX_RK_EPOCH_OPTION) {
+            Some(Value::Number(value)) => value.as_u64(),
+            Some(_) | None => None,
+        };
+        let (Some(min_rk_epoch), Some(max_rk_epoch)) = (min_rk_epoch, max_rk_epoch) else {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} metadata blind-index instance {} must pin min_rk_epoch and max_rk_epoch",
+                rule.instance
+            )));
+        };
+        if min_rk_epoch != max_rk_epoch {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} metadata blind-index instance {} must pin one active rk_epoch",
+                rule.instance
+            )));
+        }
+
+        for key in keys {
+            key.parse::<JsonPath>().map_err(|err| {
+                StorageError::bad_input(format!(
+                    "collection {collection_name} metadata blind-index key '{key}' is invalid: {err:?}",
+                ))
+            })?;
+        }
     }
 
     for rule in &encryption.rules {
@@ -4649,6 +4884,47 @@ mod tests {
         assert!(matches!(
             validate_runtime_config(&with_legacy),
             Err(CryptoSetupError::LegacyCkksRuntimeUnsupported),
+        ));
+    }
+
+    #[test]
+    fn validate_runtime_config_accepts_metadata_blind_index_provider() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                instances: HashMap::from([(
+                    "docs_body_blind_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: METADATA_BLIND_INDEX_PROVIDER.to_string(),
+                        options: json!({
+                            "key_id": "tenant-a:docs",
+                            "expected_rk_id": "tenant-a:docs",
+                            "min_rk_epoch": 3,
+                            "max_rk_epoch": 3,
+                        }),
+                        ..CryptoInstanceConfig::default()
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+
+        validate_runtime_config(&settings).unwrap();
+
+        let mut with_server_material = settings;
+        with_server_material
+            .crypto
+            .instances
+            .get_mut("docs_body_blind_v1")
+            .unwrap()
+            .materials
+            .insert("sym_key".to_string(), "tenant-a/blind-v1".to_string());
+        let err = validate_runtime_config(&with_server_material)
+            .expect_err("metadata blind-index provider must be server blind");
+        assert!(matches!(
+            err,
+            CryptoSetupError::InvalidInstanceOption { reason, .. }
+                if reason.contains("must not configure server materials")
         ));
     }
 
@@ -8072,11 +8348,11 @@ mod tests {
             "docs",
             &create_collection_with_params(params),
         )
-        .expect_err("create-time vector selector must fail schema validation");
+        .expect_err("create-time metadata value selector must fail schema validation");
         assert!(
             matches!(err, StorageError::BadInput { ref description }
                 if description.contains("collection docs crypto config is invalid")
-                    && description.contains("unsupported_encryption_selector")),
+                    && description.contains("unsupported_metadata_encryption_binding")),
             "unexpected error: {err:?}",
         );
 
@@ -8104,8 +8380,26 @@ mod tests {
     }
 
     #[test]
-    fn validate_collection_crypto_runtime_rejects_metadata_selectors() {
-        let settings = Settings::new(None).unwrap();
+    fn validate_collection_crypto_runtime_accepts_metadata_blind_index_selectors() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                instances: HashMap::from([(
+                    "docs_metadata_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: METADATA_BLIND_INDEX_PROVIDER.to_string(),
+                        options: json!({
+                            "key_id": "tenant-a:docs",
+                            "expected_rk_id": "tenant-a:docs",
+                            "min_rk_epoch": 3,
+                            "max_rk_epoch": 3,
+                        }),
+                        ..CryptoInstanceConfig::default()
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
         let params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
@@ -8114,23 +8408,32 @@ mod tests {
                 encryption_epoch: 0,
                 migration_state: CryptoMigrationState::Active,
                 rules: vec![EncryptionRuleRef {
-                    id: "metadata_conf".to_string(),
+                    id: "body_blind_eq".to_string(),
                     selector: EncryptionSelector::MetadataKeys {
-                        keys: vec!["tenant_id".to_string()],
+                        keys: vec!["body__blind_eq".to_string()],
                     },
                     instance: "docs_metadata_v1".to_string(),
-                    binding: Some("metadata-value/v1".to_string()),
+                    binding: Some("metadata-exact-match-token/v1".to_string()),
                 }],
             }),
             ..CollectionParams::empty()
         };
 
-        let err = validate_collection_crypto_runtime(&settings, "docs", &params)
-            .expect_err("metadata selectors are reserved and must fail schema validation");
+        validate_collection_crypto_runtime(&settings, "docs", &params).unwrap();
+
+        let mut settings_with_material = settings.clone();
+        settings_with_material
+            .crypto
+            .instances
+            .get_mut("docs_metadata_v1")
+            .unwrap()
+            .materials
+            .insert("sym_key".to_string(), "tenant-a/blind-v1".to_string());
+        let err = validate_collection_crypto_runtime(&settings_with_material, "docs", &params)
+            .expect_err("metadata blind-index provider must stay server blind");
         assert!(
             matches!(err, StorageError::BadInput { ref description }
-                if description.contains("collection docs crypto config is invalid")
-                    && description.contains("unsupported_encryption_selector")),
+                if description.contains("metadata blind-index instance docs_metadata_v1 must not configure server materials")),
             "unexpected error: {err:?}",
         );
     }
@@ -8158,11 +8461,11 @@ mod tests {
         };
 
         let err = validate_recovered_collection_crypto_runtime(&settings, "docs", &params)
-            .expect_err("recovered vector selector must fail schema validation");
+            .expect_err("recovered metadata value selector must fail schema validation");
         assert!(
             matches!(err, StorageError::BadInput { ref description }
                 if description.contains("recovered collection docs encryption config is invalid")
-                    && description.contains("unsupported_encryption_selector")),
+                    && description.contains("unsupported_metadata_encryption_binding")),
             "unexpected error: {err:?}",
         );
 

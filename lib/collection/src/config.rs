@@ -30,6 +30,7 @@ use crate::operations::validation;
 use crate::optimizers_builder::OptimizersConfig;
 
 pub const COLLECTION_CONFIG_FILE: &str = "config.json";
+const METADATA_EXACT_MATCH_TOKEN_BINDING: &str = "metadata-exact-match-token/v1";
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Validate, Anonymize, Clone, PartialEq, Eq)]
 #[anonymize(false)]
@@ -1121,8 +1122,32 @@ mod ckks_tests {
     }
 
     #[test]
-    fn encryption_config_rejects_metadata_selector_until_transport_support_exists() {
+    fn encryption_config_allows_exact_match_metadata_blind_index_selector() {
         let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_blind_eq".to_string(),
+                    selector: EncryptionSelector::MetadataKeys {
+                        keys: vec!["body__blind_eq".to_string()],
+                    },
+                    instance: "docs_meta_eq_v1".to_string(),
+                    binding: Some("metadata-exact-match-token/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        params.validate().unwrap();
+    }
+
+    #[test]
+    fn encryption_config_rejects_metadata_value_binding_and_encrypted_path_overlap() {
+        let metadata_value_params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
                 key_id: Some("tenant-a:docs".to_string()),
@@ -1141,7 +1166,38 @@ mod ckks_tests {
             ..CollectionParams::empty()
         };
 
-        assert!(params.validate().is_err());
+        assert!(metadata_value_params.validate().is_err());
+
+        let overlapping_params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![
+                    EncryptionRuleRef {
+                        id: "body_conf".to_string(),
+                        selector: EncryptionSelector::PayloadPaths {
+                            paths: vec!["body".to_string()],
+                        },
+                        instance: "docs_payload_v1".to_string(),
+                        binding: Some("payload-field/v1".to_string()),
+                    },
+                    EncryptionRuleRef {
+                        id: "body_nested_index".to_string(),
+                        selector: EncryptionSelector::MetadataKeys {
+                            keys: vec!["body.blind_eq".to_string()],
+                        },
+                        instance: "docs_meta_eq_v1".to_string(),
+                        binding: Some("metadata-exact-match-token/v1".to_string()),
+                    },
+                ],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        assert!(overlapping_params.validate().is_err());
     }
 }
 
@@ -1541,9 +1597,9 @@ fn validate_ckks_collection_config(
 
 /// Capability-oriented collection encryption rules.
 ///
-/// Secret key material is never stored here. Metadata selectors are reserved
-/// for future metadata value and blind-index support, but are rejected by
-/// collection validation in this branch.
+/// Secret key material is never stored here. Metadata selectors are restricted
+/// to client-generated exact-match blind-index token fields; metadata value
+/// encryption, range, geo, and full-text filtering remain unsupported.
 #[derive(
     Debug, Deserialize, Serialize, JsonSchema, Validate, Anonymize, Clone, PartialEq, Eq, Hash,
 )]
@@ -1633,11 +1689,10 @@ pub enum EncryptionSelector {
         #[anonymize(false)]
         names: Vec<VectorNameBuf>,
     },
-    /// Reserved for future metadata encryption support.
+    /// Client-generated exact-match blind-index token fields.
     ///
-    /// This selector is currently rejected by collection validation; AEAD alone
-    /// does not support metadata filtering semantics such as range, geo, or
-    /// full-text filters.
+    /// These fields are ordinary searchable payload fields carrying opaque
+    /// tokens. They must not overlap encrypted payload paths.
     MetadataKeys {
         #[validate(custom(function = "validate_encryption_metadata_keys"))]
         #[anonymize(true)]
@@ -1793,7 +1848,11 @@ fn validate_encryption_metadata_keys(keys: &[String]) -> Result<(), validator::V
     }
 
     for key in keys {
-        if key.is_empty() || key.contains('\0') {
+        if key.is_empty()
+            || key.starts_with('.')
+            || key.ends_with('.')
+            || key.split('.').any(invalid_payload_encryption_path_part)
+        {
             return Err(validator::ValidationError::new(
                 "invalid_encryption_metadata_keys",
             ));
@@ -1813,21 +1872,25 @@ fn validate_encryption_rules(
     let mut ids = HashSet::new();
     let mut payload_paths = Vec::<&str>::new();
     let mut vector_names = HashSet::new();
+    let mut metadata_keys = Vec::<&str>::new();
     for rule in rules {
         if !ids.insert(rule.id.as_str()) {
             return Err(validator::ValidationError::new(
                 "duplicate_encryption_rule_id",
             ));
         }
-        if matches!(rule.selector, EncryptionSelector::MetadataKeys { .. }) {
-            return Err(validator::ValidationError::new(
-                "unsupported_encryption_selector",
-            ));
-        }
         match &rule.selector {
             EncryptionSelector::PayloadPaths { paths } => {
                 for path in paths {
                     if payload_paths
+                        .iter()
+                        .any(|existing| encryption_paths_overlap(existing, path))
+                    {
+                        return Err(validator::ValidationError::new(
+                            "overlapping_encryption_selector",
+                        ));
+                    }
+                    if metadata_keys
                         .iter()
                         .any(|existing| encryption_paths_overlap(existing, path))
                     {
@@ -1847,7 +1910,27 @@ fn validate_encryption_rules(
                     }
                 }
             }
-            EncryptionSelector::MetadataKeys { .. } => {}
+            EncryptionSelector::MetadataKeys { keys } => {
+                if rule.binding.as_deref() != Some(METADATA_EXACT_MATCH_TOKEN_BINDING) {
+                    return Err(validator::ValidationError::new(
+                        "unsupported_metadata_encryption_binding",
+                    ));
+                }
+                for key in keys {
+                    if payload_paths
+                        .iter()
+                        .any(|existing| encryption_paths_overlap(existing, key))
+                        || metadata_keys
+                            .iter()
+                            .any(|existing| encryption_paths_overlap(existing, key))
+                    {
+                        return Err(validator::ValidationError::new(
+                            "overlapping_encryption_selector",
+                        ));
+                    }
+                    metadata_keys.push(key);
+                }
+            }
         }
     }
 
