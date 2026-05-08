@@ -1158,6 +1158,18 @@ pub async fn do_recommend_batch_points(
         return Ok(results);
     }
 
+    for (request, _) in &requests {
+        let with_vector = request.with_vector.clone().unwrap_or_default();
+        ensure_with_vector_does_not_request_encrypted_vectors(
+            toc,
+            collection_name,
+            &with_vector,
+            &auth,
+            "recommend",
+        )
+        .await?;
+    }
+
     toc.recommend_batch(
         collection_name,
         requests,
@@ -1509,6 +1521,18 @@ pub async fn do_discover_batch_points(
         .await?
     {
         return Ok(results);
+    }
+
+    for (request, _) in &requests {
+        let with_vector = request.with_vector.clone().unwrap_or_default();
+        ensure_with_vector_does_not_request_encrypted_vectors(
+            toc,
+            collection_name,
+            &with_vector,
+            &auth,
+            "discover",
+        )
+        .await?;
     }
 
     toc.discover_batch(

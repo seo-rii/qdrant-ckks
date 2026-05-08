@@ -4301,6 +4301,70 @@ esac
                         && description.contains("payload sidecar only")
             ));
 
+            let err = crate::common::query::do_recommend_points(
+                &toc,
+                "vector_docs",
+                RecommendRequestInternal {
+                    positive: vec![RecommendExample::Dense(vec![0.0, 0.0])],
+                    negative: Vec::new(),
+                    strategy: Some(api::rest::RecommendStrategy::AverageVector),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(true)),
+                    score_threshold: None,
+                    using: None,
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cannot recommend encrypted vectors")
+                        && description.contains("payload sidecar only")
+            ));
+
+            let err = crate::common::query::do_discover_points(
+                &toc,
+                "vector_docs",
+                DiscoverRequestInternal {
+                    target: Some(RecommendExample::Dense(vec![0.0, 0.0])),
+                    context: None,
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(true)),
+                    using: None,
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cannot discover encrypted vectors")
+                        && description.contains("payload sidecar only")
+            ));
+
             let search_result = crate::common::query::do_core_search_points(
                 &toc,
                 "vector_docs",
