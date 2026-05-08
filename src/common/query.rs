@@ -874,6 +874,15 @@ pub async fn do_search_point_groups(
         return Ok(result);
     }
 
+    let with_vector = request.with_vector.clone().unwrap_or_default();
+    ensure_with_vector_does_not_request_encrypted_vectors(
+        toc,
+        collection_name,
+        &with_vector,
+        &auth,
+        "search groups",
+    )
+    .await?;
     ensure_encrypted_vector_group_request_is_unsupported(
         toc,
         collection_name,
@@ -1367,6 +1376,15 @@ pub async fn do_recommend_point_groups(
         .as_ref()
         .map(UsingVector::as_name)
         .unwrap_or_else(|| DEFAULT_VECTOR_NAME.to_string());
+    let with_vector = request.with_vector.clone().unwrap_or_default();
+    ensure_with_vector_does_not_request_encrypted_vectors(
+        toc,
+        collection_name,
+        &with_vector,
+        &auth,
+        "recommend groups",
+    )
+    .await?;
     ensure_encrypted_vector_group_request_is_unsupported(toc, collection_name, &vector_name, &auth)
         .await?;
 
@@ -2029,6 +2047,14 @@ pub async fn do_query_point_groups(
         return Ok(result);
     }
 
+    ensure_with_vector_does_not_request_encrypted_vectors(
+        toc,
+        collection_name,
+        &request.with_vector,
+        &auth,
+        "query groups",
+    )
+    .await?;
     ensure_encrypted_vector_group_request_is_unsupported(
         toc,
         collection_name,
