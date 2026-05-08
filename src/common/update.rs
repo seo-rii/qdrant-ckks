@@ -4298,6 +4298,28 @@ esac
                         && description.contains("CKKS-native vector search matrix is not implemented")
             ));
 
+            let err = crate::tonic::api::query_common::search_points_matrix(
+                UncheckedTocProvider::new_unchecked(&toc),
+                api::grpc::qdrant::SearchMatrixPoints {
+                    collection_name: "vector_docs".to_string(),
+                    filter: None,
+                    sample: Some(2),
+                    limit: Some(2),
+                    using: Some(DEFAULT_VECTOR_NAME.to_string()),
+                    read_consistency: None,
+                    shard_key_selector: None,
+                    timeout: None,
+                },
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                err.message()
+                    .contains("cannot search matrix using encrypted vector")
+            );
+
             let err = crate::common::query::do_core_search_points(
                 &toc,
                 "vector_docs",

@@ -8,7 +8,10 @@ pub mod snapshots_api;
 pub mod telemetry_wrapper;
 
 mod collections_common;
+#[cfg(not(test))]
 mod query_common;
+#[cfg(test)]
+pub(crate) mod query_common;
 mod update_common;
 
 use collection::operations::validation;
