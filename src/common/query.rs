@@ -1,4 +1,7 @@
 use std::collections::{HashMap, VecDeque};
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
@@ -29,6 +32,7 @@ use segment::types::{
 };
 use segment::utils::scored_point_ties::ScoredPointTies;
 use segment::vector_storage::query::ContextPair;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use shard::query::query_enum::QueryEnum;
 use shard::retrieve::record_internal::RecordInternal;
@@ -50,6 +54,8 @@ struct CkksSidecarSearchRecord {
 }
 
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_CAPACITY: usize = 16;
+const CKKS_SIDECAR_HNSW_GRAPH_CACHE_DIR: &str = "ckks_sidecar_hnsw_graphs";
+const CKKS_SIDECAR_HNSW_GRAPH_CACHE_VERSION: u8 = 1;
 
 static CKKS_SIDECAR_HNSW_GRAPH_CACHE: LazyLock<Mutex<CkksSidecarHnswGraphCache>> =
     LazyLock::new(|| Mutex::new(CkksSidecarHnswGraphCache::default()));
@@ -66,6 +72,18 @@ struct CkksSidecarHnswGraphCacheKey {
 #[derive(Clone)]
 struct CkksSidecarHnswGraph {
     links: Arc<Vec<Vec<usize>>>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CkksSidecarHnswGraphDisk {
+    version: u8,
+    collection_name: String,
+    vector_name: String,
+    score_order: String,
+    m: usize,
+    records_fingerprint: String,
+    links: Vec<Vec<usize>>,
 }
 
 #[derive(Default)]
@@ -790,6 +808,7 @@ async fn ckks_vector_search_points(
         for scored_point in ckks_sidecar_hnsw_search_points(
             collection_name,
             vector_name,
+            collection.path(),
             plan,
             &hnsw_records,
             query_values,
@@ -966,10 +985,172 @@ fn ckks_sidecar_hnsw_records_fingerprint(records: &[CkksSidecarSearchRecord]) ->
     BASE64URL_NOPAD.encode(digest.as_ref())
 }
 
+fn ckks_sidecar_hnsw_graph_cache_file_name(key: &CkksSidecarHnswGraphCacheKey) -> String {
+    let mut hasher = Sha256::new();
+    for value in [
+        key.collection_name.as_str(),
+        key.vector_name.as_str(),
+        key.score_order,
+        key.records_fingerprint.as_str(),
+    ] {
+        let bytes = value.as_bytes();
+        hasher.update((bytes.len() as u32).to_be_bytes());
+        hasher.update(bytes);
+    }
+    hasher.update((key.m as u64).to_be_bytes());
+    let digest = hasher.finalize();
+    format!("{}.json", BASE64URL_NOPAD.encode(digest.as_ref()))
+}
+
+fn ckks_sidecar_hnsw_graph_cache_path(
+    collection_path: &Path,
+    key: &CkksSidecarHnswGraphCacheKey,
+) -> PathBuf {
+    collection_path
+        .join(CKKS_SIDECAR_HNSW_GRAPH_CACHE_DIR)
+        .join(ckks_sidecar_hnsw_graph_cache_file_name(key))
+}
+
+fn ckks_sidecar_hnsw_load_persisted_graph(
+    collection_path: &Path,
+    key: &CkksSidecarHnswGraphCacheKey,
+    records_len: usize,
+) -> Result<Option<Arc<CkksSidecarHnswGraph>>, StorageError> {
+    let path = ckks_sidecar_hnsw_graph_cache_path(collection_path, key);
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(StorageError::service_error(format!(
+                "failed to read CKKS sidecar HNSW graph cache {path:?}: {err}",
+            )));
+        }
+    };
+    let disk: CkksSidecarHnswGraphDisk = serde_json::from_str(&content).map_err(|err| {
+        StorageError::service_error(format!(
+            "failed to parse CKKS sidecar HNSW graph cache {path:?}: {err}",
+        ))
+    })?;
+    if disk.version != CKKS_SIDECAR_HNSW_GRAPH_CACHE_VERSION
+        || disk.collection_name != key.collection_name
+        || disk.vector_name != key.vector_name
+        || disk.score_order != key.score_order
+        || disk.m != key.m
+        || disk.records_fingerprint != key.records_fingerprint
+    {
+        return Ok(None);
+    }
+    if disk.links.len() != records_len
+        || disk
+            .links
+            .iter()
+            .any(|neighbors| neighbors.iter().any(|neighbor| *neighbor >= records_len))
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(Arc::new(CkksSidecarHnswGraph {
+        links: Arc::new(disk.links),
+    })))
+}
+
+fn ckks_sidecar_hnsw_persist_graph(
+    collection_path: &Path,
+    key: &CkksSidecarHnswGraphCacheKey,
+    graph: &CkksSidecarHnswGraph,
+) -> Result<(), StorageError> {
+    let directory = collection_path.join(CKKS_SIDECAR_HNSW_GRAPH_CACHE_DIR);
+    fs::create_dir_all(&directory).map_err(|err| {
+        StorageError::service_error(format!(
+            "failed to create CKKS sidecar HNSW graph cache directory {directory:?}: {err}",
+        ))
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).map_err(|err| {
+            StorageError::service_error(format!(
+                "failed to set CKKS sidecar HNSW graph cache directory permissions {directory:?}: {err}",
+            ))
+        })?;
+    }
+
+    let path = ckks_sidecar_hnsw_graph_cache_path(collection_path, key);
+    let temp_path = path.with_extension("json.tmp");
+    let disk = CkksSidecarHnswGraphDisk {
+        version: CKKS_SIDECAR_HNSW_GRAPH_CACHE_VERSION,
+        collection_name: key.collection_name.clone(),
+        vector_name: key.vector_name.clone(),
+        score_order: key.score_order.to_string(),
+        m: key.m,
+        records_fingerprint: key.records_fingerprint.clone(),
+        links: graph.links.as_ref().clone(),
+    };
+    let content = serde_json::to_vec(&disk).map_err(|err| {
+        StorageError::service_error(format!(
+            "failed to serialize CKKS sidecar HNSW graph cache {path:?}: {err}",
+        ))
+    })?;
+
+    let mut options = OpenOptions::new();
+    options.create(true).write(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temp_path).map_err(|err| {
+        StorageError::service_error(format!(
+            "failed to create CKKS sidecar HNSW graph cache {temp_path:?}: {err}",
+        ))
+    })?;
+    file.write_all(&content).map_err(|err| {
+        StorageError::service_error(format!(
+            "failed to write CKKS sidecar HNSW graph cache {temp_path:?}: {err}",
+        ))
+    })?;
+    file.flush().map_err(|err| {
+        StorageError::service_error(format!(
+            "failed to flush CKKS sidecar HNSW graph cache {temp_path:?}: {err}",
+        ))
+    })?;
+    file.sync_all().map_err(|err| {
+        StorageError::service_error(format!(
+            "failed to sync CKKS sidecar HNSW graph cache {temp_path:?}: {err}",
+        ))
+    })?;
+    fs::rename(&temp_path, &path).map_err(|err| {
+        StorageError::service_error(format!(
+            "failed to replace CKKS sidecar HNSW graph cache {path:?}: {err}",
+        ))
+    })?;
+    ckks_sidecar_hnsw_sync_parent(&path).map_err(|err| {
+        StorageError::service_error(format!(
+            "failed to sync CKKS sidecar HNSW graph cache directory for {path:?}: {err}",
+        ))
+    })
+}
+
+#[cfg(unix)]
+fn ckks_sidecar_hnsw_sync_parent(path: &Path) -> std::io::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    File::open(parent)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn ckks_sidecar_hnsw_sync_parent(_path: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn ckks_sidecar_hnsw_search_points(
     collection_name: &str,
     vector_name: &str,
+    collection_path: &Path,
     plan: &crate::common::crypto::VectorWritePlan,
     records: &[CkksSidecarSearchRecord],
     query_values: &[f32],
@@ -1067,64 +1248,90 @@ fn ckks_sidecar_hnsw_search_points(
     let graph = match graph {
         Some(graph) => graph,
         None => {
-            let mut links = vec![Vec::<usize>::new(); records.len()];
-            for idx in 1..records.len() {
-                let candidates = (0..idx)
-                    .map(|candidate| {
-                        (
-                            records[candidate].point_id.clone(),
-                            records[candidate].encrypted.clone(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                let scores = plan
-                    .score_stored_query_batch(
-                        collection_name,
-                        vector_name,
-                        &records[idx].point_id,
-                        &records[idx].encrypted,
-                        &candidates,
-                    )?
-                    .ok_or_else(|| {
-                        StorageError::service_error(format!(
-                            "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-                        ))
-                    })?;
-                let mut neighbors = scores
-                    .into_iter()
-                    .enumerate()
-                    .map(|(candidate, score)| ScoredPoint {
-                        id: PointIdType::NumId(candidate as u64),
-                        version: 0,
-                        score,
-                        payload: None,
-                        vector: None,
-                        shard_key: None,
-                        order_value: None,
-                    })
-                    .collect::<Vec<_>>();
-                sort_ckks_scored_points(score_order, &mut neighbors);
-                for neighbor in neighbors.into_iter().take(m) {
-                    let candidate = match neighbor.id {
-                        PointIdType::NumId(candidate) => candidate as usize,
-                        PointIdType::Uuid(_) => unreachable!("candidate indexes are numeric"),
-                    };
-                    links[idx].push(candidate);
-                    links[candidate].push(idx);
-                    if links[candidate].len() > m * 2 {
-                        links[candidate].remove(0);
+            let persisted_graph =
+                ckks_sidecar_hnsw_load_persisted_graph(collection_path, &cache_key, records.len());
+            let persisted_graph = match persisted_graph {
+                Ok(graph) => graph,
+                Err(err) => {
+                    log::warn!(
+                        "Ignoring unreadable CKKS sidecar HNSW graph cache for collection {collection_name}, vector {vector_name}: {err}",
+                    );
+                    None
+                }
+            };
+            if let Some(graph) = persisted_graph {
+                let mut cache = CKKS_SIDECAR_HNSW_GRAPH_CACHE.lock().map_err(|_| {
+                    StorageError::service_error("CKKS sidecar HNSW graph cache mutex was poisoned")
+                })?;
+                cache.insert(cache_key, graph.clone());
+                graph
+            } else {
+                let mut links = vec![Vec::<usize>::new(); records.len()];
+                for idx in 1..records.len() {
+                    let candidates = (0..idx)
+                        .map(|candidate| {
+                            (
+                                records[candidate].point_id.clone(),
+                                records[candidate].encrypted.clone(),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    let scores = plan
+                        .score_stored_query_batch(
+                            collection_name,
+                            vector_name,
+                            &records[idx].point_id,
+                            &records[idx].encrypted,
+                            &candidates,
+                        )?
+                        .ok_or_else(|| {
+                            StorageError::service_error(format!(
+                                "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
+                            ))
+                        })?;
+                    let mut neighbors = scores
+                        .into_iter()
+                        .enumerate()
+                        .map(|(candidate, score)| ScoredPoint {
+                            id: PointIdType::NumId(candidate as u64),
+                            version: 0,
+                            score,
+                            payload: None,
+                            vector: None,
+                            shard_key: None,
+                            order_value: None,
+                        })
+                        .collect::<Vec<_>>();
+                    sort_ckks_scored_points(score_order, &mut neighbors);
+                    for neighbor in neighbors.into_iter().take(m) {
+                        let candidate = match neighbor.id {
+                            PointIdType::NumId(candidate) => candidate as usize,
+                            PointIdType::Uuid(_) => unreachable!("candidate indexes are numeric"),
+                        };
+                        links[idx].push(candidate);
+                        links[candidate].push(idx);
+                        if links[candidate].len() > m * 2 {
+                            links[candidate].remove(0);
+                        }
                     }
                 }
-            }
 
-            let graph = Arc::new(CkksSidecarHnswGraph {
-                links: Arc::new(links),
-            });
-            let mut cache = CKKS_SIDECAR_HNSW_GRAPH_CACHE.lock().map_err(|_| {
-                StorageError::service_error("CKKS sidecar HNSW graph cache mutex was poisoned")
-            })?;
-            cache.insert(cache_key, graph.clone());
-            graph
+                let graph = Arc::new(CkksSidecarHnswGraph {
+                    links: Arc::new(links),
+                });
+                if let Err(err) =
+                    ckks_sidecar_hnsw_persist_graph(collection_path, &cache_key, &graph)
+                {
+                    log::warn!(
+                        "Failed to persist CKKS sidecar HNSW graph cache for collection {collection_name}, vector {vector_name}: {err}",
+                    );
+                }
+                let mut cache = CKKS_SIDECAR_HNSW_GRAPH_CACHE.lock().map_err(|_| {
+                    StorageError::service_error("CKKS sidecar HNSW graph cache mutex was poisoned")
+                })?;
+                cache.insert(cache_key, graph.clone());
+                graph
+            }
         }
     };
 
@@ -3004,6 +3211,37 @@ mod tests {
         }
 
         assert!(cache.get(&original_key).is_none());
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_roundtrips_by_cache_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = CkksSidecarHnswGraphCacheKey {
+            collection_name: "collection".to_string(),
+            vector_name: "vector".to_string(),
+            score_order: "large",
+            m: 16,
+            records_fingerprint: "fingerprint-a".to_string(),
+        };
+        let graph = CkksSidecarHnswGraph {
+            links: Arc::new(vec![vec![1], vec![0, 2], vec![1]]),
+        };
+
+        ckks_sidecar_hnsw_persist_graph(dir.path(), &key, &graph).unwrap();
+        let loaded = ckks_sidecar_hnsw_load_persisted_graph(dir.path(), &key, 3)
+            .unwrap()
+            .unwrap();
+        assert_eq!(*loaded.links, *graph.links);
+
+        let stale_key = CkksSidecarHnswGraphCacheKey {
+            records_fingerprint: "fingerprint-b".to_string(),
+            ..key
+        };
+        assert!(
+            ckks_sidecar_hnsw_load_persisted_graph(dir.path(), &stale_key, 3)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

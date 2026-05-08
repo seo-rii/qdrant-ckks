@@ -1146,6 +1146,10 @@ impl Collection {
         &self.snapshots_path
     }
 
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     pub fn shards_holder(&self) -> SharedShardHolder {
         self.shards_holder.clone()
     }
