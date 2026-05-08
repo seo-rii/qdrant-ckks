@@ -35,7 +35,7 @@
 - CKKS encrypted vector production-grade indexing: sidecar storage/search는 구현됐지만 native segment `HNSWIndex` 통합, client-supplied encrypted query vectors, score decryption, broader distributed rebuild/recovery coverage는 아직 없다.
 - Background migration/re-encrypt job: plan/state primitive는 있지만 point scan, checkpoint resume, verification, rollback, old-key disable/destroy job은 아직 없다.
 - Cluster-wide client nonce replay ledger: request/process/collection-local/reload cache는 있지만 consensus-backed global ledger는 없다.
-- Blind index: client-side exact-match search를 위한 token provider/query integration은 아직 없다.
+- Blind index: client-side exact-match token field provider/query integration은 들어갔다. Metadata value encryption, server-computed tokens, range/geo/full-text searchable encryption은 아직 없다.
 - Decrypt/RBAC read mode: 현재 retrieve/scroll/search/export는 raw envelope 반환이며 `decrypted`/`redacted` 권한 모델은 없다.
 - KMS/Vault/Unix socket key providers: local/env/file/fd/wrapped material 기반은 있지만 external KMS lifecycle은 future work다.
 - Broader distributed integration: current unit/integration coverage는 많지만 multi-node parity/restore/replay ledger e2e는 남아 있다.
@@ -232,11 +232,11 @@
 
 작업 순서:
 
-- `metadata_value/aead`와 `metadata_exact_match/blind-index` provider contract를 분리한다.
+- `metadata_value/aead`와 `metadata_exact_match/blind-index` provider contract를 분리한다. Exact-match blind-index token field는 현재 `metadata/blind-index-hmac@v1` + `metadata-exact-match-token/v1`로 구현되어 있고, Qdrant는 token을 계산하지 않는다.
 - metadata value envelope schema를 정의한다.
-- exact-match token은 deterministic HMAC/HKDF subkey로 만들고 원문 값을 저장하지 않는다.
+- exact-match token은 client/SDK가 deterministic HMAC/HKDF subkey로 만들고 원문 값을 저장하지 않는다.
 - payload filter planner가 encrypted metadata field에 range/geo/full-text filter를 요청하면 거부한다.
-- exact-match filter만 blind index가 있을 때 허용한다.
+- exact-match filter는 별도 blind-index token field를 대상으로 할 때만 허용한다.
 - API docs에 지원/비지원 filter matrix를 추가한다.
 
 테스트:
@@ -244,7 +244,7 @@
 - metadata value는 retrieve 시 권한 있는 경로에서만 복호화된다.
 - exact-match filter는 blind index token으로 동작한다.
 - range/geo/full-text filter는 실패한다.
-- metadata selector가 구현 전 unsupported였던 테스트를 구현 후 새 계약으로 교체한다.
+- metadata value selector는 구현 전 unsupported로 유지하고, blind-index token selector만 새 계약으로 허용한다.
 
 완료 조건:
 
