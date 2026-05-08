@@ -661,14 +661,16 @@ The bridge reads newline-delimited JSON requests from stdin and writes one
 newline-delimited JSON response per request to stdout. The backend reuses the
 same child process while the bridge stays healthy and respawns it if the worker
 exits between requests.
-Vector encryption requests use `operation: encrypt`; plaintext-query scoring
+Single vector encryption requests use `operation: encrypt`; batch vector
+encryption requests use `operation: encrypt_batch`. Plaintext-query scoring
 requests use `operation: score_plaintext_query` for single-point scoring or
-`operation: score_plaintext_query_batch` for scroll-batch scoring. Both include
-the profile parameters, OpenFHE public material, collection/vector routing
-metadata, the collection `distance` metric (`dot`, `cosine`, `euclid`, or
-`manhattan`), plaintext query values, and stored CKKS ciphertext bytes. Batch
-score responses must preserve request item order and return exactly one finite
-score per item. All encrypt, batch encrypt, and scoring responses must include
+`operation: score_plaintext_query_batch` for scroll-batch scoring. All bridge
+requests include the profile parameters, OpenFHE public material, and
+collection/vector routing metadata. Scoring requests additionally include the
+collection `distance` metric (`dot`, `cosine`, `euclid`, or `manhattan`),
+plaintext query values, and stored CKKS ciphertext bytes. Batch responses must
+preserve request item order and return exactly one ciphertext or finite score
+per item. All encrypt, batch encrypt, and scoring responses must include
 `security_profile`, and it must equal the configured allowlisted CKKS profile.
 The subprocess backend still enforces a positive `timeout_ms` and caps
 stdout/stderr collection so a hung or noisy bridge cannot block Qdrant
@@ -699,6 +701,7 @@ Request fields:
 ```json
 {
   "version": 1,
+  "operation": "encrypt",
   "scheme": "openfhe-ckks",
   "collection": "docs",
   "point_id": "point-1",
@@ -721,6 +724,7 @@ Response fields:
 ```json
 {
   "version": 1,
+  "security_profile": "ckks-128-n16384-d4-scale50",
   "ciphertext": "base64url-no-pad-openfhe-ciphertext"
 }
 ```
@@ -733,6 +737,7 @@ items:
 ```json
 {
   "version": 1,
+  "operation": "encrypt_batch",
   "scheme": "openfhe-ckks",
   "collection": "docs",
   "vector_name": "embedding",
@@ -757,6 +762,7 @@ The bridge response must preserve item order:
 ```json
 {
   "version": 1,
+  "security_profile": "ckks-128-n16384-d4-scale50",
   "ciphertexts": [
     "base64url-no-pad-openfhe-ciphertext-1",
     "base64url-no-pad-openfhe-ciphertext-2"

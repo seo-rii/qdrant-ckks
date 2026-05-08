@@ -888,7 +888,7 @@ fn command_openfhe_backend_uses_bridge_protocol() {
 set -euo pipefail
 IFS= read -r request
 case "$request" in
-  *'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*) ;;
+  *'"operation":"encrypt"'*'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*) ;;
   *) exit 7 ;;
 esac
 printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
@@ -1285,7 +1285,7 @@ fn command_openfhe_backend_uses_batch_bridge_protocol() {
 set -euo pipefail
 IFS= read -r request
 case "$request" in
-  *'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*'"items"'*'"point_id":"point-1"'*'"point_id":"point-2"'*) ;;
+  *'"operation":"encrypt_batch"'*'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*'"items"'*'"point_id":"point-1"'*'"point_id":"point-2"'*) ;;
   *) exit 7 ;;
 esac
 printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertexts":["YmF0Y2gtb25l","YmF0Y2gtdHdv"]}\n'

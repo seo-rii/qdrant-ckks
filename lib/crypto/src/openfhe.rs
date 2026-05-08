@@ -419,6 +419,7 @@ impl CkksVectorBackend for CommandOpenFheBackend {
     fn encrypt(&self, input: CkksEncryptionInput<'_>) -> Result<Vec<u8>, CkksError> {
         let request = CommandOpenFheRequest {
             version: 1,
+            operation: "encrypt",
             scheme: CKKS_SCHEME,
             collection: input.collection,
             point_id: input.point_id,
@@ -469,6 +470,7 @@ impl CkksVectorBackend for CommandOpenFheBackend {
             .collect();
         let request = CommandOpenFheBatchRequest {
             version: 1,
+            operation: "encrypt_batch",
             scheme: CKKS_SCHEME,
             collection: input.collection,
             vector_name: input.vector_name,
@@ -971,6 +973,7 @@ fn configure_bridge_command_sandbox(_command: &mut Command) {}
 #[serde(rename_all = "snake_case")]
 struct CommandOpenFheRequest<'a> {
     version: u8,
+    operation: &'static str,
     scheme: &'static str,
     collection: &'a str,
     point_id: &'a str,
@@ -985,6 +988,7 @@ struct CommandOpenFheRequest<'a> {
 #[serde(rename_all = "snake_case")]
 struct CommandOpenFheBatchRequest<'a> {
     version: u8,
+    operation: &'static str,
     scheme: &'static str,
     collection: &'a str,
     vector_name: &'a str,
