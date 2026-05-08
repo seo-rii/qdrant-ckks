@@ -1058,12 +1058,52 @@ fn ckks_sidecar_hnsw_graph_cache_path(
         .join(ckks_sidecar_hnsw_graph_cache_file_name(key))
 }
 
+fn ckks_sidecar_hnsw_existing_cache_directory_is_safe(
+    directory: &Path,
+) -> Result<bool, StorageError> {
+    let metadata = match fs::symlink_metadata(directory) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => {
+            return Err(StorageError::service_error(format!(
+                "failed to inspect CKKS sidecar HNSW graph cache directory {directory:?}: {err}",
+            )));
+        }
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(StorageError::service_error(format!(
+            "CKKS sidecar HNSW graph cache directory {directory:?} must not be a symlink",
+        )));
+    }
+    if !metadata.is_dir() {
+        return Err(StorageError::service_error(format!(
+            "CKKS sidecar HNSW graph cache directory {directory:?} must be a directory",
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(StorageError::service_error(format!(
+                "CKKS sidecar HNSW graph cache directory {directory:?} must not be group/world accessible",
+            )));
+        }
+    }
+
+    Ok(true)
+}
+
 fn ckks_sidecar_hnsw_load_persisted_graph(
     collection_path: &Path,
     key: &CkksSidecarHnswGraphCacheKey,
     records_len: usize,
 ) -> Result<Option<Arc<CkksSidecarHnswGraph>>, StorageError> {
-    let path = ckks_sidecar_hnsw_graph_cache_path(collection_path, key);
+    let directory = collection_path.join(CKKS_SIDECAR_HNSW_GRAPH_CACHE_DIR);
+    if !ckks_sidecar_hnsw_existing_cache_directory_is_safe(&directory)? {
+        return Ok(None);
+    }
+    let path = directory.join(ckks_sidecar_hnsw_graph_cache_file_name(key));
     let metadata = match fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -1153,11 +1193,13 @@ fn ckks_sidecar_hnsw_persist_graph(
     graph: &CkksSidecarHnswGraph,
 ) -> Result<(), StorageError> {
     let directory = collection_path.join(CKKS_SIDECAR_HNSW_GRAPH_CACHE_DIR);
-    fs::create_dir_all(&directory).map_err(|err| {
-        StorageError::service_error(format!(
-            "failed to create CKKS sidecar HNSW graph cache directory {directory:?}: {err}",
-        ))
-    })?;
+    if !ckks_sidecar_hnsw_existing_cache_directory_is_safe(&directory)? {
+        fs::create_dir_all(&directory).map_err(|err| {
+            StorageError::service_error(format!(
+                "failed to create CKKS sidecar HNSW graph cache directory {directory:?}: {err}",
+            ))
+        })?;
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1168,6 +1210,7 @@ fn ckks_sidecar_hnsw_persist_graph(
             ))
         })?;
     }
+    ckks_sidecar_hnsw_existing_cache_directory_is_safe(&directory)?;
 
     let path = ckks_sidecar_hnsw_graph_cache_path(collection_path, key);
     let temp_path = path.with_extension("json.tmp");
@@ -3412,13 +3455,24 @@ mod tests {
         }
     }
 
+    fn set_ckks_sidecar_test_private_directory_permissions(directory: &Path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+
     fn write_ckks_sidecar_test_graph_disk(
         collection_path: &Path,
         key: &CkksSidecarHnswGraphCacheKey,
         disk: &CkksSidecarHnswGraphDisk,
     ) -> PathBuf {
         let path = ckks_sidecar_hnsw_graph_cache_path(collection_path, key);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let directory = path.parent().unwrap();
+        std::fs::create_dir_all(directory).unwrap();
+        set_ckks_sidecar_test_private_directory_permissions(directory);
         let mut options = std::fs::OpenOptions::new();
         options.create(true).write(true).truncate(true);
         #[cfg(unix)]
@@ -3522,13 +3576,65 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let key = ckks_sidecar_test_graph_cache_key("fingerprint-a");
         let cache_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &key);
-        std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        let cache_directory = cache_path.parent().unwrap();
+        std::fs::create_dir_all(cache_directory).unwrap();
+        set_ckks_sidecar_test_private_directory_permissions(cache_directory);
         let target_path = dir.path().join("target.json");
         std::fs::write(&target_path, "{}").unwrap();
         symlink(&target_path, &cache_path).unwrap();
 
         let err = ckks_sidecar_hnsw_load_persisted_graph(dir.path(), &key, 0).unwrap_err();
         assert!(format!("{err}").contains("must not be a symlink"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_rejects_symlink_cache_directory() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let key = ckks_sidecar_test_graph_cache_key("fingerprint-a");
+        let target_dir = dir.path().join("target-cache-dir");
+        std::fs::create_dir(&target_dir).unwrap();
+        symlink(
+            &target_dir,
+            dir.path().join(CKKS_SIDECAR_HNSW_GRAPH_CACHE_DIR),
+        )
+        .unwrap();
+
+        let err = ckks_sidecar_hnsw_load_persisted_graph(dir.path(), &key, 0).unwrap_err();
+        assert!(format!("{err}").contains("cache directory"));
+        assert!(format!("{err}").contains("must not be a symlink"));
+
+        let graph = CkksSidecarHnswGraph {
+            links: Arc::new(vec![Vec::new()]),
+        };
+        let err = ckks_sidecar_hnsw_persist_graph(dir.path(), &key, &graph).unwrap_err();
+        assert!(format!("{err}").contains("cache directory"));
+        assert!(format!("{err}").contains("must not be a symlink"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_rejects_group_accessible_cache_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let key = ckks_sidecar_test_graph_cache_key("fingerprint-a");
+        let cache_dir = dir.path().join(CKKS_SIDECAR_HNSW_GRAPH_CACHE_DIR);
+        std::fs::create_dir(&cache_dir).unwrap();
+        std::fs::set_permissions(&cache_dir, std::fs::Permissions::from_mode(0o750)).unwrap();
+
+        let err = ckks_sidecar_hnsw_load_persisted_graph(dir.path(), &key, 0).unwrap_err();
+        assert!(format!("{err}").contains("cache directory"));
+        assert!(format!("{err}").contains("must not be group/world accessible"));
+
+        let graph = CkksSidecarHnswGraph {
+            links: Arc::new(vec![Vec::new()]),
+        };
+        let err = ckks_sidecar_hnsw_persist_graph(dir.path(), &key, &graph).unwrap_err();
+        assert!(format!("{err}").contains("cache directory"));
+        assert!(format!("{err}").contains("must not be group/world accessible"));
     }
 
     #[cfg(unix)]
@@ -3554,8 +3660,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let key = ckks_sidecar_test_graph_cache_key("fingerprint-a");
         let cache_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &key);
-        std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
-        let file = std::fs::File::create(&cache_path).unwrap();
+        let cache_directory = cache_path.parent().unwrap();
+        std::fs::create_dir_all(cache_directory).unwrap();
+        set_ckks_sidecar_test_private_directory_permissions(cache_directory);
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).write(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            options.mode(0o600);
+        }
+        let file = options.open(&cache_path).unwrap();
         file.set_len(CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES + 1)
             .unwrap();
 
@@ -3612,8 +3728,18 @@ mod tests {
         for idx in 0..4 {
             let old_key = ckks_sidecar_test_graph_cache_key(format!("old-{idx}"));
             let old_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &old_key);
-            std::fs::create_dir_all(old_path.parent().unwrap()).unwrap();
-            let file = std::fs::File::create(&old_path).unwrap();
+            let old_directory = old_path.parent().unwrap();
+            std::fs::create_dir_all(old_directory).unwrap();
+            set_ckks_sidecar_test_private_directory_permissions(old_directory);
+            let mut options = std::fs::OpenOptions::new();
+            options.create(true).write(true).truncate(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+
+                options.mode(0o600);
+            }
+            let file = options.open(&old_path).unwrap();
             file.set_len(CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_TOTAL_BYTES / 2)
                 .unwrap();
         }
