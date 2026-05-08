@@ -3967,6 +3967,39 @@ esac
                 common::math::scaled_fast_sigmoid(10.0)
             );
 
+            let point_id_context_discover = crate::common::query::do_discover_points(
+                &toc,
+                "vector_groups",
+                DiscoverRequestInternal {
+                    target: Some(RecommendExample::Dense(vec![0.0, 0.0])),
+                    context: Some(vec![ContextExamplePair {
+                        positive: RecommendExample::Dense(vec![0.0, 0.0]),
+                        negative: RecommendExample::PointId(2.into()),
+                    }]),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    using: Some(DEFAULT_VECTOR_NAME.to_string().into()),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(point_id_context_discover[0].id, 1.into());
+            assert_eq!(
+                point_id_context_discover[0].score,
+                1.0 + common::math::scaled_fast_sigmoid(9.0)
+            );
+
             let discover_context = crate::common::query::do_discover_points(
                 &toc,
                 "vector_groups",

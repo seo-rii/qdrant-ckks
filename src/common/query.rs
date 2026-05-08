@@ -73,10 +73,9 @@ enum CkksSidecarScoring<'a> {
         target: &'a [f32],
         pairs: Vec<(&'a [f32], &'a [f32])>,
     },
-    DiscoverStoredTarget {
-        target_point_id: String,
-        target_encrypted: EncryptedCkksVector,
-        pairs: Vec<(&'a [f32], &'a [f32])>,
+    DiscoverResolved {
+        target: CkksSidecarQuerySource<'a>,
+        pairs: Vec<(CkksSidecarQuerySource<'a>, CkksSidecarQuerySource<'a>)>,
     },
     Context {
         pairs: Vec<(&'a [f32], &'a [f32])>,
@@ -539,7 +538,7 @@ async fn ckks_vector_search_points_with_scoring(
             }
             Order::LargeBetter
         }
-        CkksSidecarScoring::Discover { .. } | CkksSidecarScoring::DiscoverStoredTarget { .. } => {
+        CkksSidecarScoring::Discover { .. } | CkksSidecarScoring::DiscoverResolved { .. } => {
             if distance.distance_order() != Order::LargeBetter {
                 return Err(StorageError::bad_input(format!(
                     "encrypted vector '{vector_name}' discover with sidecar scoring requires a large-better metric such as dot or cosine",
@@ -838,50 +837,30 @@ async fn ckks_vector_search_points_with_scoring(
                         })
                         .collect()
                 }
-                CkksSidecarScoring::DiscoverStoredTarget {
-                    target_point_id,
-                    target_encrypted,
-                    pairs,
-                } => {
-                    let target_scores = plan
-                        .score_stored_query_batch(
-                            collection_name,
-                            vector_name,
-                            target_point_id,
-                            target_encrypted,
-                            &encrypted_items,
-                        )?
-                        .ok_or_else(|| {
-                            StorageError::service_error(format!(
-                                "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-                            ))
-                        })?;
+                CkksSidecarScoring::DiscoverResolved { target, pairs } => {
+                    let target_scores = ckks_score_query_source_batch(
+                        collection_name,
+                        vector_name,
+                        plan,
+                        target,
+                        &encrypted_items,
+                    )?;
                     let mut rank_scores = vec![0i32; encrypted_items.len()];
                     for (positive, negative) in pairs {
-                        let positive_scores = plan
-                            .score_encrypted_query_batch(
-                                collection_name,
-                                vector_name,
-                                &encrypted_items,
-                                positive,
-                            )?
-                            .ok_or_else(|| {
-                                StorageError::service_error(format!(
-                                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-                                ))
-                            })?;
-                        let negative_scores = plan
-                            .score_encrypted_query_batch(
-                                collection_name,
-                                vector_name,
-                                &encrypted_items,
-                                negative,
-                            )?
-                            .ok_or_else(|| {
-                                StorageError::service_error(format!(
-                                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-                                ))
-                            })?;
+                        let positive_scores = ckks_score_query_source_batch(
+                            collection_name,
+                            vector_name,
+                            plan,
+                            positive,
+                            &encrypted_items,
+                        )?;
+                        let negative_scores = ckks_score_query_source_batch(
+                            collection_name,
+                            vector_name,
+                            plan,
+                            negative,
+                            &encrypted_items,
+                        )?;
                         for ((rank, positive), negative) in rank_scores
                             .iter_mut()
                             .zip(positive_scores)
@@ -2960,11 +2939,9 @@ async fn try_ckks_vector_discover_batch_points(
     let mut core_requests = Vec::with_capacity(requests.len());
     enum CkksResolvedDiscoverRequest<'a> {
         Core(CoreSearchRequest, ShardSelectorInternal),
-        StoredTarget {
+        Resolved {
             vector_name: String,
-            target_point_id: String,
-            target_encrypted: EncryptedCkksVector,
-            pairs: Vec<(&'a [f32], &'a [f32])>,
+            scoring: CkksSidecarScoring<'a>,
             filter: Option<Filter>,
             params: Option<SearchParams>,
             limit: usize,
@@ -2985,29 +2962,25 @@ async fn try_ckks_vector_discover_batch_points(
         }
 
         has_encrypted_discover = true;
-        if let Some((target_point_id, pairs)) =
-            discover_request_point_id_target_dense_context(request, &vector_name)?
-        {
+        if discover_request_needs_sidecar_resolution(request) {
             if request.lookup_from.is_some() {
                 return Err(StorageError::bad_input(format!(
                     "encrypted vector '{vector_name}' discover does not support lookup_from; provide examples from the same encrypted vector sidecar",
                 )));
             }
-            let target_encrypted = ckks_vector_sidecar_for_point_id(
+            let scoring = discover_request_as_ckks_resolved_scoring(
                 &collection,
                 &vector_name,
-                target_point_id,
+                request,
                 read_consistency,
                 shard_selection,
                 timeout,
                 hw_measurement_acc.clone(),
             )
             .await?;
-            core_requests.push(Some(CkksResolvedDiscoverRequest::StoredTarget {
+            core_requests.push(Some(CkksResolvedDiscoverRequest::Resolved {
                 vector_name,
-                target_point_id: target_point_id.to_string(),
-                target_encrypted,
-                pairs,
+                scoring,
                 filter: request.filter.clone(),
                 params: request.params.clone(),
                 limit: request.limit,
@@ -3054,11 +3027,9 @@ async fn try_ckks_vector_discover_batch_points(
                 )
                 .await?
             }
-            CkksResolvedDiscoverRequest::StoredTarget {
+            CkksResolvedDiscoverRequest::Resolved {
                 vector_name,
-                target_point_id,
-                target_encrypted,
-                pairs,
+                scoring,
                 filter,
                 params,
                 limit,
@@ -3073,11 +3044,7 @@ async fn try_ckks_vector_discover_batch_points(
                     collection_name,
                     &collection_crypto_id,
                     &vector_name,
-                    CkksSidecarScoring::DiscoverStoredTarget {
-                        target_point_id,
-                        target_encrypted,
-                        pairs,
-                    },
+                    scoring,
                     filter,
                     params,
                     limit,
@@ -3100,35 +3067,111 @@ async fn try_ckks_vector_discover_batch_points(
     Ok(Some(results))
 }
 
-fn discover_request_point_id_target_dense_context<'a>(
-    request: &'a DiscoverRequestInternal,
+fn discover_request_needs_sidecar_resolution(request: &DiscoverRequestInternal) -> bool {
+    request
+        .target
+        .as_ref()
+        .is_some_and(|target| matches!(target, RecommendExample::PointId(_)))
+        || request
+            .context
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .any(|pair| {
+                matches!(pair.positive, RecommendExample::PointId(_))
+                    || matches!(pair.negative, RecommendExample::PointId(_))
+            })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn recommend_example_as_ckks_query_source<'a>(
+    collection: &collection::collection::Collection,
     vector_name: &str,
-) -> Result<Option<(PointIdType, Vec<(&'a [f32], &'a [f32])>)>, StorageError> {
-    let Some(RecommendExample::PointId(target_point_id)) = request.target.as_ref() else {
-        return Ok(None);
+    role: &str,
+    example: &'a RecommendExample,
+    read_consistency: Option<ReadConsistency>,
+    shard_selection: &ShardSelectorInternal,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+) -> Result<CkksSidecarQuerySource<'a>, StorageError> {
+    match example {
+        RecommendExample::Dense(values) => Ok(CkksSidecarQuerySource::Dense(values)),
+        RecommendExample::PointId(point_id) => {
+            let encrypted = ckks_vector_sidecar_for_point_id(
+                collection,
+                vector_name,
+                *point_id,
+                read_consistency,
+                shard_selection,
+                timeout,
+                hw_measurement_acc,
+            )
+            .await?;
+            Ok(CkksSidecarQuerySource::Stored {
+                point_id: point_id.to_string(),
+                encrypted,
+            })
+        }
+        RecommendExample::Sparse(_) => Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' discover only supports raw dense or point-id {role} examples",
+        ))),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn discover_request_as_ckks_resolved_scoring<'a>(
+    collection: &collection::collection::Collection,
+    vector_name: &str,
+    request: &'a DiscoverRequestInternal,
+    read_consistency: Option<ReadConsistency>,
+    shard_selection: &ShardSelectorInternal,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+) -> Result<CkksSidecarScoring<'a>, StorageError> {
+    let Some(target) = request.target.as_ref() else {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' discover requires a raw dense or point-id target vector",
+        )));
     };
+    let target = recommend_example_as_ckks_query_source(
+        collection,
+        vector_name,
+        "target",
+        target,
+        read_consistency,
+        shard_selection,
+        timeout,
+        hw_measurement_acc.clone(),
+    )
+    .await?;
+    let mut pairs = Vec::new();
+    for pair in request.context.as_deref().unwrap_or_default() {
+        let positive = recommend_example_as_ckks_query_source(
+            collection,
+            vector_name,
+            "positive context",
+            &pair.positive,
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        let negative = recommend_example_as_ckks_query_source(
+            collection,
+            vector_name,
+            "negative context",
+            &pair.negative,
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        pairs.push((positive, negative));
+    }
 
-    let pairs = request
-        .context
-        .as_deref()
-        .unwrap_or_default()
-        .iter()
-        .map(|pair| {
-            let RecommendExample::Dense(positive) = &pair.positive else {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' discover cannot resolve point-id or sparse positive context examples because encrypted context arithmetic is not implemented",
-                )));
-            };
-            let RecommendExample::Dense(negative) = &pair.negative else {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' discover cannot resolve point-id or sparse negative context examples because encrypted context arithmetic is not implemented",
-                )));
-            };
-            Ok((positive.as_slice(), negative.as_slice()))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(Some((*target_point_id, pairs)))
+    Ok(CkksSidecarScoring::DiscoverResolved { target, pairs })
 }
 
 fn discover_request_as_ckks_search_request(
