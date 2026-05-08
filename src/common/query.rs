@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
@@ -56,6 +56,7 @@ struct CkksSidecarSearchRecord {
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_CAPACITY: usize = 16;
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_DIR: &str = "ckks_sidecar_hnsw_graphs";
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_VERSION: u8 = 1;
+const CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
 static CKKS_SIDECAR_HNSW_GRAPH_CACHE: LazyLock<Mutex<CkksSidecarHnswGraphCache>> =
     LazyLock::new(|| Mutex::new(CkksSidecarHnswGraphCache::default()));
@@ -69,7 +70,7 @@ struct CkksSidecarHnswGraphCacheKey {
     records_fingerprint: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct CkksSidecarHnswGraph {
     links: Arc<Vec<Vec<usize>>>,
 }
@@ -1017,15 +1018,60 @@ fn ckks_sidecar_hnsw_load_persisted_graph(
     records_len: usize,
 ) -> Result<Option<Arc<CkksSidecarHnswGraph>>, StorageError> {
     let path = ckks_sidecar_hnsw_graph_cache_path(collection_path, key);
-    let content = match fs::read_to_string(&path) {
-        Ok(content) => content,
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
             return Err(StorageError::service_error(format!(
-                "failed to read CKKS sidecar HNSW graph cache {path:?}: {err}",
+                "failed to inspect CKKS sidecar HNSW graph cache {path:?}: {err}",
             )));
         }
     };
+    if metadata.file_type().is_symlink() {
+        return Err(StorageError::service_error(format!(
+            "CKKS sidecar HNSW graph cache {path:?} must not be a symlink",
+        )));
+    }
+    if !metadata.is_file() {
+        return Err(StorageError::service_error(format!(
+            "CKKS sidecar HNSW graph cache {path:?} must be a regular file",
+        )));
+    }
+    if metadata.len() > CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES {
+        return Err(StorageError::service_error(format!(
+            "CKKS sidecar HNSW graph cache {path:?} exceeds maximum size",
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(StorageError::service_error(format!(
+                "CKKS sidecar HNSW graph cache {path:?} must not be group/world accessible",
+            )));
+        }
+    }
+
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
+    }
+    let mut file = options.open(&path).map_err(|err| {
+        StorageError::service_error(format!(
+            "failed to open CKKS sidecar HNSW graph cache {path:?}: {err}",
+        ))
+    })?;
+    let mut content = String::with_capacity(metadata.len() as usize);
+    file.read_to_string(&mut content).map_err(|err| {
+        StorageError::service_error(format!(
+            "failed to read CKKS sidecar HNSW graph cache {path:?}: {err}",
+        ))
+    })?;
     let disk: CkksSidecarHnswGraphDisk = serde_json::from_str(&content).map_err(|err| {
         StorageError::service_error(format!(
             "failed to parse CKKS sidecar HNSW graph cache {path:?}: {err}",
@@ -1100,6 +1146,7 @@ fn ckks_sidecar_hnsw_persist_graph(
         use std::os::unix::fs::OpenOptionsExt;
 
         options.mode(0o600);
+        options.custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
     }
     let mut file = options.open(&temp_path).map_err(|err| {
         StorageError::service_error(format!(
@@ -3242,6 +3289,73 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_rejects_symlink_cache_file() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let key = CkksSidecarHnswGraphCacheKey {
+            collection_name: "collection".to_string(),
+            vector_name: "vector".to_string(),
+            score_order: "large",
+            m: 16,
+            records_fingerprint: "fingerprint-a".to_string(),
+        };
+        let cache_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &key);
+        std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        let target_path = dir.path().join("target.json");
+        std::fs::write(&target_path, "{}").unwrap();
+        symlink(&target_path, &cache_path).unwrap();
+
+        let err = ckks_sidecar_hnsw_load_persisted_graph(dir.path(), &key, 0).unwrap_err();
+        assert!(format!("{err}").contains("must not be a symlink"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_rejects_group_accessible_cache_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let key = CkksSidecarHnswGraphCacheKey {
+            collection_name: "collection".to_string(),
+            vector_name: "vector".to_string(),
+            score_order: "large",
+            m: 16,
+            records_fingerprint: "fingerprint-a".to_string(),
+        };
+        let graph = CkksSidecarHnswGraph {
+            links: Arc::new(vec![Vec::new()]),
+        };
+        ckks_sidecar_hnsw_persist_graph(dir.path(), &key, &graph).unwrap();
+        let cache_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &key);
+        std::fs::set_permissions(&cache_path, std::fs::Permissions::from_mode(0o640)).unwrap();
+
+        let err = ckks_sidecar_hnsw_load_persisted_graph(dir.path(), &key, 1).unwrap_err();
+        assert!(format!("{err}").contains("must not be group/world accessible"));
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_rejects_oversized_cache_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = CkksSidecarHnswGraphCacheKey {
+            collection_name: "collection".to_string(),
+            vector_name: "vector".to_string(),
+            score_order: "large",
+            m: 16,
+            records_fingerprint: "fingerprint-a".to_string(),
+        };
+        let cache_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &key);
+        std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        let file = std::fs::File::create(&cache_path).unwrap();
+        file.set_len(CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES + 1)
+            .unwrap();
+
+        let err = ckks_sidecar_hnsw_load_persisted_graph(dir.path(), &key, 0).unwrap_err();
+        assert!(format!("{err}").contains("exceeds maximum size"));
     }
 
     #[test]
