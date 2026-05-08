@@ -3303,13 +3303,7 @@ mod tests {
     #[test]
     fn ckks_sidecar_hnsw_graph_cache_evicts_old_entries() {
         let mut cache = CkksSidecarHnswGraphCache::default();
-        let original_key = CkksSidecarHnswGraphCacheKey {
-            collection_name: "collection".to_string(),
-            vector_name: "vector".to_string(),
-            score_order: "large",
-            m: 16,
-            records_fingerprint: "original".to_string(),
-        };
+        let original_key = ckks_sidecar_test_graph_cache_key("original");
         let original_graph = Arc::new(CkksSidecarHnswGraph {
             links: Arc::new(vec![vec![1], vec![0]]),
         });
@@ -3321,13 +3315,7 @@ mod tests {
 
         for idx in 0..CKKS_SIDECAR_HNSW_GRAPH_CACHE_CAPACITY {
             cache.insert(
-                CkksSidecarHnswGraphCacheKey {
-                    collection_name: "collection".to_string(),
-                    vector_name: "vector".to_string(),
-                    score_order: "large",
-                    m: 16,
-                    records_fingerprint: format!("fresh-{idx}"),
-                },
+                ckks_sidecar_test_graph_cache_key(format!("fresh-{idx}")),
                 Arc::new(CkksSidecarHnswGraph {
                     links: Arc::new(Vec::new()),
                 }),
@@ -3337,16 +3325,57 @@ mod tests {
         assert!(cache.get(&original_key).is_none());
     }
 
-    #[test]
-    fn ckks_sidecar_hnsw_persisted_graph_roundtrips_by_cache_key() {
-        let dir = tempfile::tempdir().unwrap();
-        let key = CkksSidecarHnswGraphCacheKey {
+    fn ckks_sidecar_test_graph_cache_key(
+        records_fingerprint: impl Into<String>,
+    ) -> CkksSidecarHnswGraphCacheKey {
+        CkksSidecarHnswGraphCacheKey {
             collection_name: "collection".to_string(),
             vector_name: "vector".to_string(),
             score_order: "large",
             m: 16,
-            records_fingerprint: "fingerprint-a".to_string(),
-        };
+            records_fingerprint: records_fingerprint.into(),
+        }
+    }
+
+    fn ckks_sidecar_test_graph_disk(
+        key: &CkksSidecarHnswGraphCacheKey,
+        links: Vec<Vec<usize>>,
+    ) -> CkksSidecarHnswGraphDisk {
+        CkksSidecarHnswGraphDisk {
+            version: CKKS_SIDECAR_HNSW_GRAPH_CACHE_VERSION,
+            collection_name: key.collection_name.clone(),
+            vector_name: key.vector_name.clone(),
+            score_order: key.score_order.to_string(),
+            m: key.m,
+            records_fingerprint: key.records_fingerprint.clone(),
+            links,
+        }
+    }
+
+    fn write_ckks_sidecar_test_graph_disk(
+        collection_path: &Path,
+        key: &CkksSidecarHnswGraphCacheKey,
+        disk: &CkksSidecarHnswGraphDisk,
+    ) -> PathBuf {
+        let path = ckks_sidecar_hnsw_graph_cache_path(collection_path, key);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).write(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            options.mode(0o600);
+        }
+        let mut file = options.open(&path).unwrap();
+        file.write_all(&serde_json::to_vec(disk).unwrap()).unwrap();
+        path
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_roundtrips_by_cache_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = ckks_sidecar_test_graph_cache_key("fingerprint-a");
         let graph = CkksSidecarHnswGraph {
             links: Arc::new(vec![vec![1], vec![0, 2], vec![1]]),
         };
@@ -3368,19 +3397,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_ignores_metadata_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = ckks_sidecar_test_graph_cache_key("fingerprint-a");
+        let mut disk = ckks_sidecar_test_graph_disk(&key, vec![vec![1], vec![0]]);
+        disk.collection_name = "other-collection".to_string();
+        write_ckks_sidecar_test_graph_disk(dir.path(), &key, &disk);
+
+        assert!(
+            ckks_sidecar_hnsw_load_persisted_graph(dir.path(), &key, 2)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_ignores_out_of_range_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = ckks_sidecar_test_graph_cache_key("fingerprint-a");
+        let disk = ckks_sidecar_test_graph_disk(&key, vec![vec![2], vec![0]]);
+        write_ckks_sidecar_test_graph_disk(dir.path(), &key, &disk);
+
+        assert!(
+            ckks_sidecar_hnsw_load_persisted_graph(dir.path(), &key, 2)
+                .unwrap()
+                .is_none()
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn ckks_sidecar_hnsw_persisted_graph_rejects_symlink_cache_file() {
         use std::os::unix::fs::symlink;
 
         let dir = tempfile::tempdir().unwrap();
-        let key = CkksSidecarHnswGraphCacheKey {
-            collection_name: "collection".to_string(),
-            vector_name: "vector".to_string(),
-            score_order: "large",
-            m: 16,
-            records_fingerprint: "fingerprint-a".to_string(),
-        };
+        let key = ckks_sidecar_test_graph_cache_key("fingerprint-a");
         let cache_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &key);
         std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
         let target_path = dir.path().join("target.json");
@@ -3397,13 +3449,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().unwrap();
-        let key = CkksSidecarHnswGraphCacheKey {
-            collection_name: "collection".to_string(),
-            vector_name: "vector".to_string(),
-            score_order: "large",
-            m: 16,
-            records_fingerprint: "fingerprint-a".to_string(),
-        };
+        let key = ckks_sidecar_test_graph_cache_key("fingerprint-a");
         let graph = CkksSidecarHnswGraph {
             links: Arc::new(vec![Vec::new()]),
         };
@@ -3418,13 +3464,7 @@ mod tests {
     #[test]
     fn ckks_sidecar_hnsw_persisted_graph_rejects_oversized_cache_file() {
         let dir = tempfile::tempdir().unwrap();
-        let key = CkksSidecarHnswGraphCacheKey {
-            collection_name: "collection".to_string(),
-            vector_name: "vector".to_string(),
-            score_order: "large",
-            m: 16,
-            records_fingerprint: "fingerprint-a".to_string(),
-        };
+        let key = ckks_sidecar_test_graph_cache_key("fingerprint-a");
         let cache_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &key);
         std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
         let file = std::fs::File::create(&cache_path).unwrap();
@@ -3443,13 +3483,7 @@ mod tests {
         };
         let mut newest_key = None;
         for idx in 0..(CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_FILES + 5) {
-            let key = CkksSidecarHnswGraphCacheKey {
-                collection_name: "collection".to_string(),
-                vector_name: "vector".to_string(),
-                score_order: "large",
-                m: 16,
-                records_fingerprint: format!("fingerprint-{idx}"),
-            };
+            let key = ckks_sidecar_test_graph_cache_key(format!("fingerprint-{idx}"));
             ckks_sidecar_hnsw_persist_graph(dir.path(), &key, &graph).unwrap();
             newest_key = Some(key);
         }
@@ -3474,6 +3508,36 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_prunes_by_total_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let keep_key = ckks_sidecar_test_graph_cache_key("keep");
+        let keep_graph = CkksSidecarHnswGraph {
+            links: Arc::new(vec![Vec::new()]),
+        };
+        ckks_sidecar_hnsw_persist_graph(dir.path(), &keep_key, &keep_graph).unwrap();
+        let cache_dir = dir.path().join(CKKS_SIDECAR_HNSW_GRAPH_CACHE_DIR);
+        let keep_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &keep_key);
+
+        for idx in 0..4 {
+            let old_key = ckks_sidecar_test_graph_cache_key(format!("old-{idx}"));
+            let old_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &old_key);
+            std::fs::create_dir_all(old_path.parent().unwrap()).unwrap();
+            let file = std::fs::File::create(&old_path).unwrap();
+            file.set_len(CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_TOTAL_BYTES / 2)
+                .unwrap();
+        }
+
+        ckks_sidecar_hnsw_prune_persisted_graphs(&cache_dir, &keep_path).unwrap();
+        let total_bytes = std::fs::read_dir(cache_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.metadata().unwrap().len())
+            .sum::<u64>();
+        assert!(total_bytes <= CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_TOTAL_BYTES);
+        assert!(keep_path.exists());
     }
 
     #[test]
