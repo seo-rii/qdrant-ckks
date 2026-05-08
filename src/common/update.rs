@@ -2492,6 +2492,9 @@ case "$request" in
   *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"encrypted_query":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"}]'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[8.0]}\n'
     ;;
+  *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"encrypted_query":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"},{"point_id":"2","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"}]'*)
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[8.0,10.0]}\n'
+    ;;
   *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"},{"point_id":"2","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"}]'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[9.0,4.0]}\n'
     ;;
@@ -3422,6 +3425,37 @@ esac
                 StorageError::BadInput { description }
                     if description.contains("context query cannot resolve point-id")
             ));
+
+            let point_id_nearest_query = crate::common::query::do_query_points(
+                &toc,
+                "vector_groups",
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::Id(
+                        2.into(),
+                    )))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(point_id_nearest_query.len(), 1);
+            assert_eq!(point_id_nearest_query[0].id, 2.into());
+            assert_eq!(point_id_nearest_query[0].score, 10.0);
 
             let recommend = crate::common::query::do_recommend_points(
                 &toc,
