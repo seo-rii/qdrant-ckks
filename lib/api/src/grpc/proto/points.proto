@@ -503,6 +503,7 @@ message SearchPoints {
   // Specify in which shards to look for the points, if not specified - look in all shards
   optional ShardKeySelector shard_key_selector = 14;
   optional SparseIndices sparse_indices = 15;
+  optional CkksEncryptedQueryVector ckks_encrypted_query = 16;
 }
 
 message SearchBatchPoints {
@@ -558,6 +559,7 @@ message SearchPointGroups {
   // Specify in which shards to look for the points, if not specified - look in all shards
   optional ShardKeySelector shard_key_selector = 15;
   optional SparseIndices sparse_indices = 16;
+  optional CkksEncryptedQueryVector ckks_encrypted_query = 17;
 }
 
 enum Direction {

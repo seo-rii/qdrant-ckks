@@ -195,7 +195,14 @@ impl TryFrom<api::grpc::qdrant::SearchPoints> for CoreSearchRequest {
             timeout: _,
             shard_key_selector: _,
             sparse_indices,
+            ckks_encrypted_query,
         } = value;
+
+        if ckks_encrypted_query.is_some() {
+            return Err(tonic::Status::invalid_argument(
+                "CKKS encrypted query vectors must be routed before core search conversion",
+            ));
+        }
 
         if let Some(sparse_indices) = &sparse_indices {
             let api::grpc::qdrant::SparseIndices { data } = sparse_indices;

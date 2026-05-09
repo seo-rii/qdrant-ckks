@@ -11,6 +11,7 @@ use api::grpc::qdrant::{
     SearchPointGroups, SearchPoints, SearchResponse,
 };
 use api::grpc::{InferenceUsage, Usage};
+use api::rest;
 use collection::collection::distance_matrix::{
     CollectionSearchMatrixRequest, CollectionSearchMatrixResponse,
 };
@@ -22,9 +23,8 @@ use collection::shards::shard::ShardId;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use segment::data_types::facets::FacetParams;
 use segment::data_types::order_by::{OrderBy, OrderByInterface};
-use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, NamedQuery, VectorInternal};
+use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
 use shard::count::CountRequestInternal;
-use shard::query::query_enum::QueryEnum;
 use shard::scroll::ScrollRequestInternal;
 use shard::search::CoreSearchRequestBatch;
 use storage::content_manager::toc::TableOfContent;
@@ -67,45 +67,12 @@ pub async fn search(
     hw_measurement_acc: RequestHwCounter,
     runtime_settings: Option<&Settings>,
 ) -> Result<Response<SearchResponse>, Status> {
-    let SearchPoints {
-        collection_name,
-        vector,
-        filter,
-        limit,
-        offset,
-        with_payload,
-        params,
-        score_threshold,
-        vector_name,
-        with_vectors,
-        read_consistency,
-        timeout,
-        shard_key_selector,
-        sparse_indices,
-    } = search_points;
-
-    let vector_internal =
-        VectorInternal::from_vector_and_indices(vector, sparse_indices.map(|v| v.data));
-
-    let vector_struct =
-        api::grpc::conversions::into_named_vector_struct(vector_name, vector_internal)?;
-
+    let collection_name = search_points.collection_name.clone();
+    let read_consistency = search_points.read_consistency.clone();
+    let timeout = search_points.timeout;
+    let shard_key_selector = search_points.shard_key_selector.clone();
+    let search_request = rest::SearchRequestInternal::try_from(search_points)?;
     let shard_selector = convert_shard_selector_for_read(shard_selection, shard_key_selector)?;
-
-    let search_request = CoreSearchRequest {
-        query: QueryEnum::Nearest(NamedQuery::from(vector_struct)),
-        filter: filter.map(|f| f.try_into()).transpose()?,
-        params: params.map(|p| p.into()),
-        limit: limit as usize,
-        offset: offset.unwrap_or_default() as usize,
-        with_payload: with_payload.map(|wp| wp.try_into()).transpose()?,
-        with_vector: Some(
-            with_vectors
-                .map(|selector| selector.into())
-                .unwrap_or_default(),
-        ),
-        score_threshold,
-    };
 
     let toc = toc_provider
         .check_strict_mode(
@@ -119,7 +86,7 @@ pub async fn search(
     let read_consistency = ReadConsistency::try_from_optional(read_consistency)?;
 
     let timing = Instant::now();
-    let scored_points = do_core_search_points(
+    let scored_points = do_search_points(
         toc,
         &collection_name,
         search_request,
@@ -144,10 +111,10 @@ pub async fn search(
     Ok(Response::new(response))
 }
 
-pub async fn core_search_batch(
+pub async fn search_batch_from_grpc(
     toc_provider: impl CheckedTocProvider,
     collection_name: &str,
-    requests: Vec<(CoreSearchRequest, ShardSelectorInternal)>,
+    requests: Vec<(rest::SearchRequestInternal, ShardSelectorInternal)>,
     read_consistency: Option<ReadConsistencyGrpc>,
     auth: Auth,
     timeout: Option<Duration>,
@@ -168,7 +135,7 @@ pub async fn core_search_batch(
 
     let timing = Instant::now();
 
-    let scored_points = do_search_batch_points(
+    let scored_points = do_search_batch_points_from_rest(
         toc,
         collection_name,
         requests,

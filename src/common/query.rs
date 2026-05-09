@@ -307,6 +307,7 @@ pub async fn do_search_batch_points_from_rest(
     Ok(results)
 }
 
+#[allow(dead_code)]
 pub async fn do_search_batch_points(
     toc: &TableOfContent,
     collection_name: &str,

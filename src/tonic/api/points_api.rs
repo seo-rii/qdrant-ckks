@@ -16,7 +16,6 @@ use api::grpc::qdrant::{
     SearchPoints, SearchResponse, SetPayloadPoints, UpdateBatchPoints, UpdateBatchResponse,
     UpdatePointVectors, UpsertPoints,
 };
-use collection::operations::types::CoreSearchRequest;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use storage::content_manager::toc::request_hw_counter::RequestHwCounter;
 use storage::dispatcher::Dispatcher;
@@ -390,15 +389,13 @@ impl Points for PointsService {
             let shard_key = search_point.shard_key_selector.take();
 
             let shard_selector = convert_shard_selector_for_read(None, shard_key)?;
-            let core_search_request = CoreSearchRequest::try_from(search_point)?;
-
-            requests.push((core_search_request, shard_selector));
+            requests.push((search_point.try_into()?, shard_selector));
         }
 
         let hw_metrics =
             self.get_request_collection_hw_usage_counter(collection_name.clone(), None);
 
-        let res = core_search_batch(
+        let res = search_batch_from_grpc(
             StrictModeCheckedTocProvider::new(&self.dispatcher),
             &collection_name,
             requests,

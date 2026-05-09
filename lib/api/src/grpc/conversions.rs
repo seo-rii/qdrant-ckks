@@ -27,14 +27,15 @@ use tonic::Status;
 use uuid::Uuid;
 
 use super::qdrant::{
-    BinaryQuantization, BoolIndexParams, CompressionRatio, DatetimeIndexParams, DatetimeRange,
-    Direction, FacetHit, FacetHitInternal, FacetValue, FacetValueInternal, FieldType,
-    FloatIndexParams, GeoIndexParams, GeoLineString, GroupId, HardwareUsage, HasVectorCondition,
-    KeywordIndexParams, LookupLocation, MaxOptimizationThreads, MultiVectorComparator,
-    MultiVectorConfig, OrderBy, OrderValue, Range, RawVector, RecommendStrategy, RetrievedPoint,
-    SearchMatrixPair, SearchPointGroups, SearchPoints, ShardKeySelector, StartFrom,
-    StrictModeMultivector, StrictModeMultivectorConfig, StrictModeSparse, StrictModeSparseConfig,
-    UuidIndexParams, VectorsOutput, WithLookup, raw_query, start_from,
+    BinaryQuantization, BoolIndexParams, CkksEncryptedQueryVector, CompressionRatio,
+    DatetimeIndexParams, DatetimeRange, Direction, FacetHit, FacetHitInternal, FacetValue,
+    FacetValueInternal, FieldType, FloatIndexParams, GeoIndexParams, GeoLineString, GroupId,
+    HardwareUsage, HasVectorCondition, KeywordIndexParams, LookupLocation, MaxOptimizationThreads,
+    MultiVectorComparator, MultiVectorConfig, OrderBy, OrderValue, Range, RawVector,
+    RecommendStrategy, RetrievedPoint, SearchMatrixPair, SearchPointGroups, SearchPoints,
+    ShardKeySelector, StartFrom, StrictModeMultivector, StrictModeMultivectorConfig,
+    StrictModeSparse, StrictModeSparseConfig, UuidIndexParams, VectorsOutput, WithLookup,
+    raw_query, start_from,
 };
 use super::stemming_algorithm::StemmingParams;
 use super::{Expression, Formula, RecoQuery, SnowballParams, StemmingAlgorithm, Usage};
@@ -2957,6 +2958,29 @@ impl TryFrom<raw_query::RawFeedbackItem>
     }
 }
 
+fn grpc_ckks_encrypted_query_to_rest_named_vector(
+    vector_name: Option<String>,
+    query: CkksEncryptedQueryVector,
+) -> Result<rest::NamedVectorStruct, Status> {
+    Ok(rest::NamedVectorStruct::CkksEncryptedQuery(
+        rest::NamedCkksEncryptedQueryVector {
+            name: Some(vector_name.unwrap_or_else(|| DEFAULT_VECTOR_NAME.to_string())),
+            envelope: rest::CkksEncryptedQueryVectorEnvelope {
+                version: query.version.try_into().map_err(|_| {
+                    Status::invalid_argument("CKKS encrypted query version is too large")
+                })?,
+                scheme: query.scheme,
+                security_profile: query.security_profile,
+                context_digest: query.context_digest,
+                slots: query.slots.try_into().map_err(|_| {
+                    Status::invalid_argument("CKKS encrypted query slots is too large")
+                })?,
+                ciphertext: query.ciphertext,
+            },
+        },
+    ))
+}
+
 impl TryFrom<SearchPoints> for rest::SearchRequestInternal {
     type Error = Status;
 
@@ -2976,20 +3000,32 @@ impl TryFrom<SearchPoints> for rest::SearchRequestInternal {
             timeout: _,
             shard_key_selector: _,
             sparse_indices,
+            ckks_encrypted_query,
         } = value;
 
-        let vector_internal =
-            VectorInternal::from_vector_and_indices(vector, sparse_indices.map(|v| v.data));
-
-        let named_struct = into_named_vector_struct(vector_name, vector_internal)?;
-        let vector = match named_struct {
-            segment_vectors::NamedVectorStruct::Default(v) => rest::NamedVectorStruct::Default(v),
-            segment_vectors::NamedVectorStruct::Dense(v) => rest::NamedVectorStruct::Dense(v),
-            segment_vectors::NamedVectorStruct::Sparse(v) => rest::NamedVectorStruct::Sparse(v),
-            segment_vectors::NamedVectorStruct::MultiDense(_) => {
+        let vector = if let Some(query) = ckks_encrypted_query {
+            if !vector.is_empty() || sparse_indices.is_some() {
                 return Err(Status::invalid_argument(
-                    "MultiDense vector is not supported in search request",
+                    "CKKS encrypted query cannot be combined with raw vector or sparse indices",
                 ));
+            }
+            grpc_ckks_encrypted_query_to_rest_named_vector(vector_name, query)?
+        } else {
+            let vector_internal =
+                VectorInternal::from_vector_and_indices(vector, sparse_indices.map(|v| v.data));
+
+            let named_struct = into_named_vector_struct(vector_name, vector_internal)?;
+            match named_struct {
+                segment_vectors::NamedVectorStruct::Default(v) => {
+                    rest::NamedVectorStruct::Default(v)
+                }
+                segment_vectors::NamedVectorStruct::Dense(v) => rest::NamedVectorStruct::Dense(v),
+                segment_vectors::NamedVectorStruct::Sparse(v) => rest::NamedVectorStruct::Sparse(v),
+                segment_vectors::NamedVectorStruct::MultiDense(_) => {
+                    return Err(Status::invalid_argument(
+                        "MultiDense vector is not supported in search request",
+                    ));
+                }
             }
         };
         Ok(Self {
@@ -3030,6 +3066,7 @@ impl TryFrom<SearchPointGroups> for rest::SearchGroupsRequestInternal {
             timeout,
             shard_key_selector,
             sparse_indices,
+            ckks_encrypted_query,
         } = value;
         let search_points = SearchPoints {
             vector,
@@ -3046,6 +3083,7 @@ impl TryFrom<SearchPointGroups> for rest::SearchGroupsRequestInternal {
             timeout,
             shard_key_selector,
             sparse_indices,
+            ckks_encrypted_query,
         };
 
         if let Some(sparse_indices) = &search_points.sparse_indices {

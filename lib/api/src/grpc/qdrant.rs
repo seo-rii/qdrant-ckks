@@ -5703,6 +5703,8 @@ pub struct SearchPoints {
     pub shard_key_selector: ::core::option::Option<ShardKeySelector>,
     #[prost(message, optional, tag = "15")]
     pub sparse_indices: ::core::option::Option<SparseIndices>,
+    #[prost(message, optional, tag = "16")]
+    pub ckks_encrypted_query: ::core::option::Option<CkksEncryptedQueryVector>,
 }
 #[derive(validator::Validate)]
 #[derive(serde::Serialize)]
@@ -5805,6 +5807,8 @@ pub struct SearchPointGroups {
     pub shard_key_selector: ::core::option::Option<ShardKeySelector>,
     #[prost(message, optional, tag = "16")]
     pub sparse_indices: ::core::option::Option<SparseIndices>,
+    #[prost(message, optional, tag = "17")]
+    pub ckks_encrypted_query: ::core::option::Option<CkksEncryptedQueryVector>,
 }
 #[derive(serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]

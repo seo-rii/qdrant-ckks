@@ -2611,6 +2611,21 @@ esac
         })
     }
 
+    fn fake_grpc_ckks_client_query(
+        ciphertext: &[u8],
+        slots: usize,
+    ) -> api::grpc::qdrant::CkksEncryptedQueryVector {
+        let query = fake_ckks_client_query(ciphertext, slots);
+        api::grpc::qdrant::CkksEncryptedQueryVector {
+            version: query.version.into(),
+            scheme: query.scheme,
+            security_profile: query.security_profile,
+            context_digest: query.context_digest,
+            slots: query.slots as u64,
+            ciphertext: query.ciphertext,
+        }
+    }
+
     fn encrypted_vector_params() -> CollectionParams {
         CollectionParams {
             vectors: collection::operations::types::VectorsConfig::Multi(BTreeMap::from([(
@@ -6366,6 +6381,70 @@ esac
                 1.into()
             );
             assert_eq!(legacy_client_encrypted_groups.groups[0].hits[0].score, 9.0);
+
+            let grpc_client_encrypted_search = crate::tonic::api::query_common::search(
+                UncheckedTocProvider::new_unchecked(&toc),
+                api::grpc::qdrant::SearchPoints {
+                    collection_name: "vector_docs".to_string(),
+                    limit: 1,
+                    vector_name: Some(DEFAULT_VECTOR_NAME.to_string()),
+                    ckks_encrypted_query: Some(fake_grpc_ckks_client_query(
+                        b"fake-ckks-query:2",
+                        2,
+                    )),
+                    ..Default::default()
+                },
+                None,
+                auth.clone(),
+                storage::content_manager::toc::request_hw_counter::RequestHwCounter::new(
+                    HwMeasurementAcc::disposable(),
+                    false,
+                ),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            assert_eq!(grpc_client_encrypted_search.result.len(), 1);
+            assert_eq!(
+                grpc_client_encrypted_search.result[0].id,
+                Some(segment::types::PointIdType::from(1).into())
+            );
+            assert_eq!(grpc_client_encrypted_search.result[0].score, 9.0);
+
+            let grpc_client_encrypted_groups =
+                crate::tonic::api::query_common::search_groups(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::SearchPointGroups {
+                        collection_name: "vector_docs".to_string(),
+                        limit: 1,
+                        group_size: 1,
+                        group_by: "group".to_string(),
+                        vector_name: Some(DEFAULT_VECTOR_NAME.to_string()),
+                        ckks_encrypted_query: Some(fake_grpc_ckks_client_query(
+                            b"fake-ckks-query:2",
+                            2,
+                        )),
+                        ..Default::default()
+                    },
+                    None,
+                    auth.clone(),
+                    storage::content_manager::toc::request_hw_counter::RequestHwCounter::new(
+                        HwMeasurementAcc::disposable(),
+                        false,
+                    ),
+                    Some(&vector_settings),
+                )
+                .await
+                .unwrap()
+                .into_inner();
+            let grpc_groups = grpc_client_encrypted_groups.result.unwrap().groups;
+            assert_eq!(grpc_groups.len(), 1);
+            assert_eq!(
+                grpc_groups[0].hits[0].id,
+                Some(segment::types::PointIdType::from(1).into())
+            );
+            assert_eq!(grpc_groups[0].hits[0].score, 9.0);
 
             let mut wrong_context_query = fake_ckks_client_query(b"fake-ckks-query:2", 2);
             wrong_context_query.context_digest = BASE64URL_NOPAD.encode(&[9u8; 32]);
