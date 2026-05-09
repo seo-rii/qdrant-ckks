@@ -25,6 +25,7 @@ use segment::vector_storage::query::{self as segment_query, NaiveFeedbackCoeffic
 use sparse::common::sparse_vector::validate_sparse_vector_impl;
 use tonic::Status;
 use uuid::Uuid;
+use validator::Validate as _;
 
 use super::qdrant::{
     BinaryQuantization, BoolIndexParams, CkksEncryptedQueryVector, CompressionRatio,
@@ -2962,6 +2963,9 @@ fn grpc_ckks_encrypted_query_to_rest_named_vector(
     vector_name: Option<String>,
     query: CkksEncryptedQueryVector,
 ) -> Result<rest::NamedVectorStruct, Status> {
+    query.validate().map_err(|err| {
+        Status::invalid_argument(format!("Invalid CKKS encrypted query vector: {err}"))
+    })?;
     Ok(rest::NamedVectorStruct::CkksEncryptedQuery(
         rest::NamedCkksEncryptedQueryVector {
             name: Some(vector_name.unwrap_or_else(|| DEFAULT_VECTOR_NAME.to_string())),
@@ -3492,6 +3496,7 @@ impl From<Modifier> for grpc::Modifier {
 
 #[cfg(test)]
 mod tests {
+    use data_encoding::BASE64URL_NOPAD;
     use tonic::Code;
 
     use super::*;
@@ -3501,9 +3506,9 @@ mod tests {
             version: 1,
             scheme: "openfhe-ckks".to_string(),
             security_profile: "ckks-128-n16384-d4-scale50".to_string(),
-            context_digest: "test-context-digest".to_string(),
+            context_digest: BASE64URL_NOPAD.encode(&[3_u8; 32]),
             slots: 2,
-            ciphertext: "test-ciphertext".to_string(),
+            ciphertext: BASE64URL_NOPAD.encode(b"test-ciphertext"),
         }
     }
 
@@ -3547,9 +3552,15 @@ mod tests {
                     query.envelope.security_profile,
                     "ckks-128-n16384-d4-scale50"
                 );
-                assert_eq!(query.envelope.context_digest, "test-context-digest");
+                assert_eq!(
+                    query.envelope.context_digest,
+                    BASE64URL_NOPAD.encode(&[3_u8; 32])
+                );
                 assert_eq!(query.envelope.slots, 2);
-                assert_eq!(query.envelope.ciphertext, "test-ciphertext");
+                assert_eq!(
+                    query.envelope.ciphertext,
+                    BASE64URL_NOPAD.encode(b"test-ciphertext")
+                );
             }
             other => panic!("expected CKKS encrypted query vector, got {other:?}"),
         }
@@ -3619,6 +3630,37 @@ mod tests {
         assert!(
             err.message()
                 .contains("CKKS encrypted query cannot be combined")
+        );
+    }
+
+    #[test]
+    fn grpc_search_points_rejects_invalid_ckks_query_envelope_during_conversion() {
+        let request = SearchPoints {
+            collection_name: "docs".to_string(),
+            vector: Vec::new(),
+            filter: None,
+            limit: 1,
+            with_payload: None,
+            params: None,
+            score_threshold: None,
+            offset: None,
+            vector_name: Some("text".to_string()),
+            with_vectors: None,
+            read_consistency: None,
+            timeout: None,
+            shard_key_selector: None,
+            sparse_indices: None,
+            ckks_encrypted_query: Some(CkksEncryptedQueryVector {
+                context_digest: "not base64url!".to_string(),
+                ..ckks_query()
+            }),
+        };
+
+        let err = rest::SearchRequestInternal::try_from(request).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(
+            err.message()
+                .contains("Invalid CKKS encrypted query vector")
         );
     }
 }
