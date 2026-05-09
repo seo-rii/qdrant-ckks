@@ -2208,7 +2208,11 @@ fn ckks_sidecar_hnsw_prune_persisted_graphs(
             ckks_sidecar_hnsw_validate_cache_file_unix_metadata(keep_path, &metadata, "keep file")?;
             metadata.len()
         }
-        Ok(_) => 0,
+        Ok(_) => {
+            return Err(StorageError::service_error(format!(
+                "CKKS sidecar HNSW graph cache keep file {keep_path:?} must be a regular file",
+            )));
+        }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => 0,
         Err(err) => {
             return Err(StorageError::service_error(format!(
@@ -7098,6 +7102,20 @@ mod tests {
         let err = ckks_sidecar_hnsw_prune_persisted_graphs(cache_dir, &keep_path).unwrap_err();
         assert!(format!("{err}").contains("keep file"));
         assert!(format!("{err}").contains("must not be group/world accessible"));
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_prune_rejects_non_regular_keep_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = ckks_sidecar_test_graph_cache_key("keep-directory");
+        let keep_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &key);
+        let cache_dir = keep_path.parent().unwrap();
+        std::fs::create_dir_all(&keep_path).unwrap();
+        set_ckks_sidecar_test_private_directory_permissions(cache_dir);
+
+        let err = ckks_sidecar_hnsw_prune_persisted_graphs(cache_dir, &keep_path).unwrap_err();
+        assert!(format!("{err}").contains("keep file"));
+        assert!(format!("{err}").contains("must be a regular file"));
     }
 
     #[cfg(unix)]
