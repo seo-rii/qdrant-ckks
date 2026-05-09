@@ -3489,3 +3489,136 @@ impl From<Modifier> for grpc::Modifier {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use tonic::Code;
+
+    use super::*;
+
+    fn ckks_query() -> CkksEncryptedQueryVector {
+        CkksEncryptedQueryVector {
+            version: 1,
+            scheme: "openfhe-ckks".to_string(),
+            security_profile: "ckks-128-n16384-d4-scale50".to_string(),
+            context_digest: "test-context-digest".to_string(),
+            slots: 2,
+            ciphertext: "test-ciphertext".to_string(),
+        }
+    }
+
+    fn hnsw_params(hnsw_ef: u64) -> SearchParams {
+        SearchParams {
+            hnsw_ef: Some(hnsw_ef),
+            exact: Some(false),
+            quantization: None,
+            indexed_only: Some(false),
+            acorn: None,
+        }
+    }
+
+    #[test]
+    fn grpc_search_points_ckks_query_preserves_hnsw_params() {
+        let request = SearchPoints {
+            collection_name: "docs".to_string(),
+            vector: Vec::new(),
+            filter: None,
+            limit: 7,
+            with_payload: None,
+            params: Some(hnsw_params(11)),
+            score_threshold: Some(0.5),
+            offset: Some(2),
+            vector_name: Some("text".to_string()),
+            with_vectors: None,
+            read_consistency: None,
+            timeout: None,
+            shard_key_selector: None,
+            sparse_indices: None,
+            ckks_encrypted_query: Some(ckks_query()),
+        };
+
+        let converted = rest::SearchRequestInternal::try_from(request).unwrap();
+        match converted.vector {
+            rest::NamedVectorStruct::CkksEncryptedQuery(query) => {
+                assert_eq!(query.name.as_deref(), Some("text"));
+                assert_eq!(query.envelope.version, 1);
+                assert_eq!(query.envelope.scheme, "openfhe-ckks");
+                assert_eq!(
+                    query.envelope.security_profile,
+                    "ckks-128-n16384-d4-scale50"
+                );
+                assert_eq!(query.envelope.context_digest, "test-context-digest");
+                assert_eq!(query.envelope.slots, 2);
+                assert_eq!(query.envelope.ciphertext, "test-ciphertext");
+            }
+            other => panic!("expected CKKS encrypted query vector, got {other:?}"),
+        }
+        let params = converted.params.unwrap();
+        assert_eq!(params.hnsw_ef, Some(11));
+        assert!(!params.exact);
+        assert_eq!(converted.limit, 7);
+        assert_eq!(converted.offset, Some(2));
+        assert_eq!(converted.score_threshold, Some(0.5));
+    }
+
+    #[test]
+    fn grpc_search_groups_ckks_query_preserves_hnsw_params() {
+        let request = SearchPointGroups {
+            collection_name: "docs".to_string(),
+            vector: Vec::new(),
+            filter: None,
+            limit: 5,
+            with_payload: None,
+            params: Some(hnsw_params(13)),
+            score_threshold: None,
+            vector_name: Some("text".to_string()),
+            with_vectors: None,
+            group_by: "group".to_string(),
+            group_size: 2,
+            read_consistency: None,
+            with_lookup: None,
+            timeout: None,
+            shard_key_selector: None,
+            sparse_indices: None,
+            ckks_encrypted_query: Some(ckks_query()),
+        };
+
+        let converted = rest::SearchGroupsRequestInternal::try_from(request).unwrap();
+        assert!(matches!(
+            converted.vector,
+            rest::NamedVectorStruct::CkksEncryptedQuery(_)
+        ));
+        let params = converted.params.unwrap();
+        assert_eq!(params.hnsw_ef, Some(13));
+        assert_eq!(converted.group_request.limit, 5);
+        assert_eq!(converted.group_request.group_size, 2);
+    }
+
+    #[test]
+    fn grpc_search_points_rejects_ckks_query_with_raw_vector() {
+        let request = SearchPoints {
+            collection_name: "docs".to_string(),
+            vector: vec![1.0, 2.0],
+            filter: None,
+            limit: 1,
+            with_payload: None,
+            params: None,
+            score_threshold: None,
+            offset: None,
+            vector_name: Some("text".to_string()),
+            with_vectors: None,
+            read_consistency: None,
+            timeout: None,
+            shard_key_selector: None,
+            sparse_indices: None,
+            ckks_encrypted_query: Some(ckks_query()),
+        };
+
+        let err = rest::SearchRequestInternal::try_from(request).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(
+            err.message()
+                .contains("CKKS encrypted query cannot be combined")
+        );
+    }
+}
