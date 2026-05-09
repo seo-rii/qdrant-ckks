@@ -401,7 +401,7 @@ crypto:
 
 The generic `crypto` control plane supports a safer MK/RK hierarchy:
 
-- `wrapping_key_32` is an MK/KEK loaded from env/file/`unix_socket`/fd/inline material.
+- `wrapping_key_32` is an MK/KEK loaded from env/file/`unix_socket`/`vault_kv2`/fd/inline material.
 - `wrapped_symmetric_key_32` is a random collection or rule RK wrapped by that
   MK using AES-256-GCM.
 - Payload text and CKKS vector envelope AEAD keys are still purpose-specific
@@ -448,8 +448,8 @@ crypto:
 ```
 
 Direct MK/RK materials must set `source` explicitly; qdrant-sec does not infer
-`env`, `file`, `unix_socket`, `fd`, or `inline` from whichever field happens to
-be present.
+`env`, `file`, `unix_socket`, `vault_kv2`, `fd`, or `inline` from whichever
+field happens to be present.
 When a material uses `source: file`, the path must be absolute and point to a
 regular non-symlink file. On Unix, qdrant-sec rejects group/world-accessible key
 files and rejects group/world-writable parent directories. The file and each
@@ -464,6 +464,14 @@ connects to the socket, reads a base64url-no-pad 32-byte material, and closes
 the connection. This keeps the raw MK/RK out of config and persistent key files,
 but the local socket service becomes part of the key-management TCB and must
 preserve cluster runtime parity.
+When a material uses `source: vault_kv2`, `path` must be the full Vault KV v2
+data URL, `env` must name the environment variable that contains the Vault
+token, and `vault_field` must name the string field under `data.data` that
+contains the base64url-no-pad 32-byte material. The URL must use HTTPS; loopback
+HTTP is accepted only for tests/dev. Vault-backed material keeps the MK/RK out
+of config files, but the Vault token source, Vault policy, and Vault
+availability become part of the key-management TCB and must be identical across
+nodes that can write encrypted collections.
 When a material uses `source: fd`, the `fd` must reference an already-open Unix
 file descriptor containing the base64url-no-pad 32-byte material. Qdrant
 marks the descriptor close-on-exec during validation and duplicates it with

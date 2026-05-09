@@ -1973,7 +1973,18 @@ fn validate_material(
         + usize::from(material.fd.is_some())
         + usize::from(material.value_b64.is_some());
 
-    if configured_sources != 1 {
+    if material.source.as_deref() == Some("vault_kv2") {
+        if material.env.is_none()
+            || material.path.is_none()
+            || material.vault_field.is_none()
+            || material.fd.is_some()
+            || material.value_b64.is_some()
+        {
+            return Err(CryptoSetupError::MaterialSourceMismatch {
+                material: material_name.to_string(),
+            });
+        }
+    } else if configured_sources != 1 || material.vault_field.is_some() {
         return Err(CryptoSetupError::InvalidMaterialSourceCount {
             material: material_name.to_string(),
         });
@@ -2009,6 +2020,21 @@ fn validate_material(
             validate_material_unix_socket_source(material_name, material.path.as_deref().unwrap())?;
             Ok(())
         }
+        Some("vault_kv2")
+            if material.env.is_some()
+                && material.path.is_some()
+                && material.vault_field.is_some()
+                && material.fd.is_none()
+                && material.value_b64.is_none() =>
+        {
+            validate_material_vault_kv2_source(
+                material_name,
+                material.path.as_deref().unwrap(),
+                material.env.as_deref().unwrap(),
+                material.vault_field.as_deref(),
+            )?;
+            Ok(())
+        }
         Some("fd")
             if material.fd.is_some()
                 && material.env.is_none()
@@ -2032,7 +2058,7 @@ fn validate_material(
                 })
             }
         }
-        Some("env" | "file" | "unix_socket" | "fd" | "inline") => {
+        Some("env" | "file" | "unix_socket" | "vault_kv2" | "fd" | "inline") => {
             Err(CryptoSetupError::MaterialSourceMismatch {
                 material: material_name.to_string(),
             })
@@ -2208,6 +2234,72 @@ fn validate_material_unix_socket_source(
     }
 }
 
+fn validate_material_vault_kv2_source(
+    material_name: &str,
+    url: &str,
+    token_env: &str,
+    vault_field: Option<&str>,
+) -> Result<(), CryptoSetupError> {
+    let parsed =
+        reqwest::Url::parse(url).map_err(|err| CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: url.to_string(),
+            reason: format!("Vault KV v2 URL is invalid: {err}"),
+        })?;
+    let is_loopback_http = parsed.scheme() == "http"
+        && parsed.host_str().is_some_and(|host| {
+            host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1"
+        });
+    if parsed.scheme() != "https" && !is_loopback_http {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: url.to_string(),
+            reason: "Vault KV v2 URL must use https, except loopback http for tests/dev"
+                .to_string(),
+        });
+    }
+    if parsed.path().is_empty() || parsed.path() == "/" {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: url.to_string(),
+            reason: "Vault KV v2 URL must include the secret data path".to_string(),
+        });
+    }
+    if token_env.is_empty()
+        || token_env.len() > 128
+        || !token_env
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: url.to_string(),
+            reason: "Vault token env name is invalid".to_string(),
+        });
+    }
+    let Some(vault_field) = vault_field else {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: url.to_string(),
+            reason: "vault_field is required for Vault KV v2 material".to_string(),
+        });
+    };
+    if vault_field.is_empty()
+        || vault_field.len() > 128
+        || !vault_field
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+    {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: url.to_string(),
+            reason: "vault_field is invalid".to_string(),
+        });
+    }
+
+    Ok(())
+}
+
 #[cfg(unix)]
 fn qdrant_effective_uid() -> u32 {
     unsafe extern "C" {
@@ -2284,11 +2376,11 @@ fn validate_wrapped_resource_key_material(
         || material.path.is_some()
         || material.fd.is_some()
         || material.value_b64.is_some()
+        || material.vault_field.is_some()
     {
         return Err(CryptoSetupError::InvalidWrappedMaterial {
             material: material_name.to_string(),
-            reason: "wrapped resource keys must not configure direct source/env/path/fd/value_b64"
-                .to_string(),
+            reason: "wrapped resource keys must not configure direct source/env/path/fd/value_b64/vault_field".to_string(),
         });
     }
 
@@ -3779,6 +3871,27 @@ fn decode_direct_material_key(
             })?;
             read_material_unix_socket_to_string(material_name, path)?
         }
+        Some("vault_kv2") => {
+            let url = material.path.as_deref().ok_or_else(|| {
+                PayloadWriteSetupError::MissingMaterialPath {
+                    material: material_name.to_string(),
+                }
+            })?;
+            let token_env = material.env.as_deref().ok_or_else(|| {
+                PayloadWriteSetupError::MissingMaterialEnv {
+                    material: material_name.to_string(),
+                    env: "<missing>".to_string(),
+                }
+            })?;
+            let vault_field = material.vault_field.as_deref().ok_or_else(|| {
+                PayloadWriteSetupError::InvalidMaterialFileSource {
+                    material: material_name.to_string(),
+                    path: url.to_string(),
+                    reason: "vault_field is required for Vault KV v2 material".to_string(),
+                }
+            })?;
+            read_material_vault_kv2_to_string(material_name, url, token_env, vault_field)?
+        }
         Some("fd") => {
             let fd = material
                 .fd
@@ -3871,6 +3984,75 @@ fn read_material_fd_to_string(
             reason: "fd source is only supported on Unix".to_string(),
         })
     }
+}
+
+fn read_material_vault_kv2_to_string(
+    material_name: &str,
+    url: &str,
+    token_env: &str,
+    vault_field: &str,
+) -> Result<String, PayloadWriteSetupError> {
+    validate_material_vault_kv2_source(material_name, url, token_env, Some(vault_field)).map_err(
+        |err| match err {
+            CryptoSetupError::InvalidMaterialFileSource {
+                material,
+                path,
+                reason,
+            } => PayloadWriteSetupError::InvalidMaterialFileSource {
+                material,
+                path,
+                reason,
+            },
+            err => PayloadWriteSetupError::UnreadableMaterialFile {
+                material: material_name.to_string(),
+                path: format!("{url}: {err}"),
+            },
+        },
+    )?;
+    let token = Zeroizing::new(std::env::var(token_env).map_err(|_| {
+        PayloadWriteSetupError::MissingMaterialEnv {
+            material: material_name.to_string(),
+            env: token_env.to_string(),
+        }
+    })?);
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|_| PayloadWriteSetupError::UnreadableMaterialFile {
+            material: material_name.to_string(),
+            path: url.to_string(),
+        })?;
+    let response = client
+        .get(url)
+        .header("X-Vault-Token", token.as_str())
+        .send()
+        .map_err(|_| PayloadWriteSetupError::UnreadableMaterialFile {
+            material: material_name.to_string(),
+            path: url.to_string(),
+        })?;
+    if !response.status().is_success() {
+        return Err(PayloadWriteSetupError::UnreadableMaterialFile {
+            material: material_name.to_string(),
+            path: url.to_string(),
+        });
+    }
+    let body = response.json::<Value>().map_err(|_| {
+        PayloadWriteSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: url.to_string(),
+            reason: "Vault KV v2 response must be JSON".to_string(),
+        }
+    })?;
+    body.pointer("/data/data")
+        .and_then(Value::as_object)
+        .and_then(|data| data.get(vault_field))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| PayloadWriteSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: url.to_string(),
+            reason: format!("Vault KV v2 response is missing data.data.{vault_field}"),
+        })
 }
 
 fn read_material_unix_socket_to_string(
@@ -4999,6 +5181,7 @@ mod tests {
                             path: None,
                             fd: None,
                             value_b64: Some(BASE64URL_NOPAD.encode(&[1_u8; 32])),
+                            vault_field: None,
                             wrapped_by: None,
                             wrap_algorithm: None,
                             nonce: None,
@@ -5017,6 +5200,7 @@ mod tests {
                             path: None,
                             fd: None,
                             value_b64: None,
+                            vault_field: None,
                             wrapped_by: Some("tenant-a/mk".to_string()),
                             wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
                             nonce: Some(BASE64URL_NOPAD.encode(&[2_u8; 12])),
@@ -5095,6 +5279,7 @@ mod tests {
                 path: None,
                 fd: None,
                 value_b64: None,
+                vault_field: None,
                 wrapped_by: Some("tenant-a/mk".to_string()),
                 wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
                 nonce: Some(BASE64URL_NOPAD.encode(&[4_u8; 12])),
@@ -5826,6 +6011,101 @@ mod tests {
             Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
                 if reason.contains("non-symlink Unix socket")
         ));
+    }
+
+    #[test]
+    fn validate_material_vault_kv2_source_rejects_insecure_remote_http() {
+        let vault_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("vault_kv2".to_string()),
+            env: Some("QDRANT_TEST_VAULT_TOKEN".to_string()),
+            path: Some("http://vault.example.com/v1/secret/data/docs".to_string()),
+            vault_field: Some("material".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        assert!(matches!(
+            validate_material("tenant-a/payload-v1", &vault_material, false),
+            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("https")
+        ));
+    }
+
+    #[test]
+    fn validate_material_vault_kv2_source_requires_field() {
+        let vault_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("vault_kv2".to_string()),
+            env: Some("QDRANT_TEST_VAULT_TOKEN".to_string()),
+            path: Some("https://vault.example.com/v1/secret/data/docs".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        assert_eq!(
+            validate_material("tenant-a/payload-v1", &vault_material, false),
+            Err(CryptoSetupError::MaterialSourceMismatch {
+                material: "tenant-a/payload-v1".to_string(),
+            }),
+        );
+    }
+
+    #[test]
+    fn decode_direct_material_key_reads_vault_kv2_source() {
+        let mut server = mockito::Server::new();
+        let encoded = BASE64URL_NOPAD.encode(&[19u8; 32]);
+        let _mock = server
+            .mock("GET", "/v1/secret/data/docs")
+            .match_header("x-vault-token", "test-token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!({ "data": { "data": { "material": encoded } } }).to_string())
+            .create();
+        unsafe {
+            std::env::set_var("QDRANT_TEST_VAULT_TOKEN", "test-token");
+        }
+
+        let vault_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("vault_kv2".to_string()),
+            env: Some("QDRANT_TEST_VAULT_TOKEN".to_string()),
+            path: Some(format!("{}/v1/secret/data/docs", server.url())),
+            vault_field: Some("material".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        assert_eq!(
+            validate_material("tenant-a/payload-v1", &vault_material, false),
+            Ok(())
+        );
+        let decoded = decode_direct_material_key("tenant-a/payload-v1", &vault_material).unwrap();
+        unsafe {
+            std::env::remove_var("QDRANT_TEST_VAULT_TOKEN");
+        }
+
+        let encryptor = PayloadTextEncryptor::new_from_resource_key_with_metadata(
+            "docs-crypto-id",
+            "tenant-a:payload",
+            &decoded,
+            "tenant-a/payload@v1",
+            "tenant-a/payload-rk",
+            3,
+        )
+        .unwrap();
+        let policy = PayloadEncryptionPolicy::new(vec!["body".to_string()]).unwrap();
+        let mut payload = json!({ "body": "vault-backed secret" })
+            .as_object()
+            .unwrap()
+            .clone();
+        encryptor
+            .encrypt_selected_fields("1", &mut payload, &policy)
+            .unwrap();
+        encryptor
+            .decrypt_selected_fields("1", &mut payload, &policy)
+            .unwrap();
+        assert_eq!(
+            payload.get("body").and_then(Value::as_str),
+            Some("vault-backed secret"),
+        );
     }
 
     #[cfg(unix)]
