@@ -3330,6 +3330,59 @@ esac
             assert_eq!(query_best_groups.groups[1].id, GroupId::from("b"));
             assert_eq!(query_best_groups.groups[1].hits[0].id, 2.into());
 
+            let point_id_average_query_groups = crate::common::query::do_query_point_groups(
+                &toc,
+                "vector_groups",
+                collection::operations::universal_query::collection_query::CollectionQueryGroupsRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::RecommendAverageVector(
+                        segment::vector_storage::query::RecoQuery::new(
+                            vec![
+                                VectorInputInternal::Id(1.into()),
+                                VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                            ],
+                            Vec::new(),
+                        ),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    params: None,
+                    score_threshold: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                    group_by: "group".parse().unwrap(),
+                    group_size: 1,
+                    limit: 2,
+                    with_lookup: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(point_id_average_query_groups.groups.len(), 2);
+            assert_eq!(
+                point_id_average_query_groups.groups[0].id,
+                GroupId::from("a")
+            );
+            assert_eq!(
+                point_id_average_query_groups.groups[0].hits[0].score,
+                9.5
+            );
+            assert_eq!(
+                point_id_average_query_groups.groups[1].id,
+                GroupId::from("b")
+            );
+            assert_eq!(
+                point_id_average_query_groups.groups[1].hits[0].score,
+                6.0
+            );
+
             let recommend_query = crate::common::query::do_query_points(
                 &toc,
                 "vector_groups",
@@ -3364,6 +3417,45 @@ esac
             .unwrap();
             assert_eq!(recommend_query[0].id, 1.into());
             assert_eq!(recommend_query[0].score, 9.0);
+
+            let point_id_average_query = crate::common::query::do_query_points(
+                &toc,
+                "vector_groups",
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::RecommendAverageVector(
+                        segment::vector_storage::query::RecoQuery::new(
+                            vec![
+                                VectorInputInternal::Id(1.into()),
+                                VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                            ],
+                            Vec::new(),
+                        ),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 2,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(point_id_average_query.len(), 2);
+            assert_eq!(point_id_average_query[0].id, 1.into());
+            assert_eq!(point_id_average_query[0].score, 9.5);
+            assert_eq!(point_id_average_query[1].id, 2.into());
+            assert_eq!(point_id_average_query[1].score, 6.0);
 
             let recommend_best_query = crate::common::query::do_query_points(
                 &toc,
@@ -4331,6 +4423,58 @@ esac
             assert_eq!(point_id_recommend_groups.groups[1].id, GroupId::from("a"));
             assert_eq!(point_id_recommend_groups.groups[1].hits[0].score, 8.0);
 
+            let mixed_point_id_recommend_groups =
+                crate::common::query::do_recommend_point_groups(
+                    &toc,
+                    "vector_groups",
+                    RecommendGroupsRequestInternal {
+                        positive: vec![
+                            RecommendExample::PointId(1.into()),
+                            RecommendExample::Dense(vec![0.0, 0.0]),
+                        ],
+                        negative: Vec::new(),
+                        strategy: Some(api::rest::RecommendStrategy::AverageVector),
+                        filter: None,
+                        params: None,
+                        with_payload: Some(WithPayloadInterface::Bool(false)),
+                        with_vector: Some(WithVector::Bool(false)),
+                        score_threshold: None,
+                        using: Some(DEFAULT_VECTOR_NAME.to_string().into()),
+                        lookup_from: None,
+                        group_request: BaseGroupRequest {
+                            group_by: "group".parse().unwrap(),
+                            group_size: 1,
+                            limit: 2,
+                            with_lookup: None,
+                        },
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    Some(&vector_settings),
+                )
+                .await
+                .unwrap();
+            assert_eq!(mixed_point_id_recommend_groups.groups.len(), 2);
+            assert_eq!(
+                mixed_point_id_recommend_groups.groups[0].id,
+                GroupId::from("a")
+            );
+            assert_eq!(
+                mixed_point_id_recommend_groups.groups[0].hits[0].score,
+                9.5
+            );
+            assert_eq!(
+                mixed_point_id_recommend_groups.groups[1].id,
+                GroupId::from("b")
+            );
+            assert_eq!(
+                mixed_point_id_recommend_groups.groups[1].hits[0].score,
+                6.0
+            );
+
             let recommend_best_groups = crate::common::query::do_recommend_point_groups(
                 &toc,
                 "vector_groups",
@@ -4544,6 +4688,41 @@ esac
             assert_eq!(point_id_recommend.len(), 1);
             assert_eq!(point_id_recommend[0].id, 1.into());
             assert_eq!(point_id_recommend[0].score, 10.0);
+
+            let mixed_point_id_recommend = crate::common::query::do_recommend_points(
+                &toc,
+                "vector_groups",
+                RecommendRequestInternal {
+                    positive: vec![
+                        RecommendExample::PointId(1.into()),
+                        RecommendExample::Dense(vec![0.0, 0.0]),
+                    ],
+                    negative: Vec::new(),
+                    strategy: Some(api::rest::RecommendStrategy::AverageVector),
+                    filter: None,
+                    params: None,
+                    limit: 2,
+                    offset: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                    using: Some(DEFAULT_VECTOR_NAME.to_string().into()),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(mixed_point_id_recommend.len(), 2);
+            assert_eq!(mixed_point_id_recommend[0].id, 1.into());
+            assert_eq!(mixed_point_id_recommend[0].score, 9.5);
+            assert_eq!(mixed_point_id_recommend[1].id, 2.into());
+            assert_eq!(mixed_point_id_recommend[1].score, 6.0);
 
             let point_id_discover = crate::common::query::do_discover_points(
                 &toc,

@@ -63,6 +63,10 @@ enum CkksSidecarScoring<'a> {
         query_point_id: String,
         query_encrypted: EncryptedCkksVector,
     },
+    RecommendAverageVectorResolved {
+        positives: Vec<CkksSidecarQuerySource<'a>>,
+        negatives: Vec<CkksSidecarQuerySource<'a>>,
+    },
     RecommendBestScore {
         positives: Vec<&'a [f32]>,
         negatives: Vec<&'a [f32]>,
@@ -550,6 +554,22 @@ async fn ckks_vector_search_points_with_scoring(
         CkksSidecarScoring::Nearest { .. } | CkksSidecarScoring::StoredNearest { .. } => {
             distance.distance_order()
         }
+        CkksSidecarScoring::RecommendAverageVectorResolved {
+            positives,
+            negatives: _,
+        } => {
+            if positives.is_empty() {
+                return Err(StorageError::bad_input(format!(
+                    "encrypted vector '{vector_name}' average-vector recommend requires at least one positive example",
+                )));
+            }
+            if distance.distance_order() != Order::LargeBetter {
+                return Err(StorageError::bad_input(format!(
+                    "encrypted vector '{vector_name}' average-vector point-id recommend requires a large-better metric such as dot or cosine",
+                )));
+            }
+            Order::LargeBetter
+        }
         CkksSidecarScoring::RecommendBestScore {
             positives,
             negatives,
@@ -788,6 +808,41 @@ async fn ckks_vector_search_points_with_scoring(
                             }
                         })
                         .collect()
+                }
+                CkksSidecarScoring::RecommendAverageVectorResolved {
+                    positives,
+                    negatives,
+                } => {
+                    let mut total_scores = vec![0.0; encrypted_items.len()];
+                    let positive_weight = 1.0 / positives.len() as f32;
+                    for source in positives {
+                        let batch_scores = ckks_score_query_source_batch(
+                            collection_name,
+                            vector_name,
+                            plan,
+                            source,
+                            &encrypted_items,
+                        )?;
+                        for (total, score) in total_scores.iter_mut().zip(batch_scores) {
+                            *total += score * positive_weight;
+                        }
+                    }
+                    if !negatives.is_empty() {
+                        let negative_weight = 1.0 / negatives.len() as f32;
+                        for source in negatives {
+                            let batch_scores = ckks_score_query_source_batch(
+                                collection_name,
+                                vector_name,
+                                plan,
+                                source,
+                                &encrypted_items,
+                            )?;
+                            for (total, score) in total_scores.iter_mut().zip(batch_scores) {
+                                *total -= score * negative_weight;
+                            }
+                        }
+                    }
+                    total_scores
                 }
                 CkksSidecarScoring::RecommendBestScoreResolved {
                     positives,
@@ -2853,9 +2908,8 @@ fn recommend_examples_contain_point_id(examples: &[RecommendExample]) -> bool {
 }
 
 fn recommend_request_needs_sidecar_resolution(request: &RecommendRequestInternal) -> bool {
-    request.strategy.unwrap_or_default() != RecommendStrategy::AverageVector
-        && (recommend_examples_contain_point_id(&request.positive)
-            || recommend_examples_contain_point_id(&request.negative))
+    recommend_examples_contain_point_id(&request.positive)
+        || recommend_examples_contain_point_id(&request.negative)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2935,9 +2989,12 @@ async fn recommend_request_as_ckks_resolved_scoring<'a>(
             positives,
             negatives,
         }),
-        RecommendStrategy::AverageVector => Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' average-vector recommend cannot combine multiple point-id examples because encrypted vector arithmetic is not implemented",
-        ))),
+        RecommendStrategy::AverageVector => {
+            Ok(CkksSidecarScoring::RecommendAverageVectorResolved {
+                positives,
+                negatives,
+            })
+        }
     }
 }
 
@@ -4094,9 +4151,12 @@ async fn ckks_reco_query_as_scoring<'a>(
             positives,
             negatives,
         }),
-        RecommendStrategy::AverageVector => Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' average-vector recommend cannot combine multiple point-id examples because encrypted vector arithmetic is not implemented",
-        ))),
+        RecommendStrategy::AverageVector => {
+            Ok(CkksSidecarScoring::RecommendAverageVectorResolved {
+                positives,
+                negatives,
+            })
+        }
     }
 }
 
@@ -4290,6 +4350,33 @@ pub async fn do_query_batch_points(
                             vector_name: request.using.clone(),
                             query_point_id: point_id.to_string(),
                             query_encrypted,
+                            filter: request.filter.clone(),
+                            params: request.params.clone(),
+                            limit: request.limit,
+                            offset: request.offset,
+                            with_payload: request.with_payload.clone(),
+                            with_vector: request.with_vector.clone(),
+                            score_threshold: request.score_threshold,
+                            shard_selection: shard_selection.clone(),
+                        }
+                    }
+                    Some(Query::Vector(VectorQuery::RecommendAverageVector(recommend)))
+                        if reco_query_needs_sidecar_resolution(recommend) =>
+                    {
+                        let scoring = ckks_reco_query_as_scoring(
+                            &collection,
+                            &request.using,
+                            recommend,
+                            RecommendStrategy::AverageVector,
+                            read_consistency,
+                            shard_selection,
+                            timeout,
+                            hw_measurement_acc.clone(),
+                        )
+                        .await?;
+                        CkksResolvedQueryRequest::Scoring {
+                            vector_name: request.using.clone(),
+                            scoring,
                             filter: request.filter.clone(),
                             params: request.params.clone(),
                             limit: request.limit,
@@ -4716,6 +4803,54 @@ async fn try_ckks_vector_query_groups(
                 query_point_id: point_id.to_string(),
                 query_encrypted,
             },
+            request.filter.clone(),
+            request.params.clone(),
+            request.score_threshold,
+            &plan,
+            &request.group_by,
+            request.limit,
+            request.group_size,
+            request.with_payload.clone(),
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        return attach_ckks_group_lookup(
+            toc,
+            result,
+            request.with_lookup.clone(),
+            read_consistency,
+            shard_selection,
+            auth,
+            timeout,
+            hw_measurement_acc,
+        )
+        .await
+        .map(Some);
+    }
+
+    if let Some(Query::Vector(VectorQuery::RecommendAverageVector(recommend))) = &request.query
+        && reco_query_needs_sidecar_resolution(recommend)
+    {
+        let scoring = ckks_reco_query_as_scoring(
+            &collection,
+            &request.using,
+            recommend,
+            RecommendStrategy::AverageVector,
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        let result = ckks_vector_group_points_with_scoring(
+            &collection,
+            collection_name,
+            &collection_crypto_id,
+            &request.using,
+            scoring,
             request.filter.clone(),
             request.params.clone(),
             request.score_threshold,
