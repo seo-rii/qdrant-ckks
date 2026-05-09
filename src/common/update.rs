@@ -2393,6 +2393,7 @@ mod tests {
         CollectionPrefetch, CollectionQueryGroupsRequest, CollectionQueryRequest, Query,
         VectorInputInternal, VectorQuery,
     };
+    use collection::operations::universal_query::shard_query::FusionInternal;
     use collection::operations::vector_params_builder::VectorParamsBuilder;
     use collection::optimizers_builder::OptimizersConfig;
     use collection::shards::channel_service::ChannelService;
@@ -6237,6 +6238,64 @@ esac
             assert_eq!(mixed_query[1][0].id, 2.into());
             assert_eq!(mixed_query[1][0].score, 0.5);
 
+            let fusion_query = crate::common::query::do_query_points(
+                &toc,
+                "vector_docs",
+                CollectionQueryRequest {
+                    prefetch: vec![
+                        CollectionPrefetch {
+                            prefetch: Vec::new(),
+                            query: Some(Query::Vector(VectorQuery::Nearest(
+                                VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                            ))),
+                            using: DEFAULT_VECTOR_NAME.to_string(),
+                            filter: None,
+                            score_threshold: None,
+                            limit: 2,
+                            params: None,
+                            lookup_from: None,
+                        },
+                        CollectionPrefetch {
+                            prefetch: Vec::new(),
+                            query: Some(Query::Vector(VectorQuery::Nearest(
+                                VectorInputInternal::Vector(VectorInternal::Dense(vec![1.0, 0.0])),
+                            ))),
+                            using: "plain".to_string(),
+                            filter: None,
+                            score_threshold: None,
+                            limit: 1,
+                            params: None,
+                            lookup_from: None,
+                        },
+                    ],
+                    query: Some(Query::Fusion(FusionInternal::Rrf {
+                        k: 2,
+                        weights: None,
+                    })),
+                    using: String::new(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 2,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(fusion_query.len(), 2);
+            assert_eq!(fusion_query[0].id, 2.into());
+            assert!(fusion_query[0].score > fusion_query[1].score);
+            assert_eq!(fusion_query[1].id, 1.into());
+
             let err = crate::common::query::do_query_points(
                 &toc,
                 "vector_docs",
@@ -6278,7 +6337,7 @@ esac
             assert!(matches!(
                 err,
                 StorageError::BadInput { description }
-                    if description.contains("prefetch/fusion/MMR")
+                    if description.contains("requires a root fusion query")
             ));
 
             let err = crate::common::query::do_core_search_points(

@@ -16,6 +16,7 @@ use collection::operations::consistency_params::ReadConsistency;
 use collection::operations::shard_selector_internal::ShardSelectorInternal;
 use collection::operations::types::*;
 use collection::operations::universal_query::collection_query::*;
+use collection::operations::universal_query::shard_query::FusionInternal;
 use collection::recommendations::avg_vector_for_recommendation;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use common::math::scaled_fast_sigmoid;
@@ -23,6 +24,8 @@ use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD, EncryptedCkksVector,
 };
+use segment::common::reciprocal_rank_fusion::rrf_scoring;
+use segment::common::score_fusion::{ScoreFusion, score_fusion};
 use segment::data_types::groups::GroupId;
 use segment::data_types::vectors::{
     DEFAULT_VECTOR_NAME, Named, NamedQuery, VectorInternal, VectorRef,
@@ -1216,15 +1219,40 @@ async fn ckks_vector_search_points_with_scoring(
         .take(limit)
         .collect::<Vec<_>>();
 
-    let with_payload = with_payload.unwrap_or(WithPayloadInterface::Bool(false));
-    if top.is_empty() || (!with_payload.is_required() && !with_vector.is_enabled()) {
-        return Ok(top);
+    ckks_fill_scored_points_payload_or_vectors(
+        collection,
+        &mut top,
+        with_payload.unwrap_or(WithPayloadInterface::Bool(false)),
+        with_vector,
+        read_consistency,
+        shard_selection,
+        timeout,
+        hw_measurement_acc,
+    )
+    .await?;
+
+    Ok(top)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn ckks_fill_scored_points_payload_or_vectors(
+    collection: &collection::collection::Collection,
+    points: &mut [ScoredPoint],
+    with_payload: WithPayloadInterface,
+    with_vector: WithVector,
+    read_consistency: Option<ReadConsistency>,
+    shard_selection: &ShardSelectorInternal,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+) -> Result<(), StorageError> {
+    if points.is_empty() || (!with_payload.is_required() && !with_vector.is_enabled()) {
+        return Ok(());
     }
 
     let records = collection
         .retrieve(
             PointRequestInternal {
-                ids: top.iter().map(|point| point.id).collect(),
+                ids: points.iter().map(|point| point.id).collect(),
                 with_payload: Some(with_payload),
                 with_vector,
             },
@@ -1238,7 +1266,7 @@ async fn ckks_vector_search_points_with_scoring(
         .into_iter()
         .map(|record| (record.id, record))
         .collect::<std::collections::HashMap<_, _>>();
-    for point in &mut top {
+    for point in points {
         if let Some(record) = records_by_id.remove(&point.id) {
             point.payload = record.payload;
             point.vector = record.vector;
@@ -1246,7 +1274,7 @@ async fn ckks_vector_search_points_with_scoring(
         }
     }
 
-    Ok(top)
+    Ok(())
 }
 
 fn ckks_score_passes_threshold(order: Order, score: f32, score_threshold: Option<f32>) -> bool {
@@ -4238,6 +4266,7 @@ pub async fn do_query_batch_points(
             &config.params,
         )? {
             enum CkksResolvedQueryRequest<'a> {
+                Ready(Vec<ScoredPoint>),
                 Plain(CollectionQueryRequest, ShardSelectorInternal),
                 Core(CoreSearchRequest, ShardSelectorInternal),
                 StoredNearest {
@@ -4272,14 +4301,94 @@ pub async fn do_query_batch_points(
 
             for (request, shard_selection) in &requests {
                 let mut prefetches = request.prefetch.iter().collect::<Vec<_>>();
+                let mut has_encrypted_prefetch = false;
                 while let Some(prefetch) = prefetches.pop() {
                     if plan.contains_vector_name(&prefetch.using) {
-                        return Err(StorageError::bad_input(format!(
-                            "encrypted vector '{}' only supports root nearest-neighbor dense or point-id query; prefetch/fusion/MMR over CKKS ciphertext are not implemented",
-                            prefetch.using,
-                        )));
+                        has_encrypted_prefetch = true;
                     }
                     prefetches.extend(prefetch.prefetch.iter());
+                }
+                if has_encrypted_prefetch {
+                    let Some(Query::Fusion(fusion)) = &request.query else {
+                        return Err(StorageError::bad_input(
+                            "encrypted vector prefetch currently requires a root fusion query",
+                        ));
+                    };
+                    if request.with_vector.is_enabled() {
+                        return Err(StorageError::bad_input(
+                            "cannot return encrypted vectors from CKKS prefetch fusion; CKKS vector ciphertext read path returns payload sidecar only",
+                        ));
+                    }
+
+                    let mut intermediates = Vec::with_capacity(request.prefetch.len());
+                    for prefetch in &request.prefetch {
+                        let prefetch_request = CollectionQueryRequest {
+                            prefetch: prefetch.prefetch.clone(),
+                            query: prefetch.query.clone(),
+                            using: prefetch.using.clone(),
+                            filter: prefetch.filter.clone(),
+                            score_threshold: prefetch
+                                .score_threshold
+                                .as_ref()
+                                .map(|score| score.into_inner()),
+                            limit: prefetch.limit,
+                            offset: 0,
+                            params: prefetch.params.clone(),
+                            with_vector: WithVector::Bool(false),
+                            with_payload: WithPayloadInterface::Bool(false),
+                            lookup_from: prefetch.lookup_from.clone(),
+                        };
+                        intermediates.push(
+                            Box::pin(do_query_points(
+                                toc,
+                                collection_name,
+                                prefetch_request,
+                                read_consistency,
+                                shard_selection.clone(),
+                                auth.clone(),
+                                timeout,
+                                hw_measurement_acc.clone(),
+                                runtime_settings,
+                            ))
+                            .await?,
+                        );
+                    }
+
+                    let mut fused = match fusion {
+                        FusionInternal::Rrf { k, weights } => {
+                            let weights_slice = weights.as_ref().map(|weights| {
+                                weights.iter().map(|w| w.into_inner()).collect::<Vec<_>>()
+                            });
+                            rrf_scoring(intermediates, *k, weights_slice.as_deref())
+                                .map_err(|err| StorageError::bad_input(err.to_string()))?
+                        }
+                        FusionInternal::Dbsf => score_fusion(intermediates, ScoreFusion::dbsf()),
+                    };
+                    if let Some(score_threshold) = request.score_threshold {
+                        fused = fused
+                            .into_iter()
+                            .take_while(|point| point.score >= score_threshold)
+                            .collect();
+                    }
+                    let mut top = fused
+                        .into_iter()
+                        .skip(request.offset)
+                        .take(request.limit)
+                        .collect::<Vec<_>>();
+                    ckks_fill_scored_points_payload_or_vectors(
+                        &collection,
+                        &mut top,
+                        request.with_payload.clone(),
+                        WithVector::Bool(false),
+                        read_consistency,
+                        shard_selection,
+                        timeout,
+                        hw_measurement_acc.clone(),
+                    )
+                    .await?;
+                    has_encrypted_query = true;
+                    core_requests.push(Some(CkksResolvedQueryRequest::Ready(top)));
+                    continue;
                 }
 
                 if !plan.contains_vector_name(&request.using) {
@@ -4517,6 +4626,7 @@ pub async fn do_query_batch_points(
                         unreachable!("plain query requests are represented explicitly");
                     };
                     let result = match request {
+                        CkksResolvedQueryRequest::Ready(result) => result,
                         CkksResolvedQueryRequest::Plain(request, shard_selection) => {
                             ensure_with_vector_does_not_request_encrypted_vectors(
                                 toc,
