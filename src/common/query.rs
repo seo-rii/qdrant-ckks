@@ -2082,8 +2082,34 @@ fn ckks_sidecar_hnsw_persist_graph(
         ))
     })?;
 
+    match fs::symlink_metadata(&temp_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(StorageError::service_error(format!(
+                "CKKS sidecar HNSW graph cache temp file {temp_path:?} must not be a symlink",
+            )));
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            return Err(StorageError::service_error(format!(
+                "CKKS sidecar HNSW graph cache temp file {temp_path:?} must be a regular file",
+            )));
+        }
+        Ok(_) => {
+            fs::remove_file(&temp_path).map_err(|err| {
+                StorageError::service_error(format!(
+                    "failed to remove stale CKKS sidecar HNSW graph cache temp file {temp_path:?}: {err}",
+                ))
+            })?;
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(StorageError::service_error(format!(
+                "failed to inspect CKKS sidecar HNSW graph cache temp file {temp_path:?}: {err}",
+            )));
+        }
+    }
+
     let mut options = OpenOptions::new();
-    options.create(true).write(true).truncate(true);
+    options.create_new(true).write(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -6999,6 +7025,31 @@ mod tests {
         let err = ckks_sidecar_hnsw_prune_persisted_graphs(cache_dir, &keep_path).unwrap_err();
         assert!(format!("{err}").contains("keep file"));
         assert!(format!("{err}").contains("must not be a symlink"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_rejects_symlink_temp_file() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let key = ckks_sidecar_test_graph_cache_key("temp-symlink");
+        let cache_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &key);
+        let cache_dir = cache_path.parent().unwrap();
+        std::fs::create_dir_all(cache_dir).unwrap();
+        set_ckks_sidecar_test_private_directory_permissions(cache_dir);
+        let temp_path = cache_path.with_extension("json.tmp");
+        let target_path = dir.path().join("target.tmp");
+        std::fs::write(&target_path, "{}").unwrap();
+        symlink(&target_path, &temp_path).unwrap();
+
+        let graph = CkksSidecarHnswGraph {
+            links: Arc::new(vec![Vec::new()]),
+        };
+        let err = ckks_sidecar_hnsw_persist_graph(dir.path(), &key, &graph).unwrap_err();
+        assert!(format!("{err}").contains("temp file"));
+        assert!(format!("{err}").contains("must not be a symlink"));
+        assert!(!cache_path.exists());
     }
 
     #[test]
