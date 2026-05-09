@@ -5841,7 +5841,7 @@ async fn ensure_encrypted_vector_group_request_is_unsupported(
         vector_name,
         auth,
         "group by search over",
-        "CKKS-native vector search is not implemented for grouped requests in this branch",
+        "runtime OpenFHE settings are required for CKKS sidecar grouped search",
     )
     .await
 }
@@ -5925,7 +5925,7 @@ pub async fn do_search_points_matrix(
         &request.using,
         &auth,
         "search matrix using",
-        "CKKS-native vector search matrix is not implemented for encrypted vectors in this branch",
+        "runtime OpenFHE settings are required for CKKS sidecar matrix search",
     )
     .await?;
 

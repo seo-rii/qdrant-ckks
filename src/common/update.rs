@@ -5520,7 +5520,7 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains("cannot search matrix using encrypted vector")
-                        && description.contains("CKKS-native vector search matrix is not implemented")
+                        && description.contains("runtime OpenFHE settings are required")
             ));
 
             let matrix = crate::common::query::do_search_points_matrix(
@@ -6297,7 +6297,7 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains("encrypted vector")
-                        && description.contains("CKKS-native vector search is not implemented")
+                        && description.contains("runtime OpenFHE settings are required")
             ));
 
             let err = crate::common::query::do_query_point_groups(
@@ -6333,7 +6333,7 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains("encrypted vector")
-                        && description.contains("CKKS-native vector search is not implemented")
+                        && description.contains("runtime OpenFHE settings are required")
             ));
 
             let err = crate::common::query::do_query_points(
