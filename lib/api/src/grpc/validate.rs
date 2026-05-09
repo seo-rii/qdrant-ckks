@@ -598,7 +598,8 @@ mod tests {
 
     use crate::grpc::qdrant::{
         CkksEncryptedQueryVector, CreateCollection, CreateFieldIndexCollection, GeoLineString,
-        GeoPoint, GeoPolygon, SearchPoints, UpdateCollection, VectorInput, vector_input,
+        GeoPoint, GeoPolygon, SearchBatchPoints, SearchPoints, UpdateCollection, VectorInput,
+        vector_input,
     };
 
     #[test]
@@ -829,6 +830,42 @@ mod tests {
         assert!(
             bad_input.validate().is_err(),
             "bad universal CKKS encrypted query scheme should error on validation"
+        );
+    }
+
+    #[test]
+    fn test_ckks_encrypted_query_batch_validation() {
+        let good_batch = SearchBatchPoints {
+            collection_name: "docs".to_string(),
+            search_points: vec![SearchPoints {
+                collection_name: "docs".to_string(),
+                limit: 1,
+                ckks_encrypted_query: Some(valid_ckks_encrypted_query()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(
+            good_batch.validate().is_ok(),
+            "valid batched CKKS encrypted query should pass validation"
+        );
+
+        let bad_batch = SearchBatchPoints {
+            collection_name: "docs".to_string(),
+            search_points: vec![SearchPoints {
+                collection_name: "docs".to_string(),
+                limit: 1,
+                ckks_encrypted_query: Some(CkksEncryptedQueryVector {
+                    ciphertext: "not base64url!".to_string(),
+                    ..valid_ckks_encrypted_query()
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(
+            bad_batch.validate().is_err(),
+            "batched CKKS encrypted query should validate nested envelopes"
         );
     }
 

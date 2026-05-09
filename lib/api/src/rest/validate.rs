@@ -376,7 +376,9 @@ mod tests {
     use validator::Validate;
 
     use super::*;
-    use crate::rest::CkksEncryptedQueryVectorEnvelope;
+    use crate::rest::{
+        CkksEncryptedQueryVectorEnvelope, QueryRequest, QueryRequestBatch, QueryRequestInternal,
+    };
 
     fn valid_ckks_encrypted_query() -> CkksEncryptedQueryVector {
         CkksEncryptedQueryVector {
@@ -490,6 +492,64 @@ mod tests {
         assert!(
             bad_vector_input.validate().is_err(),
             "universal REST CKKS encrypted query should validate the nested envelope"
+        );
+    }
+
+    #[test]
+    fn test_ckks_encrypted_query_batch_validation() {
+        let good_batch = QueryRequestBatch {
+            searches: vec![QueryRequest {
+                internal: QueryRequestInternal {
+                    prefetch: None,
+                    query: Some(QueryInterface::Nearest(VectorInput::CkksEncryptedQuery(
+                        valid_ckks_encrypted_query(),
+                    ))),
+                    using: None,
+                    filter: None,
+                    params: None,
+                    score_threshold: None,
+                    limit: Some(1),
+                    offset: None,
+                    with_vector: None,
+                    with_payload: None,
+                    lookup_from: None,
+                },
+                shard_key: None,
+            }],
+        };
+        assert!(
+            good_batch.validate().is_ok(),
+            "valid REST batched CKKS encrypted query should pass validation"
+        );
+
+        let bad_batch = QueryRequestBatch {
+            searches: vec![QueryRequest {
+                internal: QueryRequestInternal {
+                    prefetch: None,
+                    query: Some(QueryInterface::Nearest(VectorInput::CkksEncryptedQuery(
+                        CkksEncryptedQueryVector {
+                            envelope: CkksEncryptedQueryVectorEnvelope {
+                                ciphertext: "not base64url!".to_string(),
+                                ..valid_ckks_encrypted_query().envelope
+                            },
+                        },
+                    ))),
+                    using: None,
+                    filter: None,
+                    params: None,
+                    score_threshold: None,
+                    limit: Some(1),
+                    offset: None,
+                    with_vector: None,
+                    with_payload: None,
+                    lookup_from: None,
+                },
+                shard_key: None,
+            }],
+        };
+        assert!(
+            bad_batch.validate().is_err(),
+            "REST query batch should validate nested CKKS encrypted query envelopes"
         );
     }
 }
