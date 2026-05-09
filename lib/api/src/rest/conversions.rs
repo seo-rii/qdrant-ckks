@@ -110,6 +110,11 @@ impl From<NamedVectorStruct> for segment::data_types::vectors::NamedVectorStruct
             NamedVectorStruct::Sparse(vector) => {
                 segment::data_types::vectors::NamedVectorStruct::Sparse(vector)
             }
+            NamedVectorStruct::CkksEncryptedQuery(_) => {
+                panic!(
+                    "client CKKS encrypted query vectors must be routed before segment conversion"
+                )
+            }
         }
     }
 }

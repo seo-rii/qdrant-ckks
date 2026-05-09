@@ -3,9 +3,7 @@ use actix_web_validator::{Json, Path, Query};
 use api::rest::{SearchMatrixOffsetsResponse, SearchMatrixPairsResponse, SearchMatrixRequest};
 use collection::collection::distance_matrix::CollectionSearchMatrixRequest;
 use collection::operations::shard_selector_internal::ShardSelectorInternal;
-use collection::operations::types::{
-    CoreSearchRequest, SearchGroupsRequest, SearchRequest, SearchRequestBatch,
-};
+use collection::operations::types::{SearchGroupsRequest, SearchRequest, SearchRequestBatch};
 use itertools::Itertools;
 use storage::content_manager::collection_verification::check_strict_mode;
 use storage::dispatcher::Dispatcher;
@@ -18,7 +16,8 @@ use crate::actix::helpers::{
     get_request_hardware_counter, process_response, process_response_error,
 };
 use crate::common::query::{
-    do_core_search_points, do_search_batch_points, do_search_point_groups, do_search_points_matrix,
+    do_search_batch_points_from_rest, do_search_point_groups, do_search_points,
+    do_search_points_matrix,
 };
 use crate::settings::{ServiceConfig, Settings};
 
@@ -64,10 +63,10 @@ async fn search_points(
 
     let timing = Instant::now();
 
-    let result = do_core_search_points(
+    let result = do_search_points(
         dispatcher.toc(&auth, &pass),
         &collection.collection_name,
-        search_request.into(),
+        search_request,
         params.consistency,
         shard_selection,
         auth,
@@ -122,9 +121,8 @@ async fn batch_search_points(
                 None => ShardSelectorInternal::All,
                 Some(shard_keys) => shard_keys.into(),
             };
-            let core_request: CoreSearchRequest = search_request.into();
 
-            (core_request, shard_selection)
+            (search_request, shard_selection)
         })
         .collect::<Vec<_>>();
 
@@ -137,7 +135,7 @@ async fn batch_search_points(
 
     let timing = Instant::now();
 
-    let result = do_search_batch_points(
+    let result = do_search_batch_points_from_rest(
         dispatcher.toc(&auth, &pass),
         &collection.collection_name,
         requests,

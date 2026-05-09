@@ -500,9 +500,19 @@ pub struct Record {
 #[serde(untagged)]
 pub enum NamedVectorStruct {
     Default(segment::data_types::vectors::DenseVector),
+    CkksEncryptedQuery(NamedCkksEncryptedQueryVector),
     Dense(segment::data_types::vectors::NamedVector),
     Sparse(segment::data_types::vectors::NamedSparseVector),
     // No support for multi-dense vectors in search
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct NamedCkksEncryptedQueryVector {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<VectorNameBuf>,
+    #[serde(rename = "$qdrant_sec_ckks_query")]
+    pub envelope: CkksEncryptedQueryVectorEnvelope,
 }
 
 /// Fusion algorithm allows to combine results of multiple prefetches.
@@ -554,7 +564,7 @@ pub struct CkksEncryptedQueryVector {
     pub envelope: CkksEncryptedQueryVectorEnvelope,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CkksEncryptedQueryVectorEnvelope {
     pub version: u8,

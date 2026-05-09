@@ -235,6 +235,78 @@ pub async fn do_core_search_points(
         .ok_or_else(|| StorageError::service_error("Empty search result"))
 }
 
+#[allow(clippy::too_many_arguments)]
+pub async fn do_search_points(
+    toc: &TableOfContent,
+    collection_name: &str,
+    request: SearchRequestInternal,
+    read_consistency: Option<ReadConsistency>,
+    shard_selection: ShardSelectorInternal,
+    auth: Auth,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
+) -> Result<Vec<ScoredPoint>, StorageError> {
+    if let Some(query_request) = ckks_legacy_search_as_query_request(&request) {
+        return do_query_points(
+            toc,
+            collection_name,
+            query_request,
+            read_consistency,
+            shard_selection,
+            auth,
+            timeout,
+            hw_measurement_acc,
+            runtime_settings,
+        )
+        .await;
+    }
+
+    do_core_search_points(
+        toc,
+        collection_name,
+        request.into(),
+        read_consistency,
+        shard_selection,
+        auth,
+        timeout,
+        hw_measurement_acc,
+        runtime_settings,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn do_search_batch_points_from_rest(
+    toc: &TableOfContent,
+    collection_name: &str,
+    requests: Vec<(SearchRequestInternal, ShardSelectorInternal)>,
+    read_consistency: Option<ReadConsistency>,
+    auth: Auth,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
+) -> Result<Vec<Vec<ScoredPoint>>, StorageError> {
+    let mut results = Vec::with_capacity(requests.len());
+    for (request, shard_selection) in requests {
+        results.push(
+            do_search_points(
+                toc,
+                collection_name,
+                request,
+                read_consistency,
+                shard_selection,
+                auth.clone(),
+                timeout,
+                hw_measurement_acc.clone(),
+                runtime_settings,
+            )
+            .await?,
+        );
+    }
+    Ok(results)
+}
+
 pub async fn do_search_batch_points(
     toc: &TableOfContent,
     collection_name: &str,
@@ -285,6 +357,42 @@ pub async fn do_search_batch_points(
     let results = futures::future::try_join_all(requests).await?;
     let flatten_results: Vec<Vec<_>> = results.into_iter().flatten().collect();
     Ok(flatten_results)
+}
+
+fn ckks_legacy_search_as_query_request(
+    request: &SearchRequestInternal,
+) -> Option<CollectionQueryRequest> {
+    let api::rest::NamedVectorStruct::CkksEncryptedQuery(query) = &request.vector else {
+        return None;
+    };
+    Some(CollectionQueryRequest {
+        prefetch: Vec::new(),
+        query: Some(Query::Vector(VectorQuery::Nearest(
+            VectorInputInternal::CkksEncryptedQuery(CkksEncryptedQueryInput {
+                version: query.envelope.version,
+                scheme: query.envelope.scheme.clone(),
+                security_profile: query.envelope.security_profile.clone(),
+                context_digest: query.envelope.context_digest.clone(),
+                slots: query.envelope.slots,
+                ciphertext: query.envelope.ciphertext.clone(),
+            }),
+        ))),
+        using: query
+            .name
+            .clone()
+            .unwrap_or_else(|| DEFAULT_VECTOR_NAME.to_string()),
+        filter: request.filter.clone(),
+        score_threshold: request.score_threshold,
+        limit: request.limit,
+        offset: request.offset.unwrap_or_default(),
+        params: request.params.clone(),
+        with_vector: request.with_vector.clone().unwrap_or_default(),
+        with_payload: request
+            .with_payload
+            .clone()
+            .unwrap_or(WithPayloadInterface::Bool(false)),
+        lookup_from: None,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1629,28 +1737,63 @@ fn ckks_client_encrypted_query_source<'a>(
     vector_name: &str,
     input: &'a CkksEncryptedQueryInput,
 ) -> Result<CkksSidecarQuerySource<'a>, StorageError> {
-    if input.version != 1 {
+    ckks_client_encrypted_query_source_from_parts(
+        vector_name,
+        input.version,
+        &input.scheme,
+        &input.security_profile,
+        &input.context_digest,
+        input.slots,
+        &input.ciphertext,
+    )
+}
+
+fn ckks_rest_client_encrypted_query_source<'a>(
+    vector_name: &str,
+    input: &'a api::rest::NamedCkksEncryptedQueryVector,
+) -> Result<CkksSidecarQuerySource<'a>, StorageError> {
+    ckks_client_encrypted_query_source_from_parts(
+        vector_name,
+        input.envelope.version,
+        &input.envelope.scheme,
+        &input.envelope.security_profile,
+        &input.envelope.context_digest,
+        input.envelope.slots,
+        &input.envelope.ciphertext,
+    )
+}
+
+fn ckks_client_encrypted_query_source_from_parts<'a>(
+    vector_name: &str,
+    version: u8,
+    scheme: &str,
+    security_profile: &str,
+    context_digest_b64: &'a str,
+    slots: usize,
+    ciphertext_b64: &str,
+) -> Result<CkksSidecarQuerySource<'a>, StorageError> {
+    if version != 1 {
         return Err(StorageError::bad_input(format!(
             "encrypted vector '{vector_name}' client CKKS query version must be 1",
         )));
     }
-    if input.scheme != CKKS_SCHEME {
+    if scheme != CKKS_SCHEME {
         return Err(StorageError::bad_input(format!(
             "encrypted vector '{vector_name}' client CKKS query scheme must be {CKKS_SCHEME}",
         )));
     }
-    if input.security_profile != CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50 {
+    if security_profile != CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50 {
         return Err(StorageError::bad_input(format!(
             "encrypted vector '{vector_name}' client CKKS query profile must be {CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50}",
         )));
     }
-    if input.slots == 0 {
+    if slots == 0 {
         return Err(StorageError::bad_input(format!(
             "encrypted vector '{vector_name}' client CKKS query slots must be greater than 0",
         )));
     }
     let context_digest = BASE64URL_NOPAD
-        .decode(input.context_digest.as_bytes())
+        .decode(context_digest_b64.as_bytes())
         .map_err(|err| {
             StorageError::bad_input(format!(
                 "encrypted vector '{vector_name}' client CKKS query context digest is not base64url: {err}",
@@ -1662,7 +1805,7 @@ fn ckks_client_encrypted_query_source<'a>(
         )));
     }
     let ciphertext = BASE64URL_NOPAD
-        .decode(input.ciphertext.as_bytes())
+        .decode(ciphertext_b64.as_bytes())
         .map_err(|err| {
             StorageError::bad_input(format!(
                 "encrypted vector '{vector_name}' client CKKS query ciphertext is not base64url: {err}",
@@ -1675,8 +1818,8 @@ fn ckks_client_encrypted_query_source<'a>(
     }
 
     Ok(CkksSidecarQuerySource::ClientEncrypted {
-        context_digest: &input.context_digest,
-        slots: input.slots,
+        context_digest: context_digest_b64,
+        slots,
         ciphertext,
     })
 }
@@ -2495,6 +2638,45 @@ async fn try_ckks_vector_search_groups(
     ensure_group_path_does_not_touch_encrypted_vector_sidecar(&request.group_request.group_by)?;
 
     let group_by = request.group_request.group_by.clone();
+    if let api::rest::NamedVectorStruct::CkksEncryptedQuery(query) = &request.vector {
+        let query = ckks_rest_client_encrypted_query_source(vector_name, query)?;
+        let result = ckks_vector_group_points_with_scoring(
+            &collection,
+            collection_name,
+            &collection_crypto_id,
+            vector_name,
+            CkksSidecarScoring::NearestResolved { query },
+            request.filter.clone(),
+            request.params.clone(),
+            request.score_threshold,
+            &plan,
+            &group_by,
+            request.group_request.limit as usize,
+            request.group_request.group_size as usize,
+            request
+                .with_payload
+                .clone()
+                .unwrap_or(WithPayloadInterface::Bool(false)),
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        return attach_ckks_group_lookup(
+            toc,
+            result,
+            request.group_request.with_lookup.clone().map(Into::into),
+            read_consistency,
+            shard_selection,
+            auth,
+            timeout,
+            hw_measurement_acc,
+        )
+        .await
+        .map(Some);
+    }
+
     let search_request = CoreSearchRequest::from(SearchRequestInternal {
         vector: request.vector.clone(),
         filter: request.filter.clone(),
@@ -6012,6 +6194,9 @@ fn ckks_context_query_as_core_context(
 fn search_group_vector_name(vector: &api::rest::NamedVectorStruct) -> &str {
     match vector {
         api::rest::NamedVectorStruct::Default(_) => DEFAULT_VECTOR_NAME,
+        api::rest::NamedVectorStruct::CkksEncryptedQuery(vector) => {
+            vector.name.as_deref().unwrap_or(DEFAULT_VECTOR_NAME)
+        }
         api::rest::NamedVectorStruct::Dense(vector) => &vector.name,
         api::rest::NamedVectorStruct::Sparse(vector) => &vector.name,
     }

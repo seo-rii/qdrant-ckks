@@ -2593,6 +2593,24 @@ esac
         }
     }
 
+    fn fake_rest_named_ckks_client_query(
+        ciphertext: &[u8],
+        slots: usize,
+    ) -> api::rest::NamedVectorStruct {
+        let query = fake_ckks_client_query(ciphertext, slots);
+        api::rest::NamedVectorStruct::CkksEncryptedQuery(api::rest::NamedCkksEncryptedQueryVector {
+            name: Some(DEFAULT_VECTOR_NAME.to_string()),
+            envelope: api::rest::CkksEncryptedQueryVectorEnvelope {
+                version: query.version,
+                scheme: query.scheme,
+                security_profile: query.security_profile,
+                context_digest: query.context_digest,
+                slots: query.slots,
+                ciphertext: query.ciphertext,
+            },
+        })
+    }
+
     fn encrypted_vector_params() -> CollectionParams {
         CollectionParams {
             vectors: collection::operations::types::VectorsConfig::Multi(BTreeMap::from([(
@@ -6172,6 +6190,111 @@ esac
             assert_eq!(client_encrypted_hnsw_query[0].id, 1.into());
             assert_eq!(client_encrypted_hnsw_query[0].score, 9.0);
 
+            let legacy_client_encrypted_search = crate::common::query::do_search_points(
+                &toc,
+                "vector_docs",
+                SearchRequestInternal {
+                    vector: fake_rest_named_ckks_client_query(b"fake-ckks-query:2", 2),
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    score_threshold: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(legacy_client_encrypted_search.len(), 1);
+            assert_eq!(legacy_client_encrypted_search[0].id, 1.into());
+            assert_eq!(legacy_client_encrypted_search[0].score, 9.0);
+
+            let legacy_client_encrypted_hnsw_search = crate::common::query::do_search_points(
+                &toc,
+                "vector_docs",
+                SearchRequestInternal {
+                    vector: fake_rest_named_ckks_client_query(b"fake-ckks-query:2", 2),
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    filter: None,
+                    params: Some(SearchParams {
+                        hnsw_ef: Some(1),
+                        ..SearchParams::default()
+                    }),
+                    limit: 1,
+                    offset: None,
+                    score_threshold: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(legacy_client_encrypted_hnsw_search.len(), 1);
+            assert_eq!(legacy_client_encrypted_hnsw_search[0].id, 1.into());
+            assert_eq!(legacy_client_encrypted_hnsw_search[0].score, 9.0);
+
+            let legacy_client_encrypted_batch =
+                crate::common::query::do_search_batch_points_from_rest(
+                    &toc,
+                    "vector_docs",
+                    vec![
+                        (
+                            SearchRequestInternal {
+                                vector: fake_rest_named_ckks_client_query(
+                                    b"fake-ckks-query:2",
+                                    2,
+                                ),
+                                with_payload: Some(WithPayloadInterface::Bool(false)),
+                                with_vector: Some(WithVector::Bool(false)),
+                                filter: None,
+                                params: None,
+                                limit: 1,
+                                offset: None,
+                                score_threshold: None,
+                            },
+                            ShardSelectorInternal::All,
+                        ),
+                        (
+                            SearchRequestInternal {
+                                vector: vec![0.0, 0.0].into(),
+                                with_payload: Some(WithPayloadInterface::Bool(false)),
+                                with_vector: Some(WithVector::Bool(false)),
+                                filter: None,
+                                params: None,
+                                limit: 1,
+                                offset: None,
+                                score_threshold: Some(5.0),
+                            },
+                            ShardSelectorInternal::All,
+                        ),
+                    ],
+                    None,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    Some(&vector_settings),
+                )
+                .await
+                .unwrap();
+            assert_eq!(legacy_client_encrypted_batch.len(), 2);
+            for batch_result in &legacy_client_encrypted_batch {
+                assert_eq!(batch_result.len(), 1);
+                assert_eq!(batch_result[0].id, 1.into());
+                assert_eq!(batch_result[0].score, 9.0);
+            }
+
             let client_encrypted_query_groups = crate::common::query::do_query_point_groups(
                 &toc,
                 "vector_docs",
@@ -6210,6 +6333,39 @@ esac
                 1.into()
             );
             assert_eq!(client_encrypted_query_groups.groups[0].hits[0].score, 9.0);
+
+            let legacy_client_encrypted_groups = crate::common::query::do_search_point_groups(
+                &toc,
+                "vector_docs",
+                SearchGroupsRequestInternal {
+                    vector: fake_rest_named_ckks_client_query(b"fake-ckks-query:2", 2),
+                    filter: None,
+                    params: None,
+                    score_threshold: None,
+                    with_vector: Some(WithVector::Bool(false)),
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    group_request: api::rest::BaseGroupRequest {
+                        group_by: "group".parse().unwrap(),
+                        group_size: 1,
+                        limit: 1,
+                        with_lookup: None,
+                    },
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(legacy_client_encrypted_groups.groups.len(), 1);
+            assert_eq!(
+                legacy_client_encrypted_groups.groups[0].hits[0].id,
+                1.into()
+            );
+            assert_eq!(legacy_client_encrypted_groups.groups[0].hits[0].score, 9.0);
 
             let mut wrong_context_query = fake_ckks_client_query(b"fake-ckks-query:2", 2);
             wrong_context_query.context_digest = BASE64URL_NOPAD.encode(&[9u8; 32]);

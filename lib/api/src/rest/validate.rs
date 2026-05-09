@@ -6,8 +6,8 @@ use validator::{Validate, ValidationError, ValidationErrors};
 
 use super::{
     Batch, BatchVectorStruct, CkksEncryptedQueryVector, ContextInput, Expression, FormulaQuery,
-    Fusion, NamedVectorStruct, PointVectors, Query, QueryInterface, RecommendInput,
-    RelevanceFeedbackInput, Sample, VectorInput,
+    Fusion, NamedCkksEncryptedQueryVector, NamedVectorStruct, PointVectors, Query, QueryInterface,
+    RecommendInput, RelevanceFeedbackInput, Sample, VectorInput,
 };
 use crate::rest::FeedbackStrategy;
 
@@ -17,7 +17,17 @@ impl Validate for NamedVectorStruct {
             NamedVectorStruct::Default(_) => Ok(()),
             NamedVectorStruct::Dense(_) => Ok(()),
             NamedVectorStruct::Sparse(v) => v.validate(),
+            NamedVectorStruct::CkksEncryptedQuery(query) => query.validate(),
         }
+    }
+}
+
+impl Validate for NamedCkksEncryptedQueryVector {
+    fn validate(&self) -> Result<(), validator::ValidationErrors> {
+        CkksEncryptedQueryVector {
+            envelope: self.envelope.clone(),
+        }
+        .validate()
     }
 }
 
