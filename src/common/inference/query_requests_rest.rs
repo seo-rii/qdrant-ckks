@@ -15,6 +15,7 @@ use segment::vector_storage::query::{
     ContextPair, ContextQuery, DiscoverQuery, FeedbackItem, RecoQuery,
 };
 use storage::content_manager::errors::{StorageError, StorageResult};
+use validator::Validate as _;
 
 use crate::common::inference::batch_processing::{
     collect_query_groups_request, collect_query_request,
@@ -183,16 +184,21 @@ fn convert_vector_input_with_inferred(
                 vector.clone(),
             )))
         }
-        rest::VectorInput::CkksEncryptedQuery(query) => Ok(
-            VectorInputInternal::CkksEncryptedQuery(CkksEncryptedQueryInput {
-                version: query.envelope.version,
-                scheme: query.envelope.scheme,
-                security_profile: query.envelope.security_profile,
-                context_digest: query.envelope.context_digest,
-                slots: query.envelope.slots,
-                ciphertext: query.envelope.ciphertext,
-            }),
-        ),
+        rest::VectorInput::CkksEncryptedQuery(query) => {
+            query.validate().map_err(|err| {
+                StorageError::bad_input(format!("Invalid CKKS encrypted query vector: {err}"))
+            })?;
+            Ok(VectorInputInternal::CkksEncryptedQuery(
+                CkksEncryptedQueryInput {
+                    version: query.envelope.version,
+                    scheme: query.envelope.scheme,
+                    security_profile: query.envelope.security_profile,
+                    context_digest: query.envelope.context_digest,
+                    slots: query.envelope.slots,
+                    ciphertext: query.envelope.ciphertext,
+                },
+            ))
+        }
         rest::VectorInput::Object(obj) => {
             let data = InferenceData::Object(obj);
             let vector = inferred.get_vector(&data).ok_or_else(|| {
@@ -373,6 +379,7 @@ mod tests {
         InferenceObject, NearestQuery,
     };
     use collection::operations::point_ops::VectorPersisted;
+    use data_encoding::BASE64URL_NOPAD;
     use serde_json::json;
 
     use super::*;
@@ -440,9 +447,9 @@ mod tests {
                 version: 1,
                 scheme: "openfhe-ckks".to_string(),
                 security_profile: "ckks-128-n16384-d4-scale50".to_string(),
-                context_digest: "digest".to_string(),
+                context_digest: BASE64URL_NOPAD.encode(&[3_u8; 32]),
                 slots: 2,
-                ciphertext: "ciphertext".to_string(),
+                ciphertext: BASE64URL_NOPAD.encode(b"ciphertext"),
             },
         });
 
@@ -452,10 +459,28 @@ mod tests {
                 assert_eq!(query.version, 1);
                 assert_eq!(query.scheme, "openfhe-ckks");
                 assert_eq!(query.slots, 2);
-                assert_eq!(query.ciphertext, "ciphertext");
+                assert_eq!(query.ciphertext, BASE64URL_NOPAD.encode(b"ciphertext"));
             }
             _ => panic!("Expected client CKKS encrypted query"),
         }
+    }
+
+    #[test]
+    fn test_convert_vector_input_rejects_invalid_client_ckks_query() {
+        let inferred = create_test_inferred_batch();
+        let vector = rest::VectorInput::CkksEncryptedQuery(CkksEncryptedQueryVector {
+            envelope: CkksEncryptedQueryVectorEnvelope {
+                version: 1,
+                scheme: "openfhe-ckks".to_string(),
+                security_profile: "ckks-128-n16384-d4-scale50".to_string(),
+                context_digest: "not base64url!".to_string(),
+                slots: 2,
+                ciphertext: BASE64URL_NOPAD.encode(b"ciphertext"),
+            },
+        });
+
+        let err = convert_vector_input_with_inferred(vector, &inferred).unwrap_err();
+        assert!(format!("{err}").contains("Invalid CKKS encrypted query vector"));
     }
 
     #[test]

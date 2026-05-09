@@ -18,6 +18,7 @@ use segment::vector_storage::query::{
     ContextPair, ContextQuery, DiscoverQuery, FeedbackItem, RecoQuery,
 };
 use tonic::Status;
+use validator::Validate as _;
 
 use crate::common::inference::batch_processing_grpc::{
     BatchAccumGrpc, collect_prefetch, collect_query,
@@ -417,20 +418,25 @@ fn convert_vector_input_with_inferred(
                 vector.clone(),
             )))
         }
-        Variant::CkksEncryptedQuery(query) => Ok(VectorInputInternal::CkksEncryptedQuery(
-            CkksEncryptedQueryInput {
-                version: query.version.try_into().map_err(|_| {
-                    Status::invalid_argument("CKKS encrypted query version is too large")
-                })?,
-                scheme: query.scheme,
-                security_profile: query.security_profile,
-                context_digest: query.context_digest,
-                slots: query.slots.try_into().map_err(|_| {
-                    Status::invalid_argument("CKKS encrypted query slots is too large")
-                })?,
-                ciphertext: query.ciphertext,
-            },
-        )),
+        Variant::CkksEncryptedQuery(query) => {
+            query.validate().map_err(|err| {
+                Status::invalid_argument(format!("Invalid CKKS encrypted query vector: {err}"))
+            })?;
+            Ok(VectorInputInternal::CkksEncryptedQuery(
+                CkksEncryptedQueryInput {
+                    version: query.version.try_into().map_err(|_| {
+                        Status::invalid_argument("CKKS encrypted query version is too large")
+                    })?,
+                    scheme: query.scheme,
+                    security_profile: query.security_profile,
+                    context_digest: query.context_digest,
+                    slots: query.slots.try_into().map_err(|_| {
+                        Status::invalid_argument("CKKS encrypted query slots is too large")
+                    })?,
+                    ciphertext: query.ciphertext,
+                },
+            ))
+        }
     }
 }
 
@@ -473,6 +479,7 @@ mod tests {
     use api::grpc::qdrant::value::Kind;
     use api::grpc::qdrant::vector_input::Variant;
     use collection::operations::point_ops::VectorPersisted;
+    use data_encoding::BASE64URL_NOPAD;
 
     use super::*;
 
@@ -556,9 +563,9 @@ mod tests {
                     version: 1,
                     scheme: "openfhe-ckks".to_string(),
                     security_profile: "ckks-128-n16384-d4-scale50".to_string(),
-                    context_digest: "digest".to_string(),
+                    context_digest: BASE64URL_NOPAD.encode(&[3_u8; 32]),
                     slots: 2,
-                    ciphertext: "ciphertext".to_string(),
+                    ciphertext: BASE64URL_NOPAD.encode(b"ciphertext"),
                 },
             )),
         };
@@ -569,10 +576,34 @@ mod tests {
                 assert_eq!(query.version, 1);
                 assert_eq!(query.scheme, "openfhe-ckks");
                 assert_eq!(query.slots, 2);
-                assert_eq!(query.ciphertext, "ciphertext");
+                assert_eq!(query.ciphertext, BASE64URL_NOPAD.encode(b"ciphertext"));
             }
             _ => panic!("Expected client CKKS encrypted query"),
         }
+    }
+
+    #[test]
+    fn test_convert_vector_input_rejects_invalid_client_ckks_query() {
+        let inferred = create_test_inferred_batch();
+        let vector = grpc::VectorInput {
+            variant: Some(Variant::CkksEncryptedQuery(
+                grpc::CkksEncryptedQueryVector {
+                    version: 1,
+                    scheme: "openfhe-ckks".to_string(),
+                    security_profile: "ckks-128-n16384-d4-scale50".to_string(),
+                    context_digest: "not base64url!".to_string(),
+                    slots: 2,
+                    ciphertext: BASE64URL_NOPAD.encode(b"ciphertext"),
+                },
+            )),
+        };
+
+        let err = convert_vector_input_with_inferred(vector, &inferred).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message()
+                .contains("Invalid CKKS encrypted query vector")
+        );
     }
 
     #[test]
