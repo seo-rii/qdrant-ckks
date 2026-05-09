@@ -1923,11 +1923,22 @@ fn ckks_sidecar_hnsw_existing_cache_directory_is_safe(
     }
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        unsafe extern "C" {
+            fn geteuid() -> u32;
+        }
 
         if metadata.permissions().mode() & 0o077 != 0 {
             return Err(StorageError::service_error(format!(
                 "CKKS sidecar HNSW graph cache directory {directory:?} must not be group/world accessible",
+            )));
+        }
+        let effective_uid = unsafe { geteuid() };
+        let owner = metadata.uid();
+        if owner != 0 && owner != effective_uid {
+            return Err(StorageError::service_error(format!(
+                "CKKS sidecar HNSW graph cache directory {directory:?} must be owned by root or the qdrant process user",
             )));
         }
     }
@@ -1971,11 +1982,22 @@ fn ckks_sidecar_hnsw_load_persisted_graph(
     }
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        unsafe extern "C" {
+            fn geteuid() -> u32;
+        }
 
         if metadata.permissions().mode() & 0o077 != 0 {
             return Err(StorageError::service_error(format!(
                 "CKKS sidecar HNSW graph cache {path:?} must not be group/world accessible",
+            )));
+        }
+        let effective_uid = unsafe { geteuid() };
+        let owner = metadata.uid();
+        if owner != 0 && owner != effective_uid {
+            return Err(StorageError::service_error(format!(
+                "CKKS sidecar HNSW graph cache {path:?} must be owned by root or the qdrant process user",
             )));
         }
     }
@@ -2093,7 +2115,23 @@ fn ckks_sidecar_hnsw_persist_graph(
                 "CKKS sidecar HNSW graph cache temp file {temp_path:?} must be a regular file",
             )));
         }
-        Ok(_) => {
+        Ok(metadata) => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+
+                unsafe extern "C" {
+                    fn geteuid() -> u32;
+                }
+
+                let effective_uid = unsafe { geteuid() };
+                let owner = metadata.uid();
+                if owner != 0 && owner != effective_uid {
+                    return Err(StorageError::service_error(format!(
+                        "CKKS sidecar HNSW graph cache temp file {temp_path:?} must be owned by root or the qdrant process user",
+                    )));
+                }
+            }
             fs::remove_file(&temp_path).map_err(|err| {
                 StorageError::service_error(format!(
                     "failed to remove stale CKKS sidecar HNSW graph cache temp file {temp_path:?}: {err}",
