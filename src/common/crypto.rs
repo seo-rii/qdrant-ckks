@@ -139,6 +139,7 @@ const SIGNATURE_KEY_ID_OPTION: &str = "signature_key_id";
 const CKKS_PROFILE_OPTION: &str = "profile";
 const CKKS_CRYPTO_CONTEXT_B64_OPTION: &str = "crypto_context_b64";
 const CKKS_PUBLIC_KEY_B64_OPTION: &str = "public_key_b64";
+const VAULT_KV2_RESPONSE_MAX_BYTES: u64 = 64 * 1024;
 const PAYLOAD_AES_GCM_ALLOWED_OPTIONS: &[&str] = &[
     "key_id",
     MATERIAL_FINGERPRINT_ID_OPTION,
@@ -4037,7 +4038,22 @@ fn read_material_vault_kv2_to_string(
             path: url.to_string(),
         });
     }
-    let body = response.json::<Value>().map_err(|_| {
+    let mut limited_response = response.take(VAULT_KV2_RESPONSE_MAX_BYTES + 1);
+    let mut body_bytes = Vec::new();
+    limited_response.read_to_end(&mut body_bytes).map_err(|_| {
+        PayloadWriteSetupError::UnreadableMaterialFile {
+            material: material_name.to_string(),
+            path: url.to_string(),
+        }
+    })?;
+    if body_bytes.len() as u64 > VAULT_KV2_RESPONSE_MAX_BYTES {
+        return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: url.to_string(),
+            reason: "Vault KV v2 response exceeds maximum size".to_string(),
+        });
+    }
+    let body = serde_json::from_slice::<Value>(&body_bytes).map_err(|_| {
         PayloadWriteSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
             path: url.to_string(),
@@ -6142,6 +6158,39 @@ mod tests {
             payload.get("body").and_then(Value::as_str),
             Some("vault-backed secret"),
         );
+    }
+
+    #[test]
+    fn decode_direct_material_key_rejects_oversized_vault_kv2_response() {
+        let mut server = mockito::Server::new();
+        let _mock = server
+            .mock("GET", "/v1/secret/data/docs")
+            .match_header("x-vault-token", "test-token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body("x".repeat(VAULT_KV2_RESPONSE_MAX_BYTES as usize + 1))
+            .create();
+        unsafe {
+            std::env::set_var("QDRANT_TEST_VAULT_TOKEN_OVERSIZED", "test-token");
+        }
+
+        let vault_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("vault_kv2".to_string()),
+            env: Some("QDRANT_TEST_VAULT_TOKEN_OVERSIZED".to_string()),
+            path: Some(format!("{}/v1/secret/data/docs", server.url())),
+            vault_field: Some("material".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        assert!(matches!(
+            decode_direct_material_key("tenant-a/payload-v1", &vault_material),
+            Err(PayloadWriteSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("maximum size")
+        ));
+        unsafe {
+            std::env::remove_var("QDRANT_TEST_VAULT_TOKEN_OVERSIZED");
+        }
     }
 
     #[cfg(unix)]
