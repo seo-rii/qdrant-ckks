@@ -3,7 +3,7 @@
 이 문서는 `RISK_REGISTER.md`의 대형 작업을 구현 순서대로 정리한다. 작은 방어 패치는 이미 별도 커밋으로 일부 처리됐고, 여기서는 설계, migration, 테스트 인프라, 구조 변경이 필요한 작업만 다룬다.
 
 기준 브랜치: `sec`
-최종 갱신: 2026-05-08
+최종 갱신: 2026-05-10
 
 ## 작업 원칙
 
@@ -26,13 +26,13 @@
 - Payload index/filter/order/group/formula/facet은 encrypted content에 대해 fail-closed 된다.
 - CKKS encrypted vector dense ingest/update는 payload sidecar storage로 연결되어 있고, plaintext vector는 dense vector storage에서 제거된다.
 - REST/gRPC legacy `search`, root direct `query`, raw-dense recommend/discover/context는 CKKS sidecar scoring으로 연결되어 있다. Nearest-neighbor `hnsw_ef` 요청은 experimental sidecar HNSW graph cache를 사용하며, graph cache는 in-memory와 collection-local disk cache로 보존된다.
-- Quantization/search matrix/prefetch/fusion/MMR, point-id recommend/discover/context examples, encrypted query vectors, native segment `HNSWIndex` over CKKS ciphertext, grouped lookup은 unsupported 상태에서 fail-closed 된다.
+- Quantization/ACORN/indexed-only search params와 CKKS ciphertext native segment `HNSWIndex`는 아직 unsupported 상태에서 fail-closed 된다. Client-supplied encrypted CKKS query ciphertext, search matrix, prefetch/fusion/MMR, point-id recommend/discover/context examples, grouped variants는 문서화된 범위에서 sidecar scoring으로 라우팅된다.
 - Snapshot/restore preflight, shard-transfer/replication/resharding start, dead-replica recovery source selection, readiness gate는 encrypted collection의 runtime crypto parity mismatch를 fail-closed 한다.
 - OpenFHE bridge path/hash validation, parent-dir checks, env secret stripping, timeout/stdout/stderr malicious-behavior coverage, worker pool, batch protocol이 들어가 있다.
 
 남은 대형 작업:
 
-- CKKS encrypted vector production-grade indexing: sidecar storage/search는 구현됐지만 native segment `HNSWIndex` 통합, client-supplied encrypted query vectors, score decryption, broader distributed rebuild/recovery coverage는 아직 없다.
+- CKKS encrypted vector production-grade indexing: sidecar storage/search와 client-supplied encrypted query ciphertext scoring은 구현됐지만 native segment `HNSWIndex` 통합, score decryption, broader distributed rebuild/recovery coverage는 아직 없다.
 - Background migration/re-encrypt job: plan/state primitive는 있지만 point scan, checkpoint resume, verification, rollback, old-key disable/destroy job은 아직 없다.
 - Cluster-wide client nonce replay ledger: request/process/collection-local/reload cache는 있지만 consensus-backed global ledger는 없다.
 - Blind index: client-side exact-match token field provider/query integration은 들어갔다. Metadata value encryption, server-computed tokens, range/geo/full-text searchable encryption은 아직 없다.
@@ -269,7 +269,7 @@
 - C안 sidecar storage/search는 현재 canonical 구현으로 선택됐다.
 - `VectorCryptoBackend` capability는 encrypt, batch encrypt, encrypted-query scoring, stored-ciphertext scoring을 제공한다.
 - collection create/update path는 encrypted dense vectors를 payload sidecar envelope로 저장하고 plaintext vector write를 제거한다. Sparse/multi-dense vector는 fail-closed 한다.
-- query API는 현재 plaintext dense query vectors를 받아 bridge에서 encrypted query ciphertext로 변환한다. Client-supplied encrypted query ciphertext는 아직 unsupported다.
+- query API는 plaintext dense query vectors를 bridge에서 encrypted query ciphertext로 변환할 수 있고, client-supplied encrypted CKKS query ciphertext도 sidecar scoring path로 받는다.
 - Nearest-neighbor `search`/root direct `query`는 brute-force sidecar scoring 또는 `hnsw_ef` 기반 experimental sidecar graph cache를 사용한다. 이 graph는 native segment `HNSWIndex`가 아니다.
 - retrieve with/without decrypt, query failure modes, unsupported Qdrant flows는 `docs/ckks.md` 지원 matrix에 맞춰 계속 유지한다.
 
@@ -278,7 +278,7 @@
 - encrypted vector collection에서 unsupported search path는 명확한 error를 반환한다.
 - Sidecar ingest/search/query/recommend/discover/context는 raw sidecar payload 반환, `with_vector` fail-closed, score threshold, wrong OpenFHE context fail-closed, plaintext vector leakage scan으로 검증된다.
 - Experimental sidecar HNSW graph cache는 build, in-memory cache, disk persistence, pruning, hardening, snapshot exclusion, stale/asymmetric cache ignore 테스트로 검증된다.
-- Native segment `HNSWIndex`, encrypted query vector, score decrypt lifecycle은 아직 unsupported contract로 남긴다.
+- Native segment `HNSWIndex`와 score decrypt lifecycle은 아직 unsupported contract로 남긴다.
 
 완료 조건:
 
