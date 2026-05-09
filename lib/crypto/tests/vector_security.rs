@@ -7,10 +7,10 @@ use std::time::{Duration, Instant};
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CkksBatchEncryptionInput,
-    CkksEncryptionInput, CkksError, CkksParameters, CkksPlaintextQueryScoreBatchInput,
-    CkksPlaintextQueryScoreInput, CkksPublicMaterial, CkksVectorBackend, CkksVectorBatchItem,
-    CkksVectorEncryptor, CommandOpenFheBackend, EncryptedCkksVector, EncryptionContext,
-    EncryptionError, SecretKey,
+    CkksEncryptedQueryScoreBatchInput, CkksEncryptionInput, CkksError, CkksParameters,
+    CkksPlaintextQueryScoreBatchInput, CkksPlaintextQueryScoreInput, CkksPublicMaterial,
+    CkksVectorBackend, CkksVectorBatchItem, CkksVectorEncryptor, CommandOpenFheBackend,
+    EncryptedCkksVector, EncryptionContext, EncryptionError, SecretKey,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -152,6 +152,25 @@ impl CkksVectorBackend for BatchScoreTestBackend {
                 _ => 1.0,
             })
             .collect())
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MismatchedEncryptedScoreBatchBackend;
+
+impl CkksVectorBackend for MismatchedEncryptedScoreBatchBackend {
+    fn encrypt(&self, input: CkksEncryptionInput<'_>) -> Result<Vec<u8>, CkksError> {
+        Ok(format!("cipher:{}:{}", input.point_id, input.values.len()).into_bytes())
+    }
+
+    fn score_encrypted_query_batch(
+        &self,
+        input: CkksEncryptedQueryScoreBatchInput<'_>,
+    ) -> Result<Vec<f64>, CkksError> {
+        assert_eq!(input.collection, "docs");
+        assert_eq!(input.vector_name, "embedding");
+        assert_eq!(input.distance, "dot");
+        Ok(vec![1.0])
     }
 }
 
@@ -300,6 +319,44 @@ fn ckks_vector_plaintext_query_batch_scoring_uses_backend_batch() {
     assert_eq!(scores, vec![10.0, 5.0]);
     assert_eq!(backend.batch_calls.load(Ordering::Relaxed), 1);
     assert_eq!(backend.single_calls.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn ckks_vector_stored_query_batch_rejects_backend_score_count_mismatch() {
+    let encryptor = test_ckks_encryptor(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        MismatchedEncryptedScoreBatchBackend,
+    )
+    .unwrap();
+    let query = encryptor
+        .encrypt("docs", "query-point", &public_material(), &[1.0, 2.0])
+        .unwrap();
+    let first = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[3.0, 4.0])
+        .unwrap();
+    let second = encryptor
+        .encrypt("docs", "point-2", &public_material(), &[5.0, 6.0])
+        .unwrap();
+
+    let err = encryptor
+        .score_stored_query_batch(
+            "docs",
+            &public_material(),
+            "query-point",
+            &query,
+            &[("point-1", &first), ("point-2", &second)],
+            "dot",
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CkksError::Backend(message)
+            if message.contains("OpenFHE backend returned 1 scores for 2 encrypted vectors")
+    ));
 }
 
 #[test]
