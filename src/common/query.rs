@@ -127,6 +127,11 @@ enum CkksSidecarQuerySource<'a> {
 #[derive(Clone, Copy)]
 enum CkksSidecarHnswQuery<'a> {
     Dense(&'a [f32]),
+    ClientEncrypted {
+        context_digest: &'a str,
+        slots: usize,
+        ciphertext: &'a [u8],
+    },
     Stored {
         query_point_id: &'a str,
         query_encrypted: &'a EncryptedCkksVector,
@@ -689,11 +694,15 @@ async fn ckks_vector_search_points_with_scoring(
     if hnsw_ef.is_some()
         && !matches!(
             &scoring,
-            CkksSidecarScoring::Nearest { .. } | CkksSidecarScoring::StoredNearest { .. }
+            CkksSidecarScoring::Nearest { .. }
+                | CkksSidecarScoring::StoredNearest { .. }
+                | CkksSidecarScoring::NearestResolved {
+                    query: CkksSidecarQuerySource::ClientEncrypted { .. },
+                }
         )
     {
         return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' HNSW sidecar search currently supports only dense or point-id nearest-neighbor queries",
+            "encrypted vector '{vector_name}' HNSW sidecar search currently supports only dense, client-encrypted, or point-id nearest-neighbor queries",
         )));
     }
 
@@ -1222,6 +1231,18 @@ async fn ckks_vector_search_points_with_scoring(
             CkksSidecarScoring::Nearest { query_values } => {
                 CkksSidecarHnswQuery::Dense(query_values)
             }
+            CkksSidecarScoring::NearestResolved {
+                query:
+                    CkksSidecarQuerySource::ClientEncrypted {
+                        context_digest,
+                        slots,
+                        ciphertext,
+                    },
+            } => CkksSidecarHnswQuery::ClientEncrypted {
+                context_digest,
+                slots: *slots,
+                ciphertext,
+            },
             CkksSidecarScoring::StoredNearest {
                 query_point_id,
                 query_encrypted,
@@ -1229,7 +1250,9 @@ async fn ckks_vector_search_points_with_scoring(
                 query_point_id,
                 query_encrypted,
             },
-            _ => unreachable!("non-nearest CKKS HNSW sidecar search was rejected before scrolling"),
+            _ => unreachable!(
+                "non-nearest or unsupported CKKS HNSW sidecar search was rejected before scrolling"
+            ),
         };
         for scored_point in ckks_sidecar_hnsw_search_points(
             collection_name,
@@ -2047,6 +2070,18 @@ fn ckks_sidecar_score_hnsw_query_batch(
             vector_name,
             encrypted_items,
             query_values,
+        )?,
+        CkksSidecarHnswQuery::ClientEncrypted {
+            context_digest,
+            slots,
+            ciphertext,
+        } => plan.score_client_encrypted_query_batch(
+            collection_name,
+            vector_name,
+            encrypted_items,
+            context_digest,
+            slots,
+            ciphertext,
         )?,
         CkksSidecarHnswQuery::Stored {
             query_point_id,

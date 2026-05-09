@@ -6135,6 +6135,43 @@ esac
             assert_eq!(client_encrypted_query[0].id, 1.into());
             assert_eq!(client_encrypted_query[0].score, 9.0);
 
+            let client_encrypted_hnsw_query = crate::common::query::do_query_points(
+                &toc,
+                "vector_docs",
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::CkksEncryptedQuery(fake_ckks_client_query(
+                            b"fake-ckks-query:2",
+                            2,
+                        )),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: Some(SearchParams {
+                        hnsw_ef: Some(1),
+                        ..SearchParams::default()
+                    }),
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(client_encrypted_hnsw_query.len(), 1);
+            assert_eq!(client_encrypted_hnsw_query[0].id, 1.into());
+            assert_eq!(client_encrypted_hnsw_query[0].score, 9.0);
+
             let client_encrypted_query_groups = crate::common::query::do_query_point_groups(
                 &toc,
                 "vector_docs",
