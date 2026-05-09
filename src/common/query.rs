@@ -1946,6 +1946,34 @@ fn ckks_sidecar_hnsw_existing_cache_directory_is_safe(
     Ok(true)
 }
 
+#[cfg(unix)]
+fn ckks_sidecar_hnsw_validate_cache_file_unix_metadata(
+    path: &Path,
+    metadata: &fs::Metadata,
+    label: &str,
+) -> Result<(), StorageError> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    unsafe extern "C" {
+        fn geteuid() -> u32;
+    }
+
+    if metadata.permissions().mode() & 0o077 != 0 {
+        return Err(StorageError::service_error(format!(
+            "CKKS sidecar HNSW graph cache {label} {path:?} must not be group/world accessible",
+        )));
+    }
+    let effective_uid = unsafe { geteuid() };
+    let owner = metadata.uid();
+    if owner != 0 && owner != effective_uid {
+        return Err(StorageError::service_error(format!(
+            "CKKS sidecar HNSW graph cache {label} {path:?} must be owned by root or the qdrant process user",
+        )));
+    }
+
+    Ok(())
+}
+
 fn ckks_sidecar_hnsw_load_persisted_graph(
     collection_path: &Path,
     key: &CkksSidecarHnswGraphCacheKey,
@@ -1981,26 +2009,7 @@ fn ckks_sidecar_hnsw_load_persisted_graph(
         )));
     }
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-
-        unsafe extern "C" {
-            fn geteuid() -> u32;
-        }
-
-        if metadata.permissions().mode() & 0o077 != 0 {
-            return Err(StorageError::service_error(format!(
-                "CKKS sidecar HNSW graph cache {path:?} must not be group/world accessible",
-            )));
-        }
-        let effective_uid = unsafe { geteuid() };
-        let owner = metadata.uid();
-        if owner != 0 && owner != effective_uid {
-            return Err(StorageError::service_error(format!(
-                "CKKS sidecar HNSW graph cache {path:?} must be owned by root or the qdrant process user",
-            )));
-        }
-    }
+    ckks_sidecar_hnsw_validate_cache_file_unix_metadata(&path, &metadata, "file")?;
 
     let mut options = OpenOptions::new();
     options.read(true);
@@ -2117,21 +2126,11 @@ fn ckks_sidecar_hnsw_persist_graph(
         }
         Ok(metadata) => {
             #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-
-                unsafe extern "C" {
-                    fn geteuid() -> u32;
-                }
-
-                let effective_uid = unsafe { geteuid() };
-                let owner = metadata.uid();
-                if owner != 0 && owner != effective_uid {
-                    return Err(StorageError::service_error(format!(
-                        "CKKS sidecar HNSW graph cache temp file {temp_path:?} must be owned by root or the qdrant process user",
-                    )));
-                }
-            }
+            ckks_sidecar_hnsw_validate_cache_file_unix_metadata(
+                &temp_path,
+                &metadata,
+                "temp file",
+            )?;
             fs::remove_file(&temp_path).map_err(|err| {
                 StorageError::service_error(format!(
                     "failed to remove stale CKKS sidecar HNSW graph cache temp file {temp_path:?}: {err}",
@@ -2204,7 +2203,11 @@ fn ckks_sidecar_hnsw_prune_persisted_graphs(
                 "CKKS sidecar HNSW graph cache keep file {keep_path:?} must not be a symlink",
             )));
         }
-        Ok(metadata) if metadata.is_file() => metadata.len(),
+        Ok(metadata) if metadata.is_file() => {
+            #[cfg(unix)]
+            ckks_sidecar_hnsw_validate_cache_file_unix_metadata(keep_path, &metadata, "keep file")?;
+            metadata.len()
+        }
         Ok(_) => 0,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => 0,
         Err(err) => {
@@ -7079,6 +7082,26 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_prune_rejects_group_accessible_keep_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let key = ckks_sidecar_test_graph_cache_key("keep-permissions");
+        let graph = CkksSidecarHnswGraph {
+            links: Arc::new(vec![Vec::new()]),
+        };
+        ckks_sidecar_hnsw_persist_graph(dir.path(), &key, &graph).unwrap();
+        let keep_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &key);
+        let cache_dir = keep_path.parent().unwrap();
+        std::fs::set_permissions(&keep_path, std::fs::Permissions::from_mode(0o640)).unwrap();
+
+        let err = ckks_sidecar_hnsw_prune_persisted_graphs(cache_dir, &keep_path).unwrap_err();
+        assert!(format!("{err}").contains("keep file"));
+        assert!(format!("{err}").contains("must not be group/world accessible"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn ckks_sidecar_hnsw_persisted_graph_rejects_symlink_temp_file() {
         use std::os::unix::fs::symlink;
 
@@ -7099,6 +7122,30 @@ mod tests {
         let err = ckks_sidecar_hnsw_persist_graph(dir.path(), &key, &graph).unwrap_err();
         assert!(format!("{err}").contains("temp file"));
         assert!(format!("{err}").contains("must not be a symlink"));
+        assert!(!cache_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_rejects_group_accessible_temp_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let key = ckks_sidecar_test_graph_cache_key("temp-permissions");
+        let cache_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &key);
+        let cache_dir = cache_path.parent().unwrap();
+        std::fs::create_dir_all(cache_dir).unwrap();
+        set_ckks_sidecar_test_private_directory_permissions(cache_dir);
+        let temp_path = cache_path.with_extension("json.tmp");
+        std::fs::write(&temp_path, "{}").unwrap();
+        std::fs::set_permissions(&temp_path, std::fs::Permissions::from_mode(0o640)).unwrap();
+
+        let graph = CkksSidecarHnswGraph {
+            links: Arc::new(vec![Vec::new()]),
+        };
+        let err = ckks_sidecar_hnsw_persist_graph(dir.path(), &key, &graph).unwrap_err();
+        assert!(format!("{err}").contains("temp file"));
+        assert!(format!("{err}").contains("must not be group/world accessible"));
         assert!(!cache_path.exists());
     }
 
