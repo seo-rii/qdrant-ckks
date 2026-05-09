@@ -5403,7 +5403,9 @@ esac
                                 api::rest::Vector::Dense(vec![0.3, 0.4]),
                             ),
                         ])),
-                        payload: None,
+                        payload: Some(segment::types::Payload(
+                            json!({ "group": "a" }).as_object().unwrap().clone(),
+                        )),
                     }, api::rest::PointStruct {
                         id: 2.into(),
                         vector: api::rest::VectorStruct::Named(HashMap::from([
@@ -5416,7 +5418,9 @@ esac
                                 api::rest::Vector::Dense(vec![0.5, 0.6]),
                             ),
                         ])),
-                        payload: None,
+                        payload: Some(segment::types::Payload(
+                            json!({ "group": "b" }).as_object().unwrap().clone(),
+                        )),
                     }],
                     shard_key: None,
                     update_filter: None,
@@ -8624,6 +8628,54 @@ esac
                         .any(|window| window == forbidden),
                     "CKKS sidecar HNSW cache data leaked into vector collection snapshot",
                 );
+            }
+            let mut vector_snapshot_plaintext_f32_pair = Vec::new();
+            vector_snapshot_plaintext_f32_pair.extend_from_slice(&0.7_f32.to_le_bytes());
+            vector_snapshot_plaintext_f32_pair.extend_from_slice(&(-0.25_f32).to_le_bytes());
+            let mut vector_snapshot_plaintext_f64_pair = Vec::new();
+            vector_snapshot_plaintext_f64_pair.extend_from_slice(&0.7_f64.to_le_bytes());
+            vector_snapshot_plaintext_f64_pair.extend_from_slice(&(-0.25_f64).to_le_bytes());
+            for (label, sentinel) in [
+                (
+                    "CKKS sidecar HNSW cache directory",
+                    b"ckks_sidecar_hnsw_graphs".to_vec(),
+                ),
+                (
+                    "CKKS sidecar HNSW cache filename",
+                    b"should-not-be-snapshotted.json".to_vec(),
+                ),
+                (
+                    "CKKS sidecar HNSW cache sentinel",
+                    b"ckks sidecar graph cache snapshot sentinel".to_vec(),
+                ),
+                (
+                    "CKKS vector plaintext f32 pair",
+                    vector_snapshot_plaintext_f32_pair,
+                ),
+                (
+                    "CKKS vector plaintext f64 pair",
+                    vector_snapshot_plaintext_f64_pair,
+                ),
+            ] {
+                let mut pending = vec![vector_snapshot_temp_dir.path().to_path_buf()];
+                while let Some(path) = pending.pop() {
+                    let metadata = fs::metadata(&path).unwrap();
+                    if metadata.is_dir() {
+                        for entry in fs::read_dir(&path).unwrap() {
+                            pending.push(entry.unwrap().path());
+                        }
+                        continue;
+                    }
+                    if !metadata.is_file() {
+                        continue;
+                    }
+                    let bytes = fs::read(&path).unwrap();
+                    assert!(
+                        !bytes.windows(sentinel.len()).any(|window| window == sentinel),
+                        "plaintext/cache sentinel '{label}' leaked into vector snapshot temp file {}",
+                        path.display(),
+                    );
+                }
             }
 
             client_collection.stop_gracefully().await;
