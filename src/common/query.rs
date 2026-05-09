@@ -2018,6 +2018,11 @@ fn ckks_sidecar_hnsw_load_persisted_graph(
             .links
             .iter()
             .any(|neighbors| neighbors.iter().any(|neighbor| *neighbor >= records_len))
+        || disk
+            .links
+            .iter()
+            .enumerate()
+            .any(|(idx, neighbors)| neighbors.iter().any(|neighbor| *neighbor == idx))
         || !ckks_sidecar_hnsw_links_are_reciprocal(&disk.links)
         || !ckks_sidecar_hnsw_links_are_connected(&disk.links)
     {
@@ -6775,6 +6780,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let key = ckks_sidecar_test_graph_cache_key("fingerprint-a");
         let disk = ckks_sidecar_test_graph_disk(&key, vec![vec![1, 1], vec![0]]);
+        write_ckks_sidecar_test_graph_disk(dir.path(), &key, &disk);
+
+        assert!(
+            ckks_sidecar_hnsw_load_persisted_graph(dir.path(), &key, 2)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_ignores_self_loops() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = ckks_sidecar_test_graph_cache_key("fingerprint-a");
+        let disk = ckks_sidecar_test_graph_disk(&key, vec![vec![0, 1], vec![0]]);
         write_ckks_sidecar_test_graph_disk(dir.path(), &key, &disk);
 
         assert!(
