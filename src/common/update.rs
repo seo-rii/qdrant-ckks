@@ -2490,6 +2490,12 @@ case "$request" in
   *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"encrypted_query":"ZmFrZS1ja2tzLXF1ZXJ5OjI"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"}]'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[9.0]}\n'
     ;;
+  *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"encrypted_query":"ZmFrZS1ja2tzLXF1ZXJ5Om5vLWZ1bGwtc2Nhbg"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"},{"point_id":"2","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"}]'*)
+    exit 11
+    ;;
+  *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"encrypted_query":"ZmFrZS1ja2tzLXF1ZXJ5Om5vLWZ1bGwtc2Nhbg"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"}]'*)
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[9.0]}\n'
+    ;;
   *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"encrypted_query":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"}]'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[8.0]}\n'
     ;;
@@ -6259,6 +6265,43 @@ esac
             assert_eq!(legacy_client_encrypted_hnsw_search.len(), 1);
             assert_eq!(legacy_client_encrypted_hnsw_search[0].id, 1.into());
             assert_eq!(legacy_client_encrypted_hnsw_search[0].score, 9.0);
+
+            let hnsw_no_full_scan_query = crate::common::query::do_query_points(
+                &toc,
+                "vector_docs",
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::CkksEncryptedQuery(fake_ckks_client_query(
+                            b"fake-ckks-query:no-full-scan",
+                            2,
+                        )),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: Some(SearchParams {
+                        hnsw_ef: Some(1),
+                        ..SearchParams::default()
+                    }),
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(hnsw_no_full_scan_query.len(), 1);
+            assert_eq!(hnsw_no_full_scan_query[0].id, 1.into());
+            assert_eq!(hnsw_no_full_scan_query[0].score, 9.0);
 
             let legacy_client_encrypted_batch =
                 crate::common::query::do_search_batch_points_from_rest(
