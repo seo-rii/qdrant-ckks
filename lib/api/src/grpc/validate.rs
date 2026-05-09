@@ -598,8 +598,8 @@ mod tests {
 
     use crate::grpc::qdrant::{
         CkksEncryptedQueryVector, CreateCollection, CreateFieldIndexCollection, GeoLineString,
-        GeoPoint, GeoPolygon, SearchBatchPoints, SearchPoints, UpdateCollection, VectorInput,
-        vector_input,
+        GeoPoint, GeoPolygon, SearchBatchPoints, SearchPointGroups, SearchPoints, UpdateCollection,
+        VectorInput, vector_input,
     };
 
     #[test]
@@ -866,6 +866,38 @@ mod tests {
         assert!(
             bad_batch.validate().is_err(),
             "batched CKKS encrypted query should validate nested envelopes"
+        );
+    }
+
+    #[test]
+    fn test_ckks_encrypted_query_groups_validation() {
+        let good_request = SearchPointGroups {
+            collection_name: "docs".to_string(),
+            limit: 1,
+            group_by: "tenant".to_string(),
+            group_size: 1,
+            ckks_encrypted_query: Some(valid_ckks_encrypted_query()),
+            ..Default::default()
+        };
+        assert!(
+            good_request.validate().is_ok(),
+            "valid grouped CKKS encrypted query should pass validation"
+        );
+
+        let bad_request = SearchPointGroups {
+            collection_name: "docs".to_string(),
+            limit: 1,
+            group_by: "tenant".to_string(),
+            group_size: 1,
+            ckks_encrypted_query: Some(CkksEncryptedQueryVector {
+                context_digest: "not base64url!".to_string(),
+                ..valid_ckks_encrypted_query()
+            }),
+            ..Default::default()
+        };
+        assert!(
+            bad_request.validate().is_err(),
+            "grouped CKKS encrypted query should validate nested envelopes"
         );
     }
 
