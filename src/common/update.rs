@@ -6412,6 +6412,84 @@ esac
             );
             assert_eq!(grpc_client_encrypted_search.result[0].score, 9.0);
 
+            let grpc_conflicting_query = api::rest::SearchRequestInternal::try_from(
+                api::grpc::qdrant::SearchPoints {
+                    collection_name: "vector_docs".to_string(),
+                    vector: vec![0.0, 0.0],
+                    limit: 1,
+                    vector_name: Some(DEFAULT_VECTOR_NAME.to_string()),
+                    ckks_encrypted_query: Some(fake_grpc_ckks_client_query(
+                        b"fake-ckks-query:2",
+                        2,
+                    )),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+            assert!(
+                grpc_conflicting_query
+                    .message()
+                    .contains("cannot be combined with raw vector")
+            );
+
+            let grpc_client_encrypted_batch =
+                crate::tonic::api::query_common::search_batch_from_grpc(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "vector_docs",
+                    vec![
+                        (
+                            api::rest::SearchRequestInternal::try_from(
+                                api::grpc::qdrant::SearchPoints {
+                                    collection_name: "vector_docs".to_string(),
+                                    limit: 1,
+                                    vector_name: Some(DEFAULT_VECTOR_NAME.to_string()),
+                                    ckks_encrypted_query: Some(fake_grpc_ckks_client_query(
+                                        b"fake-ckks-query:2",
+                                        2,
+                                    )),
+                                    ..Default::default()
+                                },
+                            )
+                            .unwrap(),
+                            ShardSelectorInternal::All,
+                        ),
+                        (
+                            api::rest::SearchRequestInternal::try_from(
+                                api::grpc::qdrant::SearchPoints {
+                                    collection_name: "vector_docs".to_string(),
+                                    vector: vec![0.0, 0.0],
+                                    limit: 1,
+                                    score_threshold: Some(5.0),
+                                    vector_name: Some(DEFAULT_VECTOR_NAME.to_string()),
+                                    ..Default::default()
+                                },
+                            )
+                            .unwrap(),
+                            ShardSelectorInternal::All,
+                        ),
+                    ],
+                    None,
+                    auth.clone(),
+                    None,
+                    storage::content_manager::toc::request_hw_counter::RequestHwCounter::new(
+                        HwMeasurementAcc::disposable(),
+                        false,
+                    ),
+                    Some(&vector_settings),
+                )
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(grpc_client_encrypted_batch.result.len(), 2);
+            for batch_result in &grpc_client_encrypted_batch.result {
+                assert_eq!(batch_result.result.len(), 1);
+                assert_eq!(
+                    batch_result.result[0].id,
+                    Some(segment::types::PointIdType::from(1).into())
+                );
+                assert_eq!(batch_result.result[0].score, 9.0);
+            }
+
             let grpc_client_encrypted_groups =
                 crate::tonic::api::query_common::search_groups(
                     UncheckedTocProvider::new_unchecked(&toc),
