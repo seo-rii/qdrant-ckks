@@ -2243,7 +2243,15 @@ fn ckks_sidecar_hnsw_prune_persisted_graphs(
                 "failed to inspect CKKS sidecar HNSW graph cache file {path:?}: {err}",
             ))
         })?;
-        if !metadata.is_file() && !metadata.file_type().is_symlink() {
+        if metadata.file_type().is_symlink() {
+            fs::remove_file(&path).map_err(|err| {
+                StorageError::service_error(format!(
+                    "failed to prune CKKS sidecar HNSW graph cache symlink {path:?}: {err}",
+                ))
+            })?;
+            continue;
+        }
+        if !metadata.is_file() {
             continue;
         }
         files.push(CacheFile {
@@ -7116,6 +7124,31 @@ mod tests {
         let err = ckks_sidecar_hnsw_prune_persisted_graphs(cache_dir, &keep_path).unwrap_err();
         assert!(format!("{err}").contains("keep file"));
         assert!(format!("{err}").contains("must be a regular file"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_prune_removes_stale_symlink_cache_file() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let keep_key = ckks_sidecar_test_graph_cache_key("keep");
+        let graph = CkksSidecarHnswGraph {
+            links: Arc::new(vec![Vec::new()]),
+        };
+        ckks_sidecar_hnsw_persist_graph(dir.path(), &keep_key, &graph).unwrap();
+        let keep_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &keep_key);
+        let cache_dir = keep_path.parent().unwrap();
+
+        let stale_key = ckks_sidecar_test_graph_cache_key("stale-symlink");
+        let stale_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &stale_key);
+        let target_path = dir.path().join("target.json");
+        std::fs::write(&target_path, "{}").unwrap();
+        symlink(&target_path, &stale_path).unwrap();
+
+        ckks_sidecar_hnsw_prune_persisted_graphs(cache_dir, &keep_path).unwrap();
+        assert!(!stale_path.exists());
+        assert!(keep_path.exists());
     }
 
     #[cfg(unix)]
