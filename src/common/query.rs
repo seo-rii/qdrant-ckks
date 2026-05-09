@@ -4351,6 +4351,69 @@ async fn ckks_discover_query_as_scoring<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn ckks_resolve_query_prefetches(
+    toc: &TableOfContent,
+    collection_name: &str,
+    prefetches: &[CollectionPrefetch],
+    read_consistency: Option<ReadConsistency>,
+    shard_selection: &ShardSelectorInternal,
+    auth: &Auth,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
+) -> Result<Vec<Vec<ScoredPoint>>, StorageError> {
+    let mut intermediates = Vec::with_capacity(prefetches.len());
+    for prefetch in prefetches {
+        let prefetch_request = CollectionQueryRequest {
+            prefetch: prefetch.prefetch.clone(),
+            query: prefetch.query.clone(),
+            using: prefetch.using.clone(),
+            filter: prefetch.filter.clone(),
+            score_threshold: prefetch
+                .score_threshold
+                .as_ref()
+                .map(|score| score.into_inner()),
+            limit: prefetch.limit,
+            offset: 0,
+            params: prefetch.params.clone(),
+            with_vector: WithVector::Bool(false),
+            with_payload: WithPayloadInterface::Bool(false),
+            lookup_from: prefetch.lookup_from.clone(),
+        };
+        intermediates.push(
+            Box::pin(do_query_points(
+                toc,
+                collection_name,
+                prefetch_request,
+                read_consistency,
+                shard_selection.clone(),
+                auth.clone(),
+                timeout,
+                hw_measurement_acc.clone(),
+                runtime_settings,
+            ))
+            .await?,
+        );
+    }
+
+    Ok(intermediates)
+}
+
+fn ckks_prefetch_candidate_filter(sources: &[Vec<ScoredPoint>]) -> Option<Filter> {
+    if sources.is_empty() {
+        return None;
+    }
+
+    Some(
+        Filter::new().with_point_ids(
+            sources
+                .iter()
+                .flat_map(|source| source.iter().map(|point| point.id)),
+        ),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn do_query_batch_points(
     toc: &TableOfContent,
     collection_name: &str,
@@ -4411,6 +4474,7 @@ pub async fn do_query_batch_points(
             let mut core_requests = Vec::with_capacity(requests.len());
 
             for (request, shard_selection) in &requests {
+                let root_uses_encrypted_vector = plan.contains_vector_name(&request.using);
                 let mut prefetches = request.prefetch.iter().collect::<Vec<_>>();
                 let mut has_encrypted_prefetch = false;
                 while let Some(prefetch) = prefetches.pop() {
@@ -4420,103 +4484,103 @@ pub async fn do_query_batch_points(
                     prefetches.extend(prefetch.prefetch.iter());
                 }
                 if has_encrypted_prefetch {
-                    let Some(Query::Fusion(fusion)) = &request.query else {
-                        return Err(StorageError::bad_input(
-                            "encrypted vector prefetch currently requires a root fusion query",
-                        ));
-                    };
-                    if request.with_vector.is_enabled() {
-                        return Err(StorageError::bad_input(
-                            "cannot return encrypted vectors from CKKS prefetch fusion; CKKS vector ciphertext read path returns payload sidecar only",
-                        ));
-                    }
-
-                    let mut intermediates = Vec::with_capacity(request.prefetch.len());
-                    for prefetch in &request.prefetch {
-                        let prefetch_request = CollectionQueryRequest {
-                            prefetch: prefetch.prefetch.clone(),
-                            query: prefetch.query.clone(),
-                            using: prefetch.using.clone(),
-                            filter: prefetch.filter.clone(),
-                            score_threshold: prefetch
-                                .score_threshold
-                                .as_ref()
-                                .map(|score| score.into_inner()),
-                            limit: prefetch.limit,
-                            offset: 0,
-                            params: prefetch.params.clone(),
-                            with_vector: WithVector::Bool(false),
-                            with_payload: WithPayloadInterface::Bool(false),
-                            lookup_from: prefetch.lookup_from.clone(),
-                        };
-                        intermediates.push(
-                            Box::pin(do_query_points(
-                                toc,
-                                collection_name,
-                                prefetch_request,
-                                read_consistency,
-                                shard_selection.clone(),
-                                auth.clone(),
-                                timeout,
-                                hw_measurement_acc.clone(),
-                                runtime_settings,
-                            ))
-                            .await?,
-                        );
-                    }
-
-                    let mut fused = match fusion {
-                        FusionInternal::Rrf { k, weights } => {
-                            let weights_slice = weights.as_ref().map(|weights| {
-                                weights.iter().map(|w| w.into_inner()).collect::<Vec<_>>()
-                            });
-                            rrf_scoring(intermediates, *k, weights_slice.as_deref())
-                                .map_err(|err| StorageError::bad_input(err.to_string()))?
+                    if let Some(Query::Fusion(fusion)) = &request.query {
+                        if request.with_vector.is_enabled() {
+                            return Err(StorageError::bad_input(
+                                "cannot return encrypted vectors from CKKS prefetch fusion; CKKS vector ciphertext read path returns payload sidecar only",
+                            ));
                         }
-                        FusionInternal::Dbsf => score_fusion(intermediates, ScoreFusion::dbsf()),
-                    };
-                    if let Some(score_threshold) = request.score_threshold {
-                        fused = fused
+
+                        let intermediates = ckks_resolve_query_prefetches(
+                            toc,
+                            collection_name,
+                            &request.prefetch,
+                            read_consistency,
+                            shard_selection,
+                            &auth,
+                            timeout,
+                            hw_measurement_acc.clone(),
+                            runtime_settings,
+                        )
+                        .await?;
+                        let mut fused = match fusion {
+                            FusionInternal::Rrf { k, weights } => {
+                                let weights_slice = weights.as_ref().map(|weights| {
+                                    weights.iter().map(|w| w.into_inner()).collect::<Vec<_>>()
+                                });
+                                rrf_scoring(intermediates, *k, weights_slice.as_deref())
+                                    .map_err(|err| StorageError::bad_input(err.to_string()))?
+                            }
+                            FusionInternal::Dbsf => {
+                                score_fusion(intermediates, ScoreFusion::dbsf())
+                            }
+                        };
+                        if let Some(score_threshold) = request.score_threshold {
+                            fused = fused
+                                .into_iter()
+                                .take_while(|point| point.score >= score_threshold)
+                                .collect();
+                        }
+                        let mut top = fused
                             .into_iter()
-                            .take_while(|point| point.score >= score_threshold)
-                            .collect();
+                            .skip(request.offset)
+                            .take(request.limit)
+                            .collect::<Vec<_>>();
+                        ckks_fill_scored_points_payload_or_vectors(
+                            &collection,
+                            &mut top,
+                            request.with_payload.clone(),
+                            WithVector::Bool(false),
+                            read_consistency,
+                            shard_selection,
+                            timeout,
+                            hw_measurement_acc.clone(),
+                        )
+                        .await?;
+                        has_encrypted_query = true;
+                        core_requests.push(Some(CkksResolvedQueryRequest::Ready(top)));
+                        continue;
                     }
-                    let mut top = fused
-                        .into_iter()
-                        .skip(request.offset)
-                        .take(request.limit)
-                        .collect::<Vec<_>>();
-                    ckks_fill_scored_points_payload_or_vectors(
-                        &collection,
-                        &mut top,
-                        request.with_payload.clone(),
-                        WithVector::Bool(false),
+                }
+
+                let prefetch_candidate_filter = if has_encrypted_prefetch
+                    || (root_uses_encrypted_vector && !request.prefetch.is_empty())
+                {
+                    let intermediates = ckks_resolve_query_prefetches(
+                        toc,
+                        collection_name,
+                        &request.prefetch,
                         read_consistency,
                         shard_selection,
+                        &auth,
                         timeout,
                         hw_measurement_acc.clone(),
+                        runtime_settings,
                     )
                     .await?;
                     has_encrypted_query = true;
-                    core_requests.push(Some(CkksResolvedQueryRequest::Ready(top)));
-                    continue;
-                }
+                    ckks_prefetch_candidate_filter(&intermediates)
+                } else {
+                    None
+                };
+                let has_prefetch_candidate_filter = prefetch_candidate_filter.is_some();
+                let effective_filter =
+                    Filter::merge_opts(request.filter.clone(), prefetch_candidate_filter);
 
-                if !plan.contains_vector_name(&request.using) {
+                if !root_uses_encrypted_vector {
+                    let mut request = request.clone();
+                    if has_prefetch_candidate_filter {
+                        request.prefetch.clear();
+                        request.filter = effective_filter;
+                    }
                     core_requests.push(Some(CkksResolvedQueryRequest::Plain(
-                        request.clone(),
+                        request,
                         shard_selection.clone(),
                     )));
                     continue;
                 }
 
                 has_encrypted_query = true;
-                if !request.prefetch.is_empty() {
-                    return Err(StorageError::bad_input(format!(
-                        "encrypted vector '{}' only supports root nearest-neighbor dense or point-id query; prefetch/fusion/MMR over CKKS ciphertext are not implemented",
-                        request.using,
-                    )));
-                }
                 if request.lookup_from.is_some() {
                     return Err(StorageError::bad_input(format!(
                         "encrypted vector '{}' query does not support lookup_from; provide a raw dense query vector or a point id with an encrypted sidecar",
@@ -4541,7 +4605,7 @@ pub async fn do_query_batch_points(
                             vector_name: request.using.clone(),
                             query_point_id: point_id.to_string(),
                             query_encrypted,
-                            filter: request.filter.clone(),
+                            filter: effective_filter.clone(),
                             params: request.params.clone(),
                             limit: request.limit,
                             offset: request.offset,
@@ -4570,7 +4634,7 @@ pub async fn do_query_batch_points(
                             vector_name: request.using.clone(),
                             query_point_id: point_id.to_string(),
                             query_encrypted,
-                            filter: request.filter.clone(),
+                            filter: effective_filter.clone(),
                             params: request.params.clone(),
                             limit: request.limit,
                             offset: request.offset,
@@ -4597,7 +4661,7 @@ pub async fn do_query_batch_points(
                         CkksResolvedQueryRequest::Scoring {
                             vector_name: request.using.clone(),
                             scoring,
-                            filter: request.filter.clone(),
+                            filter: effective_filter.clone(),
                             params: request.params.clone(),
                             limit: request.limit,
                             offset: request.offset,
@@ -4624,7 +4688,7 @@ pub async fn do_query_batch_points(
                         CkksResolvedQueryRequest::Scoring {
                             vector_name: request.using.clone(),
                             scoring,
-                            filter: request.filter.clone(),
+                            filter: effective_filter.clone(),
                             params: request.params.clone(),
                             limit: request.limit,
                             offset: request.offset,
@@ -4651,7 +4715,7 @@ pub async fn do_query_batch_points(
                         CkksResolvedQueryRequest::Scoring {
                             vector_name: request.using.clone(),
                             scoring,
-                            filter: request.filter.clone(),
+                            filter: effective_filter.clone(),
                             params: request.params.clone(),
                             limit: request.limit,
                             offset: request.offset,
@@ -4687,7 +4751,7 @@ pub async fn do_query_batch_points(
                                     .candidates_limit
                                     .unwrap_or(request.limit),
                             },
-                            filter: request.filter.clone(),
+                            filter: effective_filter.clone(),
                             params: request.params.clone(),
                             limit: request.limit,
                             offset: request.offset,
@@ -4711,7 +4775,7 @@ pub async fn do_query_batch_points(
                         CkksResolvedQueryRequest::Scoring {
                             vector_name: request.using.clone(),
                             scoring,
-                            filter: request.filter.clone(),
+                            filter: effective_filter.clone(),
                             params: request.params.clone(),
                             limit: request.limit,
                             offset: request.offset,
@@ -4735,7 +4799,7 @@ pub async fn do_query_batch_points(
                         CkksResolvedQueryRequest::Scoring {
                             vector_name: request.using.clone(),
                             scoring,
-                            filter: request.filter.clone(),
+                            filter: effective_filter.clone(),
                             params: request.params.clone(),
                             limit: request.limit,
                             offset: request.offset,
@@ -4750,7 +4814,7 @@ pub async fn do_query_batch_points(
                         CkksResolvedQueryRequest::Core(
                             CoreSearchRequest {
                                 query,
-                                filter: request.filter.clone(),
+                                filter: effective_filter.clone(),
                                 params: request.params.clone(),
                                 limit: request.limit,
                                 offset: request.offset,
@@ -5019,114 +5083,136 @@ async fn try_ckks_vector_query_groups(
         }
         prefetches.extend(prefetch.prefetch.iter());
     }
+    let root_uses_encrypted_vector = plan.contains_vector_name(&request.using);
     if has_encrypted_prefetch {
-        let Some(Query::Fusion(fusion)) = &request.query else {
-            return Err(StorageError::bad_input(
-                "encrypted vector prefetch currently requires a root fusion query groups request",
-            ));
-        };
-        if request.with_vector.is_enabled() {
-            return Err(StorageError::bad_input(
-                "cannot return encrypted vectors from CKKS prefetch fusion groups; CKKS vector ciphertext read path returns payload sidecar only",
-            ));
-        }
-        ensure_group_path_does_not_touch_encrypted_vector_sidecar(&request.group_by)?;
+        if let Some(Query::Fusion(fusion)) = &request.query {
+            if request.with_vector.is_enabled() {
+                return Err(StorageError::bad_input(
+                    "cannot return encrypted vectors from CKKS prefetch fusion groups; CKKS vector ciphertext read path returns payload sidecar only",
+                ));
+            }
+            ensure_group_path_does_not_touch_encrypted_vector_sidecar(&request.group_by)?;
 
-        let mut intermediates = Vec::with_capacity(request.prefetch.len());
-        for prefetch in &request.prefetch {
-            let prefetch_request = CollectionQueryRequest {
-                prefetch: prefetch.prefetch.clone(),
-                query: prefetch.query.clone(),
-                using: prefetch.using.clone(),
-                filter: prefetch.filter.clone(),
-                score_threshold: prefetch
-                    .score_threshold
-                    .as_ref()
-                    .map(|score| score.into_inner()),
-                limit: prefetch.limit,
-                offset: 0,
-                params: prefetch.params.clone(),
-                with_vector: WithVector::Bool(false),
-                with_payload: WithPayloadInterface::Bool(false),
-                lookup_from: prefetch.lookup_from.clone(),
+            let intermediates = ckks_resolve_query_prefetches(
+                toc,
+                collection_name,
+                &request.prefetch,
+                read_consistency,
+                shard_selection,
+                auth,
+                timeout,
+                hw_measurement_acc.clone(),
+                Some(runtime_settings),
+            )
+            .await?;
+            let mut fused = match fusion {
+                FusionInternal::Rrf { k, weights } => {
+                    let weights_slice = weights
+                        .as_ref()
+                        .map(|weights| weights.iter().map(|w| w.into_inner()).collect::<Vec<_>>());
+                    rrf_scoring(intermediates, *k, weights_slice.as_deref())
+                        .map_err(|err| StorageError::bad_input(err.to_string()))?
+                }
+                FusionInternal::Dbsf => score_fusion(intermediates, ScoreFusion::dbsf()),
             };
-            intermediates.push(
-                Box::pin(do_query_points(
-                    toc,
+            if let Some(score_threshold) = request.score_threshold {
+                fused = fused
+                    .into_iter()
+                    .take_while(|point| point.score >= score_threshold)
+                    .collect();
+            }
+            ckks_fill_scored_points_payload_or_vectors(
+                &collection,
+                &mut fused,
+                WithPayloadInterface::Bool(true),
+                WithVector::Bool(false),
+                read_consistency,
+                shard_selection,
+                timeout,
+                hw_measurement_acc.clone(),
+            )
+            .await?;
+            let result = ckks_vector_group_scored_points(
+                &collection,
+                fused,
+                &request.group_by,
+                request.limit,
+                request.group_size,
+                request.with_payload.clone(),
+                read_consistency,
+                shard_selection,
+                timeout,
+                hw_measurement_acc.clone(),
+            )
+            .await?;
+            return attach_ckks_group_lookup(
+                toc,
+                result,
+                request.with_lookup.clone(),
+                read_consistency,
+                shard_selection,
+                auth,
+                timeout,
+                hw_measurement_acc,
+            )
+            .await
+            .map(Some);
+        }
+    }
+
+    let prefetch_candidate_filter =
+        if has_encrypted_prefetch || (root_uses_encrypted_vector && !request.prefetch.is_empty()) {
+            let intermediates = ckks_resolve_query_prefetches(
+                toc,
+                collection_name,
+                &request.prefetch,
+                read_consistency,
+                shard_selection,
+                auth,
+                timeout,
+                hw_measurement_acc.clone(),
+                Some(runtime_settings),
+            )
+            .await?;
+            ckks_prefetch_candidate_filter(&intermediates)
+        } else {
+            None
+        };
+    let has_prefetch_candidate_filter = prefetch_candidate_filter.is_some();
+    let effective_filter = Filter::merge_opts(request.filter.clone(), prefetch_candidate_filter);
+
+    if !root_uses_encrypted_vector {
+        if has_prefetch_candidate_filter {
+            let request = CollectionQueryGroupsRequest {
+                prefetch: Vec::new(),
+                query: request.query.clone(),
+                using: request.using.clone(),
+                filter: effective_filter,
+                params: request.params.clone(),
+                score_threshold: request.score_threshold,
+                with_vector: request.with_vector.clone(),
+                with_payload: request.with_payload.clone(),
+                lookup_from: request.lookup_from.clone(),
+                group_by: request.group_by.clone(),
+                group_size: request.group_size,
+                limit: request.limit,
+                with_lookup: request.with_lookup.clone(),
+            };
+            ensure_group_path_does_not_touch_encrypted_vector_sidecar(&request.group_by)?;
+            return toc
+                .group(
                     collection_name,
-                    prefetch_request,
+                    GroupRequest::from(request),
                     read_consistency,
                     shard_selection.clone(),
                     auth.clone(),
                     timeout,
-                    hw_measurement_acc.clone(),
-                    Some(runtime_settings),
-                ))
-                .await?,
-            );
+                    hw_measurement_acc,
+                )
+                .await
+                .map(Some);
         }
-
-        let mut fused = match fusion {
-            FusionInternal::Rrf { k, weights } => {
-                let weights_slice = weights
-                    .as_ref()
-                    .map(|weights| weights.iter().map(|w| w.into_inner()).collect::<Vec<_>>());
-                rrf_scoring(intermediates, *k, weights_slice.as_deref())
-                    .map_err(|err| StorageError::bad_input(err.to_string()))?
-            }
-            FusionInternal::Dbsf => score_fusion(intermediates, ScoreFusion::dbsf()),
-        };
-        if let Some(score_threshold) = request.score_threshold {
-            fused = fused
-                .into_iter()
-                .take_while(|point| point.score >= score_threshold)
-                .collect();
-        }
-        ckks_fill_scored_points_payload_or_vectors(
-            &collection,
-            &mut fused,
-            WithPayloadInterface::Bool(true),
-            WithVector::Bool(false),
-            read_consistency,
-            shard_selection,
-            timeout,
-            hw_measurement_acc.clone(),
-        )
-        .await?;
-        let result = ckks_vector_group_scored_points(
-            &collection,
-            fused,
-            &request.group_by,
-            request.limit,
-            request.group_size,
-            request.with_payload.clone(),
-            read_consistency,
-            shard_selection,
-            timeout,
-            hw_measurement_acc.clone(),
-        )
-        .await?;
-        return attach_ckks_group_lookup(
-            toc,
-            result,
-            request.with_lookup.clone(),
-            read_consistency,
-            shard_selection,
-            auth,
-            timeout,
-            hw_measurement_acc,
-        )
-        .await
-        .map(Some);
-    }
-    if !plan.contains_vector_name(&request.using) {
         return Ok(None);
-    }
-    if !request.prefetch.is_empty() {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{}' only supports root nearest-neighbor dense or point-id query groups; prefetch/fusion/MMR over CKKS ciphertext are not implemented",
-            request.using,
-        )));
     }
     if request.lookup_from.is_some() {
         return Err(StorageError::bad_input(format!(
@@ -5158,7 +5244,7 @@ async fn try_ckks_vector_query_groups(
                 query_point_id: point_id.to_string(),
                 query_encrypted,
             },
-            request.filter.clone(),
+            effective_filter.clone(),
             request.params.clone(),
             request.score_threshold,
             &plan,
@@ -5206,7 +5292,7 @@ async fn try_ckks_vector_query_groups(
             &collection_crypto_id,
             &request.using,
             scoring,
-            request.filter.clone(),
+            effective_filter.clone(),
             request.params.clone(),
             request.score_threshold,
             &plan,
@@ -5254,7 +5340,7 @@ async fn try_ckks_vector_query_groups(
             &collection_crypto_id,
             &request.using,
             scoring,
-            request.filter.clone(),
+            effective_filter.clone(),
             request.params.clone(),
             request.score_threshold,
             &plan,
@@ -5302,7 +5388,7 @@ async fn try_ckks_vector_query_groups(
             &collection_crypto_id,
             &request.using,
             scoring,
-            request.filter.clone(),
+            effective_filter.clone(),
             request.params.clone(),
             request.score_threshold,
             &plan,
@@ -5347,7 +5433,7 @@ async fn try_ckks_vector_query_groups(
             &collection_crypto_id,
             &request.using,
             scoring,
-            request.filter.clone(),
+            effective_filter.clone(),
             request.params.clone(),
             request.score_threshold,
             &plan,
@@ -5392,7 +5478,7 @@ async fn try_ckks_vector_query_groups(
             &collection_crypto_id,
             &request.using,
             scoring,
-            request.filter.clone(),
+            effective_filter.clone(),
             request.params.clone(),
             request.score_threshold,
             &plan,
@@ -5442,7 +5528,7 @@ async fn try_ckks_vector_query_groups(
                 query_point_id: point_id.to_string(),
                 query_encrypted,
             },
-            request.filter.clone(),
+            effective_filter.clone(),
             request.params.clone(),
             request.score_threshold,
             &plan,
@@ -5499,7 +5585,7 @@ async fn try_ckks_vector_query_groups(
                     .candidates_limit
                     .unwrap_or(request.limit),
             },
-            request.filter.clone(),
+            effective_filter.clone(),
             request.params.clone(),
             request.score_threshold,
             &plan,
@@ -5529,7 +5615,7 @@ async fn try_ckks_vector_query_groups(
 
     let search_request = CoreSearchRequest {
         query: ckks_query_as_core_query(&request.query, &request.using)?,
-        filter: request.filter.clone(),
+        filter: effective_filter.clone(),
         params: request.params.clone(),
         limit: usize::MAX,
         offset: 0,

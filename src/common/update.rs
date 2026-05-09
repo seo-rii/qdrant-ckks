@@ -3352,6 +3352,51 @@ esac
             assert_eq!(fusion_query_groups.groups[1].id, GroupId::from("a"));
             assert_eq!(fusion_query_groups.groups[1].hits[0].id, 1.into());
 
+            let prefetched_query_groups = crate::common::query::do_query_point_groups(
+                &toc,
+                "vector_groups",
+                collection::operations::universal_query::collection_query::CollectionQueryGroupsRequest {
+                    prefetch: vec![CollectionPrefetch {
+                        prefetch: Vec::new(),
+                        query: Some(Query::Vector(VectorQuery::Nearest(
+                            VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                        ))),
+                        using: DEFAULT_VECTOR_NAME.to_string(),
+                        filter: None,
+                        score_threshold: None,
+                        limit: 1,
+                        params: None,
+                        lookup_from: None,
+                    }],
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    params: None,
+                    score_threshold: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                    group_by: "group".parse().unwrap(),
+                    group_size: 1,
+                    limit: 2,
+                    with_lookup: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(prefetched_query_groups.groups.len(), 1);
+            assert_eq!(prefetched_query_groups.groups[0].id, GroupId::from("a"));
+            assert_eq!(prefetched_query_groups.groups[0].hits[0].id, 1.into());
+            assert_eq!(prefetched_query_groups.groups[0].hits[0].score, 9.0);
+
             let mmr_query_groups = crate::common::query::do_query_point_groups(
                 &toc,
                 "vector_groups",
@@ -6433,7 +6478,7 @@ esac
             assert!(fusion_query[0].score > fusion_query[1].score);
             assert_eq!(fusion_query[1].id, 1.into());
 
-            let err = crate::common::query::do_query_points(
+            let prefetched_query = crate::common::query::do_query_points(
                 &toc,
                 "vector_docs",
                 CollectionQueryRequest {
@@ -6470,12 +6515,52 @@ esac
                 Some(&vector_settings),
             )
             .await
-            .unwrap_err();
-            assert!(matches!(
-                err,
-                StorageError::BadInput { description }
-                    if description.contains("requires a root fusion query")
-            ));
+            .unwrap();
+            assert_eq!(prefetched_query.len(), 1);
+            assert_eq!(prefetched_query[0].id, 1.into());
+            assert_eq!(prefetched_query[0].score, 9.0);
+
+            let plaintext_root_prefetched_query = crate::common::query::do_query_points(
+                &toc,
+                "vector_docs",
+                CollectionQueryRequest {
+                    prefetch: vec![CollectionPrefetch {
+                        prefetch: Vec::new(),
+                        query: Some(Query::Vector(VectorQuery::Nearest(
+                            VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                        ))),
+                        using: DEFAULT_VECTOR_NAME.to_string(),
+                        filter: None,
+                        score_threshold: None,
+                        limit: 1,
+                        params: None,
+                        lookup_from: None,
+                    }],
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::Vector(VectorInternal::Dense(vec![1.0, 0.0])),
+                    ))),
+                    using: "plain".to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(plaintext_root_prefetched_query.len(), 1);
+            assert_eq!(plaintext_root_prefetched_query[0].id, 1.into());
+            assert_eq!(plaintext_root_prefetched_query[0].score, 0.3);
 
             let err = crate::common::query::do_core_search_points(
                 &toc,
