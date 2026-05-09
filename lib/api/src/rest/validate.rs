@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use common::validation::validate_multi_vector;
+use data_encoding::BASE64URL_NOPAD;
 use segment::index::query_optimization::rescore_formula::parsed_formula::VariableId;
 use validator::{Validate, ValidationError, ValidationErrors};
 
@@ -10,6 +11,9 @@ use super::{
     RecommendInput, RelevanceFeedbackInput, Sample, VectorInput,
 };
 use crate::rest::FeedbackStrategy;
+
+const CKKS_ENCRYPTED_QUERY_SCHEME: &str = "openfhe-ckks";
+const CKKS_ENCRYPTED_QUERY_SECURITY_PROFILE: &str = "ckks-128-n16384-d4-scale50";
 
 impl Validate for NamedVectorStruct {
     fn validate(&self) -> Result<(), validator::ValidationErrors> {
@@ -76,20 +80,60 @@ impl Validate for CkksEncryptedQueryVector {
     fn validate(&self) -> Result<(), validator::ValidationErrors> {
         let mut errors = ValidationErrors::new();
         if self.envelope.version != 1 {
-            errors.add("version", ValidationError::new("must be 1"));
+            errors.add(
+                "version",
+                ValidationError::new("unsupported_ckks_encrypted_query_version"),
+            );
+        }
+        if self.envelope.scheme != CKKS_ENCRYPTED_QUERY_SCHEME {
+            errors.add(
+                "scheme",
+                ValidationError::new("unsupported_ckks_encrypted_query_scheme"),
+            );
+        }
+        if self.envelope.security_profile != CKKS_ENCRYPTED_QUERY_SECURITY_PROFILE {
+            errors.add(
+                "security_profile",
+                ValidationError::new("unsupported_ckks_encrypted_query_security_profile"),
+            );
+        }
+        if self.envelope.context_digest.is_empty() {
+            errors.add(
+                "context_digest",
+                ValidationError::new("empty_ckks_encrypted_query_context_digest"),
+            );
+        } else {
+            match BASE64URL_NOPAD.decode(self.envelope.context_digest.as_bytes()) {
+                Ok(decoded) if decoded.len() == 32 => {}
+                Ok(_) => errors.add(
+                    "context_digest",
+                    ValidationError::new("invalid_ckks_encrypted_query_context_digest_length"),
+                ),
+                Err(_) => errors.add(
+                    "context_digest",
+                    ValidationError::new("invalid_ckks_encrypted_query_context_digest_base64url"),
+                ),
+            }
         }
         if self.envelope.slots == 0 {
-            errors.add("slots", ValidationError::new("must be greater than 0"));
+            errors.add(
+                "slots",
+                ValidationError::new("empty_ckks_encrypted_query_slots"),
+            );
         }
-        for (field, value) in [
-            ("scheme", self.envelope.scheme.as_str()),
-            ("security_profile", self.envelope.security_profile.as_str()),
-            ("context_digest", self.envelope.context_digest.as_str()),
-            ("ciphertext", self.envelope.ciphertext.as_str()),
-        ] {
-            if value.is_empty() {
-                errors.add(field, ValidationError::new("must not be empty"));
-            }
+        if self.envelope.ciphertext.is_empty() {
+            errors.add(
+                "ciphertext",
+                ValidationError::new("empty_ckks_encrypted_query_ciphertext"),
+            );
+        } else if BASE64URL_NOPAD
+            .decode(self.envelope.ciphertext.as_bytes())
+            .is_err()
+        {
+            errors.add(
+                "ciphertext",
+                ValidationError::new("invalid_ckks_encrypted_query_ciphertext_base64url"),
+            );
         }
         if errors.is_empty() {
             Ok(())
@@ -324,4 +368,128 @@ pub fn validate_relevance_feedback_input(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use data_encoding::BASE64URL_NOPAD;
+    use validator::Validate;
+
+    use super::*;
+    use crate::rest::CkksEncryptedQueryVectorEnvelope;
+
+    fn valid_ckks_encrypted_query() -> CkksEncryptedQueryVector {
+        CkksEncryptedQueryVector {
+            envelope: CkksEncryptedQueryVectorEnvelope {
+                version: 1,
+                scheme: "openfhe-ckks".to_string(),
+                security_profile: "ckks-128-n16384-d4-scale50".to_string(),
+                context_digest: BASE64URL_NOPAD.encode(&[3_u8; 32]),
+                slots: 2,
+                ciphertext: BASE64URL_NOPAD.encode(b"ciphertext"),
+            },
+        }
+    }
+
+    #[test]
+    fn test_ckks_encrypted_query_validation() {
+        assert!(
+            valid_ckks_encrypted_query().validate().is_ok(),
+            "valid REST CKKS encrypted query should pass validation"
+        );
+
+        let bad_query = CkksEncryptedQueryVector {
+            envelope: CkksEncryptedQueryVectorEnvelope {
+                version: 2,
+                ..valid_ckks_encrypted_query().envelope
+            },
+        };
+        assert!(
+            bad_query.validate().is_err(),
+            "bad REST CKKS encrypted query version should error on validation"
+        );
+
+        let bad_query = CkksEncryptedQueryVector {
+            envelope: CkksEncryptedQueryVectorEnvelope {
+                scheme: "other".to_string(),
+                security_profile: "other".to_string(),
+                ..valid_ckks_encrypted_query().envelope
+            },
+        };
+        assert!(
+            bad_query.validate().is_err(),
+            "bad REST CKKS encrypted query scheme/profile should error on validation"
+        );
+
+        let bad_query = CkksEncryptedQueryVector {
+            envelope: CkksEncryptedQueryVectorEnvelope {
+                context_digest: String::new(),
+                slots: 0,
+                ciphertext: String::new(),
+                ..valid_ckks_encrypted_query().envelope
+            },
+        };
+        assert!(
+            bad_query.validate().is_err(),
+            "empty REST CKKS encrypted query metadata should error on validation"
+        );
+
+        let bad_query = CkksEncryptedQueryVector {
+            envelope: CkksEncryptedQueryVectorEnvelope {
+                context_digest: BASE64URL_NOPAD.encode(&[3_u8; 31]),
+                ..valid_ckks_encrypted_query().envelope
+            },
+        };
+        assert!(
+            bad_query.validate().is_err(),
+            "short REST CKKS encrypted query context digest should error on validation"
+        );
+
+        let bad_query = CkksEncryptedQueryVector {
+            envelope: CkksEncryptedQueryVectorEnvelope {
+                context_digest: "not base64url!".to_string(),
+                ciphertext: "also not base64url!".to_string(),
+                ..valid_ckks_encrypted_query().envelope
+            },
+        };
+        assert!(
+            bad_query.validate().is_err(),
+            "malformed REST CKKS encrypted query base64url fields should error on validation"
+        );
+    }
+
+    #[test]
+    fn test_ckks_encrypted_query_wrappers_validate_nested_envelope() {
+        let named_query = NamedCkksEncryptedQueryVector {
+            name: None,
+            envelope: valid_ckks_encrypted_query().envelope,
+        };
+        assert!(
+            named_query.validate().is_ok(),
+            "valid named REST CKKS encrypted query should pass validation"
+        );
+
+        let bad_named_query = NamedCkksEncryptedQueryVector {
+            name: None,
+            envelope: CkksEncryptedQueryVectorEnvelope {
+                ciphertext: "not base64url!".to_string(),
+                ..valid_ckks_encrypted_query().envelope
+            },
+        };
+        assert!(
+            bad_named_query.validate().is_err(),
+            "named REST CKKS encrypted query should validate the nested envelope"
+        );
+
+        let bad_vector_input = VectorInput::CkksEncryptedQuery(CkksEncryptedQueryVector {
+            envelope: CkksEncryptedQueryVectorEnvelope {
+                context_digest: BASE64URL_NOPAD.encode(&[3_u8; 31]),
+                ..valid_ckks_encrypted_query().envelope
+            },
+        });
+        assert!(
+            bad_vector_input.validate().is_err(),
+            "universal REST CKKS encrypted query should validate the nested envelope"
+        );
+    }
 }
