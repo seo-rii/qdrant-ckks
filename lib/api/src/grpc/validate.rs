@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use common::validation::{validate_range_generic, validate_shard_different_peers};
+use data_encoding::BASE64URL_NOPAD;
 use segment::data_types::index::validate_integer_index_params;
 use validator::{Validate, ValidationError, ValidationErrors};
 
@@ -421,6 +422,18 @@ impl Validate for grpc::CkksEncryptedQueryVector {
                 "context_digest",
                 ValidationError::new("empty_ckks_encrypted_query_context_digest"),
             );
+        } else {
+            match BASE64URL_NOPAD.decode(self.context_digest.as_bytes()) {
+                Ok(decoded) if decoded.len() == 32 => {}
+                Ok(_) => errors.add(
+                    "context_digest",
+                    ValidationError::new("invalid_ckks_encrypted_query_context_digest_length"),
+                ),
+                Err(_) => errors.add(
+                    "context_digest",
+                    ValidationError::new("invalid_ckks_encrypted_query_context_digest_base64url"),
+                ),
+            }
         }
         if self.slots == 0 {
             errors.add(
@@ -432,6 +445,11 @@ impl Validate for grpc::CkksEncryptedQueryVector {
             errors.add(
                 "ciphertext",
                 ValidationError::new("empty_ckks_encrypted_query_ciphertext"),
+            );
+        } else if BASE64URL_NOPAD.decode(self.ciphertext.as_bytes()).is_err() {
+            errors.add(
+                "ciphertext",
+                ValidationError::new("invalid_ckks_encrypted_query_ciphertext_base64url"),
             );
         }
 
@@ -575,6 +593,7 @@ impl Validate for super::qdrant::points_selector::PointsSelectorOneOf {
 
 #[cfg(test)]
 mod tests {
+    use data_encoding::BASE64URL_NOPAD;
     use validator::Validate;
 
     use crate::grpc::qdrant::{
@@ -708,9 +727,9 @@ mod tests {
             version: 1,
             scheme: "openfhe-ckks".to_string(),
             security_profile: "ckks-128-n16384-d4-scale50".to_string(),
-            context_digest: "context-digest".to_string(),
+            context_digest: BASE64URL_NOPAD.encode(&[3_u8; 32]),
             slots: 2,
-            ciphertext: "ciphertext".to_string(),
+            ciphertext: BASE64URL_NOPAD.encode(b"ciphertext"),
         }
     }
 
@@ -755,6 +774,35 @@ mod tests {
         assert!(
             bad_request.validate().is_err(),
             "empty CKKS encrypted query metadata should error on validation"
+        );
+
+        let bad_request = SearchPoints {
+            collection_name: "docs".to_string(),
+            limit: 1,
+            ckks_encrypted_query: Some(CkksEncryptedQueryVector {
+                context_digest: BASE64URL_NOPAD.encode(&[3_u8; 31]),
+                ..valid_ckks_encrypted_query()
+            }),
+            ..Default::default()
+        };
+        assert!(
+            bad_request.validate().is_err(),
+            "short CKKS encrypted query context digest should error on validation"
+        );
+
+        let bad_request = SearchPoints {
+            collection_name: "docs".to_string(),
+            limit: 1,
+            ckks_encrypted_query: Some(CkksEncryptedQueryVector {
+                context_digest: "not base64url!".to_string(),
+                ciphertext: "also not base64url!".to_string(),
+                ..valid_ckks_encrypted_query()
+            }),
+            ..Default::default()
+        };
+        assert!(
+            bad_request.validate().is_err(),
+            "malformed CKKS encrypted query base64url fields should error on validation"
         );
     }
 
