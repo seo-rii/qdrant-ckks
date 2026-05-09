@@ -1988,17 +1988,23 @@ fn ckks_sidecar_hnsw_load_persisted_graph(
 
         options.custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
     }
-    let mut file = options.open(&path).map_err(|err| {
+    let file = options.open(&path).map_err(|err| {
         StorageError::service_error(format!(
             "failed to open CKKS sidecar HNSW graph cache {path:?}: {err}",
         ))
     })?;
     let mut content = String::with_capacity(metadata.len() as usize);
-    file.read_to_string(&mut content).map_err(|err| {
+    let mut limited_file = file.take(CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES + 1);
+    limited_file.read_to_string(&mut content).map_err(|err| {
         StorageError::service_error(format!(
             "failed to read CKKS sidecar HNSW graph cache {path:?}: {err}",
         ))
     })?;
+    if content.len() as u64 > CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES {
+        return Err(StorageError::service_error(format!(
+            "CKKS sidecar HNSW graph cache {path:?} exceeds maximum size",
+        )));
+    }
     let disk: CkksSidecarHnswGraphDisk = serde_json::from_str(&content).map_err(|err| {
         StorageError::service_error(format!(
             "failed to parse CKKS sidecar HNSW graph cache {path:?}: {err}",
