@@ -214,18 +214,27 @@ impl ClientPayloadNonceReplayCache {
         Ok(cache)
     }
 
-    fn pending_keys(&self, keys: impl IntoIterator<Item = String>) -> Option<Vec<String>> {
+    fn pending_keys(
+        &self,
+        keys: impl IntoIterator<Item = String>,
+    ) -> CollectionResult<Option<Vec<String>>> {
         let mut batch_seen = HashSet::new();
         let mut pending = Vec::new();
 
         for key in keys {
+            qdrant_sec::ClientPayloadNonceReplayKey::validate_cache_key_for_collection(&key)
+                .map_err(|err| {
+                    CollectionError::bad_input(format!(
+                        "client encrypted payload nonce replay cache key is invalid: {err}",
+                    ))
+                })?;
             if self.seen.contains(&key) || !batch_seen.insert(key.clone()) {
-                return None;
+                return Ok(None);
             }
             pending.push(key);
         }
 
-        Some(pending)
+        Ok(Some(pending))
     }
 
     fn insert_pending(&mut self, pending: Vec<String>) -> bool {
@@ -548,7 +557,7 @@ impl Collection {
         }
 
         let mut cache = self.client_payload_nonce_replay_cache.lock().await;
-        let Some(pending) = cache.pending_keys(keys) else {
+        let Some(pending) = cache.pending_keys(keys)? else {
             return Err(CollectionError::bad_input(
                 "client encrypted payload nonce was already used in this collection; regenerate the client-side envelope with a fresh nonce before retrying".to_string(),
             ));
@@ -574,6 +583,12 @@ impl Collection {
 
         let mut loaded_keys = HashSet::new();
         for key in &keys {
+            qdrant_sec::ClientPayloadNonceReplayKey::validate_cache_key_for_collection(key)
+                .map_err(|err| {
+                    CollectionError::service_error(format!(
+                        "stored client encrypted payload nonce replay cache key is invalid: {err}",
+                    ))
+                })?;
             if !loaded_keys.insert(key) {
                 return Err(CollectionError::service_error(
                     "stored client encrypted payload nonce was reused in this collection; refuse to load replay cache backfill".to_string(),
@@ -1439,6 +1454,15 @@ mod tests {
 
         let err = ClientPayloadNonceReplayCache::load(dir.path()).unwrap_err();
         assert!(format!("{err:?}").contains("malformed entry"));
+    }
+
+    #[test]
+    fn client_payload_nonce_replay_cache_rejects_malformed_pending_keys() {
+        let cache = ClientPayloadNonceReplayCache::default();
+        let err = cache
+            .pending_keys(["not-a-valid-cache-key".to_string()])
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("nonce replay cache key is invalid"));
     }
 
     #[test]
