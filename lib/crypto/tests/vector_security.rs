@@ -1218,6 +1218,74 @@ done
 
 #[cfg(unix)]
 #[test]
+fn command_openfhe_backend_rejects_encrypted_query_score_batch_response_size_mismatch() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir
+        .path()
+        .join("bad-openfhe-encrypted-score-batch-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+while IFS= read -r request; do
+  case "$request" in
+    *'"operation":"encrypt_query"'*'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*)
+      printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1xdWVyeQ"}\n'
+      ;;
+    *'"operation":"score_encrypted_query_batch"'*)
+      printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[12.5]}\n'
+      ;;
+    *'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*)
+      printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
+      ;;
+    *) exit 7 ;;
+  esac
+done
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+        .with_args([script_path.display().to_string()]);
+    let encryptor = test_ckks_encryptor(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+    let first = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0, 2.0])
+        .unwrap();
+    let second = encryptor
+        .encrypt("docs", "point-2", &public_material(), &[3.0, 4.0])
+        .unwrap();
+
+    let err = encryptor
+        .score_encrypted_query_batch(
+            "docs",
+            &public_material(),
+            &[("point-1", &first), ("point-2", &second)],
+            "dot",
+            &[0.5, 0.25],
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CkksError::Backend(message)
+            if message.contains("returned 1 batch scores for 2 encrypted vectors")
+    ));
+}
+
+#[cfg(unix)]
+#[test]
 fn command_openfhe_backend_scores_stored_ciphertext_as_query() {
     use std::os::unix::fs::PermissionsExt;
 
