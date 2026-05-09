@@ -115,13 +115,37 @@ impl Default for ClientPayloadNonceReplayCache {
 }
 
 impl ClientPayloadNonceReplayCache {
-    fn record(&mut self, keys: impl IntoIterator<Item = String>) -> bool {
+    fn record(&mut self, keys: impl IntoIterator<Item = String>) -> Result<bool, StorageError> {
         let mut batch_seen = HashSet::new();
         let mut pending = Vec::new();
 
         for key in keys {
+            let mut parts = key.split('\x1f');
+            let collection_crypto_id = parts.next();
+            let key_id = parts.next();
+            let rk_id = parts.next();
+            let rk_epoch = parts.next();
+            let nonce = parts.next();
+            let valid_nonce = nonce.is_some_and(|nonce| {
+                nonce.len() == 16
+                    && nonce
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            });
+            if parts.next().is_some()
+                || collection_crypto_id.is_none_or(str::is_empty)
+                || key_id.is_none_or(str::is_empty)
+                || rk_id.is_none_or(str::is_empty)
+                || rk_epoch.is_none_or(str::is_empty)
+                || rk_epoch.is_some_and(|epoch| epoch.parse::<u64>().is_err())
+                || !valid_nonce
+            {
+                return Err(StorageError::bad_input(
+                    "client encrypted payload nonce replay cache key is invalid".to_string(),
+                ));
+            }
             if self.seen.contains(&key) || !batch_seen.insert(key.clone()) {
-                return false;
+                return Ok(false);
             }
             pending.push(key);
         }
@@ -139,7 +163,7 @@ impl ClientPayloadNonceReplayCache {
             self.seen.remove(&oldest);
         }
 
-        true
+        Ok(true)
     }
 }
 
@@ -308,7 +332,7 @@ impl TableOfContent {
         }
 
         let mut cache = self.client_payload_nonce_replay_cache.lock().await;
-        if !cache.record(scoped_keys) {
+        if !cache.record(scoped_keys)? {
             return Err(StorageError::bad_input(
                 "client encrypted payload nonce was already used in this collection".to_string(),
             ));
@@ -824,5 +848,29 @@ impl TableOfContent {
 
     pub fn general_runtime_handle(&self) -> &Handle {
         self.general_runtime.handle()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_payload_nonce_replay_cache_rejects_malformed_scoped_keys() {
+        let mut cache = ClientPayloadNonceReplayCache::default();
+        let err = cache
+            .record(["not-a-valid-cache-key".to_string()])
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("nonce replay cache key is invalid"));
+    }
+
+    #[test]
+    fn client_payload_nonce_replay_cache_rejects_duplicate_scoped_keys() {
+        let mut cache = ClientPayloadNonceReplayCache::default();
+        let key =
+            "collection-uuid\x1ftenant-a-key\x1ftenant-a-rk\x1f1\x1fAAAAAAAAAAAAAAAA".to_string();
+
+        assert!(cache.record([key.clone()]).unwrap());
+        assert!(!cache.record([key]).unwrap());
     }
 }
