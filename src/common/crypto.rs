@@ -1273,6 +1273,7 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
                 "path": material.path,
                 "has_fd": material.fd.is_some(),
                 "has_value_b64": material.value_b64.is_some(),
+                "vault_field": material.vault_field,
                 "wrapped_by": material.wrapped_by,
                 "wrap_algorithm": material.wrap_algorithm,
                 "has_nonce": material.nonce.is_some(),
@@ -5551,6 +5552,41 @@ mod tests {
             fingerprint,
             crypto_runtime_capability_fingerprint(&peer_with_different_rk),
             "client expected RK id drift must change the parity fingerprint",
+        );
+    }
+
+    #[test]
+    fn crypto_runtime_capability_fingerprint_tracks_vault_material_field() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                materials: HashMap::from([(
+                    "tenant-a/mk".to_string(),
+                    CryptoMaterialConfig {
+                        kind: WRAPPING_KEY_32_KIND.to_string(),
+                        source: Some("vault_kv2".to_string()),
+                        env: Some("QDRANT_VAULT_TOKEN".to_string()),
+                        path: Some("https://vault.example.com/v1/secret/data/docs".to_string()),
+                        vault_field: Some("mk_v1".to_string()),
+                        ..CryptoMaterialConfig::default()
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let fingerprint = crypto_runtime_capability_fingerprint(&settings);
+        let mut peer_with_different_field = settings.clone();
+        peer_with_different_field
+            .crypto
+            .materials
+            .get_mut("tenant-a/mk")
+            .unwrap()
+            .vault_field = Some("mk_v2".to_string());
+
+        assert_ne!(
+            fingerprint,
+            crypto_runtime_capability_fingerprint(&peer_with_different_field),
+            "Vault field drift must change the non-secret runtime parity fingerprint",
         );
     }
 
