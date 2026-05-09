@@ -2134,9 +2134,21 @@ fn ckks_sidecar_hnsw_prune_persisted_graphs(
         modified: SystemTime,
     }
 
-    let keep_len = fs::metadata(keep_path)
-        .map(|metadata| metadata.len())
-        .unwrap_or(0);
+    let keep_len = match fs::symlink_metadata(keep_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(StorageError::service_error(format!(
+                "CKKS sidecar HNSW graph cache keep file {keep_path:?} must not be a symlink",
+            )));
+        }
+        Ok(metadata) if metadata.is_file() => metadata.len(),
+        Ok(_) => 0,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(err) => {
+            return Err(StorageError::service_error(format!(
+                "failed to inspect CKKS sidecar HNSW graph cache keep file {keep_path:?}: {err}",
+            )));
+        }
+    };
     let mut files = Vec::new();
     let entries = fs::read_dir(directory).map_err(|err| {
         StorageError::service_error(format!(
@@ -6967,6 +6979,26 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_prune_rejects_symlink_keep_file() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let key = ckks_sidecar_test_graph_cache_key("keep");
+        let keep_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &key);
+        let cache_dir = keep_path.parent().unwrap();
+        std::fs::create_dir_all(cache_dir).unwrap();
+        set_ckks_sidecar_test_private_directory_permissions(cache_dir);
+        let target_path = dir.path().join("target.json");
+        std::fs::write(&target_path, "{}").unwrap();
+        symlink(&target_path, &keep_path).unwrap();
+
+        let err = ckks_sidecar_hnsw_prune_persisted_graphs(cache_dir, &keep_path).unwrap_err();
+        assert!(format!("{err}").contains("keep file"));
+        assert!(format!("{err}").contains("must not be a symlink"));
     }
 
     #[test]
