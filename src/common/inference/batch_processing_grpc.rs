@@ -60,6 +60,7 @@ fn collect_vector_input(vector: &VectorInput, batch: &mut BatchAccumGrpc) -> Res
         Variant::Dense(_) => {}
         Variant::Sparse(_) => {}
         Variant::MultiDense(_) => {}
+        Variant::CkksEncryptedQuery(_) => {}
         Variant::Document(document) => {
             let doc = rest::Document::try_from(document.clone())
                 .map_err(|e| Status::internal(format!("Document conversion error: {e:?}")))?;

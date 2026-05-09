@@ -382,7 +382,8 @@ impl Validate for super::qdrant::vector_input::Variant {
             | grpc::vector_input::Variant::Dense(_)
             | grpc::vector_input::Variant::Document(_)
             | grpc::vector_input::Variant::Image(_)
-            | grpc::vector_input::Variant::Object(_) => Ok(()),
+            | grpc::vector_input::Variant::Object(_)
+            | grpc::vector_input::Variant::CkksEncryptedQuery(_) => Ok(()),
             grpc::vector_input::Variant::Sparse(sparse_vector) => sparse_vector.validate(),
             grpc::vector_input::Variant::MultiDense(multi_dense_vector) => {
                 multi_dense_vector.validate()

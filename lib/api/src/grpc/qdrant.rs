@@ -5060,6 +5060,23 @@ pub struct MultiDenseVector {
     #[prost(message, repeated, tag = "1")]
     pub vectors: ::prost::alloc::vec::Vec<DenseVector>,
 }
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CkksEncryptedQueryVector {
+    #[prost(uint32, tag = "1")]
+    pub version: u32,
+    #[prost(string, tag = "2")]
+    pub scheme: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub security_profile: ::prost::alloc::string::String,
+    #[prost(string, tag = "4")]
+    pub context_digest: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "5")]
+    pub slots: u64,
+    #[prost(string, tag = "6")]
+    pub ciphertext: ::prost::alloc::string::String,
+}
 /// Vector type to be used in queries.
 /// Ids will be substituted with their corresponding vectors from the collection.
 #[derive(validator::Validate)]
@@ -5067,7 +5084,7 @@ pub struct MultiDenseVector {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct VectorInput {
-    #[prost(oneof = "vector_input::Variant", tags = "1, 2, 3, 4, 5, 6, 7")]
+    #[prost(oneof = "vector_input::Variant", tags = "1, 2, 3, 4, 5, 6, 7, 8")]
     #[validate(nested)]
     pub variant: ::core::option::Option<vector_input::Variant>,
 }
@@ -5091,6 +5108,8 @@ pub mod vector_input {
         Image(super::Image),
         #[prost(message, tag = "7")]
         Object(super::InferenceObject),
+        #[prost(message, tag = "8")]
+        CkksEncryptedQuery(super::CkksEncryptedQueryVector),
     }
 }
 #[derive(serde::Serialize)]

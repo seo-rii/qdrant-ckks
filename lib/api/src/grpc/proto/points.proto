@@ -134,6 +134,15 @@ message MultiDenseVector {
   repeated DenseVector vectors = 1;
 }
 
+message CkksEncryptedQueryVector {
+  uint32 version = 1;
+  string scheme = 2;
+  string security_profile = 3;
+  string context_digest = 4;
+  uint64 slots = 5;
+  string ciphertext = 6;
+}
+
 // Vector type to be used in queries.
 // Ids will be substituted with their corresponding vectors from the collection.
 message VectorInput {
@@ -145,6 +154,7 @@ message VectorInput {
     Document document = 5;
     Image image = 6;
     InferenceObject object = 7;
+    CkksEncryptedQueryVector ckks_encrypted_query = 8;
   }
 }
 

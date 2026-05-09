@@ -4,8 +4,9 @@ use api::grpc::qdrant::query::Variant;
 use api::grpc::{InferenceUsage, qdrant as grpc};
 use api::rest::{self, LookupLocation, RecommendStrategy};
 use collection::operations::universal_query::collection_query::{
-    CollectionPrefetch, CollectionQueryGroupsRequest, CollectionQueryRequest, FeedbackInternal,
-    FeedbackStrategy, Mmr, NearestWithMmr, Query, VectorInputInternal, VectorQuery,
+    CkksEncryptedQueryInput, CollectionPrefetch, CollectionQueryGroupsRequest,
+    CollectionQueryRequest, FeedbackInternal, FeedbackStrategy, Mmr, NearestWithMmr, Query,
+    VectorInputInternal, VectorQuery,
 };
 use collection::operations::universal_query::formula::FormulaInternal;
 use collection::operations::universal_query::shard_query::{FusionInternal, SampleInternal};
@@ -416,6 +417,20 @@ fn convert_vector_input_with_inferred(
                 vector.clone(),
             )))
         }
+        Variant::CkksEncryptedQuery(query) => Ok(VectorInputInternal::CkksEncryptedQuery(
+            CkksEncryptedQueryInput {
+                version: query.version.try_into().map_err(|_| {
+                    Status::invalid_argument("CKKS encrypted query version is too large")
+                })?,
+                scheme: query.scheme,
+                security_profile: query.security_profile,
+                context_digest: query.context_digest,
+                slots: query.slots.try_into().map_err(|_| {
+                    Status::invalid_argument("CKKS encrypted query slots is too large")
+                })?,
+                ciphertext: query.ciphertext,
+            },
+        )),
     }
 }
 
@@ -529,6 +544,34 @@ mod tests {
                 assert_eq!(values, vec![1.0, 2.0, 3.0]);
             }
             _ => panic!("Expected dense vector"),
+        }
+    }
+
+    #[test]
+    fn test_convert_vector_input_with_client_ckks_query() {
+        let inferred = create_test_inferred_batch();
+        let vector = grpc::VectorInput {
+            variant: Some(Variant::CkksEncryptedQuery(
+                grpc::CkksEncryptedQueryVector {
+                    version: 1,
+                    scheme: "openfhe-ckks".to_string(),
+                    security_profile: "ckks-128-n16384-d4-scale50".to_string(),
+                    context_digest: "digest".to_string(),
+                    slots: 2,
+                    ciphertext: "ciphertext".to_string(),
+                },
+            )),
+        };
+
+        let result = convert_vector_input_with_inferred(vector, &inferred).unwrap();
+        match result {
+            VectorInputInternal::CkksEncryptedQuery(query) => {
+                assert_eq!(query.version, 1);
+                assert_eq!(query.scheme, "openfhe-ckks");
+                assert_eq!(query.slots, 2);
+                assert_eq!(query.ciphertext, "ciphertext");
+            }
+            _ => panic!("Expected client CKKS encrypted query"),
         }
     }
 
