@@ -3195,6 +3195,65 @@ esac
                 Some("lookup-b")
             );
 
+            let query_groups_with_lookup = crate::common::query::do_query_point_groups(
+                &toc,
+                "vector_groups",
+                collection::operations::universal_query::collection_query::CollectionQueryGroupsRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    params: None,
+                    score_threshold: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                    group_by: "group_id".parse().unwrap(),
+                    group_size: 1,
+                    limit: 2,
+                    with_lookup: Some(api::rest::WithLookupInterface::Collection(
+                        "vector_group_lookup".to_string(),
+                    ).into()),
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(query_groups_with_lookup.groups.len(), 2);
+            assert_eq!(
+                query_groups_with_lookup.groups[0].id,
+                GroupId::from(1_u64)
+            );
+            assert_eq!(
+                query_groups_with_lookup.groups[0]
+                    .lookup
+                    .as_ref()
+                    .and_then(|lookup| lookup.payload.as_ref())
+                    .and_then(|payload| payload.0.get("label"))
+                    .and_then(Value::as_str),
+                Some("lookup-a")
+            );
+            assert_eq!(
+                query_groups_with_lookup.groups[1].id,
+                GroupId::from(2_u64)
+            );
+            assert_eq!(
+                query_groups_with_lookup.groups[1]
+                    .lookup
+                    .as_ref()
+                    .and_then(|lookup| lookup.payload.as_ref())
+                    .and_then(|payload| payload.0.get("label"))
+                    .and_then(Value::as_str),
+                Some("lookup-b")
+            );
+
             let query_groups = crate::common::query::do_query_point_groups(
                 &toc,
                 "vector_groups",
@@ -4175,6 +4234,66 @@ esac
             assert_eq!(recommend_groups.groups.len(), 2);
             assert_eq!(recommend_groups.groups[0].id, GroupId::from("a"));
             assert_eq!(recommend_groups.groups[1].id, GroupId::from("b"));
+
+            let recommend_groups_with_lookup = crate::common::query::do_recommend_point_groups(
+                &toc,
+                "vector_groups",
+                RecommendGroupsRequestInternal {
+                    positive: vec![RecommendExample::Dense(vec![0.0, 0.0])],
+                    negative: Vec::new(),
+                    strategy: Some(api::rest::RecommendStrategy::AverageVector),
+                    filter: None,
+                    params: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                    using: Some(DEFAULT_VECTOR_NAME.to_string().into()),
+                    lookup_from: None,
+                    group_request: BaseGroupRequest {
+                        group_by: "group_id".parse().unwrap(),
+                        group_size: 1,
+                        limit: 2,
+                        with_lookup: Some(api::rest::WithLookupInterface::Collection(
+                            "vector_group_lookup".to_string(),
+                        )),
+                    },
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(recommend_groups_with_lookup.groups.len(), 2);
+            assert_eq!(
+                recommend_groups_with_lookup.groups[0].id,
+                GroupId::from(1_u64)
+            );
+            assert_eq!(
+                recommend_groups_with_lookup.groups[0]
+                    .lookup
+                    .as_ref()
+                    .and_then(|lookup| lookup.payload.as_ref())
+                    .and_then(|payload| payload.0.get("label"))
+                    .and_then(Value::as_str),
+                Some("lookup-a")
+            );
+            assert_eq!(
+                recommend_groups_with_lookup.groups[1].id,
+                GroupId::from(2_u64)
+            );
+            assert_eq!(
+                recommend_groups_with_lookup.groups[1]
+                    .lookup
+                    .as_ref()
+                    .and_then(|lookup| lookup.payload.as_ref())
+                    .and_then(|payload| payload.0.get("label"))
+                    .and_then(Value::as_str),
+                Some("lookup-b")
+            );
 
             let point_id_recommend_groups = crate::common::query::do_recommend_point_groups(
                 &toc,
