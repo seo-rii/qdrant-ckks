@@ -5012,14 +5012,112 @@ async fn try_ckks_vector_query_groups(
     };
 
     let mut prefetches = request.prefetch.iter().collect::<Vec<_>>();
+    let mut has_encrypted_prefetch = false;
     while let Some(prefetch) = prefetches.pop() {
         if plan.contains_vector_name(&prefetch.using) {
-            return Err(StorageError::bad_input(format!(
-                "encrypted vector '{}' only supports root nearest-neighbor dense or point-id query groups; prefetch/fusion/MMR over CKKS ciphertext are not implemented",
-                prefetch.using,
-            )));
+            has_encrypted_prefetch = true;
         }
         prefetches.extend(prefetch.prefetch.iter());
+    }
+    if has_encrypted_prefetch {
+        let Some(Query::Fusion(fusion)) = &request.query else {
+            return Err(StorageError::bad_input(
+                "encrypted vector prefetch currently requires a root fusion query groups request",
+            ));
+        };
+        if request.with_vector.is_enabled() {
+            return Err(StorageError::bad_input(
+                "cannot return encrypted vectors from CKKS prefetch fusion groups; CKKS vector ciphertext read path returns payload sidecar only",
+            ));
+        }
+        ensure_group_path_does_not_touch_encrypted_vector_sidecar(&request.group_by)?;
+
+        let mut intermediates = Vec::with_capacity(request.prefetch.len());
+        for prefetch in &request.prefetch {
+            let prefetch_request = CollectionQueryRequest {
+                prefetch: prefetch.prefetch.clone(),
+                query: prefetch.query.clone(),
+                using: prefetch.using.clone(),
+                filter: prefetch.filter.clone(),
+                score_threshold: prefetch
+                    .score_threshold
+                    .as_ref()
+                    .map(|score| score.into_inner()),
+                limit: prefetch.limit,
+                offset: 0,
+                params: prefetch.params.clone(),
+                with_vector: WithVector::Bool(false),
+                with_payload: WithPayloadInterface::Bool(false),
+                lookup_from: prefetch.lookup_from.clone(),
+            };
+            intermediates.push(
+                Box::pin(do_query_points(
+                    toc,
+                    collection_name,
+                    prefetch_request,
+                    read_consistency,
+                    shard_selection.clone(),
+                    auth.clone(),
+                    timeout,
+                    hw_measurement_acc.clone(),
+                    Some(runtime_settings),
+                ))
+                .await?,
+            );
+        }
+
+        let mut fused = match fusion {
+            FusionInternal::Rrf { k, weights } => {
+                let weights_slice = weights
+                    .as_ref()
+                    .map(|weights| weights.iter().map(|w| w.into_inner()).collect::<Vec<_>>());
+                rrf_scoring(intermediates, *k, weights_slice.as_deref())
+                    .map_err(|err| StorageError::bad_input(err.to_string()))?
+            }
+            FusionInternal::Dbsf => score_fusion(intermediates, ScoreFusion::dbsf()),
+        };
+        if let Some(score_threshold) = request.score_threshold {
+            fused = fused
+                .into_iter()
+                .take_while(|point| point.score >= score_threshold)
+                .collect();
+        }
+        ckks_fill_scored_points_payload_or_vectors(
+            &collection,
+            &mut fused,
+            WithPayloadInterface::Bool(true),
+            WithVector::Bool(false),
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        let result = ckks_vector_group_scored_points(
+            &collection,
+            fused,
+            &request.group_by,
+            request.limit,
+            request.group_size,
+            request.with_payload.clone(),
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        return attach_ckks_group_lookup(
+            toc,
+            result,
+            request.with_lookup.clone(),
+            read_consistency,
+            shard_selection,
+            auth,
+            timeout,
+            hw_measurement_acc,
+        )
+        .await
+        .map(Some);
     }
     if !plan.contains_vector_name(&request.using) {
         return Ok(None);

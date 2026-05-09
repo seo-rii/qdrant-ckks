@@ -3291,6 +3291,67 @@ esac
             assert_eq!(query_groups.groups[1].id, GroupId::from("b"));
             assert_eq!(query_groups.groups[1].hits[0].id, 2.into());
 
+            let fusion_query_groups = crate::common::query::do_query_point_groups(
+                &toc,
+                "vector_groups",
+                collection::operations::universal_query::collection_query::CollectionQueryGroupsRequest {
+                    prefetch: vec![
+                        CollectionPrefetch {
+                            prefetch: Vec::new(),
+                            query: Some(Query::Vector(VectorQuery::Nearest(
+                                VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                            ))),
+                            using: DEFAULT_VECTOR_NAME.to_string(),
+                            filter: None,
+                            score_threshold: None,
+                            limit: 2,
+                            params: None,
+                            lookup_from: None,
+                        },
+                        CollectionPrefetch {
+                            prefetch: Vec::new(),
+                            query: Some(Query::Vector(VectorQuery::Nearest(
+                                VectorInputInternal::Vector(VectorInternal::Dense(vec![1.0, 0.0])),
+                            ))),
+                            using: "plain".to_string(),
+                            filter: None,
+                            score_threshold: None,
+                            limit: 1,
+                            params: None,
+                            lookup_from: None,
+                        },
+                    ],
+                    query: Some(Query::Fusion(FusionInternal::Rrf {
+                        k: 2,
+                        weights: None,
+                    })),
+                    using: String::new(),
+                    filter: None,
+                    params: None,
+                    score_threshold: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                    group_by: "group".parse().unwrap(),
+                    group_size: 1,
+                    limit: 2,
+                    with_lookup: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(fusion_query_groups.groups.len(), 2);
+            assert_eq!(fusion_query_groups.groups[0].id, GroupId::from("b"));
+            assert_eq!(fusion_query_groups.groups[0].hits[0].id, 2.into());
+            assert_eq!(fusion_query_groups.groups[1].id, GroupId::from("a"));
+            assert_eq!(fusion_query_groups.groups[1].hits[0].id, 1.into());
+
             let query_best_groups = crate::common::query::do_query_point_groups(
                 &toc,
                 "vector_groups",
