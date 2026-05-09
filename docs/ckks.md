@@ -468,10 +468,11 @@ When a material uses `source: vault_kv2`, `path` must be the full Vault KV v2
 data URL, `env` must name the environment variable that contains the Vault
 token, and `vault_field` must name the string field under `data.data` that
 contains the base64url-no-pad 32-byte material. The URL must use HTTPS; loopback
-HTTP is accepted only for tests/dev. Vault-backed material keeps the MK/RK out
-of config files, but the Vault token source, Vault policy, and Vault
-availability become part of the key-management TCB and must be identical across
-nodes that can write encrypted collections.
+HTTP is accepted only for tests/dev. Query strings and fragments are rejected so
+Vault tokens or field selectors are not accidentally placed in config URLs.
+Vault-backed material keeps the MK/RK out of config files, but the Vault token
+source, Vault policy, and Vault availability become part of the key-management
+TCB and must be identical across nodes that can write encrypted collections.
 When a material uses `source: fd`, the `fd` must reference an already-open Unix
 file descriptor containing the base64url-no-pad 32-byte material. Qdrant
 marks the descriptor close-on-exec during validation and duplicates it with

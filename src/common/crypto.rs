@@ -2267,6 +2267,13 @@ fn validate_material_vault_kv2_source(
             reason: "Vault KV v2 URL must include the secret data path".to_string(),
         });
     }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: url.to_string(),
+            reason: "Vault KV v2 URL must not include query or fragment components".to_string(),
+        });
+    }
     if token_env.is_empty()
         || token_env.len() > 128
         || !token_env
@@ -6099,6 +6106,37 @@ mod tests {
                 material: "tenant-a/payload-v1".to_string(),
             }),
         );
+    }
+
+    #[test]
+    fn validate_material_vault_kv2_source_rejects_query_and_fragment() {
+        let query_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("vault_kv2".to_string()),
+            env: Some("QDRANT_TEST_VAULT_TOKEN".to_string()),
+            path: Some("https://vault.example.com/v1/secret/data/docs?version=1".to_string()),
+            vault_field: Some("material".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        assert!(matches!(
+            validate_material("tenant-a/payload-v1", &query_material, false),
+            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("query or fragment")
+        ));
+
+        let fragment_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("vault_kv2".to_string()),
+            env: Some("QDRANT_TEST_VAULT_TOKEN".to_string()),
+            path: Some("https://vault.example.com/v1/secret/data/docs#material".to_string()),
+            vault_field: Some("material".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        assert!(matches!(
+            validate_material("tenant-a/payload-v1", &fragment_material, false),
+            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("query or fragment")
+        ));
     }
 
     #[test]
