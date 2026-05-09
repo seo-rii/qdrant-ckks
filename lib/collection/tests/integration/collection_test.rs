@@ -3123,28 +3123,32 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     collection.stop_gracefully().await;
 
     let sentinel = sentinel.as_bytes();
-    let mut pending = vec![collection_path];
-    while let Some(path) = pending.pop() {
-        let metadata = fs::metadata(&path).unwrap();
-        if metadata.is_dir() {
-            for entry in fs::read_dir(&path).unwrap() {
-                pending.push(entry.unwrap().path());
+    let assert_path_has_no_sentinel = |root: &std::path::Path| {
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(path) = pending.pop() {
+            let metadata = fs::metadata(&path).unwrap();
+            if metadata.is_dir() {
+                for entry in fs::read_dir(&path).unwrap() {
+                    pending.push(entry.unwrap().path());
+                }
+                continue;
             }
-            continue;
-        }
-        if !metadata.is_file() {
-            continue;
-        }
+            if !metadata.is_file() {
+                continue;
+            }
 
-        let bytes = fs::read(&path).unwrap();
-        assert!(
-            !bytes
-                .windows(sentinel.len())
-                .any(|window| window == sentinel),
-            "plaintext sentinel leaked into {}",
-            path.display(),
-        );
-    }
+            let bytes = fs::read(&path).unwrap();
+            assert!(
+                !bytes
+                    .windows(sentinel.len())
+                    .any(|window| window == sentinel),
+                "plaintext sentinel leaked into {}",
+                path.display(),
+            );
+        }
+    };
+    assert_path_has_no_sentinel(&collection_path);
+    assert_path_has_no_sentinel(snapshot_temp_dir.path());
 }
 
 #[tokio::test(flavor = "multi_thread")]
