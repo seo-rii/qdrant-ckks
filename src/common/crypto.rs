@@ -760,6 +760,63 @@ impl VectorWritePlan {
         Ok(Some(scores))
     }
 
+    pub fn score_client_encrypted_query_batch(
+        &self,
+        collection_name: &str,
+        vector_name: &str,
+        encrypted_items: &[(String, EncryptedCkksVector)],
+        context_digest: &str,
+        slots: usize,
+        encrypted_query: &[u8],
+    ) -> Result<Option<Vec<f32>>, StorageError> {
+        let Some(rule) = self
+            .rules
+            .iter()
+            .find(|rule| rule.vector_name == vector_name)
+        else {
+            return Ok(None);
+        };
+        let expected_digest = rule.encryptor.context_digest_for(&rule.public_material);
+        if context_digest != expected_digest {
+            return Err(StorageError::bad_input(format!(
+                "encrypted query context digest does not match active CKKS public material for vector '{vector_name}' in collection {collection_name}",
+            )));
+        }
+        let encrypted_items = encrypted_items
+            .iter()
+            .map(|(point_id, encrypted)| (point_id.as_str(), encrypted))
+            .collect::<Vec<_>>();
+        let scores = rule
+            .encryptor
+            .score_pre_encrypted_query_batch(
+                collection_name,
+                &rule.public_material,
+                encrypted_query,
+                slots,
+                &encrypted_items,
+                ckks_score_distance_name(rule.distance),
+            )
+            .map_err(|err| {
+                StorageError::service_error(format!(
+                    "CKKS vector client-encrypted-query batch scoring failed for vector '{vector_name}' in collection {collection_name}: {err}",
+                ))
+            })?;
+        let scores = scores
+            .into_iter()
+            .map(|score| {
+                let score = score as f32;
+                if !score.is_finite() {
+                    return Err(StorageError::service_error(format!(
+                        "CKKS vector client-encrypted-query batch scoring returned non-finite score for vector '{vector_name}' in collection {collection_name}",
+                    )));
+                }
+                Ok(score)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Some(scores))
+    }
+
     pub fn score_stored_query_batch(
         &self,
         collection_name: &str,

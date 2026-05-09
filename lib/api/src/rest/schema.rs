@@ -543,7 +543,26 @@ pub enum VectorInput {
     Id(segment::types::PointIdType),
     Document(Document),
     Image(Image),
+    CkksEncryptedQuery(CkksEncryptedQueryVector),
     Object(InferenceObject),
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct CkksEncryptedQueryVector {
+    #[serde(rename = "$qdrant_sec_ckks_query")]
+    pub envelope: CkksEncryptedQueryVectorEnvelope,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct CkksEncryptedQueryVectorEnvelope {
+    pub version: u8,
+    pub scheme: String,
+    pub security_profile: String,
+    pub context_digest: String,
+    pub slots: usize,
+    pub ciphertext: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Validate)]

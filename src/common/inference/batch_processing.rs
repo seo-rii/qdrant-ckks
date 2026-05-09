@@ -56,6 +56,7 @@ fn collect_vector_input(vector: &VectorInput, batch: &mut BatchAccum) {
         VectorInput::SparseVector(_) => {}
         VectorInput::MultiDenseVector(_) => {}
         VectorInput::Id(_) => {}
+        VectorInput::CkksEncryptedQuery(_) => {}
     }
 }
 

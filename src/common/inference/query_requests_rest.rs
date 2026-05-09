@@ -2,8 +2,9 @@ use api::rest::models::InferenceUsage;
 use api::rest::schema as rest;
 use collection::lookup::WithLookup;
 use collection::operations::universal_query::collection_query::{
-    CollectionPrefetch, CollectionQueryGroupsRequest, CollectionQueryRequest, FeedbackInternal,
-    FeedbackStrategy, Mmr, NearestWithMmr, Query, VectorInputInternal, VectorQuery,
+    CkksEncryptedQueryInput, CollectionPrefetch, CollectionQueryGroupsRequest,
+    CollectionQueryRequest, FeedbackInternal, FeedbackStrategy, Mmr, NearestWithMmr, Query,
+    VectorInputInternal, VectorQuery,
 };
 use collection::operations::universal_query::formula::FormulaInternal;
 use collection::operations::universal_query::shard_query::{FusionInternal, SampleInternal};
@@ -182,6 +183,16 @@ fn convert_vector_input_with_inferred(
                 vector.clone(),
             )))
         }
+        rest::VectorInput::CkksEncryptedQuery(query) => Ok(
+            VectorInputInternal::CkksEncryptedQuery(CkksEncryptedQueryInput {
+                version: query.envelope.version,
+                scheme: query.envelope.scheme,
+                security_profile: query.envelope.security_profile,
+                context_digest: query.envelope.context_digest,
+                slots: query.envelope.slots,
+                ciphertext: query.envelope.ciphertext,
+            }),
+        ),
         rest::VectorInput::Object(obj) => {
             let data = InferenceData::Object(obj);
             let vector = inferred.get_vector(&data).ok_or_else(|| {
@@ -357,7 +368,10 @@ fn context_pair_from_rest_with_inferred(
 mod tests {
     use std::collections::HashMap;
 
-    use api::rest::schema::{Document, Image, InferenceObject, NearestQuery};
+    use api::rest::schema::{
+        CkksEncryptedQueryVector, CkksEncryptedQueryVectorEnvelope, Document, Image,
+        InferenceObject, NearestQuery,
+    };
     use collection::operations::point_ops::VectorPersisted;
     use serde_json::json;
 
@@ -415,6 +429,32 @@ mod tests {
                 assert_eq!(values, vec![1.0, 2.0, 3.0]);
             }
             _ => panic!("Expected dense vector"),
+        }
+    }
+
+    #[test]
+    fn test_convert_vector_input_with_client_ckks_query() {
+        let inferred = create_test_inferred_batch();
+        let vector = rest::VectorInput::CkksEncryptedQuery(CkksEncryptedQueryVector {
+            envelope: CkksEncryptedQueryVectorEnvelope {
+                version: 1,
+                scheme: "openfhe-ckks".to_string(),
+                security_profile: "ckks-128-n16384-d4-scale50".to_string(),
+                context_digest: "digest".to_string(),
+                slots: 2,
+                ciphertext: "ciphertext".to_string(),
+            },
+        });
+
+        let result = convert_vector_input_with_inferred(vector, &inferred).unwrap();
+        match result {
+            VectorInputInternal::CkksEncryptedQuery(query) => {
+                assert_eq!(query.version, 1);
+                assert_eq!(query.scheme, "openfhe-ckks");
+                assert_eq!(query.slots, 2);
+                assert_eq!(query.ciphertext, "ciphertext");
+            }
+            _ => panic!("Expected client CKKS encrypted query"),
         }
     }
 

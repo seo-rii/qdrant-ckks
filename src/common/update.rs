@@ -2390,8 +2390,8 @@ mod tests {
         RecommendGroupsRequestInternal, RecommendRequestInternal,
     };
     use collection::operations::universal_query::collection_query::{
-        CollectionPrefetch, CollectionQueryGroupsRequest, CollectionQueryRequest, Mmr,
-        NearestWithMmr, Query, VectorInputInternal, VectorQuery,
+        CkksEncryptedQueryInput, CollectionPrefetch, CollectionQueryGroupsRequest,
+        CollectionQueryRequest, Mmr, NearestWithMmr, Query, VectorInputInternal, VectorQuery,
     };
     use collection::operations::universal_query::shard_query::FusionInternal;
     use collection::operations::vector_params_builder::VectorParamsBuilder;
@@ -2577,6 +2577,20 @@ esac
             )]),
         };
         settings
+    }
+
+    fn fake_ckks_client_query(ciphertext: &[u8], slots: usize) -> CkksEncryptedQueryInput {
+        let public_material =
+            qdrant_sec::CkksPublicMaterial::new(b"openfhe context", b"openfhe public key").unwrap();
+        CkksEncryptedQueryInput {
+            version: 1,
+            scheme: qdrant_sec::CKKS_SCHEME.to_string(),
+            security_profile: qdrant_sec::CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50.to_string(),
+            context_digest: public_material
+                .digest_for(&qdrant_sec::CkksParameters::openfhe_default_128_bit()),
+            slots,
+            ciphertext: BASE64URL_NOPAD.encode(ciphertext),
+        }
     }
 
     fn encrypted_vector_params() -> CollectionParams {
@@ -6086,6 +6100,114 @@ esac
             assert_eq!(query_result.len(), 1);
             assert_eq!(query_result[0].id, 1.into());
             assert_eq!(query_result[0].score, 9.0);
+
+            let client_encrypted_query = crate::common::query::do_query_points(
+                &toc,
+                "vector_docs",
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::CkksEncryptedQuery(fake_ckks_client_query(
+                            b"fake-ckks-query:2",
+                            2,
+                        )),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(client_encrypted_query.len(), 1);
+            assert_eq!(client_encrypted_query[0].id, 1.into());
+            assert_eq!(client_encrypted_query[0].score, 9.0);
+
+            let client_encrypted_query_groups = crate::common::query::do_query_point_groups(
+                &toc,
+                "vector_docs",
+                CollectionQueryGroupsRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::CkksEncryptedQuery(fake_ckks_client_query(
+                            b"fake-ckks-query:2",
+                            2,
+                        )),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    params: None,
+                    score_threshold: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                    group_by: "group".parse().unwrap(),
+                    group_size: 1,
+                    limit: 1,
+                    with_lookup: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(client_encrypted_query_groups.groups.len(), 1);
+            assert_eq!(
+                client_encrypted_query_groups.groups[0].hits[0].id,
+                1.into()
+            );
+            assert_eq!(client_encrypted_query_groups.groups[0].hits[0].score, 9.0);
+
+            let mut wrong_context_query = fake_ckks_client_query(b"fake-ckks-query:2", 2);
+            wrong_context_query.context_digest = BASE64URL_NOPAD.encode(&[9u8; 32]);
+            let err = crate::common::query::do_query_points(
+                &toc,
+                "vector_docs",
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::CkksEncryptedQuery(wrong_context_query),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("encrypted query context digest does not match")
+            ));
 
             let query_with_payload = crate::common::query::do_query_points(
                 &toc,

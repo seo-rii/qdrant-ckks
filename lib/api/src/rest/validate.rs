@@ -5,9 +5,9 @@ use segment::index::query_optimization::rescore_formula::parsed_formula::Variabl
 use validator::{Validate, ValidationError, ValidationErrors};
 
 use super::{
-    Batch, BatchVectorStruct, ContextInput, Expression, FormulaQuery, Fusion, NamedVectorStruct,
-    PointVectors, Query, QueryInterface, RecommendInput, RelevanceFeedbackInput, Sample,
-    VectorInput,
+    Batch, BatchVectorStruct, CkksEncryptedQueryVector, ContextInput, Expression, FormulaQuery,
+    Fusion, NamedVectorStruct, PointVectors, Query, QueryInterface, RecommendInput,
+    RelevanceFeedbackInput, Sample, VectorInput,
 };
 use crate::rest::FeedbackStrategy;
 
@@ -56,7 +56,35 @@ impl Validate for VectorInput {
             VectorInput::MultiDenseVector(multi) => validate_multi_vector(multi),
             VectorInput::Document(doc) => doc.validate(),
             VectorInput::Image(image) => image.validate(),
+            VectorInput::CkksEncryptedQuery(query) => query.validate(),
             VectorInput::Object(obj) => obj.validate(),
+        }
+    }
+}
+
+impl Validate for CkksEncryptedQueryVector {
+    fn validate(&self) -> Result<(), validator::ValidationErrors> {
+        let mut errors = ValidationErrors::new();
+        if self.envelope.version != 1 {
+            errors.add("version", ValidationError::new("must be 1"));
+        }
+        if self.envelope.slots == 0 {
+            errors.add("slots", ValidationError::new("must be greater than 0"));
+        }
+        for (field, value) in [
+            ("scheme", self.envelope.scheme.as_str()),
+            ("security_profile", self.envelope.security_profile.as_str()),
+            ("context_digest", self.envelope.context_digest.as_str()),
+            ("ciphertext", self.envelope.ciphertext.as_str()),
+        ] {
+            if value.is_empty() {
+                errors.add(field, ValidationError::new("must not be empty"));
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
         }
     }
 }

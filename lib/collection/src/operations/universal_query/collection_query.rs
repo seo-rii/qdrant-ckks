@@ -147,13 +147,24 @@ impl Query {
 pub enum VectorInputInternal {
     Id(PointIdType),
     Vector(VectorInternal),
+    CkksEncryptedQuery(CkksEncryptedQueryInput),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CkksEncryptedQueryInput {
+    pub version: u8,
+    pub scheme: String,
+    pub security_profile: String,
+    pub context_digest: String,
+    pub slots: usize,
+    pub ciphertext: String,
 }
 
 impl VectorInputInternal {
     pub fn as_id(&self) -> Option<&PointIdType> {
         match self {
             VectorInputInternal::Id(id) => Some(id),
-            VectorInputInternal::Vector(_) => None,
+            VectorInputInternal::Vector(_) | VectorInputInternal::CkksEncryptedQuery(_) => None,
         }
     }
 }

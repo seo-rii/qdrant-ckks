@@ -136,6 +136,9 @@ impl Generalizer for VectorInputInternal {
                 VectorInputInternal::Vector(vector.remove_details())
             }
             VectorInputInternal::Id(id) => VectorInputInternal::Id(*id),
+            VectorInputInternal::CkksEncryptedQuery(query) => {
+                VectorInputInternal::CkksEncryptedQuery(query.clone())
+            }
         }
     }
 }

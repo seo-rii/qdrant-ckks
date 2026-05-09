@@ -22,7 +22,8 @@ use common::counter::hardware_accumulator::HwMeasurementAcc;
 use common::math::scaled_fast_sigmoid;
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
-    ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD, EncryptedCkksVector,
+    CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_SCHEME, ENCRYPTED_CKKS_VECTOR_MARKER,
+    ENCRYPTED_VECTOR_SIDECAR_FIELD, EncryptedCkksVector,
 };
 use segment::common::reciprocal_rank_fusion::rrf_scoring;
 use segment::common::score_fusion::{ScoreFusion, score_fusion};
@@ -61,6 +62,9 @@ struct CkksSidecarSearchRecord {
 enum CkksSidecarScoring<'a> {
     Nearest {
         query_values: &'a [f32],
+    },
+    NearestResolved {
+        query: CkksSidecarQuerySource<'a>,
     },
     StoredNearest {
         query_point_id: String,
@@ -109,6 +113,11 @@ enum CkksSidecarScoring<'a> {
 
 enum CkksSidecarQuerySource<'a> {
     Dense(&'a [f32]),
+    ClientEncrypted {
+        context_digest: &'a str,
+        slots: usize,
+        ciphertext: Vec<u8>,
+    },
     Stored {
         point_id: String,
         encrypted: EncryptedCkksVector,
@@ -559,9 +568,9 @@ async fn ckks_vector_search_points_with_scoring(
         ))
     })?;
     let score_order = match &scoring {
-        CkksSidecarScoring::Nearest { .. } | CkksSidecarScoring::StoredNearest { .. } => {
-            distance.distance_order()
-        }
+        CkksSidecarScoring::Nearest { .. }
+        | CkksSidecarScoring::NearestResolved { .. }
+        | CkksSidecarScoring::StoredNearest { .. } => distance.distance_order(),
         CkksSidecarScoring::NearestMmr { .. } => {
             if distance.distance_order() != Order::LargeBetter {
                 return Err(StorageError::bad_input(format!(
@@ -757,6 +766,15 @@ async fn ckks_vector_search_points_with_scoring(
                             "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
                         ))
                     })?,
+                CkksSidecarScoring::NearestResolved { query } => {
+                    ckks_score_query_source_batch(
+                        collection_name,
+                        vector_name,
+                        plan,
+                        query,
+                        &encrypted_items,
+                    )?
+                }
                 CkksSidecarScoring::StoredNearest {
                     query_point_id,
                     query_encrypted,
@@ -1553,6 +1571,18 @@ fn ckks_score_query_source_batch(
             encrypted_items,
             query_values,
         )?,
+        CkksSidecarQuerySource::ClientEncrypted {
+            context_digest,
+            slots,
+            ciphertext,
+        } => plan.score_client_encrypted_query_batch(
+            collection_name,
+            vector_name,
+            encrypted_items,
+            context_digest,
+            *slots,
+            ciphertext,
+        )?,
         CkksSidecarQuerySource::Stored {
             point_id,
             encrypted,
@@ -1569,6 +1599,62 @@ fn ckks_score_query_source_batch(
         StorageError::service_error(format!(
             "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
         ))
+    })
+}
+
+fn ckks_client_encrypted_query_source<'a>(
+    vector_name: &str,
+    input: &'a CkksEncryptedQueryInput,
+) -> Result<CkksSidecarQuerySource<'a>, StorageError> {
+    if input.version != 1 {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query version must be 1",
+        )));
+    }
+    if input.scheme != CKKS_SCHEME {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query scheme must be {CKKS_SCHEME}",
+        )));
+    }
+    if input.security_profile != CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50 {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query profile must be {CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50}",
+        )));
+    }
+    if input.slots == 0 {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query slots must be greater than 0",
+        )));
+    }
+    let context_digest = BASE64URL_NOPAD
+        .decode(input.context_digest.as_bytes())
+        .map_err(|err| {
+            StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' client CKKS query context digest is not base64url: {err}",
+            ))
+        })?;
+    if context_digest.len() != 32 {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query context digest must decode to 32 bytes",
+        )));
+    }
+    let ciphertext = BASE64URL_NOPAD
+        .decode(input.ciphertext.as_bytes())
+        .map_err(|err| {
+            StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' client CKKS query ciphertext is not base64url: {err}",
+            ))
+        })?;
+    if ciphertext.is_empty() {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query ciphertext must not be empty",
+        )));
+    }
+
+    Ok(CkksSidecarQuerySource::ClientEncrypted {
+        context_digest: &input.context_digest,
+        slots: input.slots,
+        ciphertext,
     })
 }
 
@@ -4133,6 +4219,9 @@ async fn ckks_vector_input_as_query_source<'a>(
         VectorInputInternal::Vector(_) => Err(StorageError::bad_input(format!(
             "encrypted vector '{vector_name}' context query only supports raw dense or point-id {role} examples",
         ))),
+        VectorInputInternal::CkksEncryptedQuery(input) => {
+            ckks_client_encrypted_query_source(vector_name, input)
+        }
         VectorInputInternal::Id(point_id) => {
             let encrypted = ckks_vector_sidecar_for_point_id(
                 collection,
@@ -4588,6 +4677,23 @@ pub async fn do_query_batch_points(
                     )));
                 }
                 let resolved_request = match &request.query {
+                    Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::CkksEncryptedQuery(input),
+                    ))) => {
+                        let query = ckks_client_encrypted_query_source(&request.using, input)?;
+                        CkksResolvedQueryRequest::Scoring {
+                            vector_name: request.using.clone(),
+                            scoring: CkksSidecarScoring::NearestResolved { query },
+                            filter: effective_filter.clone(),
+                            params: request.params.clone(),
+                            limit: request.limit,
+                            offset: request.offset,
+                            with_payload: request.with_payload.clone(),
+                            with_vector: request.with_vector.clone(),
+                            score_threshold: request.score_threshold,
+                            shard_selection: shard_selection.clone(),
+                        }
+                    }
                     Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::Id(
                         point_id,
                     )))) => {
@@ -5506,6 +5612,45 @@ async fn try_ckks_vector_query_groups(
         .map(Some);
     }
 
+    if let Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::CkksEncryptedQuery(
+        input,
+    )))) = &request.query
+    {
+        let query = ckks_client_encrypted_query_source(&request.using, input)?;
+        let result = ckks_vector_group_points_with_scoring(
+            &collection,
+            collection_name,
+            &collection_crypto_id,
+            &request.using,
+            CkksSidecarScoring::NearestResolved { query },
+            effective_filter.clone(),
+            request.params.clone(),
+            request.score_threshold,
+            &plan,
+            &request.group_by,
+            request.limit,
+            request.group_size,
+            request.with_payload.clone(),
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        return attach_ckks_group_lookup(
+            toc,
+            result,
+            request.with_lookup.clone(),
+            read_consistency,
+            shard_selection,
+            auth,
+            timeout,
+            hw_measurement_acc,
+        )
+        .await
+        .map(Some);
+    }
+
     if let Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::Id(point_id)))) =
         &request.query
     {
@@ -5695,6 +5840,11 @@ fn ckks_query_as_core_query(
                 "encrypted vector '{vector_name}' query cannot resolve point-id query vectors because plaintext vectors are not stored",
             )))
         }
+        Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::CkksEncryptedQuery(_)))) => {
+            Err(StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' client CKKS query requires CKKS sidecar scoring",
+            )))
+        }
         Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::Vector(_)))) => {
             Err(StorageError::bad_input(format!(
                 "encrypted vector '{vector_name}' only supports dense query vectors",
@@ -5741,6 +5891,9 @@ fn vector_inputs_as_dense_vectors(
             ))),
             VectorInputInternal::Id(_) => Err(StorageError::bad_input(format!(
                 "encrypted vector '{vector_name}' query cannot resolve point-id {role} examples because plaintext vectors are not stored",
+            ))),
+            VectorInputInternal::CkksEncryptedQuery(_) => Err(StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' query does not support client CKKS encrypted {role} examples in recommend/discover/context inputs",
             ))),
         })
         .collect()
