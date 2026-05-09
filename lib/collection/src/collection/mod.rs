@@ -67,6 +67,9 @@ use crate::telemetry::CollectionsAggregatedTelemetry;
 const CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_CAPACITY: usize = 1_000_000;
 const CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE: &str = "client_payload_nonce_replay.cache";
 const CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_ENTRY_MAX_BYTES: usize = 512;
+const CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_MAX_BYTES: u64 = CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_CAPACITY
+    as u64
+    * (CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_ENTRY_MAX_BYTES as u64 + 1);
 
 /// Collection's data is split into several shards.
 pub struct Collection {
@@ -144,6 +147,11 @@ impl ClientPayloadNonceReplayCache {
                             "client payload nonce replay cache {cache_path:?} must not be group/world accessible",
                         )));
                     }
+                    if metadata.len() > CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_MAX_BYTES {
+                        return Err(CollectionError::service_error(format!(
+                            "client payload nonce replay cache {cache_path:?} exceeds maximum size",
+                        )));
+                    }
                     file
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -166,6 +174,19 @@ impl ClientPayloadNonceReplayCache {
                 )));
             }
         };
+        #[cfg(not(unix))]
+        {
+            let metadata = file.metadata().map_err(|err| {
+                CollectionError::service_error(format!(
+                    "failed to inspect client payload nonce replay cache {cache_path:?}: {err}",
+                ))
+            })?;
+            if metadata.len() > CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_MAX_BYTES {
+                return Err(CollectionError::service_error(format!(
+                    "client payload nonce replay cache {cache_path:?} exceeds maximum size",
+                )));
+            }
+        }
 
         let mut cache = Self::default();
         for line in BufReader::new(file).lines() {
@@ -1382,6 +1403,26 @@ mod tests {
 
         let err = ClientPayloadNonceReplayCache::load(dir.path()).unwrap_err();
         assert!(format!("{err:?}").contains("oversized entry"));
+    }
+
+    #[test]
+    fn client_payload_nonce_replay_cache_rejects_oversized_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_path = dir.path().join(CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE);
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).write(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            options.mode(0o600);
+        }
+        let file = options.open(&cache_path).unwrap();
+        file.set_len(CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_MAX_BYTES + 1)
+            .unwrap();
+
+        let err = ClientPayloadNonceReplayCache::load(dir.path()).unwrap_err();
+        assert!(format!("{err:?}").contains("exceeds maximum size"));
     }
 
     #[test]
