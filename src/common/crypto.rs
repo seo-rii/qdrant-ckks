@@ -1997,6 +1997,16 @@ fn validate_material(
                 && material.fd.is_none()
                 && material.value_b64.is_none() =>
         {
+            validate_material_file_source(material_name, material.path.as_deref().unwrap())?;
+            Ok(())
+        }
+        Some("unix_socket")
+            if material.path.is_some()
+                && material.env.is_none()
+                && material.fd.is_none()
+                && material.value_b64.is_none() =>
+        {
+            validate_material_unix_socket_source(material_name, material.path.as_deref().unwrap())?;
             Ok(())
         }
         Some("fd")
@@ -2022,18 +2032,16 @@ fn validate_material(
                 })
             }
         }
-        Some("env" | "file" | "fd" | "inline") => Err(CryptoSetupError::MaterialSourceMismatch {
-            material: material_name.to_string(),
-        }),
+        Some("env" | "file" | "unix_socket" | "fd" | "inline") => {
+            Err(CryptoSetupError::MaterialSourceMismatch {
+                material: material_name.to_string(),
+            })
+        }
         Some(source) => Err(CryptoSetupError::UnsupportedMaterialSource {
             material: material_name.to_string(),
             material_source: source.to_string(),
         }),
     }?;
-
-    if let Some(path) = material.path.as_deref() {
-        validate_material_file_source(material_name, path)?;
-    }
 
     Ok(())
 }
@@ -2111,12 +2119,7 @@ fn validate_material_file_source(material_name: &str, path: &str) -> Result<(), 
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
-        unsafe extern "C" {
-            fn geteuid() -> u32;
-        }
-
-        let effective_uid = unsafe { geteuid() };
-
+        let effective_uid = qdrant_effective_uid();
         let owner = link_metadata.uid();
         if owner != 0 && owner != effective_uid {
             return Err(CryptoSetupError::InvalidMaterialFileSource {
@@ -2134,51 +2137,139 @@ fn validate_material_file_source(material_name: &str, path: &str) -> Result<(), 
             });
         }
 
-        let mut parent = material_path.parent();
-        while let Some(directory) = parent {
-            let directory_metadata = fs::symlink_metadata(directory).map_err(|err| {
-                CryptoSetupError::InvalidMaterialFileSource {
-                    material: material_name.to_string(),
-                    path: path.to_string(),
-                    reason: format!(
-                        "failed to inspect parent directory {}: {err}",
-                        directory.display()
-                    ),
-                }
-            })?;
-            if directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir() {
-                return Err(CryptoSetupError::InvalidMaterialFileSource {
-                    material: material_name.to_string(),
-                    path: path.to_string(),
-                    reason: format!(
-                        "parent path must be a regular directory: {}",
-                        directory.display()
-                    ),
-                });
-            }
-            if directory_metadata.permissions().mode() & 0o022 != 0 {
-                return Err(CryptoSetupError::InvalidMaterialFileSource {
-                    material: material_name.to_string(),
-                    path: path.to_string(),
-                    reason: format!(
-                        "parent directory must not be group/world-writable: {}",
-                        directory.display()
-                    ),
-                });
-            }
-            let owner = directory_metadata.uid();
-            if owner != 0 && owner != effective_uid {
-                return Err(CryptoSetupError::InvalidMaterialFileSource {
-                    material: material_name.to_string(),
-                    path: path.to_string(),
-                    reason: format!(
-                        "parent directory must be owned by root or the qdrant process user: {}",
-                        directory.display()
-                    ),
-                });
-            }
-            parent = directory.parent();
+        validate_material_parent_directories(material_name, material_path, path, effective_uid)?;
+    }
+
+    Ok(())
+}
+
+fn validate_material_unix_socket_source(
+    material_name: &str,
+    path: &str,
+) -> Result<(), CryptoSetupError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+
+        let material_path = Path::new(path);
+        if !material_path.is_absolute() {
+            return Err(CryptoSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: path.to_string(),
+                reason: "path must be absolute".to_string(),
+            });
         }
+
+        let link_metadata = fs::symlink_metadata(material_path).map_err(|err| {
+            CryptoSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: path.to_string(),
+                reason: format!("failed to inspect Unix socket: {err}"),
+            }
+        })?;
+        let file_type = link_metadata.file_type();
+        if file_type.is_symlink() || !file_type.is_socket() {
+            return Err(CryptoSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: path.to_string(),
+                reason: "must be a regular non-symlink Unix socket".to_string(),
+            });
+        }
+
+        let effective_uid = qdrant_effective_uid();
+        let owner = link_metadata.uid();
+        if owner != 0 && owner != effective_uid {
+            return Err(CryptoSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: path.to_string(),
+                reason: "must be owned by root or the qdrant process user".to_string(),
+            });
+        }
+
+        if link_metadata.permissions().mode() & 0o077 != 0 {
+            return Err(CryptoSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: path.to_string(),
+                reason: "must not be group/world accessible".to_string(),
+            });
+        }
+
+        validate_material_parent_directories(material_name, material_path, path, effective_uid)?;
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    {
+        Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: path.to_string(),
+            reason: "unix_socket source is only supported on Unix".to_string(),
+        })
+    }
+}
+
+#[cfg(unix)]
+fn qdrant_effective_uid() -> u32 {
+    unsafe extern "C" {
+        fn geteuid() -> u32;
+    }
+
+    unsafe { geteuid() }
+}
+
+#[cfg(unix)]
+fn validate_material_parent_directories(
+    material_name: &str,
+    material_path: &Path,
+    path: &str,
+    effective_uid: u32,
+) -> Result<(), CryptoSetupError> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let mut parent = material_path.parent();
+    while let Some(directory) = parent {
+        let directory_metadata = fs::symlink_metadata(directory).map_err(|err| {
+            CryptoSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: path.to_string(),
+                reason: format!(
+                    "failed to inspect parent directory {}: {err}",
+                    directory.display()
+                ),
+            }
+        })?;
+        if directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir() {
+            return Err(CryptoSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: path.to_string(),
+                reason: format!(
+                    "parent path must be a regular directory: {}",
+                    directory.display()
+                ),
+            });
+        }
+        if directory_metadata.permissions().mode() & 0o022 != 0 {
+            return Err(CryptoSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: path.to_string(),
+                reason: format!(
+                    "parent directory must not be group/world-writable: {}",
+                    directory.display()
+                ),
+            });
+        }
+        let owner = directory_metadata.uid();
+        if owner != 0 && owner != effective_uid {
+            return Err(CryptoSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: path.to_string(),
+                reason: format!(
+                    "parent directory must be owned by root or the qdrant process user: {}",
+                    directory.display()
+                ),
+            });
+        }
+        parent = directory.parent();
     }
 
     Ok(())
@@ -3680,6 +3771,14 @@ fn decode_direct_material_key(
             })?;
             read_material_file_to_string(material_name, path)?
         }
+        Some("unix_socket") => {
+            let path = material.path.as_deref().ok_or_else(|| {
+                PayloadWriteSetupError::MissingMaterialPath {
+                    material: material_name.to_string(),
+                }
+            })?;
+            read_material_unix_socket_to_string(material_name, path)?
+        }
         Some("fd") => {
             let fd = material
                 .fd
@@ -3770,6 +3869,64 @@ fn read_material_fd_to_string(
             material: material_name.to_string(),
             path: format!("fd:{fd}"),
             reason: "fd source is only supported on Unix".to_string(),
+        })
+    }
+}
+
+fn read_material_unix_socket_to_string(
+    material_name: &str,
+    path: &str,
+) -> Result<String, PayloadWriteSetupError> {
+    validate_material_unix_socket_source(material_name, path).map_err(|err| match err {
+        CryptoSetupError::InvalidMaterialFileSource {
+            material,
+            path,
+            reason,
+        } => PayloadWriteSetupError::InvalidMaterialFileSource {
+            material,
+            path,
+            reason,
+        },
+        err => PayloadWriteSetupError::UnreadableMaterialFile {
+            material: material_name.to_string(),
+            path: format!("{path}: {err}"),
+        },
+    })?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::net::UnixStream;
+
+        let mut stream = UnixStream::connect(path).map_err(|_| {
+            PayloadWriteSetupError::UnreadableMaterialFile {
+                material: material_name.to_string(),
+                path: path.to_string(),
+            }
+        })?;
+        let timeout = Some(Duration::from_secs(5));
+        stream.set_read_timeout(timeout).map_err(|_| {
+            PayloadWriteSetupError::UnreadableMaterialFile {
+                material: material_name.to_string(),
+                path: path.to_string(),
+            }
+        })?;
+
+        let mut encoded = String::new();
+        stream.read_to_string(&mut encoded).map_err(|_| {
+            PayloadWriteSetupError::UnreadableMaterialFile {
+                material: material_name.to_string(),
+                path: path.to_string(),
+            }
+        })?;
+        Ok(encoded)
+    }
+
+    #[cfg(not(unix))]
+    {
+        Err(PayloadWriteSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: path.to_string(),
+            reason: "unix_socket source is only supported on Unix".to_string(),
         })
     }
 }
@@ -5545,6 +5702,130 @@ mod tests {
             3,
         )
         .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn decode_direct_material_key_reads_unix_socket_source() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::net::UnixListener;
+
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-material-socket-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let mut dir_permissions = std::fs::metadata(dir.path()).unwrap().permissions();
+        dir_permissions.set_mode(0o700);
+        std::fs::set_permissions(dir.path(), dir_permissions).unwrap();
+
+        let socket_path = dir.path().join("payload.key.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let mut socket_permissions = std::fs::symlink_metadata(&socket_path)
+            .unwrap()
+            .permissions();
+        socket_permissions.set_mode(0o600);
+        std::fs::set_permissions(&socket_path, socket_permissions).unwrap();
+
+        let encoded = BASE64URL_NOPAD.encode(&[17u8; 32]);
+        let writer = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.write_all(encoded.as_bytes()).unwrap();
+        });
+
+        let socket_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("unix_socket".to_string()),
+            path: Some(socket_path.to_string_lossy().to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        assert_eq!(
+            validate_material("tenant-a/payload-v1", &socket_material, false),
+            Ok(())
+        );
+        let decoded = decode_direct_material_key("tenant-a/payload-v1", &socket_material).unwrap();
+        writer.join().unwrap();
+
+        let encryptor = PayloadTextEncryptor::new_from_resource_key_with_metadata(
+            "docs-crypto-id",
+            "tenant-a:payload",
+            &decoded,
+            "tenant-a/payload@v1",
+            "tenant-a/payload-rk",
+            3,
+        )
+        .unwrap();
+        let policy = PayloadEncryptionPolicy::new(vec!["body".to_string()]).unwrap();
+        let mut payload = json!({ "body": "socket-backed secret" })
+            .as_object()
+            .unwrap()
+            .clone();
+        encryptor
+            .encrypt_selected_fields("1", &mut payload, &policy)
+            .unwrap();
+        encryptor
+            .decrypt_selected_fields("1", &mut payload, &policy)
+            .unwrap();
+        assert_eq!(
+            payload.get("body").and_then(Value::as_str),
+            Some("socket-backed secret"),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_material_unix_socket_source_rejects_relative_path() {
+        let socket_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("unix_socket".to_string()),
+            path: Some("payload.key.sock".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        assert!(matches!(
+            validate_material("tenant-a/payload-v1", &socket_material, false),
+            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("absolute")
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_material_unix_socket_source_rejects_symlink() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        use std::os::unix::net::UnixListener;
+
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-material-socket-symlink-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let mut dir_permissions = std::fs::metadata(dir.path()).unwrap().permissions();
+        dir_permissions.set_mode(0o700);
+        std::fs::set_permissions(dir.path(), dir_permissions).unwrap();
+
+        let socket_path = dir.path().join("payload.key.sock.target");
+        let symlink_path = dir.path().join("payload.key.sock");
+        let _listener = UnixListener::bind(&socket_path).unwrap();
+        let mut socket_permissions = std::fs::symlink_metadata(&socket_path)
+            .unwrap()
+            .permissions();
+        socket_permissions.set_mode(0o600);
+        std::fs::set_permissions(&socket_path, socket_permissions).unwrap();
+        symlink(&socket_path, &symlink_path).unwrap();
+
+        let socket_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("unix_socket".to_string()),
+            path: Some(symlink_path.to_string_lossy().to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        assert!(matches!(
+            validate_material("tenant-a/payload-v1", &socket_material, false),
+            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("non-symlink Unix socket")
+        ));
     }
 
     #[cfg(unix)]

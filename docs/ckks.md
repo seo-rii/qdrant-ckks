@@ -448,13 +448,22 @@ crypto:
 ```
 
 Direct MK/RK materials must set `source` explicitly; qdrant-sec does not infer
-`env`, `file`, `fd`, or `inline` from whichever field happens to be present.
+`env`, `file`, `unix_socket`, `fd`, or `inline` from whichever field happens to
+be present.
 When a material uses `source: file`, the path must be absolute and point to a
 regular non-symlink file. On Unix, qdrant-sec rejects group/world-accessible key
 files and rejects group/world-writable parent directories. The file and each
 parent directory must be owned by root or the qdrant process user so file-backed
 MK/RK material is not accidentally exposed or swapped through broad filesystem
 permissions.
+When a material uses `source: unix_socket`, the same `path` field must point to
+an absolute, non-symlink Unix domain socket. On Unix, qdrant-sec rejects sockets
+that are group/world-accessible and applies the same parent-directory
+owner/mode checks as file-backed material. At startup/material-load time Qdrant
+connects to the socket, reads a base64url-no-pad 32-byte material, and closes
+the connection. This keeps the raw MK/RK out of config and persistent key files,
+but the local socket service becomes part of the key-management TCB and must
+preserve cluster runtime parity.
 When a material uses `source: fd`, the `fd` must reference an already-open Unix
 file descriptor containing the base64url-no-pad 32-byte material. Qdrant
 marks the descriptor close-on-exec during validation and duplicates it with
