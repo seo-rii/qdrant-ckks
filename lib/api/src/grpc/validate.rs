@@ -598,8 +598,9 @@ mod tests {
 
     use crate::grpc::qdrant::{
         CkksEncryptedQueryVector, CreateCollection, CreateFieldIndexCollection, GeoLineString,
-        GeoPoint, GeoPolygon, SearchBatchPoints, SearchPointGroups, SearchPoints, UpdateCollection,
-        VectorInput, vector_input,
+        GeoPoint, GeoPolygon, Query, QueryBatchPoints, QueryPointGroups, QueryPoints,
+        SearchBatchPoints, SearchPointGroups, SearchPoints, UpdateCollection, VectorInput, query,
+        vector_input,
     };
 
     #[test]
@@ -898,6 +899,72 @@ mod tests {
         assert!(
             bad_request.validate().is_err(),
             "grouped CKKS encrypted query should validate nested envelopes"
+        );
+    }
+
+    #[test]
+    fn test_ckks_encrypted_query_universal_query_validation() {
+        let good_request = QueryPoints {
+            collection_name: "docs".to_string(),
+            limit: Some(1),
+            query: Some(Query {
+                variant: Some(query::Variant::Nearest(VectorInput {
+                    variant: Some(vector_input::Variant::CkksEncryptedQuery(
+                        valid_ckks_encrypted_query(),
+                    )),
+                })),
+            }),
+            ..Default::default()
+        };
+        assert!(
+            good_request.validate().is_ok(),
+            "valid gRPC universal CKKS encrypted query should pass validation"
+        );
+
+        let bad_batch = QueryBatchPoints {
+            collection_name: "docs".to_string(),
+            query_points: vec![QueryPoints {
+                collection_name: "docs".to_string(),
+                limit: Some(1),
+                query: Some(Query {
+                    variant: Some(query::Variant::Nearest(VectorInput {
+                        variant: Some(vector_input::Variant::CkksEncryptedQuery(
+                            CkksEncryptedQueryVector {
+                                ciphertext: "not base64url!".to_string(),
+                                ..valid_ckks_encrypted_query()
+                            },
+                        )),
+                    })),
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(
+            bad_batch.validate().is_err(),
+            "gRPC universal query batch should validate nested CKKS encrypted query envelopes"
+        );
+
+        let bad_group_request = QueryPointGroups {
+            collection_name: "docs".to_string(),
+            limit: Some(1),
+            group_by: "tenant".to_string(),
+            group_size: Some(1),
+            query: Some(Query {
+                variant: Some(query::Variant::Nearest(VectorInput {
+                    variant: Some(vector_input::Variant::CkksEncryptedQuery(
+                        CkksEncryptedQueryVector {
+                            context_digest: "not base64url!".to_string(),
+                            ..valid_ckks_encrypted_query()
+                        },
+                    )),
+                })),
+            }),
+            ..Default::default()
+        };
+        assert!(
+            bad_group_request.validate().is_err(),
+            "gRPC universal query groups should validate nested CKKS encrypted query envelopes"
         );
     }
 
