@@ -3352,6 +3352,45 @@ esac
             assert_eq!(fusion_query_groups.groups[1].id, GroupId::from("a"));
             assert_eq!(fusion_query_groups.groups[1].hits[0].id, 1.into());
 
+            let mmr_query_groups = crate::common::query::do_query_point_groups(
+                &toc,
+                "vector_groups",
+                collection::operations::universal_query::collection_query::CollectionQueryGroupsRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::NearestWithMmr(NearestWithMmr {
+                        nearest: VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                        mmr: Mmr {
+                            diversity: Some(0.5),
+                            candidates_limit: Some(2),
+                        },
+                    }))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    params: None,
+                    score_threshold: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                    group_by: "group".parse().unwrap(),
+                    group_size: 1,
+                    limit: 2,
+                    with_lookup: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(mmr_query_groups.groups.len(), 2);
+            assert_eq!(mmr_query_groups.groups[0].id, GroupId::from("a"));
+            assert_eq!(mmr_query_groups.groups[0].hits[0].score, 9.0);
+            assert_eq!(mmr_query_groups.groups[1].id, GroupId::from("b"));
+            assert_eq!(mmr_query_groups.groups[1].hits[0].score, 4.0);
+
             let query_best_groups = crate::common::query::do_query_point_groups(
                 &toc,
                 "vector_groups",

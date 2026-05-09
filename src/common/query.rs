@@ -5470,6 +5470,63 @@ async fn try_ckks_vector_query_groups(
         .map(Some);
     }
 
+    if let Some(Query::Vector(VectorQuery::NearestWithMmr(nearest_with_mmr))) = &request.query {
+        let query = ckks_vector_input_as_query_source(
+            &collection,
+            &request.using,
+            "MMR nearest",
+            &nearest_with_mmr.nearest,
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        let result = ckks_vector_group_points_with_scoring(
+            &collection,
+            collection_name,
+            &collection_crypto_id,
+            &request.using,
+            CkksSidecarScoring::NearestMmr {
+                query,
+                lambda: nearest_with_mmr
+                    .mmr
+                    .diversity
+                    .map(|diversity| 1.0 - diversity)
+                    .unwrap_or(0.5),
+                candidates_limit: nearest_with_mmr
+                    .mmr
+                    .candidates_limit
+                    .unwrap_or(request.limit),
+            },
+            request.filter.clone(),
+            request.params.clone(),
+            request.score_threshold,
+            &plan,
+            &request.group_by,
+            request.limit,
+            request.group_size,
+            request.with_payload.clone(),
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+        return attach_ckks_group_lookup(
+            toc,
+            result,
+            request.with_lookup.clone(),
+            read_consistency,
+            shard_selection,
+            auth,
+            timeout,
+            hw_measurement_acc,
+        )
+        .await
+        .map(Some);
+    }
+
     let search_request = CoreSearchRequest {
         query: ckks_query_as_core_query(&request.query, &request.using)?,
         filter: request.filter.clone(),
