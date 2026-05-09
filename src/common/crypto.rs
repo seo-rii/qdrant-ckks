@@ -2002,6 +2002,14 @@ fn validate_material(
                 && material.fd.is_none()
                 && material.value_b64.is_none() =>
         {
+            let env = material.env.as_deref().unwrap();
+            if !is_material_env_name(env) {
+                return Err(CryptoSetupError::InvalidMaterialFileSource {
+                    material: material_name.to_string(),
+                    path: format!("env:{env}"),
+                    reason: "environment variable name is invalid".to_string(),
+                });
+            }
             Ok(())
         }
         Some("file")
@@ -2274,12 +2282,7 @@ fn validate_material_vault_kv2_source(
             reason: "Vault KV v2 URL must not include query or fragment components".to_string(),
         });
     }
-    if token_env.is_empty()
-        || token_env.len() > 128
-        || !token_env
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-    {
+    if !is_material_env_name(token_env) {
         return Err(CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
             path: url.to_string(),
@@ -2307,6 +2310,14 @@ fn validate_material_vault_kv2_source(
     }
 
     Ok(())
+}
+
+fn is_material_env_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
 #[cfg(unix)]
@@ -5728,6 +5739,35 @@ mod tests {
                 material: "tenant-a/payload-v1".to_string(),
             }),
         );
+    }
+
+    #[test]
+    fn validate_material_env_source_rejects_invalid_name() {
+        let env_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("env".to_string()),
+            env: Some("QDRANT/PAYLOAD_KEY".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        assert!(matches!(
+            validate_material("tenant-a/payload-v1", &env_material, false),
+            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("environment variable")
+        ));
+
+        let empty_env_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("env".to_string()),
+            env: Some(String::new()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        assert!(matches!(
+            validate_material("tenant-a/payload-v1", &empty_env_material, false),
+            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("environment variable")
+        ));
     }
 
     #[test]
