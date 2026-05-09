@@ -598,9 +598,9 @@ mod tests {
 
     use crate::grpc::qdrant::{
         CkksEncryptedQueryVector, CreateCollection, CreateFieldIndexCollection, GeoLineString,
-        GeoPoint, GeoPolygon, Query, QueryBatchPoints, QueryPointGroups, QueryPoints,
-        SearchBatchPoints, SearchPointGroups, SearchPoints, UpdateCollection, VectorInput, query,
-        vector_input,
+        GeoPoint, GeoPolygon, PrefetchQuery, Query, QueryBatchPoints, QueryPointGroups,
+        QueryPoints, SearchBatchPoints, SearchPointGroups, SearchPoints, UpdateCollection,
+        VectorInput, query, vector_input,
     };
 
     #[test]
@@ -965,6 +965,30 @@ mod tests {
         assert!(
             bad_group_request.validate().is_err(),
             "gRPC universal query groups should validate nested CKKS encrypted query envelopes"
+        );
+
+        let bad_prefetch_request = QueryPoints {
+            collection_name: "docs".to_string(),
+            limit: Some(1),
+            prefetch: vec![PrefetchQuery {
+                query: Some(Query {
+                    variant: Some(query::Variant::Nearest(VectorInput {
+                        variant: Some(vector_input::Variant::CkksEncryptedQuery(
+                            CkksEncryptedQueryVector {
+                                ciphertext: "not base64url!".to_string(),
+                                ..valid_ckks_encrypted_query()
+                            },
+                        )),
+                    })),
+                }),
+                limit: Some(1),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(
+            bad_prefetch_request.validate().is_err(),
+            "gRPC prefetch should validate nested CKKS encrypted query envelopes"
         );
     }
 

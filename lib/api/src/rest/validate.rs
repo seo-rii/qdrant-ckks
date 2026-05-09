@@ -377,7 +377,7 @@ mod tests {
 
     use super::*;
     use crate::rest::{
-        CkksEncryptedQueryVectorEnvelope, QueryBaseGroupRequest, QueryGroupsRequest,
+        CkksEncryptedQueryVectorEnvelope, Prefetch, QueryBaseGroupRequest, QueryGroupsRequest,
         QueryGroupsRequestInternal, QueryRequest, QueryRequestBatch, QueryRequestInternal,
     };
 
@@ -613,6 +613,46 @@ mod tests {
         assert!(
             bad_request.validate().is_err(),
             "REST query groups should validate nested CKKS encrypted query envelopes"
+        );
+    }
+
+    #[test]
+    fn test_ckks_encrypted_query_prefetch_validation() {
+        let bad_request = QueryRequest {
+            internal: QueryRequestInternal {
+                prefetch: Some(vec![Prefetch {
+                    prefetch: None,
+                    query: Some(QueryInterface::Nearest(VectorInput::CkksEncryptedQuery(
+                        CkksEncryptedQueryVector {
+                            envelope: CkksEncryptedQueryVectorEnvelope {
+                                ciphertext: "not base64url!".to_string(),
+                                ..valid_ckks_encrypted_query().envelope
+                            },
+                        },
+                    ))),
+                    using: None,
+                    filter: None,
+                    params: None,
+                    score_threshold: None,
+                    limit: Some(1),
+                    lookup_from: None,
+                }]),
+                query: None,
+                using: None,
+                filter: None,
+                params: None,
+                score_threshold: None,
+                limit: Some(1),
+                offset: None,
+                with_vector: None,
+                with_payload: None,
+                lookup_from: None,
+            },
+            shard_key: None,
+        };
+        assert!(
+            bad_request.validate().is_err(),
+            "REST prefetch should validate nested CKKS encrypted query envelopes"
         );
     }
 }
