@@ -66,6 +66,11 @@ enum CkksSidecarScoring<'a> {
         query_point_id: String,
         query_encrypted: EncryptedCkksVector,
     },
+    NearestMmr {
+        query: CkksSidecarQuerySource<'a>,
+        lambda: f32,
+        candidates_limit: usize,
+    },
     RecommendAverageVectorResolved {
         positives: Vec<CkksSidecarQuerySource<'a>>,
         negatives: Vec<CkksSidecarQuerySource<'a>>,
@@ -557,6 +562,14 @@ async fn ckks_vector_search_points_with_scoring(
         CkksSidecarScoring::Nearest { .. } | CkksSidecarScoring::StoredNearest { .. } => {
             distance.distance_order()
         }
+        CkksSidecarScoring::NearestMmr { .. } => {
+            if distance.distance_order() != Order::LargeBetter {
+                return Err(StorageError::bad_input(format!(
+                    "encrypted vector '{vector_name}' MMR requires a large-better metric such as dot or cosine",
+                )));
+            }
+            Order::LargeBetter
+        }
         CkksSidecarScoring::RecommendAverageVectorResolved {
             positives,
             negatives: _,
@@ -677,6 +690,8 @@ async fn ckks_vector_search_points_with_scoring(
 
     let mut next_offset = None;
     let mut scored_by_id = std::collections::HashMap::<_, ScoredPoint>::new();
+    let mut encrypted_by_id =
+        std::collections::HashMap::<PointIdType, (String, EncryptedCkksVector)>::new();
     let mut hnsw_records = Vec::new();
     const BATCH_SIZE: usize = 512;
 
@@ -758,6 +773,15 @@ async fn ckks_vector_search_points_with_scoring(
                             "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
                         ))
                     })?,
+                CkksSidecarScoring::NearestMmr { query, .. } => {
+                    ckks_score_query_source_batch(
+                        collection_name,
+                        vector_name,
+                        plan,
+                        query,
+                        &encrypted_items,
+                    )?
+                }
                 CkksSidecarScoring::RecommendBestScore {
                     positives,
                     negatives,
@@ -1143,6 +1167,10 @@ async fn ckks_vector_search_points_with_scoring(
                 if !ckks_score_passes_threshold(score_order, score, score_threshold) {
                     continue;
                 }
+                encrypted_by_id.insert(
+                    record.id,
+                    (record.point_id.clone(), record.encrypted.clone()),
+                );
                 let scored_point = ScoredPoint {
                     id: record.id,
                     version: 0,
@@ -1209,6 +1237,89 @@ async fn ckks_vector_search_points_with_scoring(
                 }
             }
         }
+    }
+
+    if let CkksSidecarScoring::NearestMmr {
+        lambda,
+        candidates_limit,
+        ..
+    } = &scoring
+    {
+        let mut candidates = scored_by_id.into_values().collect::<Vec<_>>();
+        sort_ckks_scored_points(score_order, &mut candidates);
+        candidates.truncate((*candidates_limit).max(limit));
+        let mut selected = Vec::new();
+        if !candidates.is_empty() && limit > 0 {
+            selected.push(0usize);
+            let mut remaining = (1..candidates.len()).collect::<Vec<_>>();
+            while selected.len() < limit && !remaining.is_empty() {
+                let mut best_position = 0usize;
+                let mut best_score = f32::NEG_INFINITY;
+                for (position, candidate_idx) in remaining.iter().copied().enumerate() {
+                    let Some((candidate_point_id, candidate_encrypted)) =
+                        encrypted_by_id.get(&candidates[candidate_idx].id)
+                    else {
+                        continue;
+                    };
+                    let candidate_item =
+                        vec![(candidate_point_id.clone(), candidate_encrypted.clone())];
+                    let mut max_similarity = f32::NEG_INFINITY;
+                    for selected_idx in &selected {
+                        let Some((selected_point_id, selected_encrypted)) =
+                            encrypted_by_id.get(&candidates[*selected_idx].id)
+                        else {
+                            continue;
+                        };
+                        let similarity = plan
+                            .score_stored_query_batch(
+                                collection_name,
+                                vector_name,
+                                selected_point_id,
+                                selected_encrypted,
+                                &candidate_item,
+                            )?
+                            .ok_or_else(|| {
+                                StorageError::service_error(format!(
+                                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
+                                ))
+                            })?
+                            .into_iter()
+                            .next()
+                            .ok_or_else(|| {
+                                StorageError::service_error(
+                                    "CKKS MMR sidecar scoring returned no candidate score",
+                                )
+                            })?;
+                        max_similarity = max_similarity.max(similarity);
+                    }
+                    let mmr_score = *lambda * candidates[candidate_idx].score
+                        - (1.0 - *lambda) * max_similarity;
+                    if mmr_score > best_score {
+                        best_score = mmr_score;
+                        best_position = position;
+                    }
+                }
+                selected.push(remaining.swap_remove(best_position));
+            }
+        }
+
+        let mut top = selected
+            .into_iter()
+            .filter_map(|idx| candidates.get(idx).cloned())
+            .collect::<Vec<_>>();
+        ckks_fill_scored_points_payload_or_vectors(
+            collection,
+            &mut top,
+            with_payload.unwrap_or(WithPayloadInterface::Bool(false)),
+            with_vector,
+            read_consistency,
+            shard_selection,
+            timeout,
+            hw_measurement_acc,
+        )
+        .await?;
+
+        return Ok(top);
     }
 
     let mut scored = scored_by_id.into_values().collect::<Vec<_>>();
@@ -4540,6 +4651,42 @@ pub async fn do_query_batch_points(
                         CkksResolvedQueryRequest::Scoring {
                             vector_name: request.using.clone(),
                             scoring,
+                            filter: request.filter.clone(),
+                            params: request.params.clone(),
+                            limit: request.limit,
+                            offset: request.offset,
+                            with_payload: request.with_payload.clone(),
+                            with_vector: request.with_vector.clone(),
+                            score_threshold: request.score_threshold,
+                            shard_selection: shard_selection.clone(),
+                        }
+                    }
+                    Some(Query::Vector(VectorQuery::NearestWithMmr(nearest_with_mmr))) => {
+                        let query = ckks_vector_input_as_query_source(
+                            &collection,
+                            &request.using,
+                            "MMR nearest",
+                            &nearest_with_mmr.nearest,
+                            read_consistency,
+                            shard_selection,
+                            timeout,
+                            hw_measurement_acc.clone(),
+                        )
+                        .await?;
+                        CkksResolvedQueryRequest::Scoring {
+                            vector_name: request.using.clone(),
+                            scoring: CkksSidecarScoring::NearestMmr {
+                                query,
+                                lambda: nearest_with_mmr
+                                    .mmr
+                                    .diversity
+                                    .map(|diversity| 1.0 - diversity)
+                                    .unwrap_or(0.5),
+                                candidates_limit: nearest_with_mmr
+                                    .mmr
+                                    .candidates_limit
+                                    .unwrap_or(request.limit),
+                            },
                             filter: request.filter.clone(),
                             params: request.params.clone(),
                             limit: request.limit,

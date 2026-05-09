@@ -2390,8 +2390,8 @@ mod tests {
         RecommendGroupsRequestInternal, RecommendRequestInternal,
     };
     use collection::operations::universal_query::collection_query::{
-        CollectionPrefetch, CollectionQueryGroupsRequest, CollectionQueryRequest, Query,
-        VectorInputInternal, VectorQuery,
+        CollectionPrefetch, CollectionQueryGroupsRequest, CollectionQueryRequest, Mmr,
+        NearestWithMmr, Query, VectorInputInternal, VectorQuery,
     };
     use collection::operations::universal_query::shard_query::FusionInternal;
     use collection::operations::vector_params_builder::VectorParamsBuilder;
@@ -3457,6 +3457,43 @@ esac
             assert_eq!(point_id_average_query[0].score, 9.5);
             assert_eq!(point_id_average_query[1].id, 2.into());
             assert_eq!(point_id_average_query[1].score, 6.0);
+
+            let mmr_query = crate::common::query::do_query_points(
+                &toc,
+                "vector_groups",
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::NearestWithMmr(NearestWithMmr {
+                        nearest: VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                        mmr: Mmr {
+                            diversity: Some(0.5),
+                            candidates_limit: Some(2),
+                        },
+                    }))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 2,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(mmr_query.len(), 2);
+            assert_eq!(mmr_query[0].id, 1.into());
+            assert_eq!(mmr_query[0].score, 9.0);
+            assert_eq!(mmr_query[1].id, 2.into());
+            assert_eq!(mmr_query[1].score, 4.0);
 
             let recommend_best_query = crate::common::query::do_query_points(
                 &toc,
