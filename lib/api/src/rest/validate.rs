@@ -377,7 +377,8 @@ mod tests {
 
     use super::*;
     use crate::rest::{
-        CkksEncryptedQueryVectorEnvelope, QueryRequest, QueryRequestBatch, QueryRequestInternal,
+        CkksEncryptedQueryVectorEnvelope, QueryBaseGroupRequest, QueryGroupsRequest,
+        QueryGroupsRequestInternal, QueryRequest, QueryRequestBatch, QueryRequestInternal,
     };
 
     fn valid_ckks_encrypted_query() -> CkksEncryptedQueryVector {
@@ -550,6 +551,68 @@ mod tests {
         assert!(
             bad_batch.validate().is_err(),
             "REST query batch should validate nested CKKS encrypted query envelopes"
+        );
+    }
+
+    #[test]
+    fn test_ckks_encrypted_query_groups_validation() {
+        let good_request = QueryGroupsRequest {
+            search_group_request: QueryGroupsRequestInternal {
+                prefetch: None,
+                query: Some(QueryInterface::Nearest(VectorInput::CkksEncryptedQuery(
+                    valid_ckks_encrypted_query(),
+                ))),
+                using: None,
+                filter: None,
+                params: None,
+                score_threshold: None,
+                with_vector: None,
+                with_payload: None,
+                lookup_from: None,
+                group_request: QueryBaseGroupRequest {
+                    group_by: "tenant".parse().unwrap(),
+                    group_size: Some(1),
+                    limit: Some(1),
+                    with_lookup: None,
+                },
+            },
+            shard_key: None,
+        };
+        assert!(
+            good_request.validate().is_ok(),
+            "valid REST grouped CKKS encrypted query should pass validation"
+        );
+
+        let bad_request = QueryGroupsRequest {
+            search_group_request: QueryGroupsRequestInternal {
+                prefetch: None,
+                query: Some(QueryInterface::Nearest(VectorInput::CkksEncryptedQuery(
+                    CkksEncryptedQueryVector {
+                        envelope: CkksEncryptedQueryVectorEnvelope {
+                            context_digest: "not base64url!".to_string(),
+                            ..valid_ckks_encrypted_query().envelope
+                        },
+                    },
+                ))),
+                using: None,
+                filter: None,
+                params: None,
+                score_threshold: None,
+                with_vector: None,
+                with_payload: None,
+                lookup_from: None,
+                group_request: QueryBaseGroupRequest {
+                    group_by: "tenant".parse().unwrap(),
+                    group_size: Some(1),
+                    limit: Some(1),
+                    with_lookup: None,
+                },
+            },
+            shard_key: None,
+        };
+        assert!(
+            bad_request.validate().is_err(),
+            "REST query groups should validate nested CKKS encrypted query envelopes"
         );
     }
 }
