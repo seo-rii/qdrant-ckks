@@ -329,6 +329,12 @@ fn validate_bridge_program_sha256_b64(
     path: &Path,
     expected_sha256_b64: &str,
 ) -> Result<(), CkksError> {
+    let expected = decode_bridge_sha256_pin(path, expected_sha256_b64)?;
+    let bytes = read_bridge_program_for_sha256(path)?;
+    validate_bridge_sha256_bytes(path, &expected, &bytes)
+}
+
+fn decode_bridge_sha256_pin(path: &Path, expected_sha256_b64: &str) -> Result<Vec<u8>, CkksError> {
     let expected = BASE64URL_NOPAD
         .decode(expected_sha256_b64.as_bytes())
         .map_err(|_| {
@@ -344,7 +350,14 @@ fn validate_bridge_program_sha256_b64(
         )));
     }
 
-    let bytes = read_bridge_program_for_sha256(path)?;
+    Ok(expected)
+}
+
+fn validate_bridge_sha256_bytes(
+    path: &Path,
+    expected: &[u8],
+    bytes: &[u8],
+) -> Result<(), CkksError> {
     let actual = Sha256::digest(&bytes);
     if actual[..] != expected[..] {
         return Err(CkksError::Backend(format!(
@@ -354,6 +367,133 @@ fn validate_bridge_program_sha256_b64(
     }
 
     Ok(())
+}
+
+struct BridgeSpawnProgram {
+    path: PathBuf,
+    _fd: Option<std::fs::File>,
+}
+
+impl BridgeSpawnProgram {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+fn bridge_spawn_program(
+    program: &Path,
+    checked_program: bool,
+    expected_sha256_b64: Option<&str>,
+) -> Result<BridgeSpawnProgram, CkksError> {
+    if !checked_program {
+        return Ok(BridgeSpawnProgram {
+            path: program.to_path_buf(),
+            _fd: None,
+        });
+    }
+
+    checked_bridge_spawn_program(program, expected_sha256_b64)
+}
+
+#[cfg(target_os = "linux")]
+fn checked_bridge_spawn_program(
+    program: &Path,
+    expected_sha256_b64: Option<&str>,
+) -> Result<BridgeSpawnProgram, CkksError> {
+    use std::fs::OpenOptions;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    validate_checked_bridge_program(program)?;
+
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+        .open(program)
+        .map_err(|err| {
+            CkksError::Backend(format!(
+                "failed to open OpenFHE bridge program {} for checked spawn: {err}",
+                program.display(),
+            ))
+        })?;
+    let metadata = file.metadata().map_err(|err| {
+        CkksError::Backend(format!(
+            "failed to inspect OpenFHE bridge program {} for checked spawn: {err}",
+            program.display(),
+        ))
+    })?;
+    if !metadata.is_file() {
+        return Err(CkksError::Backend(format!(
+            "OpenFHE bridge program must remain a regular file for checked spawn: {}",
+            program.display(),
+        )));
+    }
+
+    let mut prefix = [0u8; 2];
+    let prefix_len = file.read(&mut prefix).map_err(|err| {
+        CkksError::Backend(format!(
+            "failed to read OpenFHE bridge program {} for checked spawn: {err}",
+            program.display(),
+        ))
+    })?;
+    let is_shebang_script = prefix_len == 2 && prefix == *b"#!";
+
+    if let Some(expected_sha256_b64) = expected_sha256_b64 {
+        let expected = decode_bridge_sha256_pin(program, expected_sha256_b64)?;
+        let mut bytes = prefix[..prefix_len].to_vec();
+        file.read_to_end(&mut bytes).map_err(|err| {
+            CkksError::Backend(format!(
+                "failed to read OpenFHE bridge program {} for checked spawn sha256 pinning: {err}",
+                program.display(),
+            ))
+        })?;
+        validate_bridge_sha256_bytes(program, &expected, &bytes)?;
+    }
+    if is_shebang_script {
+        // Shebang interpreters reopen /proc/self/fd/<fd> after exec. Keep the
+        // script fd inherited only for scripts; production bridge binaries keep
+        // FD_CLOEXEC and do not inherit the checked executable fd.
+        let flags = unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_GETFD) };
+        if flags < 0 {
+            return Err(CkksError::Backend(format!(
+                "failed to inspect OpenFHE bridge executable fd for checked spawn: {}",
+                program.display(),
+            )));
+        }
+        let result = unsafe {
+            nix::libc::fcntl(
+                file.as_raw_fd(),
+                nix::libc::F_SETFD,
+                flags & !nix::libc::FD_CLOEXEC,
+            )
+        };
+        if result < 0 {
+            return Err(CkksError::Backend(format!(
+                "failed to prepare OpenFHE bridge script fd for checked spawn: {}",
+                program.display(),
+            )));
+        }
+    }
+
+    Ok(BridgeSpawnProgram {
+        path: PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd())),
+        _fd: Some(file),
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn checked_bridge_spawn_program(
+    program: &Path,
+    expected_sha256_b64: Option<&str>,
+) -> Result<BridgeSpawnProgram, CkksError> {
+    validate_checked_bridge_program(program)?;
+    if let Some(expected_sha256_b64) = expected_sha256_b64 {
+        validate_bridge_program_sha256_b64(program, expected_sha256_b64)?;
+    }
+    Ok(BridgeSpawnProgram {
+        path: program.to_path_buf(),
+        _fd: None,
+    })
 }
 
 #[cfg(unix)]
@@ -931,14 +1071,13 @@ impl CommandOpenFheBackend {
             return Ok(Arc::clone(worker_process));
         }
 
-        if self.checked_program {
-            validate_checked_bridge_program(&self.program)?;
-            if let Some(expected_sha256_b64) = self.expected_sha256_b64.as_deref() {
-                validate_bridge_program_sha256_b64(&self.program, expected_sha256_b64)?;
-            }
-        }
+        let spawn_program = bridge_spawn_program(
+            &self.program,
+            self.checked_program,
+            self.expected_sha256_b64.as_deref(),
+        )?;
 
-        let mut command = Command::new(&self.program);
+        let mut command = Command::new(spawn_program.path());
         command
             .args(&self.args)
             .stdin(Stdio::piped())
@@ -1419,4 +1558,23 @@ fn validate_bridge_security_profile(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn checked_bridge_spawn_program_uses_validated_proc_fd_path() {
+        let program = std::env::current_exe().unwrap();
+        let expected_sha256_b64 =
+            BASE64URL_NOPAD.encode(&Sha256::digest(std::fs::read(&program).unwrap()));
+
+        let spawn_program =
+            checked_bridge_spawn_program(&program, Some(&expected_sha256_b64)).unwrap();
+
+        assert!(spawn_program.path().starts_with("/proc/self/fd"));
+        assert!(spawn_program._fd.is_some());
+    }
 }

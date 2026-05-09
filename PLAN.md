@@ -37,7 +37,7 @@
 - Cluster-wide client nonce replay ledger: request/process/collection-local/reload cache는 있지만 consensus-backed global ledger는 없다.
 - Blind index: client-side exact-match token field provider/query integration은 들어갔다. Metadata value encryption, server-computed tokens, range/geo/full-text searchable encryption은 아직 없다.
 - Decrypt/RBAC read mode: 현재 retrieve/scroll/search/export는 raw envelope 반환이며 `decrypted`/`redacted` 권한 모델은 없다.
-- KMS/Vault key providers: local/env/file/fd/unix-socket/wrapped material 기반은 있지만 external KMS lifecycle은 future work다.
+- KMS/Vault key providers: local/env/file/fd/`unix_socket`/wrapped material 기반은 있지만 external KMS lifecycle은 future work다.
 - Broader distributed integration: current unit/integration coverage는 많지만 multi-node parity/restore/replay ledger e2e는 남아 있다.
 
 ## Phase 0: 기준선 고정

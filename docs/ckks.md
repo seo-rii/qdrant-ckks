@@ -401,7 +401,7 @@ crypto:
 
 The generic `crypto` control plane supports a safer MK/RK hierarchy:
 
-- `wrapping_key_32` is an MK/KEK loaded from env/file/unix-socket/fd/inline material.
+- `wrapping_key_32` is an MK/KEK loaded from env/file/`unix_socket`/fd/inline material.
 - `wrapped_symmetric_key_32` is a random collection or rule RK wrapped by that
   MK using AES-256-GCM.
 - Payload text and CKKS vector envelope AEAD keys are still purpose-specific
@@ -844,7 +844,10 @@ on Unix, and requires the binary plus every parent directory to be owned by root
 or the Qdrant process user. Generic process backends must set `sha256_b64` to
 pin the expected bridge binary digest; generic runtime validation and checked
 backend construction both hash the bridge through a no-follow file descriptor
-on Unix.
+on Unix. On Linux, checked bridge workers are spawned through a
+`/proc/self/fd/<fd>` path backed by the same no-follow validated bridge file
+descriptor held open through `spawn`, which narrows the path-swap window between
+validation, hashing, and execution.
 Treat any bridge path change as privileged code
 execution under the Qdrant service account. On Linux, the checked bridge spawn path also
 sets `no_new_privs`, parent-death `SIGKILL`, and `RLIMIT_CORE=0` so the
