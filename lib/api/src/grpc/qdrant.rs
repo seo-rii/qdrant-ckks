@@ -5704,6 +5704,7 @@ pub struct SearchPoints {
     #[prost(message, optional, tag = "15")]
     pub sparse_indices: ::core::option::Option<SparseIndices>,
     #[prost(message, optional, tag = "16")]
+    #[validate(nested)]
     pub ckks_encrypted_query: ::core::option::Option<CkksEncryptedQueryVector>,
 }
 #[derive(validator::Validate)]
@@ -5808,6 +5809,7 @@ pub struct SearchPointGroups {
     #[prost(message, optional, tag = "16")]
     pub sparse_indices: ::core::option::Option<SparseIndices>,
     #[prost(message, optional, tag = "17")]
+    #[validate(nested)]
     pub ckks_encrypted_query: ::core::option::Option<CkksEncryptedQueryVector>,
 }
 #[derive(serde::Serialize)]

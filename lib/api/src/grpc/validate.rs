@@ -9,6 +9,8 @@ use super::qdrant as grpc;
 
 const TIMESTAMP_MIN_SECONDS: i64 = -62_135_596_800; // 0001-01-01T00:00:00Z
 const TIMESTAMP_MAX_SECONDS: i64 = 253_402_300_799; // 9999-12-31T23:59:59Z
+const CKKS_ENCRYPTED_QUERY_SCHEME: &str = "openfhe-ckks";
+const CKKS_ENCRYPTED_QUERY_SECURITY_PROFILE: &str = "ckks-128-n16384-d4-scale50";
 
 pub trait ValidateExt {
     fn validate(&self) -> Result<(), ValidationErrors>;
@@ -382,12 +384,61 @@ impl Validate for super::qdrant::vector_input::Variant {
             | grpc::vector_input::Variant::Dense(_)
             | grpc::vector_input::Variant::Document(_)
             | grpc::vector_input::Variant::Image(_)
-            | grpc::vector_input::Variant::Object(_)
-            | grpc::vector_input::Variant::CkksEncryptedQuery(_) => Ok(()),
+            | grpc::vector_input::Variant::Object(_) => Ok(()),
+            grpc::vector_input::Variant::CkksEncryptedQuery(query) => query.validate(),
             grpc::vector_input::Variant::Sparse(sparse_vector) => sparse_vector.validate(),
             grpc::vector_input::Variant::MultiDense(multi_dense_vector) => {
                 multi_dense_vector.validate()
             }
+        }
+    }
+}
+
+impl Validate for grpc::CkksEncryptedQueryVector {
+    fn validate(&self) -> Result<(), ValidationErrors> {
+        let mut errors = ValidationErrors::new();
+
+        if self.version != 1 {
+            errors.add(
+                "version",
+                ValidationError::new("unsupported_ckks_encrypted_query_version"),
+            );
+        }
+        if self.scheme != CKKS_ENCRYPTED_QUERY_SCHEME {
+            errors.add(
+                "scheme",
+                ValidationError::new("unsupported_ckks_encrypted_query_scheme"),
+            );
+        }
+        if self.security_profile != CKKS_ENCRYPTED_QUERY_SECURITY_PROFILE {
+            errors.add(
+                "security_profile",
+                ValidationError::new("unsupported_ckks_encrypted_query_security_profile"),
+            );
+        }
+        if self.context_digest.is_empty() {
+            errors.add(
+                "context_digest",
+                ValidationError::new("empty_ckks_encrypted_query_context_digest"),
+            );
+        }
+        if self.slots == 0 {
+            errors.add(
+                "slots",
+                ValidationError::new("empty_ckks_encrypted_query_slots"),
+            );
+        }
+        if self.ciphertext.is_empty() {
+            errors.add(
+                "ciphertext",
+                ValidationError::new("empty_ckks_encrypted_query_ciphertext"),
+            );
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
         }
     }
 }
@@ -527,8 +578,8 @@ mod tests {
     use validator::Validate;
 
     use crate::grpc::qdrant::{
-        CreateCollection, CreateFieldIndexCollection, GeoLineString, GeoPoint, GeoPolygon,
-        SearchPoints, UpdateCollection,
+        CkksEncryptedQueryVector, CreateCollection, CreateFieldIndexCollection, GeoLineString,
+        GeoPoint, GeoPolygon, SearchPoints, UpdateCollection, VectorInput, vector_input,
     };
 
     #[test]
@@ -649,6 +700,87 @@ mod tests {
         assert!(
             bad_request.validate().is_err(),
             "bad search request should error on validation"
+        );
+    }
+
+    fn valid_ckks_encrypted_query() -> CkksEncryptedQueryVector {
+        CkksEncryptedQueryVector {
+            version: 1,
+            scheme: "openfhe-ckks".to_string(),
+            security_profile: "ckks-128-n16384-d4-scale50".to_string(),
+            context_digest: "context-digest".to_string(),
+            slots: 2,
+            ciphertext: "ciphertext".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_ckks_encrypted_query_validation() {
+        let good_request = SearchPoints {
+            collection_name: "docs".to_string(),
+            limit: 1,
+            ckks_encrypted_query: Some(valid_ckks_encrypted_query()),
+            ..Default::default()
+        };
+        assert!(
+            good_request.validate().is_ok(),
+            "valid CKKS encrypted query should pass validation"
+        );
+
+        let bad_request = SearchPoints {
+            collection_name: "docs".to_string(),
+            limit: 1,
+            ckks_encrypted_query: Some(CkksEncryptedQueryVector {
+                version: 2,
+                ..valid_ckks_encrypted_query()
+            }),
+            ..Default::default()
+        };
+        assert!(
+            bad_request.validate().is_err(),
+            "bad CKKS encrypted query version should error on validation"
+        );
+
+        let bad_request = SearchPoints {
+            collection_name: "docs".to_string(),
+            limit: 1,
+            ckks_encrypted_query: Some(CkksEncryptedQueryVector {
+                context_digest: String::new(),
+                slots: 0,
+                ciphertext: String::new(),
+                ..valid_ckks_encrypted_query()
+            }),
+            ..Default::default()
+        };
+        assert!(
+            bad_request.validate().is_err(),
+            "empty CKKS encrypted query metadata should error on validation"
+        );
+    }
+
+    #[test]
+    fn test_ckks_encrypted_query_vector_input_validation() {
+        let good_input = VectorInput {
+            variant: Some(vector_input::Variant::CkksEncryptedQuery(
+                valid_ckks_encrypted_query(),
+            )),
+        };
+        assert!(
+            good_input.validate().is_ok(),
+            "valid universal CKKS encrypted query should pass validation"
+        );
+
+        let bad_input = VectorInput {
+            variant: Some(vector_input::Variant::CkksEncryptedQuery(
+                CkksEncryptedQueryVector {
+                    scheme: "other".to_string(),
+                    ..valid_ckks_encrypted_query()
+                },
+            )),
+        };
+        assert!(
+            bad_input.validate().is_err(),
+            "bad universal CKKS encrypted query scheme should error on validation"
         );
     }
 
