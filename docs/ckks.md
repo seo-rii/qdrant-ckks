@@ -401,7 +401,7 @@ crypto:
 
 The generic `crypto` control plane supports a safer MK/RK hierarchy:
 
-- `wrapping_key_32` is an MK/KEK loaded from env/file/fd/inline material.
+- `wrapping_key_32` is an MK/KEK loaded from env/file/unix-socket/fd/inline material.
 - `wrapped_symmetric_key_32` is a random collection or rule RK wrapped by that
   MK using AES-256-GCM.
 - Payload text and CKKS vector envelope AEAD keys are still purpose-specific
