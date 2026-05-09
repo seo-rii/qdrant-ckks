@@ -6582,6 +6582,18 @@ mod tests {
             ..SearchParams::default()
         };
         assert!(!ckks_search_params_supported(&indexed_only_params));
+
+        let quantization_params = SearchParams {
+            quantization: Some(segment::types::QuantizationSearchParams::default()),
+            ..SearchParams::default()
+        };
+        assert!(!ckks_search_params_supported(&quantization_params));
+
+        let acorn_params = SearchParams {
+            acorn: Some(segment::types::AcornSearchParams::default()),
+            ..SearchParams::default()
+        };
+        assert!(!ckks_search_params_supported(&acorn_params));
     }
 
     #[test]
