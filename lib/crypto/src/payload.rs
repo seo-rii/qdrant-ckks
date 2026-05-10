@@ -259,6 +259,8 @@ impl ClientPayloadNonceReplayKey {
         {
             return Err(PayloadEncryptionError::MalformedClientNonceReplayCacheKey);
         }
+        validate_resource_key_id(collection_crypto_id)
+            .map_err(|_| PayloadEncryptionError::MalformedClientNonceReplayCacheKey)?;
         validate_resource_key_id(key_id)
             .map_err(|_| PayloadEncryptionError::MalformedClientNonceReplayCacheKey)?;
         validate_resource_key_id(rk_id)

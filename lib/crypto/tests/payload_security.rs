@@ -537,6 +537,7 @@ fn client_payload_nonce_replay_cache_key_validation_rejects_malformed_entries() 
         "",
         "not-a-cache-key",
         "\x1ftenant-a/client-rk-2026-04\x1ftenant-a/client-rk-2026-04\x1f3\x1fAAAAAAAAAAAAAAAA",
+        "not valid\x1ftenant-a/client-rk-2026-04\x1ftenant-a/client-rk-2026-04\x1f3\x1fAAAAAAAAAAAAAAAA",
         "crypto-collection-uuid\x1fnot valid\x1ftenant-a/client-rk-2026-04\x1f3\x1fAAAAAAAAAAAAAAAA",
         "crypto-collection-uuid\x1ftenant-a/client-rk-2026-04\x1fnot valid\x1f3\x1fAAAAAAAAAAAAAAAA",
         "crypto-collection-uuid\x1ftenant-a/client-rk-2026-04\x1ftenant-a/client-rk-2026-04\x1fnot-an-epoch\x1fAAAAAAAAAAAAAAAA",
