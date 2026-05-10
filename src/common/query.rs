@@ -6557,6 +6557,37 @@ async fn ckks_vector_search_points_matrix(
         nearests.push(scored);
     }
 
+    let version_ids = nearests
+        .iter()
+        .flat_map(|nearest| nearest.iter().map(|point| point.id))
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if !version_ids.is_empty() {
+        let records = collection
+            .retrieve(
+                PointRequestInternal {
+                    ids: version_ids,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: WithVector::Bool(false),
+                },
+                read_consistency,
+                shard_selection,
+                timeout,
+                hw_measurement_acc,
+            )
+            .await?;
+        let versions_by_id = records
+            .into_iter()
+            .map(|record| (record.id, record.version))
+            .collect::<HashMap<_, _>>();
+        for scored in nearests.iter_mut().flatten() {
+            if let Some(version) = versions_by_id.get(&scored.id) {
+                scored.version = *version;
+            }
+        }
+    }
+
     Ok(CollectionSearchMatrixResponse {
         sample_ids,
         nearests,

@@ -5606,8 +5606,16 @@ esac
             assert_eq!(matrix.sample_ids, vec![1.into(), 2.into()]);
             assert_eq!(matrix.nearests.len(), 2);
             assert_eq!(matrix.nearests[0][0].id, 2.into());
+            assert!(
+                matrix.nearests[0][0].version > 0,
+                "CKKS matrix search must preserve nearest point versions"
+            );
             assert_eq!(matrix.nearests[0][0].score, 8.0);
             assert_eq!(matrix.nearests[1][0].id, 1.into());
+            assert!(
+                matrix.nearests[1][0].version > 0,
+                "CKKS matrix search must preserve nearest point versions"
+            );
             assert_eq!(matrix.nearests[1][0].score, 8.0);
 
             let grpc_matrix = crate::tonic::api::query_common::search_points_matrix(
