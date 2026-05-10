@@ -362,6 +362,38 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_envelope_request_hash_uses_redacted_material() {
+        let envelope = |nonce: &str, ciphertext: &str, signature: &str| {
+            let mut value = json!({
+                "client_payload": {
+                    "$qdrant_client_aead": {
+                        "key_id": "tenant-a/payload-rk",
+                        "rk_id": "tenant-a/payload-rk",
+                        "nonce": nonce,
+                        "ciphertext": ciphertext,
+                        "signature": {
+                            "alg": "ed25519",
+                            "key_id": "tenant-a/signing-key",
+                            "sig": signature
+                        }
+                    }
+                }
+            });
+            redact_sensitive_log_fields(&mut value);
+            value
+        };
+
+        let first = envelope("nonce-a", "ciphertext-a", "signature-a");
+        let second = envelope("nonce-b", "ciphertext-b", "signature-b");
+
+        assert_eq!(first, second);
+        assert_eq!(
+            redacted_request_hash("encrypted-envelope", &first),
+            redacted_request_hash("encrypted-envelope", &second),
+        );
+    }
+
+    #[test]
     fn mmr_query_log_value_redacts_query_vector() {
         let request = vec![ShardQueryRequest {
             prefetches: vec![],
