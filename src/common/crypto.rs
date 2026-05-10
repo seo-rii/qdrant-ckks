@@ -3907,6 +3907,38 @@ fn decode_direct_material_key(
     material_name: &str,
     material: &CryptoMaterialConfig,
 ) -> Result<SecretKey, PayloadWriteSetupError> {
+    if material.source.is_none() {
+        return Err(PayloadWriteSetupError::MissingMaterialSource {
+            material: material_name.to_string(),
+        });
+    }
+
+    let source = material.source.as_deref().unwrap();
+    let configured_sources = usize::from(material.env.is_some())
+        + usize::from(material.path.is_some())
+        + usize::from(material.fd.is_some())
+        + usize::from(material.value_b64.is_some());
+    let valid_source_shape = match source {
+        "vault_kv2" => {
+            material.env.is_some()
+                && material.path.is_some()
+                && material.vault_field.is_some()
+                && material.fd.is_none()
+                && material.value_b64.is_none()
+        }
+        "env" | "file" | "unix_socket" | "fd" | "inline" => {
+            configured_sources == 1 && material.vault_field.is_none()
+        }
+        _ => true,
+    };
+    if !valid_source_shape {
+        return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: source.to_string(),
+            reason: "material source fields do not match source".to_string(),
+        });
+    }
+
     let encoded = Zeroizing::new(match material.source.as_deref() {
         Some("env") => {
             let env = material.env.as_deref().ok_or_else(|| {
@@ -5958,6 +5990,35 @@ mod tests {
             decode_direct_material_key("tenant-a/payload-v1", &env_material),
             Err(PayloadWriteSetupError::InvalidMaterialFileSource { reason, .. })
                 if reason.contains("environment variable")
+        ));
+    }
+
+    #[test]
+    fn decode_direct_material_key_revalidates_source_shape() {
+        let inline_with_path = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("inline".to_string()),
+            path: Some("/tmp/payload.key".to_string()),
+            value_b64: Some(BASE64URL_NOPAD.encode(&[7u8; 32])),
+            ..CryptoMaterialConfig::default()
+        };
+        assert!(matches!(
+            decode_direct_material_key("tenant-a/payload-v1", &inline_with_path),
+            Err(PayloadWriteSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("source fields")
+        ));
+
+        let vault_missing_field = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("vault_kv2".to_string()),
+            env: Some("QDRANT_TEST_VAULT_TOKEN".to_string()),
+            path: Some("https://vault.example.com/v1/secret/data/docs".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        assert!(matches!(
+            decode_direct_material_key("tenant-a/payload-v1", &vault_missing_field),
+            Err(PayloadWriteSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("source fields")
         ));
     }
 
