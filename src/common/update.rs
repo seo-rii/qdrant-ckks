@@ -5202,11 +5202,12 @@ esac
     fn do_upsert_points_encrypts_payload_before_storage() {
         let runtime = Runtime::new().unwrap();
         let storage_dir = Builder::new().prefix("storage").tempdir().unwrap();
+        let temp_dir = Builder::new().prefix("storage-temp").tempdir().unwrap();
         let storage_config = StorageConfig {
             storage_path: storage_dir.path().to_path_buf(),
             snapshots_path: storage_dir.path().join("snapshots"),
             snapshots_config: Default::default(),
-            temp_path: None,
+            temp_path: Some(temp_dir.path().to_path_buf()),
             on_disk_payload: false,
             optimizers: OptimizersConfig {
                 deleted_threshold: 0.5,
@@ -5493,21 +5494,26 @@ esac
                     .flat_map(f64::to_le_bytes)
                     .collect::<Vec<_>>(),
             ];
-            let mut files = vec![storage_dir.path().to_path_buf()];
-            while let Some(path) = files.pop() {
-                if path.is_dir() {
-                    for entry in fs::read_dir(&path).unwrap() {
-                        files.push(entry.unwrap().path());
+            for (root_label, root_path) in [
+                ("storage", storage_dir.path()),
+                ("temp", temp_dir.path()),
+            ] {
+                let mut files = vec![root_path.to_path_buf()];
+                while let Some(path) = files.pop() {
+                    if path.is_dir() {
+                        for entry in fs::read_dir(&path).unwrap() {
+                            files.push(entry.unwrap().path());
+                        }
+                        continue;
                     }
-                    continue;
-                }
-                let bytes = fs::read(&path).unwrap_or_default();
-                for pattern in &plaintext_vector_patterns {
-                    assert!(
-                        !bytes.windows(pattern.len()).any(|window| window == pattern),
-                        "plaintext vector byte pattern leaked into {}",
-                        path.display(),
-                    );
+                    let bytes = fs::read(&path).unwrap_or_default();
+                    for pattern in &plaintext_vector_patterns {
+                        assert!(
+                            !bytes.windows(pattern.len()).any(|window| window == pattern),
+                            "plaintext vector byte pattern leaked into {root_label} path {}",
+                            path.display(),
+                        );
+                    }
                 }
             }
 
@@ -8737,27 +8743,31 @@ esac
         sentinels.push(("CKKS vector plaintext f64 pair", vector_plaintext_f64_pair));
 
         for (label, sentinel) in sentinels {
-            let mut pending = vec![storage_dir.path().to_path_buf()];
-            while let Some(path) = pending.pop() {
-                let metadata = fs::metadata(&path).unwrap();
-                if metadata.is_dir() {
-                    for entry in fs::read_dir(&path).unwrap() {
-                        pending.push(entry.unwrap().path());
+            for (root_label, root_path) in
+                [("storage", storage_dir.path()), ("temp", temp_dir.path())]
+            {
+                let mut pending = vec![root_path.to_path_buf()];
+                while let Some(path) = pending.pop() {
+                    let metadata = fs::metadata(&path).unwrap();
+                    if metadata.is_dir() {
+                        for entry in fs::read_dir(&path).unwrap() {
+                            pending.push(entry.unwrap().path());
+                        }
+                        continue;
                     }
-                    continue;
-                }
-                if !metadata.is_file() {
-                    continue;
-                }
+                    if !metadata.is_file() {
+                        continue;
+                    }
 
-                let bytes = fs::read(&path).unwrap();
-                assert!(
-                    !bytes
-                        .windows(sentinel.len())
-                        .any(|window| window == sentinel.as_slice()),
-                    "plaintext sentinel '{label}' leaked into {}",
-                    path.display(),
-                );
+                    let bytes = fs::read(&path).unwrap();
+                    assert!(
+                        !bytes
+                            .windows(sentinel.len())
+                            .any(|window| window == sentinel.as_slice()),
+                        "plaintext sentinel '{label}' leaked into {root_label} path {}",
+                        path.display(),
+                    );
+                }
             }
         }
     }
