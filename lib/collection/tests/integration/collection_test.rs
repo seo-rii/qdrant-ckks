@@ -1621,7 +1621,7 @@ async fn encrypted_payload_blind_index_token_filter_is_searchable() {
     let count = collection
         .count(
             CountRequestInternal {
-                filter: Some(blind_filter),
+                filter: Some(blind_filter.clone()),
                 exact: true,
             },
             None,
@@ -1632,6 +1632,29 @@ async fn encrypted_payload_blind_index_token_filter_is_searchable() {
         .await
         .unwrap();
     assert_eq!(count.count, 1);
+
+    let query_records = collection
+        .query(
+            ShardQueryRequest {
+                prefetches: vec![],
+                query: Some(ScoringQuery::Sample(SampleInternal::Random)),
+                filter: Some(blind_filter.clone()),
+                score_threshold: None,
+                limit: 10,
+                offset: 0,
+                params: None,
+                with_vector: WithVector::Bool(false),
+                with_payload: WithPayloadInterface::Bool(false),
+            },
+            None,
+            ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(query_records.len(), 1);
+    assert_eq!(query_records[0].id, 1.into());
 
     let invalid_blind_filter = Filter::new_must(Condition::Field(FieldCondition::new_match(
         "document_body__blind_eq".parse().unwrap(),
