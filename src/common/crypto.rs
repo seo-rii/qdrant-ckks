@@ -196,11 +196,11 @@ fn validate_optional_instance_key_id(
 ) -> Result<(), CryptoSetupError> {
     match instance.options.get("key_id") {
         None | Some(Value::Null) => Ok(()),
-        Some(Value::String(key_id)) if is_crypto_identifier(key_id) => Ok(()),
+        Some(Value::String(key_id)) if is_server_aead_key_id(key_id) => Ok(()),
         Some(_) => Err(CryptoSetupError::InvalidInstanceOption {
             instance: instance_name.to_string(),
             option: "key_id".to_string(),
-            reason: format!("{provider} key_id must be a crypto identifier string"),
+            reason: format!("{provider} key_id must be a server AEAD key id string"),
         }),
     }
 }
@@ -296,6 +296,8 @@ pub enum PayloadWriteSetupError {
     UnsupportedInstanceOption { instance: String, option: String },
     #[error("collection {collection} payload encryption is missing a key id")]
     MissingKeyId { collection: String },
+    #[error("collection {collection} payload encryption key id is invalid for server AEAD")]
+    InvalidCollectionKeyId { collection: String },
     #[error(
         "collection {collection} key id does not match payload crypto instance {instance} key id"
     )]
@@ -3144,6 +3146,14 @@ fn is_crypto_identifier(value: &str) -> bool {
         })
 }
 
+fn is_server_aead_key_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+}
+
 fn validate_generic_collection_crypto_runtime(
     runtime_settings: &CryptoSettings,
     collection_name: &str,
@@ -3369,10 +3379,10 @@ fn validate_generic_collection_crypto_runtime(
 
         let instance_key_id = match instance.options.get("key_id") {
             None | Some(Value::Null) => None,
-            Some(Value::String(key_id)) if is_crypto_identifier(key_id) => Some(key_id.as_str()),
+            Some(Value::String(key_id)) if is_server_aead_key_id(key_id) => Some(key_id.as_str()),
             Some(_) => {
                 return Err(StorageError::bad_input(format!(
-                    "collection {collection_name} vector crypto instance {} key_id option must be a crypto identifier string",
+                    "collection {collection_name} vector crypto instance {} key_id option must be a server AEAD key id string",
                     rule.instance
                 )));
             }
@@ -3395,6 +3405,11 @@ fn validate_generic_collection_crypto_runtime(
             (Some(collection_key_id), _) => collection_key_id,
             (None, Some(runtime_key_id)) => runtime_key_id,
         };
+        if !is_server_aead_key_id(key_id) {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} vector crypto key id is invalid for server AEAD",
+            )));
+        }
 
         let Some(backend_ref) = instance.backend_ref.as_deref() else {
             return Err(StorageError::bad_input(format!(
@@ -3485,7 +3500,7 @@ fn resolve_payload_key_id<'a>(
 ) -> Result<&'a str, PayloadWriteSetupError> {
     let instance_key_id = match instance.options.get("key_id") {
         None | Some(Value::Null) => None,
-        Some(Value::String(key_id)) if is_crypto_identifier(key_id) => Some(key_id.as_str()),
+        Some(Value::String(key_id)) if is_server_aead_key_id(key_id) => Some(key_id.as_str()),
         Some(Value::String(_)) => {
             return Err(PayloadWriteSetupError::InvalidInstanceKeyId {
                 instance: instance_name.to_string(),
@@ -3498,19 +3513,26 @@ fn resolve_payload_key_id<'a>(
         }
     };
 
-    match (encryption.key_id.as_deref(), instance_key_id) {
+    let key_id = match (encryption.key_id.as_deref(), instance_key_id) {
         (Some(collection_key_id), Some(runtime_key_id)) if collection_key_id != runtime_key_id => {
-            Err(PayloadWriteSetupError::CollectionKeyMismatch {
+            return Err(PayloadWriteSetupError::CollectionKeyMismatch {
                 collection: collection_name.to_string(),
                 instance: instance_name.to_string(),
-            })
+            });
         }
         (Some(collection_key_id), _) => Ok(collection_key_id),
         (None, Some(runtime_key_id)) => Ok(runtime_key_id),
         (None, None) => Err(PayloadWriteSetupError::MissingKeyId {
             collection: collection_name.to_string(),
         }),
+    }?;
+    if !is_server_aead_key_id(key_id) {
+        return Err(PayloadWriteSetupError::InvalidCollectionKeyId {
+            collection: collection_name.to_string(),
+        });
     }
+
+    Ok(key_id)
 }
 
 fn resolve_optional_payload_key_id<'a>(
@@ -5131,6 +5153,20 @@ mod tests {
             Err(CryptoSetupError::InvalidInstanceOption { option, .. })
                 if option == "key_id"
         ));
+        let mut payload_with_resource_key_id = payload_with_invalid_key_id.clone();
+        payload_with_resource_key_id
+            .instances
+            .get_mut("docs_payload_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert("key_id".to_string(), json!("tenant-a/docs"));
+        assert!(matches!(
+            validate_crypto_settings(&payload_with_resource_key_id),
+            Err(CryptoSetupError::InvalidInstanceOption { option, .. })
+                if option == "key_id"
+        ));
 
         let bridge_program = std::env::current_exe().unwrap().display().to_string();
         let vector_with_invalid_key_id = CryptoSettings {
@@ -5175,6 +5211,20 @@ mod tests {
         };
         assert!(matches!(
             validate_crypto_settings(&vector_with_invalid_key_id),
+            Err(CryptoSetupError::InvalidInstanceOption { option, .. })
+                if option == "key_id"
+        ));
+        let mut vector_with_resource_key_id = vector_with_invalid_key_id;
+        vector_with_resource_key_id
+            .instances
+            .get_mut("docs_vector_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert("key_id".to_string(), json!("tenant-a/docs"));
+        assert!(matches!(
+            validate_crypto_settings(&vector_with_resource_key_id),
             Err(CryptoSetupError::InvalidInstanceOption { option, .. })
                 if option == "key_id"
         ));
