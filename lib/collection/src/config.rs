@@ -447,6 +447,67 @@ mod ckks_tests {
     }
 
     #[test]
+    fn collection_config_rejects_global_quantization_for_encrypted_vectors() {
+        let mut config = CollectionConfigInternal {
+            params: CollectionParams {
+                vectors: VectorsConfig::Multi(BTreeMap::from([(
+                    "embedding".into(),
+                    VectorParams {
+                        size: std::num::NonZeroU64::new(4).unwrap(),
+                        distance: Distance::Dot,
+                        hnsw_config: None,
+                        quantization_config: None,
+                        on_disk: None,
+                        datatype: None,
+                        multivector_config: None,
+                    },
+                )])),
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 3,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "embedding_conf".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec!["embedding".to_string()],
+                        },
+                        instance: "docs_vector_v1".to_string(),
+                        binding: Some("vector-envelope/v1".to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            },
+            hnsw_config: HnswConfig::default(),
+            optimizer_config: OptimizersConfig::fixture(),
+            wal_config: WalConfig::default(),
+            quantization_config: None,
+            strict_mode_config: None,
+            uuid: None,
+            metadata: None,
+        };
+
+        config.validate().unwrap();
+        config.quantization_config = Some(QuantizationConfig::Scalar(
+            segment::types::ScalarQuantization {
+                scalar: segment::types::ScalarQuantizationConfig {
+                    r#type: segment::types::ScalarType::Int8,
+                    quantile: Some(0.99),
+                    always_ram: Some(true),
+                },
+            },
+        ));
+        let err = config
+            .validate()
+            .expect_err("encrypted vector config must reject global quantization");
+        assert!(
+            err.to_string()
+                .contains("encrypted_vector_collection_quantization_unsupported")
+        );
+    }
+
+    #[test]
     fn encryption_config_rejects_direct_migration_state_changes() {
         let params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
@@ -2395,6 +2456,7 @@ pub const fn default_on_disk_payload() -> bool {
 }
 
 #[derive(Debug, Deserialize, Serialize, Validate, Clone, PartialEq)]
+#[validate(schema(function = "validate_collection_config_internal"))]
 pub struct CollectionConfigInternal {
     #[validate(nested)]
     pub params: CollectionParams,
@@ -2417,6 +2479,25 @@ pub struct CollectionConfigInternal {
     /// such as creation time, migration data, inference model info, etc.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Payload>,
+}
+
+fn validate_collection_config_internal(
+    config: &CollectionConfigInternal,
+) -> Result<(), validator::ValidationError> {
+    if config.quantization_config.is_some()
+        && config.params.encryption.as_ref().is_some_and(|encryption| {
+            encryption
+                .rules
+                .iter()
+                .any(|rule| matches!(rule.selector, EncryptionSelector::VectorNames { .. }))
+        })
+    {
+        return Err(validator::ValidationError::new(
+            "encrypted_vector_collection_quantization_unsupported",
+        ));
+    }
+
+    Ok(())
 }
 
 impl CollectionConfigInternal {
