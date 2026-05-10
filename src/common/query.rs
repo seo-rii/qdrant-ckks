@@ -7091,6 +7091,51 @@ mod tests {
     }
 
     #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_ignores_cache_metadata_mismatches() {
+        let mismatches = [
+            (
+                "vector name",
+                Box::new(|disk: &mut CkksSidecarHnswGraphDisk| {
+                    disk.vector_name = "other-vector".to_string();
+                }) as Box<dyn Fn(&mut CkksSidecarHnswGraphDisk)>,
+            ),
+            (
+                "score order",
+                Box::new(|disk: &mut CkksSidecarHnswGraphDisk| {
+                    disk.score_order = "small".to_string();
+                }),
+            ),
+            (
+                "graph degree",
+                Box::new(|disk: &mut CkksSidecarHnswGraphDisk| {
+                    disk.m += 1;
+                }),
+            ),
+            (
+                "records fingerprint",
+                Box::new(|disk: &mut CkksSidecarHnswGraphDisk| {
+                    disk.records_fingerprint = "other-fingerprint".to_string();
+                }),
+            ),
+        ];
+
+        for (label, mutate) in mismatches {
+            let dir = tempfile::tempdir().unwrap();
+            let key = ckks_sidecar_test_graph_cache_key("fingerprint-a");
+            let mut disk = ckks_sidecar_test_graph_disk(&key, vec![vec![1], vec![0]]);
+            mutate(&mut disk);
+            write_ckks_sidecar_test_graph_disk(dir.path(), &key, &disk);
+
+            assert!(
+                ckks_sidecar_hnsw_load_persisted_graph(dir.path(), &key, 2)
+                    .unwrap()
+                    .is_none(),
+                "persisted graph with {label} mismatch must not be reused",
+            );
+        }
+    }
+
+    #[test]
     fn ckks_sidecar_hnsw_persisted_graph_ignores_out_of_range_links() {
         let dir = tempfile::tempdir().unwrap();
         let key = ckks_sidecar_test_graph_cache_key("fingerprint-a");
