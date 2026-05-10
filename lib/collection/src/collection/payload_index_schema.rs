@@ -89,12 +89,17 @@ pub fn validate_payload_index_entry_for_encryption(
                     "metadata blind-index field path '{metadata_key}' is invalid: {err:?}",
                 ))
             })?;
-            if field_name.compatible(&metadata_path)
-                && field_schema.kind() != PayloadSchemaType::Keyword
-            {
-                return Err(CollectionError::bad_input(format!(
-                    "cannot {action} payload index schema on metadata blind-index field '{field_name}' because it overlaps token field '{metadata_key}'; blind-index token indexes must use keyword schema",
-                )));
+            if field_name.compatible(&metadata_path) {
+                if field_name != &metadata_path {
+                    return Err(CollectionError::bad_input(format!(
+                        "cannot {action} payload index schema on metadata blind-index field '{field_name}' because it overlaps token field '{metadata_key}'; blind-index token indexes must target the exact token field",
+                    )));
+                }
+                if field_schema.kind() != PayloadSchemaType::Keyword {
+                    return Err(CollectionError::bad_input(format!(
+                        "cannot {action} payload index schema on metadata blind-index field '{field_name}' because it overlaps token field '{metadata_key}'; blind-index token indexes must use keyword schema",
+                    )));
+                }
             }
         }
     }
@@ -352,5 +357,24 @@ mod tests {
         );
         validate_payload_index_schema_for_encryption(schema.iter(), &collection_params, "recover")
             .unwrap();
+
+        schema.clear();
+        schema.insert(
+            "document_body__blind_eq.child".parse().unwrap(),
+            PayloadFieldSchema::FieldType(PayloadSchemaType::Keyword),
+        );
+        let err = validate_payload_index_schema_for_encryption(
+            schema.iter(),
+            &collection_params,
+            "recover",
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            CollectionError::BadInput { description }
+                if description.contains("recover payload index schema")
+                    && description.contains("metadata blind-index field")
+                    && description.contains("exact token field")
+        ));
     }
 }
