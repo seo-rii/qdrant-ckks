@@ -2085,6 +2085,61 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
         .unwrap(),
     )
     .unwrap();
+    let mut point_bound_payload: Payload =
+        serde_json::from_str(r#"{"document":{"body":"point-bound marker"}}"#).unwrap();
+    valid_key_encryptor
+        .encrypt_selected_fields(
+            "6",
+            &mut point_bound_payload.0,
+            &PayloadEncryptionPolicy::new(["document.body"]).unwrap(),
+        )
+        .unwrap();
+    let point_bound_value = point_bound_payload
+        .0
+        .get("document")
+        .and_then(|document| document.get("body"))
+        .unwrap();
+    let point_bound_proof = validate_server_payload_value_for_runtime(
+        point_bound_value,
+        &collection_crypto_id,
+        "6",
+        ServerPayloadValidationContext {
+            field_path: "document.body",
+            key_id: Some("tenant-a:docs"),
+            crypto_schema_version: 1,
+            encryption_epoch: 0,
+        },
+    )
+    .unwrap();
+    let point_bound_replay =
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                id: 7.into(),
+                vector: VectorStructPersisted::from(vec![0.0, 1.0, 1.0, 0.0]),
+                payload: Some(point_bound_payload),
+            }]),
+        ));
+    let err = collection
+        .update_from_client(
+            point_bound_replay,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::runtime_encrypted_payloads([point_bound_proof]),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("encrypted payload marker")
+                && description.contains("document.body")
+                && description.contains("requires runtime payload encryption")
+    ));
+
     let mut malformed_header_payload: Payload =
         serde_json::from_str(r#"{"document":{"body":"bad nonce marker"}}"#).unwrap();
     valid_key_encryptor
