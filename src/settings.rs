@@ -9,7 +9,7 @@ use collection::operations::validation;
 use collection::shards::shard::PeerId;
 use common::flags::FeatureFlags;
 use config::{Config, ConfigError, Environment, File, FileFormat, Source};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 use storage::types::StorageConfig;
 use validator::{Validate, ValidationError, ValidationErrors};
@@ -428,21 +428,43 @@ impl CkksCollectionKeyConfig {
     }
 }
 
-#[derive(Deserialize, Clone, Validate)]
+#[derive(Clone, Validate)]
 pub struct CkksConfig {
+    pub present: bool,
     /// Legacy collection-specific runtime settings retained only to reject old config files.
-    #[serde(default)]
     #[validate(nested)]
     pub collections: HashMap<String, CkksCollectionKeyConfig>,
     /// Unsupported legacy top-level `ckks` fields. Values are never inspected or
     /// printed because they may contain old inline key material.
-    #[serde(flatten)]
     pub legacy_fields: HashMap<String, Value>,
+}
+
+#[derive(Deserialize)]
+struct CkksConfigDeserialize {
+    #[serde(default)]
+    collections: HashMap<String, CkksCollectionKeyConfig>,
+    #[serde(flatten)]
+    legacy_fields: HashMap<String, Value>,
+}
+
+impl<'de> Deserialize<'de> for CkksConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = CkksConfigDeserialize::deserialize(deserializer)?;
+        Ok(Self {
+            present: true,
+            collections: value.collections,
+            legacy_fields: value.legacy_fields,
+        })
+    }
 }
 
 impl Default for CkksConfig {
     fn default() -> Self {
         Self {
+            present: false,
             collections: HashMap::new(),
             legacy_fields: HashMap::new(),
         }
@@ -454,6 +476,7 @@ impl fmt::Debug for CkksConfig {
         let mut legacy_field_names: Vec<_> = self.legacy_fields.keys().collect();
         legacy_field_names.sort();
         f.debug_struct("CkksConfig")
+            .field("present", &self.present)
             .field("collections", &self.collections)
             .field("legacy_fields", &legacy_field_names)
             .finish()
@@ -462,7 +485,8 @@ impl fmt::Debug for CkksConfig {
 
 impl CkksConfig {
     pub fn is_configured(&self) -> bool {
-        !self.legacy_fields.is_empty()
+        self.present
+            || !self.legacy_fields.is_empty()
             || !self.collections.is_empty()
             || self
                 .collections
@@ -927,6 +951,28 @@ ckks:
         let err = config
             .validate()
             .expect_err("legacy ckks runtime settings must be rejected");
+        assert!(format!("{err:?}").contains("legacy_ckks_runtime_unsupported"));
+    }
+
+    #[test]
+    fn test_empty_legacy_ckks_runtime_section_is_rejected() {
+        let config = Config::builder()
+            .add_source(File::from_str(DEFAULT_CONFIG, FileFormat::Yaml))
+            .add_source(File::from_str(
+                r#"
+ckks: {}
+"#,
+                FileFormat::Yaml,
+            ))
+            .build()
+            .expect("failed to build config")
+            .try_deserialize::<Settings>()
+            .expect("failed to deserialize config");
+
+        assert!(config.ckks.is_configured());
+        let err = config
+            .validate()
+            .expect_err("legacy ckks runtime section presence must be rejected");
         assert!(format!("{err:?}").contains("legacy_ckks_runtime_unsupported"));
     }
 
