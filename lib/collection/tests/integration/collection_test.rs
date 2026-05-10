@@ -1375,6 +1375,30 @@ async fn server_encrypted_collection_load_ignores_malformed_client_nonce_cache()
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[should_panic(expected = "can't load client payload nonce replay cache")]
+async fn client_encrypted_collection_load_rejects_malformed_client_nonce_cache() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let snapshots_path = collection_dir.path().join("snapshots");
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, client_payload_encryption_config())
+            .await;
+    collection.stop_gracefully().await;
+
+    let cache_path = collection_dir
+        .path()
+        .join("client_payload_nonce_replay.cache");
+    fs::write(&cache_path, "not-a-valid-cache-key\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(&cache_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    let _ = load_local_collection("test".to_string(), collection_dir.path(), &snapshots_path).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn crypto_migration_completion_requires_all_collection_shards() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection =
