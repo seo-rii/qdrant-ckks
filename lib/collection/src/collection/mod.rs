@@ -439,6 +439,7 @@ impl Collection {
             effective_optimizers_config = effective_optimizers_config.update(&optimizers_overwrite);
         }
 
+        let has_effective_encryption = collection_config.params.effective_encryption().is_some();
         let shared_collection_config = Arc::new(RwLock::new(collection_config.clone()));
 
         let payload_index_schema = Arc::new(
@@ -493,20 +494,24 @@ impl Collection {
             search_runtime: search_runtime.unwrap_or_else(Handle::current),
             optimizer_resource_budget,
             collection_stats_cache,
-            client_payload_nonce_replay_cache: Mutex::new(
+            client_payload_nonce_replay_cache: Mutex::new(if has_effective_encryption {
                 ClientPayloadNonceReplayCache::load(path).unwrap_or_else(|err| {
                     panic!("can't load client payload nonce replay cache: {err}")
-                }),
-            ),
+                })
+            } else {
+                ClientPayloadNonceReplayCache::default()
+            }),
             shard_clean_tasks: Default::default(),
         };
 
-        collection
-            .backfill_client_payload_nonce_replay_cache_from_storage()
-            .await
-            .unwrap_or_else(|err| {
-                panic!("can't backfill client payload nonce replay cache: {err}")
-            });
+        if has_effective_encryption {
+            collection
+                .backfill_client_payload_nonce_replay_cache_from_storage()
+                .await
+                .unwrap_or_else(|err| {
+                    panic!("can't backfill client payload nonce replay cache: {err}")
+                });
+        }
 
         collection
     }
