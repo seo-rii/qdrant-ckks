@@ -39,7 +39,7 @@ use crate::common::collection_size_stats::{
     CollectionSizeAtomicStats, CollectionSizeStats, CollectionSizeStatsCache,
 };
 use crate::common::is_ready::IsReady;
-use crate::config::{CollectionConfigInternal, ShardingMethod};
+use crate::config::{CollectionConfigInternal, EncryptionSelector, ShardingMethod};
 use crate::operations::OperationWithClockTag;
 use crate::operations::config_diff::{DiffConfig, OptimizersConfigDiff};
 use crate::operations::shared_storage_config::SharedStorageConfig;
@@ -439,7 +439,16 @@ impl Collection {
             effective_optimizers_config = effective_optimizers_config.update(&optimizers_overwrite);
         }
 
-        let has_effective_encryption = collection_config.params.effective_encryption().is_some();
+        let has_client_envelope_rules = collection_config
+            .params
+            .effective_encryption()
+            .is_some_and(|encryption| {
+                encryption.rules.iter().any(|rule| {
+                    matches!(&rule.selector, EncryptionSelector::PayloadPaths { .. })
+                        && rule.binding.as_deref()
+                            == Some(qdrant_sec::CLIENT_PAYLOAD_ENVELOPE_BINDING)
+                })
+            });
         let shared_collection_config = Arc::new(RwLock::new(collection_config.clone()));
 
         let payload_index_schema = Arc::new(
@@ -494,7 +503,7 @@ impl Collection {
             search_runtime: search_runtime.unwrap_or_else(Handle::current),
             optimizer_resource_budget,
             collection_stats_cache,
-            client_payload_nonce_replay_cache: Mutex::new(if has_effective_encryption {
+            client_payload_nonce_replay_cache: Mutex::new(if has_client_envelope_rules {
                 ClientPayloadNonceReplayCache::load(path).unwrap_or_else(|err| {
                     panic!("can't load client payload nonce replay cache: {err}")
                 })
@@ -504,7 +513,7 @@ impl Collection {
             shard_clean_tasks: Default::default(),
         };
 
-        if has_effective_encryption {
+        if has_client_envelope_rules {
             collection
                 .backfill_client_payload_nonce_replay_cache_from_storage()
                 .await

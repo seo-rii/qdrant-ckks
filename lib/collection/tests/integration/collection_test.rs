@@ -1302,6 +1302,27 @@ async fn plaintext_collection_load_ignores_malformed_client_nonce_cache() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn server_encrypted_collection_load_ignores_malformed_client_nonce_cache() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let snapshots_path = collection_dir.path().join("snapshots");
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
+    collection.stop_gracefully().await;
+
+    fs::write(
+        collection_dir
+            .path()
+            .join("client_payload_nonce_replay.cache"),
+        "not-a-valid-cache-key\n",
+    )
+    .unwrap();
+
+    let loaded =
+        load_local_collection("test".to_string(), collection_dir.path(), &snapshots_path).await;
+    loaded.stop_gracefully().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn crypto_migration_completion_requires_all_collection_shards() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection =
