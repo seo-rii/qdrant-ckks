@@ -22,8 +22,8 @@ use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
 use segment::index::query_optimization::rescore_formula::parsed_formula::ParsedFormula;
 use segment::json_path::JsonPath;
 use segment::types::{
-    Condition, ExtendedPointId, Filter, Payload, ShardKey, WithPayload, WithPayloadInterface,
-    WithVector,
+    AnyVariants, Condition, ExtendedPointId, Filter, Match, Payload, ShardKey, ValueVariants,
+    WithPayload, WithPayloadInterface, WithVector,
 };
 use shard::count::CountRequestInternal;
 use shard::retrieve::record_internal::RecordInternal;
@@ -628,26 +628,6 @@ impl Collection {
         }
         if let Some(encryption) = encryption {
             let mut seen_client_nonces = std::collections::HashSet::new();
-            let validate_metadata_blind_index_token = |value: &serde_json::Value,
-                                                       metadata_key: &str|
-             -> CollectionResult<()> {
-                let Some(token) = value.as_str() else {
-                    return Err(CollectionError::bad_input(format!(
-                        "metadata blind-index field '{metadata_key}' must contain a base64url-no-padding HMAC-SHA256 token string",
-                    )));
-                };
-                let token = BASE64URL_NOPAD.decode(token.as_bytes()).map_err(|_| {
-                        CollectionError::bad_input(format!(
-                            "metadata blind-index field '{metadata_key}' token must be base64url-no-padding encoded",
-                        ))
-                    })?;
-                if token.len() != 32 {
-                    return Err(CollectionError::bad_input(format!(
-                        "metadata blind-index field '{metadata_key}' token must decode to 32 bytes",
-                    )));
-                }
-                Ok(())
-            };
             let payload_write_touches_metadata_blind_index =
                 |payload: &Payload,
                  key: Option<&JsonPath>,
@@ -665,7 +645,7 @@ impl Collection {
 
                     let mut touches = false;
                     for value in metadata_path.value_get(&payload.0) {
-                        validate_metadata_blind_index_token(value, metadata_key)?;
+                        validate_metadata_blind_index_json_value(value, metadata_key)?;
                         touches = true;
                     }
                     Ok(touches)
@@ -1607,7 +1587,20 @@ impl Collection {
                         }
                     }
                 }
-                EncryptionSelector::MetadataKeys { .. } => {}
+                EncryptionSelector::MetadataKeys { keys } => {
+                    for metadata_key in keys {
+                        let metadata_path = metadata_key.parse::<JsonPath>().map_err(|err| {
+                            CollectionError::bad_input(format!(
+                                "metadata blind-index field path '{metadata_key}' is invalid: {err:?}",
+                            ))
+                        })?;
+                        validate_filter_metadata_blind_index_tokens(
+                            filter,
+                            &metadata_path,
+                            metadata_key,
+                        )?;
+                    }
+                }
             }
         }
 
@@ -1808,6 +1801,128 @@ fn client_nonce_replay_cache_key(
     key: &ClientPayloadNonceReplayKey,
 ) -> String {
     key.cache_key_for_collection(collection_crypto_id)
+}
+
+fn validate_metadata_blind_index_json_value(
+    value: &serde_json::Value,
+    metadata_key: &str,
+) -> CollectionResult<()> {
+    let Some(token) = value.as_str() else {
+        return Err(CollectionError::bad_input(format!(
+            "metadata blind-index field '{metadata_key}' must contain a base64url-no-padding HMAC-SHA256 token string",
+        )));
+    };
+    validate_metadata_blind_index_token(token, metadata_key)
+}
+
+fn validate_metadata_blind_index_token(token: &str, metadata_key: &str) -> CollectionResult<()> {
+    let token = BASE64URL_NOPAD.decode(token.as_bytes()).map_err(|_| {
+        CollectionError::bad_input(format!(
+            "metadata blind-index field '{metadata_key}' token must be base64url-no-padding encoded",
+        ))
+    })?;
+    if token.len() != 32 {
+        return Err(CollectionError::bad_input(format!(
+            "metadata blind-index field '{metadata_key}' token must decode to 32 bytes",
+        )));
+    }
+    Ok(())
+}
+
+fn validate_filter_metadata_blind_index_tokens(
+    filter: &Filter,
+    metadata_path: &JsonPath,
+    metadata_key: &str,
+) -> CollectionResult<()> {
+    for condition in filter.iter_conditions() {
+        validate_condition_metadata_blind_index_tokens(condition, metadata_path, metadata_key)?;
+    }
+    Ok(())
+}
+
+fn validate_condition_metadata_blind_index_tokens(
+    condition: &Condition,
+    metadata_path: &JsonPath,
+    metadata_key: &str,
+) -> CollectionResult<()> {
+    match condition {
+        Condition::Field(field_condition) if field_condition.key.compatible(metadata_path) => {
+            let Some(match_condition) = field_condition.r#match.as_ref() else {
+                return Err(CollectionError::bad_input(format!(
+                    "metadata blind-index field '{metadata_key}' filters must use exact-match token strings",
+                )));
+            };
+            match match_condition {
+                Match::Value(value) => match &value.value {
+                    ValueVariants::String(token) => {
+                        validate_metadata_blind_index_token(token, metadata_key)
+                    }
+                    ValueVariants::Integer(_) | ValueVariants::Bool(_) => {
+                        Err(CollectionError::bad_input(format!(
+                            "metadata blind-index field '{metadata_key}' filters must use string tokens",
+                        )))
+                    }
+                },
+                Match::Any(any) => match &any.any {
+                    AnyVariants::Strings(tokens) => {
+                        for token in tokens {
+                            validate_metadata_blind_index_token(token, metadata_key)?;
+                        }
+                        Ok(())
+                    }
+                    AnyVariants::Integers(_) => Err(CollectionError::bad_input(format!(
+                        "metadata blind-index field '{metadata_key}' filters must use string tokens",
+                    ))),
+                },
+                Match::Except(except) => match &except.except {
+                    AnyVariants::Strings(tokens) => {
+                        for token in tokens {
+                            validate_metadata_blind_index_token(token, metadata_key)?;
+                        }
+                        Ok(())
+                    }
+                    AnyVariants::Integers(_) => Err(CollectionError::bad_input(format!(
+                        "metadata blind-index field '{metadata_key}' filters must use string tokens",
+                    ))),
+                },
+                Match::Text(_) | Match::TextAny(_) | Match::Phrase(_) => {
+                    Err(CollectionError::bad_input(format!(
+                        "metadata blind-index field '{metadata_key}' filters must use exact-match token strings",
+                    )))
+                }
+            }
+        }
+        Condition::Field(_)
+        | Condition::HasId(_)
+        | Condition::HasVector(_)
+        | Condition::CustomIdChecker(_) => Ok(()),
+        Condition::IsEmpty(is_empty) if is_empty.is_empty.key.compatible(metadata_path) => {
+            Err(CollectionError::bad_input(format!(
+                "metadata blind-index field '{metadata_key}' filters must use exact-match token strings",
+            )))
+        }
+        Condition::IsNull(is_null) if is_null.is_null.key.compatible(metadata_path) => {
+            Err(CollectionError::bad_input(format!(
+                "metadata blind-index field '{metadata_key}' filters must use exact-match token strings",
+            )))
+        }
+        Condition::IsEmpty(_) | Condition::IsNull(_) => Ok(()),
+        Condition::Nested(nested) => {
+            if nested.raw_key().compatible(metadata_path) {
+                return Err(CollectionError::bad_input(format!(
+                    "metadata blind-index field '{metadata_key}' filters must use exact-match token strings",
+                )));
+            }
+            validate_filter_metadata_blind_index_tokens(
+                nested.filter(),
+                metadata_path,
+                metadata_key,
+            )
+        }
+        Condition::Filter(filter) => {
+            validate_filter_metadata_blind_index_tokens(filter, metadata_path, metadata_key)
+        }
+    }
 }
 
 fn filter_touches_encrypted_payload<'a>(

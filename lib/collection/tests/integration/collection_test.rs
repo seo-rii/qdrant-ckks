@@ -1560,9 +1560,10 @@ async fn encrypted_payload_blind_index_token_filter_is_searchable() {
         payload_encryption_with_blind_index_config(),
     )
     .await;
+    let token = BASE64URL_NOPAD.encode(&[9_u8; 32]);
     let blind_filter = Filter::new_must(Condition::Field(FieldCondition::new_match(
         "document_body__blind_eq".parse().unwrap(),
-        serde_json::from_str(r#"{ "value": "client-token-v1" }"#).unwrap(),
+        serde_json::from_value(serde_json::json!({ "value": token })).unwrap(),
     )));
 
     collection
@@ -1606,6 +1607,34 @@ async fn encrypted_payload_blind_index_token_filter_is_searchable() {
         )
         .await
         .unwrap();
+
+    let invalid_blind_filter = Filter::new_must(Condition::Field(FieldCondition::new_match(
+        "document_body__blind_eq".parse().unwrap(),
+        serde_json::from_str(r#"{ "value": "client-token-v1" }"#).unwrap(),
+    )));
+    let err = collection
+        .scroll_by(
+            ScrollRequestInternal {
+                offset: None,
+                limit: Some(10),
+                filter: Some(invalid_blind_filter),
+                with_payload: Some(WithPayloadInterface::Bool(true)),
+                with_vector: false.into(),
+                order_by: None,
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("metadata blind-index field 'document_body__blind_eq'")
+                && description.contains("base64url")
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread")]

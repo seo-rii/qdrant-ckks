@@ -357,7 +357,10 @@ Token payload values must be base64url-no-padding strings that decode to a
 does fail closed on missing, non-string, malformed, or wrong-length token
 fields before writing them to storage. Key-path payload updates to blind-index
 token fields are rejected; write them as full payload objects so the collection
-guard can validate the token shape.
+guard can validate the token shape. Filters on blind-index token fields are
+also limited to exact-match string tokens, including `match.value`,
+`match.any`, and `match.except`; range, geo, full-text, null/empty, or
+wrong-length token filters fail closed.
 
 ```json
 {
