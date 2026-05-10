@@ -3793,6 +3793,55 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
                 && description.contains("requires runtime vector encryption")
     ));
 
+    let mut tampered_fingerprint_payload = vector_sidecar(
+        DEFAULT_VECTOR_NAME,
+        "tenant-a:docs",
+        valid_nonce(),
+        valid_ciphertext(),
+    );
+    let tampered_fingerprint_provenance =
+        vector_sidecar_provenance(&tampered_fingerprint_payload, DEFAULT_VECTOR_NAME);
+    let sidecar_entry = tampered_fingerprint_payload
+        .0
+        .get_mut(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+        .and_then(|sidecar| sidecar.as_object_mut())
+        .and_then(|sidecar| sidecar.get_mut(DEFAULT_VECTOR_NAME))
+        .and_then(|entry| entry.as_object_mut())
+        .and_then(|entry| entry.get_mut(ENCRYPTED_CKKS_VECTOR_MARKER))
+        .and_then(|marker| marker.as_object_mut())
+        .and_then(|marker| marker.get_mut("envelope"))
+        .and_then(|envelope| envelope.as_object_mut())
+        .unwrap();
+    sidecar_entry.insert(
+        "material_fingerprint".to_string(),
+        serde_json::Value::String("tenant-a/vector@tampered".to_string()),
+    );
+    let tampered_fingerprint_sidecar =
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
+            payload: tampered_fingerprint_payload,
+            points: Some(vec![1.into()]),
+            filter: None,
+            key: None,
+        }));
+    let err = collection
+        .update_from_client(
+            tampered_fingerprint_sidecar,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            tampered_fingerprint_provenance,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("encrypted vector sidecar entry")
+                && description.contains("requires runtime vector encryption")
+    ));
+
     let wrong_point_payload = vector_sidecar(
         DEFAULT_VECTOR_NAME,
         "tenant-a:docs",

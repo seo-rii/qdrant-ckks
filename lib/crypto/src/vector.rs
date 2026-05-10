@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::aead::{
     AeadCipher, AeadKeyring, CKKS_VECTOR_KEY_DOMAIN, EncryptedEnvelope, EncryptionContext,
-    EncryptionError, SecretKey, validate_key_id,
+    EncryptionError, SecretKey, validate_encrypted_envelope_metadata, validate_key_id,
 };
 
 pub const CKKS_SCHEME: &str = "openfhe-ckks";
@@ -372,7 +372,10 @@ pub struct CkksVectorSidecarEnvelopeKey {
     collection_id: String,
     point_id: String,
     vector_name: String,
+    envelope_version: u8,
+    envelope_algorithm: String,
     key_id: String,
+    material_fingerprint: String,
     rk_id: String,
     rk_epoch: Option<u64>,
     nonce: String,
@@ -433,6 +436,7 @@ pub fn ckks_vector_sidecar_envelope_key(
     if encrypted.scheme != CKKS_SCHEME {
         return Err(CkksError::UnsupportedScheme(encrypted.scheme));
     }
+    validate_encrypted_envelope_metadata(&encrypted.envelope)?;
     let ciphertext = BASE64URL_NOPAD
         .decode(encrypted.envelope.ciphertext.as_bytes())
         .map_err(|_| CkksError::MalformedEnvelope("stored ciphertext is invalid".to_string()))?;
@@ -447,7 +451,10 @@ pub fn ckks_vector_sidecar_envelope_key(
         collection_id: collection_id.to_string(),
         point_id: point_id.to_string(),
         vector_name: vector_name.to_string(),
+        envelope_version: encrypted.envelope.version,
+        envelope_algorithm: encrypted.envelope.algorithm,
         key_id: encrypted.envelope.key_id,
+        material_fingerprint: encrypted.envelope.material_fingerprint,
         rk_id: encrypted.envelope.rk_id,
         rk_epoch: encrypted.envelope.rk_epoch,
         nonce: encrypted.envelope.nonce,
