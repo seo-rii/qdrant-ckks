@@ -405,6 +405,36 @@ mod ckks_tests {
     }
 
     #[test]
+    fn disabled_crypto_migration_state_is_not_effective_encryption() {
+        let mut params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        assert!(params.effective_encryption().is_some());
+
+        params.encryption.as_mut().unwrap().migration_state = CryptoMigrationState::Disabled;
+        assert!(
+            params.effective_encryption().is_none(),
+            "completed decryption migrations must not leave encryption guards active",
+        );
+    }
+
+    #[test]
     fn crypto_migration_state_allows_only_job_state_machine_edges() {
         use CryptoMigrationState::{Active, Decrypting, Disabled, Encrypting, Rotating};
 
@@ -2362,7 +2392,10 @@ impl CollectionParams {
     }
 
     pub fn effective_encryption(&self) -> Option<CollectionEncryptionConfig> {
-        self.encryption.clone()
+        self.encryption
+            .as_ref()
+            .filter(|encryption| encryption.migration_state != CryptoMigrationState::Disabled)
+            .cloned()
     }
 
     fn missing_vector_error(&self, vector_name: &VectorName) -> CollectionError {
