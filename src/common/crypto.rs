@@ -412,7 +412,7 @@ impl ClientPayloadSignatureVerifier {
     }
 }
 
-pub struct PayloadWritePlan {
+pub(crate) struct PayloadWritePlan {
     collection_crypto_id: String,
     rules: Vec<PayloadWriteRule>,
 }
@@ -424,13 +424,13 @@ pub(crate) struct PayloadWriteOutcome {
 }
 
 impl PayloadWritePlan {
-    pub fn has_server_encrypt_rules(&self) -> bool {
+    pub(crate) fn has_server_encrypt_rules(&self) -> bool {
         self.rules
             .iter()
             .any(|rule| matches!(rule, PayloadWriteRule::ServerEncrypt { .. }))
     }
 
-    pub fn has_client_envelope_rules(&self) -> bool {
+    pub(crate) fn has_client_envelope_rules(&self) -> bool {
         self.rules
             .iter()
             .any(|rule| matches!(rule, PayloadWriteRule::ClientEnvelope { .. }))
@@ -576,7 +576,7 @@ impl PayloadWritePlan {
             reason = "reserved for the admin crypto migration path that re-encrypts stale payload envelopes"
         )
     )]
-    pub fn reencrypt_payload_if_stale(
+    pub(crate) fn reencrypt_payload_if_stale(
         &self,
         point_id: &str,
         payload: &mut Payload,
@@ -635,7 +635,11 @@ impl PayloadWritePlan {
         Ok(encrypted)
     }
 
-    pub fn touches_selected_fields(&self, payload: &Payload, key: Option<&JsonPath>) -> bool {
+    pub(crate) fn touches_selected_fields(
+        &self,
+        payload: &Payload,
+        key: Option<&JsonPath>,
+    ) -> bool {
         self.rules.iter().any(|rule| {
             rule.policy().fields().iter().any(|field| {
                 let Ok(encrypted_path) = field.parse::<JsonPath>() else {
@@ -678,7 +682,7 @@ pub(crate) fn payload_write_plan_for_collection(
     )
 }
 
-pub fn payload_write_plan_for_collection_with_crypto_id(
+pub(crate) fn payload_write_plan_for_collection_with_crypto_id(
     settings: &Settings,
     collection_name: &str,
     collection_crypto_id: &str,
@@ -707,25 +711,25 @@ struct VectorWriteRule {
     public_material: CkksPublicMaterial,
 }
 
-pub struct VectorWritePlan {
+pub(crate) struct VectorWritePlan {
     rules: Vec<VectorWriteRule>,
 }
 
 impl VectorWritePlan {
-    pub fn contains_vector_name(&self, vector_name: &str) -> bool {
+    pub(crate) fn contains_vector_name(&self, vector_name: &str) -> bool {
         self.rules
             .iter()
             .any(|rule| rule.vector_name == vector_name)
     }
 
-    pub fn distance_for_vector(&self, vector_name: &str) -> Option<Distance> {
+    pub(crate) fn distance_for_vector(&self, vector_name: &str) -> Option<Distance> {
         self.rules
             .iter()
             .find(|rule| rule.vector_name == vector_name)
             .map(|rule| rule.distance)
     }
 
-    pub fn encrypt_dense_vector_payload_value(
+    pub(crate) fn encrypt_dense_vector_payload_value(
         &self,
         collection_name: &str,
         point_id: &str,
@@ -761,7 +765,7 @@ impl VectorWritePlan {
         .map(Some)
     }
 
-    pub fn score_encrypted_query_batch(
+    pub(crate) fn score_encrypted_query_batch(
         &self,
         collection_name: &str,
         vector_name: &str,
@@ -813,7 +817,7 @@ impl VectorWritePlan {
         Ok(Some(scores))
     }
 
-    pub fn score_client_encrypted_query_batch(
+    pub(crate) fn score_client_encrypted_query_batch(
         &self,
         collection_name: &str,
         vector_name: &str,
@@ -870,7 +874,7 @@ impl VectorWritePlan {
         Ok(Some(scores))
     }
 
-    pub fn score_stored_query_batch(
+    pub(crate) fn score_stored_query_batch(
         &self,
         collection_name: &str,
         vector_name: &str,
@@ -921,7 +925,7 @@ impl VectorWritePlan {
     }
 }
 
-pub fn vector_write_plan_for_collection_with_crypto_id(
+pub(crate) fn vector_write_plan_for_collection_with_crypto_id(
     settings: &Settings,
     collection_name: &str,
     collection_crypto_id: &str,
