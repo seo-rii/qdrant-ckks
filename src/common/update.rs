@@ -7430,6 +7430,61 @@ esac
             assert!(is_encrypted_payload_value(body));
             assert_ne!(body, &json!("public ingress secret"));
             let upsert_body = body.clone();
+            let scroll_with_payload = crate::common::query::do_scroll_points(
+                &toc,
+                "docs",
+                shard::scroll::ScrollRequestInternal {
+                    offset: None,
+                    limit: Some(1),
+                    filter: None,
+                    with_payload: Some(WithPayloadInterface::Bool(true)),
+                    with_vector: WithVector::Bool(false),
+                    order_by: None,
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .unwrap()
+            .points;
+            assert_eq!(scroll_with_payload.len(), 1);
+            let scroll_body = scroll_with_payload[0]
+                .payload
+                .as_ref()
+                .unwrap()
+                .0
+                .get("body")
+                .unwrap();
+            assert!(is_encrypted_payload_value(scroll_body));
+            let serialized_scroll_payload =
+                serde_json::to_string(&scroll_with_payload[0].payload).unwrap();
+            assert!(!serialized_scroll_payload.contains("public ingress secret"));
+
+            let scroll_without_payload = crate::common::query::do_scroll_points(
+                &toc,
+                "docs",
+                shard::scroll::ScrollRequestInternal {
+                    offset: None,
+                    limit: Some(1),
+                    filter: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: WithVector::Bool(false),
+                    order_by: None,
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .unwrap()
+            .points;
+            assert_eq!(scroll_without_payload.len(), 1);
+            assert!(scroll_without_payload[0].payload.is_none());
 
             let err = do_upsert_points(
                 UncheckedTocProvider::new_unchecked(&toc),
