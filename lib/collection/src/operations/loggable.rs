@@ -150,6 +150,11 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "sig"
                         | "public_key"
                         | "crypto_context"
+                        | "context_digest"
+                        | "wrapped_key"
+                        | "wrapped_key_b64"
+                        | "value_b64"
+                        | "master_key_b64"
                 ) {
                     *value = Value::String("[redacted]".to_string());
                 } else {
@@ -357,7 +362,10 @@ mod tests {
                     "public_key": "qdrant-sec-public-key-log-sentinel"
                 },
                 "crypto_context": "qdrant-sec-context-log-sentinel",
-                "encrypted_query": "qdrant-sec-encrypted-query-log-sentinel"
+                "context_digest": "qdrant-sec-context-digest-log-sentinel",
+                "encrypted_query": "qdrant-sec-encrypted-query-log-sentinel",
+                "wrapped_key_b64": "qdrant-sec-wrapped-key-log-sentinel",
+                "value_b64": "qdrant-sec-inline-key-log-sentinel"
             }
         });
 
@@ -370,7 +378,10 @@ mod tests {
             "qdrant-sec-signature-log-sentinel",
             "qdrant-sec-public-key-log-sentinel",
             "qdrant-sec-context-log-sentinel",
+            "qdrant-sec-context-digest-log-sentinel",
             "qdrant-sec-encrypted-query-log-sentinel",
+            "qdrant-sec-wrapped-key-log-sentinel",
+            "qdrant-sec-inline-key-log-sentinel",
         ] {
             assert!(!serialized.contains(sentinel));
         }
