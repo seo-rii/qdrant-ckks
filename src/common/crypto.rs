@@ -6,7 +6,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use collection::config::{
-    CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams, EncryptionSelector,
+    CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams, CryptoMigrationState,
+    EncryptionSelector,
 };
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
@@ -1227,6 +1228,14 @@ pub fn validate_recovered_collection_crypto_runtime(
     params: &CollectionParams,
 ) -> Result<(), StorageError> {
     if let Some(encryption) = &params.encryption {
+        if encryption.migration_state == CryptoMigrationState::Disabled {
+            if params.ckks.is_some() {
+                return Err(StorageError::bad_input(format!(
+                    "recovered collection {collection_name} legacy ckks config is unsupported; use collection encryption rules"
+                )));
+            }
+            return Ok(());
+        }
         encryption.validate().map_err(|err| {
             StorageError::bad_input(format!(
                 "recovered collection {collection_name} encryption config is invalid: {err}",
@@ -9811,6 +9820,41 @@ mod tests {
                     && description.contains("unsupported_ckks_vector_selector")),
             "unexpected error: {err:?}",
         );
+    }
+
+    #[test]
+    fn validate_recovered_collection_crypto_runtime_allows_disabled_audit_metadata() {
+        let settings = Settings::new(None).unwrap();
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Disabled,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "missing_runtime_instance".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        assert!(
+            params.validate().is_err(),
+            "public create/update validation must still reject direct disabled states",
+        );
+        validate_recovered_collection_crypto_runtime(&settings, "docs", &params).unwrap();
+        validate_recovered_collection_crypto_config(
+            &settings,
+            "docs",
+            &recovered_config(params, None),
+        )
+        .unwrap();
     }
 
     #[test]
