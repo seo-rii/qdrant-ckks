@@ -904,6 +904,12 @@ if resource.getrlimit(resource.RLIMIT_CORE) != (0, 0):
     print("core dumps were not disabled", file=sys.stderr)
     raise SystemExit(19)
 
+current_umask = os.umask(0o077)
+os.umask(current_umask)
+if current_umask != 0o077:
+    print(f"bridge umask was not restricted: {oct(current_umask)}", file=sys.stderr)
+    raise SystemExit(22)
+
 value = ctypes.c_int(0)
 if ctypes.CDLL(None).prctl(2, ctypes.byref(value), 0, 0, 0) != 0:
     raise SystemExit(2)

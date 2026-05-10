@@ -1350,7 +1350,8 @@ fn configure_bridge_command_sandbox(command: &mut Command) {
     // This is not a full sandbox, but it prevents the bridge process from
     // gaining privileges through setuid binaries or file capabilities after
     // Qdrant has already validated the executable path and ownership. It also
-    // disables core dumps for the plaintext-bearing bridge process. The
+    // disables core dumps for the plaintext-bearing bridge process and
+    // restricts default permissions for any bridge-created files. The
     // parent-death signal prevents a bridge from staying alive as an orphan if
     // Qdrant exits while the bridge is handling plaintext embeddings.
     unsafe {
@@ -1369,10 +1370,10 @@ fn configure_bridge_command_sandbox(command: &mut Command) {
             };
             let result = nix::libc::setrlimit(nix::libc::RLIMIT_CORE, &core_limit);
             if result != 0 {
-                Err(io::Error::last_os_error())
-            } else {
-                Ok(())
+                return Err(io::Error::last_os_error());
             }
+            nix::libc::umask(0o077);
+            Ok(())
         });
     }
 }
