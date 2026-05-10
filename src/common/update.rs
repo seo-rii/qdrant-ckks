@@ -2435,9 +2435,10 @@ mod tests {
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_sec::{
         CLIENT_ENCRYPTED_PAYLOAD_MARKER, ENCRYPTED_CKKS_VECTOR_MARKER,
-        ENCRYPTED_VECTOR_SIDECAR_FIELD, VECTOR_ENVELOPE_BINDING, client_payload_signature_message,
-        is_client_encrypted_payload_value, is_encrypted_ckks_vector_payload_value,
-        is_encrypted_payload_value,
+        ENCRYPTED_VECTOR_SIDECAR_FIELD, VECTOR_ENVELOPE_BINDING, ckks_vector_sidecar_envelope_key,
+        client_payload_signature_message, is_client_encrypted_payload_value,
+        is_encrypted_ckks_vector_payload_value, is_encrypted_payload_value,
+        server_payload_envelope_key,
     };
     use ring::rand::SystemRandom;
     use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -2873,6 +2874,166 @@ esac
             StorageError::BadInput { description }
                 if description.contains("batch vector count for 'embedding'")
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn combined_payload_and_vector_write_provenance_keeps_both_proofs() {
+        let bridge = fake_openfhe_bridge();
+        let vector_settings = vector_runtime_settings(&bridge.path().join("openfhe-bridge"));
+        let mut settings = payload_runtime_settings();
+        settings
+            .crypto
+            .instances
+            .extend(vector_settings.crypto.instances.clone());
+        settings
+            .crypto
+            .materials
+            .extend(vector_settings.crypto.materials.clone());
+        settings
+            .crypto
+            .backends
+            .extend(vector_settings.crypto.backends.clone());
+        let params = CollectionParams {
+            vectors: collection::operations::types::VectorsConfig::Multi(BTreeMap::from([
+                (
+                    DEFAULT_VECTOR_NAME.to_string(),
+                    VectorParamsBuilder::new(2, Distance::Dot).build(),
+                ),
+                (
+                    "plain".to_string(),
+                    VectorParamsBuilder::new(2, Distance::Dot).build(),
+                ),
+            ])),
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: None,
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![
+                    EncryptionRuleRef {
+                        id: "body_conf".to_string(),
+                        selector: EncryptionSelector::PayloadPaths {
+                            paths: vec!["body".to_string()],
+                        },
+                        instance: "docs_payload_v1".to_string(),
+                        binding: Some("payload-field/v1".to_string()),
+                    },
+                    EncryptionRuleRef {
+                        id: "vector_conf".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec![DEFAULT_VECTOR_NAME.to_string()],
+                        },
+                        instance: "docs_vector_v1".to_string(),
+                        binding: Some(VECTOR_ENVELOPE_BINDING.to_string()),
+                    },
+                ],
+            }),
+            ..CollectionParams::empty()
+        };
+        let payload_plan = payload_write_plan_for_collection_with_crypto_id(
+            &settings,
+            "mixed_docs",
+            "mixed-crypto-id",
+            &params,
+        )
+        .unwrap()
+        .unwrap();
+        let vector_plan = vector_write_plan_for_collection_with_crypto_id(
+            &settings,
+            "mixed_docs",
+            "mixed-crypto-id",
+            &params,
+        )
+        .unwrap()
+        .unwrap();
+        let mut payload = Some(segment::types::Payload(
+            json!({ "body": "mixed secret body", "group": "mixed" })
+                .as_object()
+                .unwrap()
+                .clone(),
+        ));
+        let mut seen_client_nonces = std::collections::HashSet::new();
+        let payload_outcome = payload_plan
+            .process_payload_with_replay_cache(
+                "1",
+                payload.as_mut().unwrap(),
+                &mut seen_client_nonces,
+            )
+            .unwrap();
+        assert_eq!(payload_outcome.changed, 1);
+
+        let mut vector = VectorStructPersisted::Named(HashMap::from([
+            (
+                DEFAULT_VECTOR_NAME.to_string(),
+                VectorPersisted::Dense(vec![0.9, -0.125]),
+            ),
+            ("plain".to_string(), VectorPersisted::Dense(vec![0.2, 0.8])),
+        ]));
+        let vector_sidecar_keys =
+            encrypt_vectors_for_point(&vector_plan, "mixed_docs", "1", &mut vector, &mut payload)
+                .unwrap();
+        assert_eq!(vector_sidecar_keys.len(), 1);
+        assert!(matches!(vector, VectorStructPersisted::Named(ref vectors)
+                if !vectors.contains_key(DEFAULT_VECTOR_NAME) && vectors.contains_key("plain")));
+
+        let mut provenance = payload_update_provenance(
+            payload_plan.has_server_encrypt_rules(),
+            payload_outcome.verified_server_envelope_keys,
+            payload_outcome.verified_client_envelope_keys,
+        );
+        let vector_provenance =
+            CollectionUpdateProvenance::runtime_encrypted_vectors(vector_sidecar_keys);
+        provenance = provenance.with_runtime_encrypted_vector_provenance(vector_provenance);
+
+        let payload = payload.unwrap();
+        let body = payload.0.get("body").unwrap();
+        assert!(is_encrypted_payload_value(body));
+        let body_key = server_payload_envelope_key(body, "mixed-crypto-id", "1", "body")
+            .unwrap()
+            .unwrap();
+        assert!(
+            provenance
+                .verified_server_envelope_key_for_binding(
+                    &body_key,
+                    "mixed-crypto-id",
+                    "1",
+                    "body",
+                )
+                .is_some()
+        );
+
+        let encrypted_vector = payload
+            .0
+            .get(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+            .and_then(Value::as_object)
+            .and_then(|sidecar| sidecar.get(DEFAULT_VECTOR_NAME))
+            .unwrap();
+        assert!(is_encrypted_ckks_vector_payload_value(encrypted_vector));
+        let sidecar_key = ckks_vector_sidecar_envelope_key(
+            encrypted_vector,
+            "mixed-crypto-id",
+            "1",
+            DEFAULT_VECTOR_NAME,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            provenance
+                .verified_vector_sidecar_key_for_binding(
+                    &sidecar_key,
+                    "mixed-crypto-id",
+                    "1",
+                    DEFAULT_VECTOR_NAME,
+                )
+                .is_some()
+        );
+
+        let serialized_payload = serde_json::to_string(&payload).unwrap();
+        assert!(!serialized_payload.contains("mixed secret body"));
+        assert!(!serialized_payload.contains("0.9"));
+        assert!(!serialized_payload.contains("-0.125"));
     }
 
     #[cfg(unix)]
