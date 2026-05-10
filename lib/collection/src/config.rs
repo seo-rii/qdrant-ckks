@@ -30,6 +30,9 @@ use crate::operations::validation;
 use crate::optimizers_builder::OptimizersConfig;
 
 pub const COLLECTION_CONFIG_FILE: &str = "config.json";
+const PAYLOAD_FIELD_BINDING: &str = "payload-field/v1";
+const CLIENT_PAYLOAD_ENVELOPE_BINDING: &str = "client-payload-envelope/v1";
+const VECTOR_ENVELOPE_BINDING: &str = "vector-envelope/v1";
 const METADATA_EXACT_MATCH_TOKEN_BINDING: &str = "metadata-exact-match-token/v1";
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Validate, Anonymize, Clone, PartialEq, Eq)]
@@ -1249,6 +1252,61 @@ mod ckks_tests {
 
         assert!(overlapping_params.validate().is_err());
     }
+
+    #[test]
+    fn encryption_config_rejects_selector_binding_domain_mismatch() {
+        let payload_with_metadata_binding = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("metadata-exact-match-token/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let err = payload_with_metadata_binding
+            .validate()
+            .expect_err("payload selector must reject metadata binding");
+        assert!(
+            err.to_string()
+                .contains("unsupported_payload_encryption_binding")
+        );
+
+        let vector_with_payload_binding = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "embedding_conf".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["embedding".into()],
+                    },
+                    instance: "docs_vector_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let err = vector_with_payload_binding
+            .validate()
+            .expect_err("vector selector must reject payload binding");
+        assert!(
+            err.to_string()
+                .contains("unsupported_vector_encryption_binding")
+        );
+    }
 }
 
 impl Default for WalConfig {
@@ -1949,6 +2007,13 @@ fn validate_encryption_rules(
         }
         match &rule.selector {
             EncryptionSelector::PayloadPaths { paths } => {
+                if rule.binding.as_deref().is_some_and(|binding| {
+                    binding != PAYLOAD_FIELD_BINDING && binding != CLIENT_PAYLOAD_ENVELOPE_BINDING
+                }) {
+                    return Err(validator::ValidationError::new(
+                        "unsupported_payload_encryption_binding",
+                    ));
+                }
                 for path in paths {
                     if payload_paths
                         .iter()
@@ -1970,6 +2035,15 @@ fn validate_encryption_rules(
                 }
             }
             EncryptionSelector::VectorNames { names } => {
+                if rule
+                    .binding
+                    .as_deref()
+                    .is_some_and(|binding| binding != VECTOR_ENVELOPE_BINDING)
+                {
+                    return Err(validator::ValidationError::new(
+                        "unsupported_vector_encryption_binding",
+                    ));
+                }
                 for name in names {
                     if !vector_names.insert(name.as_str()) {
                         return Err(validator::ValidationError::new(
