@@ -6025,6 +6025,52 @@ esac
             );
             assert_eq!(hnsw_graph_search_result[0].score, 9.0);
 
+            for params in [
+                SearchParams {
+                    indexed_only: true,
+                    ..SearchParams::default()
+                },
+                SearchParams {
+                    quantization: Some(segment::types::QuantizationSearchParams::default()),
+                    ..SearchParams::default()
+                },
+                SearchParams {
+                    acorn: Some(segment::types::AcornSearchParams::default()),
+                    ..SearchParams::default()
+                },
+            ] {
+                let err = crate::common::query::do_core_search_points(
+                    &toc,
+                    "vector_docs",
+                    SearchRequestInternal {
+                        vector: vec![0.0, 0.0].into(),
+                        with_payload: Some(WithPayloadInterface::Bool(false)),
+                        with_vector: Some(WithVector::Bool(false)),
+                        filter: None,
+                        params: Some(params),
+                        limit: 1,
+                        offset: None,
+                        score_threshold: None,
+                    }
+                    .into(),
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    Some(&vector_settings),
+                )
+                .await
+                .unwrap_err();
+                assert!(matches!(
+                    err,
+                    StorageError::BadInput { description }
+                        if description.contains(
+                            "does not support quantization, indexed_only, or ACORN search params"
+                        )
+                ));
+            }
+
             let point_id_hnsw_query_result = crate::common::query::do_query_points(
                 &toc,
                 "vector_docs",
