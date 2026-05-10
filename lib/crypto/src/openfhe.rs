@@ -23,6 +23,7 @@ use crate::vector::{
 
 const DEFAULT_BRIDGE_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
+const MIN_OPENFHE_SECURITY_LEVEL_BITS: u16 = 128;
 
 #[derive(Clone)]
 pub struct CommandOpenFheBackend {
@@ -1556,6 +1557,10 @@ struct CommandOpenFheResponse {
     version: u8,
     #[serde(default)]
     security_profile: Option<String>,
+    #[serde(default)]
+    security_level_bits: Option<u16>,
+    #[serde(default)]
+    noise_budget_bits: Option<f64>,
     ciphertext: String,
 }
 
@@ -1565,6 +1570,10 @@ struct CommandOpenFheBatchResponse {
     version: u8,
     #[serde(default)]
     security_profile: Option<String>,
+    #[serde(default)]
+    security_level_bits: Option<u16>,
+    #[serde(default)]
+    noise_budget_bits: Option<f64>,
     ciphertexts: Vec<String>,
 }
 
@@ -1574,6 +1583,10 @@ struct CommandOpenFheScoreResponse {
     version: u8,
     #[serde(default)]
     security_profile: Option<String>,
+    #[serde(default)]
+    security_level_bits: Option<u16>,
+    #[serde(default)]
+    noise_budget_bits: Option<f64>,
     score: f64,
 }
 
@@ -1583,6 +1596,10 @@ struct CommandOpenFheScoreBatchResponse {
     version: u8,
     #[serde(default)]
     security_profile: Option<String>,
+    #[serde(default)]
+    security_level_bits: Option<u16>,
+    #[serde(default)]
+    noise_budget_bits: Option<f64>,
     scores: Vec<f64>,
 }
 
@@ -1604,6 +1621,7 @@ fn decode_single_bridge_response(
         response.security_profile.as_deref(),
         expected_security_profile,
     )?;
+    validate_bridge_security_metadata(response.security_level_bits, response.noise_budget_bits)?;
 
     BASE64URL_NOPAD
         .decode(response.ciphertext.as_bytes())
@@ -1630,6 +1648,7 @@ fn decode_score_bridge_response(
         response.security_profile.as_deref(),
         expected_security_profile,
     )?;
+    validate_bridge_security_metadata(response.security_level_bits, response.noise_budget_bits)?;
     if !response.score.is_finite() {
         return Err(CkksError::Backend(
             "OpenFHE bridge returned non-finite score".to_string(),
@@ -1660,6 +1679,7 @@ fn decode_score_batch_bridge_response(
         response.security_profile.as_deref(),
         expected_security_profile,
     )?;
+    validate_bridge_security_metadata(response.security_level_bits, response.noise_budget_bits)?;
     if response.scores.len() != expected {
         return Err(CkksError::Backend(format!(
             "OpenFHE bridge returned {} batch scores for {expected} encrypted vectors",
@@ -1696,6 +1716,7 @@ fn decode_batch_bridge_response(
         response.security_profile.as_deref(),
         expected_security_profile,
     )?;
+    validate_bridge_security_metadata(response.security_level_bits, response.noise_budget_bits)?;
     if response.ciphertexts.len() != expected {
         return Err(CkksError::Backend(format!(
             "OpenFHE bridge returned {} batch ciphertexts for {expected} input vectors",
@@ -1736,6 +1757,29 @@ fn validate_bridge_security_profile(
     if reported != expected {
         return Err(CkksError::Backend(format!(
             "OpenFHE bridge security profile {reported} does not match expected {expected}",
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_bridge_security_metadata(
+    security_level_bits: Option<u16>,
+    noise_budget_bits: Option<f64>,
+) -> Result<(), CkksError> {
+    if let Some(security_level_bits) = security_level_bits
+        && security_level_bits < MIN_OPENFHE_SECURITY_LEVEL_BITS
+    {
+        return Err(CkksError::Backend(format!(
+            "OpenFHE bridge security level {security_level_bits} bits is below required {MIN_OPENFHE_SECURITY_LEVEL_BITS} bits",
+        )));
+    }
+
+    if let Some(noise_budget_bits) = noise_budget_bits
+        && (!noise_budget_bits.is_finite() || noise_budget_bits < 0.0)
+    {
+        return Err(CkksError::Backend(format!(
+            "OpenFHE bridge returned invalid noise budget {noise_budget_bits}",
         )));
     }
 

@@ -733,8 +733,10 @@ material, or raw profile name is rejected before collection creation.
 `batch_size` may be lower than the profile slot count, but raw
 modulus/depth/scale combinations are rejected. OpenFHE bridge encrypt, batch
 encrypt, and scoring responses must include `security_profile`; Qdrant verifies
-that it matches the requested allowlisted profile. Carrying richer
-security-level/noise-budget metadata remains future hardening.
+that it matches the requested allowlisted profile. Responses may also include
+`security_level_bits` and `noise_budget_bits`; when present, Qdrant rejects
+reported security below 128 bits and rejects non-finite or negative noise budget
+metadata.
 
 Nearest-neighbor search over an encrypted vector name is implemented for
 REST/gRPC dense query vectors and root direct point-id nearest `query` or
@@ -871,6 +873,9 @@ CKKS ciphertext bytes. Batch responses must preserve request item order and
 return exactly one ciphertext or finite score per item. All encrypt, batch
 encrypt, and scoring responses must include
 `security_profile`, and it must equal the configured allowlisted CKKS profile.
+Responses may include `security_level_bits` and `noise_budget_bits`; Qdrant
+validates those optional fields when supplied and fails closed on sub-128-bit
+security levels, negative noise budgets, or non-finite noise budgets.
 The subprocess backend still enforces a positive `timeout_ms` and caps
 stdout/stderr collection so a hung or noisy bridge cannot block Qdrant
 indefinitely or force unbounded memory growth. Returned errors do not include

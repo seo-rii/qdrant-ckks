@@ -1200,6 +1200,111 @@ printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
 
 #[cfg(unix)]
 #[test]
+fn command_openfhe_backend_rejects_weak_security_level_metadata() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("weak-level-openfhe-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+IFS= read -r _request
+printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","security_level_bits":80,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+        .with_args([script_path.display().to_string()]);
+    let encryptor = test_ckks_encryptor(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+
+    let err = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0, 2.0])
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CkksError::Backend(message)
+            if message.contains("security level 80 bits")
+                && message.contains("required 128 bits")
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn command_openfhe_backend_rejects_invalid_noise_budget_metadata() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("bad-noise-openfhe-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+while IFS= read -r request; do
+  case "$request" in
+    *'"operation":"score_plaintext_query"'*)
+      printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","noise_budget_bits":-0.5,"score":12.5}\n'
+      ;;
+    *'"scheme":"openfhe-ckks"'*)
+      printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
+      ;;
+    *) exit 7 ;;
+  esac
+done
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+        .with_args([script_path.display().to_string()]);
+    let encryptor = test_ckks_encryptor(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+    let encrypted = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0, 2.0])
+        .unwrap();
+
+    let err = encryptor
+        .score_plaintext_query(
+            "docs",
+            "point-1",
+            &public_material(),
+            &encrypted,
+            "dot",
+            &[0.5, 0.25],
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CkksError::Backend(message)
+            if message.contains("invalid noise budget")
+                && message.contains("-0.5")
+    ));
+}
+
+#[cfg(unix)]
+#[test]
 fn command_openfhe_backend_uses_plaintext_query_score_protocol() {
     use std::os::unix::fs::PermissionsExt;
 
