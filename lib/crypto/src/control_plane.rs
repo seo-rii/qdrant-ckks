@@ -14,7 +14,6 @@ pub const METADATA_BLIND_INDEX_PROVIDER: &str = "metadata/blind-index-hmac@v1";
 pub const PAYLOAD_FIELD_BINDING: &str = "payload-field/v1";
 pub const CLIENT_PAYLOAD_ENVELOPE_BINDING: &str = "client-payload-envelope/v1";
 pub const VECTOR_ENVELOPE_BINDING: &str = "vector-envelope/v1";
-pub const METADATA_VALUE_BINDING: &str = "metadata-value/v1";
 pub const METADATA_EXACT_MATCH_TOKEN_BINDING: &str = "metadata-exact-match-token/v1";
 
 #[derive(Error, Debug, PartialEq, Eq)]
@@ -34,7 +33,6 @@ pub enum ControlPlaneError {
 pub enum CryptoCapability {
     PayloadValue,
     VectorCiphertext,
-    MetadataValue,
     MetadataExactMatchToken,
 }
 
@@ -43,7 +41,6 @@ impl CryptoCapability {
         match self {
             Self::PayloadValue => "payload_value",
             Self::VectorCiphertext => "vector_ciphertext",
-            Self::MetadataValue => "metadata_value",
             Self::MetadataExactMatchToken => "metadata_exact_match_token",
         }
     }

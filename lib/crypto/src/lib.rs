@@ -20,10 +20,10 @@ pub use control_plane::{
     CLIENT_PAYLOAD_ENVELOPE_BINDING, CiphertextEnvelope, CompiledCollectionCryptoPlan,
     CompiledMetadataRule, CompiledPayloadRule, CompiledVectorRule, ControlPlaneError,
     CryptoCapability, CryptoRegistry, CryptoSuite, GENERIC_CIPHERTEXT_MARKER,
-    METADATA_BLIND_INDEX_PROVIDER, METADATA_EXACT_MATCH_TOKEN_BINDING, METADATA_VALUE_BINDING,
-    MetadataProviderFactory, PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER,
-    PAYLOAD_FIELD_BINDING, PayloadProviderFactory, VECTOR_ENVELOPE_BINDING,
-    VECTOR_OPENFHE_CKKS_PROVIDER, VectorProviderFactory,
+    METADATA_BLIND_INDEX_PROVIDER, METADATA_EXACT_MATCH_TOKEN_BINDING, MetadataProviderFactory,
+    PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER, PAYLOAD_FIELD_BINDING,
+    PayloadProviderFactory, VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER,
+    VectorProviderFactory,
 };
 pub use openfhe::CommandOpenFheBackend;
 pub use payload::{
