@@ -7137,6 +7137,32 @@ mod tests {
                 if instance == "docs_payload_v1" && option == "materials.client_key"
         ));
 
+        let mut params_with_resource_key_id = params.clone();
+        params_with_resource_key_id
+            .encryption
+            .as_mut()
+            .unwrap()
+            .key_id = Some("tenant-a/docs".to_string());
+        let mut settings_without_instance_key_id = settings.clone();
+        settings_without_instance_key_id
+            .crypto
+            .instances
+            .get_mut("docs_payload_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .remove("key_id");
+        assert!(matches!(
+            payload_write_plan_for_collection(
+                &settings_without_instance_key_id,
+                "docs",
+                &params_with_resource_key_id
+            ),
+            Err(PayloadWriteSetupError::InvalidCollectionKeyId { collection })
+                if collection == "docs"
+        ));
+
         let plan = payload_write_plan_for_collection(&settings, "docs", &params)
             .unwrap()
             .unwrap();
