@@ -1686,6 +1686,217 @@ async fn encrypted_payload_blind_index_token_filter_is_searchable() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn metadata_blind_index_token_field_rejects_non_filter_read_modes() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection = encrypted_collection_fixture(
+        collection_dir.path(),
+        1,
+        payload_encryption_with_blind_index_config(),
+    )
+    .await;
+    let token_field = "document_body__blind_eq";
+    let token_order_by = OrderBy {
+        key: token_field.parse().unwrap(),
+        direction: Some(Direction::Asc),
+        start_from: None,
+    };
+
+    let err = collection
+        .scroll_by(
+            ScrollRequestInternal {
+                offset: None,
+                limit: Some(10),
+                filter: None,
+                with_payload: Some(WithPayloadInterface::Bool(false)),
+                with_vector: false.into(),
+                order_by: Some(OrderByInterface::Struct(token_order_by.clone())),
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot order by metadata blind-index field")
+                && description.contains(token_field)
+                && description.contains("exact-match filters only")
+    ));
+
+    let err = collection
+        .query_batch(
+            vec![(
+                CollectionQueryRequest {
+                    prefetch: vec![],
+                    query: Some(Query::OrderBy(token_order_by)),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                ShardSelectorInternal::All,
+            )],
+            |_name| async { None },
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot order by metadata blind-index field")
+                && description.contains(token_field)
+                && description.contains("exact-match filters only")
+    ));
+
+    let err = collection
+        .facet(
+            FacetParams {
+                key: token_field.parse().unwrap(),
+                limit: 10,
+                filter: None,
+                exact: true,
+            },
+            ShardSelectorInternal::All,
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot facet on metadata blind-index field")
+                && description.contains(token_field)
+                && description.contains("exact-match filters only")
+    ));
+
+    let group_request = GroupRequest {
+        source: SourceRequest::Search(SearchRequestInternal {
+            vector: vec![0.0, 0.0, 0.0, 0.0].into(),
+            filter: None,
+            params: None,
+            limit: 1,
+            offset: Some(0),
+            with_payload: Some(WithPayloadInterface::Bool(false)),
+            with_vector: Some(WithVector::Bool(false)),
+            score_threshold: None,
+        }),
+        group_by: token_field.parse().unwrap(),
+        group_size: 1,
+        limit: 1,
+        with_lookup: None,
+    };
+    let err = GroupBy::new(
+        group_request,
+        &collection,
+        |_name| async { None },
+        HwMeasurementAcc::new(),
+    )
+    .execute()
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot group by metadata blind-index field")
+                && description.contains(token_field)
+                && description.contains("exact-match filters only")
+    ));
+
+    let token_formula = FormulaInternal {
+        formula: ExpressionInternal::Variable(token_field.to_string()),
+        defaults: HashMap::new(),
+    };
+    let err = collection
+        .query_batch(
+            vec![(
+                CollectionQueryRequest {
+                    prefetch: vec![],
+                    query: Some(Query::Formula(token_formula)),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                ShardSelectorInternal::All,
+            )],
+            |_name| async { None },
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot use metadata blind-index field")
+                && description.contains(token_field)
+                && description.contains("formula")
+                && description.contains("exact-match filters only")
+    ));
+
+    let valid_token = BASE64URL_NOPAD.encode(&[9_u8; 32]);
+    let token_filter = Filter::new_must(Condition::Field(FieldCondition::new_match(
+        token_field.parse().unwrap(),
+        serde_json::from_value(serde_json::json!({ "value": valid_token })).unwrap(),
+    )));
+    let token_condition_formula = FormulaInternal {
+        formula: ExpressionInternal::Condition(Box::new(token_filter.must.unwrap().pop().unwrap())),
+        defaults: HashMap::new(),
+    };
+    let err = collection
+        .query_batch(
+            vec![(
+                CollectionQueryRequest {
+                    prefetch: vec![],
+                    query: Some(Query::Formula(token_condition_formula)),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                ShardSelectorInternal::All,
+            )],
+            |_name| async { None },
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot use formula condition on metadata blind-index field")
+                && description.contains(token_field)
+                && description.contains("exact-match filters only")
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn metadata_blind_index_writes_require_hmac_token_shape() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection = encrypted_collection_fixture(

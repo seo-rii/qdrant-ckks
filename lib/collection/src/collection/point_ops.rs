@@ -1634,22 +1634,35 @@ impl Collection {
         }
 
         for rule in &encryption.rules {
-            let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
-                continue;
-            };
-
-            for encrypted_path in paths {
-                let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
-                    CollectionError::bad_input(format!(
-                        "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                    ))
-                })?;
-                if order_by.key.compatible(&encrypted_json_path) {
-                    return Err(CollectionError::bad_input(format!(
-                        "cannot order by encrypted payload field '{}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
-                        order_by.key,
-                    )));
+            match &rule.selector {
+                EncryptionSelector::PayloadPaths { paths } => {
+                    for encrypted_path in paths {
+                        let encrypted_json_path =
+                            encrypted_path.parse::<JsonPath>().map_err(|err| {
+                                CollectionError::bad_input(format!(
+                                    "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                                ))
+                            })?;
+                        if order_by.key.compatible(&encrypted_json_path) {
+                            return Err(CollectionError::bad_input(format!(
+                                "cannot order by encrypted payload field '{}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                                order_by.key,
+                            )));
+                        }
+                    }
                 }
+                EncryptionSelector::MetadataKeys { keys } => {
+                    for metadata_key in keys {
+                        let metadata_path = parse_metadata_blind_index_path(metadata_key)?;
+                        if order_by.key.compatible(&metadata_path) {
+                            return Err(CollectionError::bad_input(format!(
+                                "cannot order by metadata blind-index field '{}' because it overlaps token field '{metadata_key}'; blind-index token fields support exact-match filters only",
+                                order_by.key,
+                            )));
+                        }
+                    }
+                }
+                EncryptionSelector::VectorNames { .. } => {}
             }
         }
 
@@ -1679,21 +1692,33 @@ impl Collection {
         }
 
         for rule in &encryption.rules {
-            let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
-                continue;
-            };
-
-            for encrypted_path in paths {
-                let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
-                    CollectionError::bad_input(format!(
-                        "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                    ))
-                })?;
-                if group_by.compatible(&encrypted_json_path) {
-                    return Err(CollectionError::bad_input(format!(
-                        "cannot group by encrypted payload field '{group_by}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
-                    )));
+            match &rule.selector {
+                EncryptionSelector::PayloadPaths { paths } => {
+                    for encrypted_path in paths {
+                        let encrypted_json_path =
+                            encrypted_path.parse::<JsonPath>().map_err(|err| {
+                                CollectionError::bad_input(format!(
+                                    "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                                ))
+                            })?;
+                        if group_by.compatible(&encrypted_json_path) {
+                            return Err(CollectionError::bad_input(format!(
+                                "cannot group by encrypted payload field '{group_by}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                            )));
+                        }
+                    }
                 }
+                EncryptionSelector::MetadataKeys { keys } => {
+                    for metadata_key in keys {
+                        let metadata_path = parse_metadata_blind_index_path(metadata_key)?;
+                        if group_by.compatible(&metadata_path) {
+                            return Err(CollectionError::bad_input(format!(
+                                "cannot group by metadata blind-index field '{group_by}' because it overlaps token field '{metadata_key}'; blind-index token fields support exact-match filters only",
+                            )));
+                        }
+                    }
+                }
+                EncryptionSelector::VectorNames { .. } => {}
             }
         }
 
@@ -1740,34 +1765,63 @@ impl Collection {
         }
 
         for rule in &encryption.rules {
-            let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
-                continue;
-            };
+            match &rule.selector {
+                EncryptionSelector::PayloadPaths { paths } => {
+                    for encrypted_path in paths {
+                        let encrypted_json_path =
+                            encrypted_path.parse::<JsonPath>().map_err(|err| {
+                                CollectionError::bad_input(format!(
+                                    "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                                ))
+                            })?;
 
-            for encrypted_path in paths {
-                let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
-                    CollectionError::bad_input(format!(
-                        "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                    ))
-                })?;
+                        if let Some(formula_path) = formula
+                            .payload_vars
+                            .iter()
+                            .find(|payload_var| payload_var.compatible(&encrypted_json_path))
+                        {
+                            return Err(CollectionError::bad_input(format!(
+                                "cannot use encrypted payload field '{formula_path}' in formula because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                            )));
+                        }
 
-                if let Some(formula_path) = formula
-                    .payload_vars
-                    .iter()
-                    .find(|payload_var| payload_var.compatible(&encrypted_json_path))
-                {
-                    return Err(CollectionError::bad_input(format!(
-                        "cannot use encrypted payload field '{formula_path}' in formula because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
-                    )));
+                        if let Some(condition_path) =
+                            formula.conditions.iter().find_map(|condition| {
+                                condition_touches_encrypted_payload(condition, &encrypted_json_path)
+                            })
+                        {
+                            return Err(CollectionError::bad_input(format!(
+                                "cannot use formula condition on encrypted payload field '{condition_path}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                            )));
+                        }
+                    }
                 }
+                EncryptionSelector::MetadataKeys { keys } => {
+                    for metadata_key in keys {
+                        let metadata_path = parse_metadata_blind_index_path(metadata_key)?;
 
-                if let Some(condition_path) = formula.conditions.iter().find_map(|condition| {
-                    condition_touches_encrypted_payload(condition, &encrypted_json_path)
-                }) {
-                    return Err(CollectionError::bad_input(format!(
-                        "cannot use formula condition on encrypted payload field '{condition_path}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
-                    )));
+                        if let Some(formula_path) = formula
+                            .payload_vars
+                            .iter()
+                            .find(|payload_var| payload_var.compatible(&metadata_path))
+                        {
+                            return Err(CollectionError::bad_input(format!(
+                                "cannot use metadata blind-index field '{formula_path}' in formula because it overlaps token field '{metadata_key}'; blind-index token fields support exact-match filters only",
+                            )));
+                        }
+
+                        if let Some(condition_path) =
+                            formula.conditions.iter().find_map(|condition| {
+                                condition_touches_encrypted_payload(condition, &metadata_path)
+                            })
+                        {
+                            return Err(CollectionError::bad_input(format!(
+                                "cannot use formula condition on metadata blind-index field '{condition_path}' because it overlaps token field '{metadata_key}'; blind-index token fields support exact-match filters only",
+                            )));
+                        }
+                    }
                 }
+                EncryptionSelector::VectorNames { .. } => {}
             }
         }
 
@@ -1827,6 +1881,14 @@ fn validate_metadata_blind_index_token(token: &str, metadata_key: &str) -> Colle
         )));
     }
     Ok(())
+}
+
+fn parse_metadata_blind_index_path(metadata_key: &str) -> CollectionResult<JsonPath> {
+    metadata_key.parse::<JsonPath>().map_err(|err| {
+        CollectionError::bad_input(format!(
+            "metadata blind-index field path '{metadata_key}' is invalid: {err:?}",
+        ))
+    })
 }
 
 fn validate_filter_metadata_blind_index_tokens(

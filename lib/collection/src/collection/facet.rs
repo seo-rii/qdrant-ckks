@@ -56,21 +56,40 @@ impl Collection {
             }
 
             for rule in &encryption.rules {
-                let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
-                    continue;
-                };
-                for encrypted_path in paths {
-                    let encrypted_json_path = encrypted_path.parse().map_err(|err| {
-                        CollectionError::bad_input(format!(
-                            "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                        ))
-                    })?;
-                    if request.key.compatible(&encrypted_json_path) {
-                        return Err(CollectionError::bad_input(format!(
-                            "cannot facet on encrypted payload field '{}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
-                            request.key,
-                        )));
+                match &rule.selector {
+                    EncryptionSelector::PayloadPaths { paths } => {
+                        for encrypted_path in paths {
+                            let encrypted_json_path =
+                                encrypted_path.parse::<JsonPath>().map_err(|err| {
+                                    CollectionError::bad_input(format!(
+                                        "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                                    ))
+                                })?;
+                            if request.key.compatible(&encrypted_json_path) {
+                                return Err(CollectionError::bad_input(format!(
+                                    "cannot facet on encrypted payload field '{}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                                    request.key,
+                                )));
+                            }
+                        }
                     }
+                    EncryptionSelector::MetadataKeys { keys } => {
+                        for metadata_key in keys {
+                            let metadata_path =
+                                metadata_key.parse::<JsonPath>().map_err(|err| {
+                                    CollectionError::bad_input(format!(
+                                        "metadata blind-index field path '{metadata_key}' is invalid: {err:?}",
+                                    ))
+                                })?;
+                            if request.key.compatible(&metadata_path) {
+                                return Err(CollectionError::bad_input(format!(
+                                    "cannot facet on metadata blind-index field '{}' because it overlaps token field '{metadata_key}'; blind-index token fields support exact-match filters only",
+                                    request.key,
+                                )));
+                            }
+                        }
+                    }
+                    EncryptionSelector::VectorNames { .. } => {}
                 }
             }
         }
