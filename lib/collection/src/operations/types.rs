@@ -104,7 +104,7 @@ struct RuntimeEncryptedPayloadEnvelopes {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 struct RuntimeEncryptedVectorSidecars {
-    verified_sidecar_keys: Arc<HashSet<CkksVectorSidecarEnvelopeKey>>,
+    verified_sidecar_keys: Arc<HashSet<CkksVectorVerifiedSidecarKey>>,
 }
 
 impl RuntimeEncryptedPayloadEnvelopes {
@@ -152,17 +152,18 @@ impl RuntimeEncryptedVectorSidecars {
         verified_sidecar_keys: impl IntoIterator<Item = CkksVectorVerifiedSidecarKey>,
     ) -> Self {
         Self {
-            verified_sidecar_keys: Arc::new(
-                verified_sidecar_keys
-                    .into_iter()
-                    .map(|key| key.envelope_key().clone())
-                    .collect(),
-            ),
+            verified_sidecar_keys: Arc::new(verified_sidecar_keys.into_iter().collect()),
         }
     }
 
-    fn contains(&self, sidecar_key: &CkksVectorSidecarEnvelopeKey) -> bool {
-        self.verified_sidecar_keys.contains(sidecar_key)
+    fn proof_for(
+        &self,
+        sidecar_key: &CkksVectorSidecarEnvelopeKey,
+    ) -> Option<CkksVectorVerifiedSidecarKey> {
+        self.verified_sidecar_keys
+            .iter()
+            .find(|verified| verified.envelope_key() == sidecar_key)
+            .cloned()
     }
 }
 
@@ -275,21 +276,19 @@ impl CollectionUpdateProvenance {
         self.vector_sidecars.is_some()
     }
 
-    pub fn allows_vector_sidecar_key(&self, sidecar_key: &CkksVectorSidecarEnvelopeKey) -> bool {
-        self.vector_sidecars
-            .as_ref()
-            .is_some_and(|verified| verified.contains(sidecar_key))
-    }
-
-    pub fn allows_vector_sidecar_key_for_binding(
+    pub fn verified_vector_sidecar_key_for_binding(
         &self,
         sidecar_key: &CkksVectorSidecarEnvelopeKey,
         collection_id: &str,
         point_id: &str,
         vector_name: &str,
-    ) -> bool {
-        sidecar_key.matches_binding(collection_id, point_id, vector_name)
-            && self.allows_vector_sidecar_key(sidecar_key)
+    ) -> Option<CkksVectorVerifiedSidecarKey> {
+        if !sidecar_key.matches_binding(collection_id, point_id, vector_name) {
+            return None;
+        }
+        self.vector_sidecars
+            .as_ref()
+            .and_then(|verified| verified.proof_for(sidecar_key))
     }
 
     pub fn verified_client_envelope_key_for_binding(

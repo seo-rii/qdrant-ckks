@@ -3741,8 +3741,6 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
         serde_json::Value::String("not-base64url".to_string()),
         valid_ciphertext(),
     );
-    let malformed_nonce_provenance =
-        vector_sidecar_provenance(&malformed_nonce_payload, DEFAULT_VECTOR_NAME);
     let malformed_nonce_sidecar =
         CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
             payload: malformed_nonce_payload,
@@ -3758,7 +3756,7 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            malformed_nonce_provenance,
+            CollectionUpdateProvenance::default(),
         )
         .await
         .unwrap_err();

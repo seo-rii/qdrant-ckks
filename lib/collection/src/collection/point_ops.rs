@@ -514,16 +514,18 @@ impl Collection {
                             "encrypted vector sidecar entry '{vector_name}' requires runtime vector encryption before collection write",
                         )));
                     };
-                    if !update_provenance.allows_vector_sidecar_key_for_binding(
-                        &sidecar_key,
-                        &collection_crypto_id,
-                        point_id,
-                        vector_name,
-                    ) {
+                    let Some(_verified_sidecar_key) = update_provenance
+                        .verified_vector_sidecar_key_for_binding(
+                            &sidecar_key,
+                            &collection_crypto_id,
+                            point_id,
+                            vector_name,
+                        )
+                    else {
                         return Err(CollectionError::bad_input(format!(
                             "encrypted vector sidecar entry '{vector_name}' requires runtime vector encryption before collection write",
                         )));
-                    }
+                    };
                 }
             }
             Ok(touches)
