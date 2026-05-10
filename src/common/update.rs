@@ -6339,6 +6339,59 @@ esac
             assert_eq!(client_encrypted_hnsw_query[0].id, 1.into());
             assert_eq!(client_encrypted_hnsw_query[0].score, 9.0);
 
+            for params in [
+                SearchParams {
+                    indexed_only: true,
+                    ..SearchParams::default()
+                },
+                SearchParams {
+                    quantization: Some(segment::types::QuantizationSearchParams::default()),
+                    ..SearchParams::default()
+                },
+                SearchParams {
+                    acorn: Some(segment::types::AcornSearchParams::default()),
+                    ..SearchParams::default()
+                },
+            ] {
+                let err = crate::common::query::do_query_points(
+                    &toc,
+                    "vector_docs",
+                    CollectionQueryRequest {
+                        prefetch: Vec::new(),
+                        query: Some(Query::Vector(VectorQuery::Nearest(
+                            VectorInputInternal::CkksEncryptedQuery(fake_ckks_client_query(
+                                b"fake-ckks-query:2",
+                                2,
+                            )),
+                        ))),
+                        using: DEFAULT_VECTOR_NAME.to_string(),
+                        filter: None,
+                        score_threshold: None,
+                        limit: 1,
+                        offset: 0,
+                        params: Some(params),
+                        with_vector: WithVector::Bool(false),
+                        with_payload: WithPayloadInterface::Bool(false),
+                        lookup_from: None,
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    Some(&vector_settings),
+                )
+                .await
+                .unwrap_err();
+                assert!(matches!(
+                    err,
+                    StorageError::BadInput { description }
+                        if description.contains(
+                            "does not support quantization, indexed_only, or ACORN search params"
+                        )
+                ));
+            }
+
             let legacy_client_encrypted_search = crate::common::query::do_search_points(
                 &toc,
                 "vector_docs",
