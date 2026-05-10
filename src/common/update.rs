@@ -7153,6 +7153,39 @@ esac
                     if description.contains("cannot return encrypted vector")
             ));
 
+            let err = crate::common::query::do_query_points(
+                &toc,
+                "vector_docs",
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Selector(vec![DEFAULT_VECTOR_NAME.to_string()]),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cannot return encrypted vector")
+            ));
+
             let encrypted_query = CollectionQueryRequest {
                 prefetch: Vec::new(),
                 query: Some(Query::Vector(VectorQuery::Nearest(
@@ -7353,6 +7386,37 @@ esac
                     vector: vec![0.0, 0.0].into(),
                     with_payload: Some(WithPayloadInterface::Bool(false)),
                     with_vector: Some(WithVector::Bool(true)),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    score_threshold: None,
+                }
+                .into(),
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cannot return encrypted vector")
+            ));
+
+            let err = crate::common::query::do_core_search_points(
+                &toc,
+                "vector_docs",
+                SearchRequestInternal {
+                    vector: vec![0.0, 0.0].into(),
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Selector(vec![
+                        DEFAULT_VECTOR_NAME.to_string(),
+                    ])),
                     filter: None,
                     params: None,
                     limit: 1,
