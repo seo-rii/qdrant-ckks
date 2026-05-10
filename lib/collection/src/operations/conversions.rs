@@ -37,8 +37,8 @@ use super::types::{
     VectorsConfigDiff,
 };
 use crate::config::{
-    CkksCollectionConfig, CollectionParams, ShardingMethod, WalConfig, default_replication_factor,
-    default_write_consistency_factor,
+    CkksCollectionConfig, CollectionParams, RedactedLegacyCkksValue, ShardingMethod, WalConfig,
+    default_replication_factor, default_write_consistency_factor,
 };
 use crate::lookup::WithLookup;
 use crate::lookup::types::WithLookupInterface;
@@ -310,12 +310,20 @@ impl TryFrom<api::grpc::qdrant::CkksCollectionConfig> for CkksCollectionConfig {
             payload_text_fields,
             vector_names,
         } = value;
-        let config = Self {
-            enabled,
-            key_id,
-            payload_text_fields,
-            vector_names,
-        };
+        let mut legacy_fields = BTreeMap::new();
+        if enabled {
+            legacy_fields.insert("enabled".to_string(), RedactedLegacyCkksValue);
+        }
+        if key_id.is_some() {
+            legacy_fields.insert("key_id".to_string(), RedactedLegacyCkksValue);
+        }
+        if !payload_text_fields.is_empty() {
+            legacy_fields.insert("payload_text_fields".to_string(), RedactedLegacyCkksValue);
+        }
+        if !vector_names.is_empty() {
+            legacy_fields.insert("vector_names".to_string(), RedactedLegacyCkksValue);
+        }
+        let config = Self { legacy_fields };
         config
             .validate()
             .map_err(|err| Status::invalid_argument(format!("invalid ckks config: {err}")))?;
@@ -325,17 +333,12 @@ impl TryFrom<api::grpc::qdrant::CkksCollectionConfig> for CkksCollectionConfig {
 
 impl From<CkksCollectionConfig> for api::grpc::qdrant::CkksCollectionConfig {
     fn from(value: CkksCollectionConfig) -> Self {
-        let CkksCollectionConfig {
-            enabled,
-            key_id,
-            payload_text_fields,
-            vector_names,
-        } = value;
+        let legacy_fields = value.legacy_fields;
         Self {
-            enabled,
-            key_id,
-            payload_text_fields,
-            vector_names,
+            enabled: legacy_fields.contains_key("enabled"),
+            key_id: None,
+            payload_text_fields: Vec::new(),
+            vector_names: Vec::new(),
         }
     }
 }
@@ -2056,61 +2059,42 @@ mod ckks_grpc_tests {
     }
 
     #[test]
-    fn grpc_ckks_config_rejects_invalid_key_id() {
+    fn grpc_ckks_config_redacts_legacy_fields() {
         let config = api::grpc::qdrant::CkksCollectionConfig {
             enabled: true,
-            key_id: Some("tenant/key".to_string()),
+            key_id: Some("tenant/key-material-must-not-survive".to_string()),
             payload_text_fields: vec!["body".to_string()],
-            vector_names: Vec::new(),
-        };
-
-        let err = CkksCollectionConfig::try_from(config).unwrap_err();
-
-        assert_eq!(err.code(), tonic::Code::InvalidArgument);
-    }
-
-    #[test]
-    fn grpc_ckks_config_rejects_invalid_payload_fields() {
-        for payload_text_fields in [vec!["$qdrant_sec".to_string()], vec!["a..b".to_string()]] {
-            let config = api::grpc::qdrant::CkksCollectionConfig {
-                enabled: true,
-                key_id: Some("tenant-a:docs".to_string()),
-                payload_text_fields,
-                vector_names: Vec::new(),
-            };
-
-            let err = CkksCollectionConfig::try_from(config).unwrap_err();
-
-            assert_eq!(err.code(), tonic::Code::InvalidArgument);
-        }
-    }
-
-    #[test]
-    fn grpc_ckks_config_rejects_vector_names_until_storage_support_exists() {
-        let config = api::grpc::qdrant::CkksCollectionConfig {
-            enabled: true,
-            key_id: Some("tenant-a:docs".to_string()),
-            payload_text_fields: Vec::new(),
             vector_names: vec!["embedding".to_string()],
         };
 
-        let err = CkksCollectionConfig::try_from(config).unwrap_err();
+        let converted = CkksCollectionConfig::try_from(config).unwrap();
 
-        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert_eq!(converted.legacy_fields.len(), 4);
+        assert!(converted.legacy_fields.contains_key("enabled"));
+        assert!(converted.legacy_fields.contains_key("key_id"));
+        assert!(converted.legacy_fields.contains_key("payload_text_fields"));
+        assert!(converted.legacy_fields.contains_key("vector_names"));
+
+        let roundtrip = api::grpc::qdrant::CkksCollectionConfig::from(converted);
+        assert!(roundtrip.enabled);
+        assert!(roundtrip.key_id.is_none());
+        assert!(roundtrip.payload_text_fields.is_empty());
+        assert!(roundtrip.vector_names.is_empty());
     }
 
     #[test]
-    fn grpc_ckks_config_rejects_empty_enabled_rules() {
+    fn grpc_ckks_config_preserves_empty_legacy_presence() {
         let config = api::grpc::qdrant::CkksCollectionConfig {
             enabled: true,
-            key_id: Some("tenant-a:docs".to_string()),
+            key_id: None,
             payload_text_fields: Vec::new(),
             vector_names: Vec::new(),
         };
 
-        let err = CkksCollectionConfig::try_from(config).unwrap_err();
+        let converted = CkksCollectionConfig::try_from(config).unwrap();
 
-        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert_eq!(converted.legacy_fields.len(), 1);
+        assert!(converted.legacy_fields.contains_key("enabled"));
     }
 }
 

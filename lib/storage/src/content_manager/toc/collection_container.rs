@@ -124,11 +124,19 @@ fn encrypted_uuid_mismatch_requires_fail_closed(
 
 #[cfg(test)]
 mod tests {
-    use collection::config::{CkksCollectionConfig, CollectionParams};
+    use collection::config::{CkksCollectionConfig, CollectionParams, RedactedLegacyCkksValue};
 
     use super::{
         collection_params_bind_crypto_identity, encrypted_uuid_mismatch_requires_fail_closed,
     };
+
+    fn legacy_ckks_config() -> CkksCollectionConfig {
+        CkksCollectionConfig {
+            legacy_fields: [("enabled".to_string(), RedactedLegacyCkksValue)]
+                .into_iter()
+                .collect(),
+        }
+    }
 
     #[test]
     fn collection_params_bind_crypto_identity_for_encrypted_configs() {
@@ -137,12 +145,7 @@ mod tests {
         ));
 
         let encrypted = CollectionParams {
-            ckks: Some(CkksCollectionConfig {
-                enabled: true,
-                key_id: Some("tenant-a:docs".to_string()),
-                payload_text_fields: vec!["body".to_string()],
-                vector_names: Vec::new(),
-            }),
+            ckks: Some(legacy_ckks_config()),
             ..CollectionParams::empty()
         };
 
@@ -153,12 +156,7 @@ mod tests {
     fn encrypted_uuid_mismatch_requires_fail_closed_for_encrypted_configs() {
         let plaintext = CollectionParams::empty();
         let encrypted = CollectionParams {
-            ckks: Some(CkksCollectionConfig {
-                enabled: true,
-                key_id: Some("tenant-a:docs".to_string()),
-                payload_text_fields: vec!["body".to_string()],
-                vector_names: Vec::new(),
-            }),
+            ckks: Some(legacy_ckks_config()),
             ..CollectionParams::empty()
         };
 

@@ -801,7 +801,7 @@ mod tests {
 
     use collection::config::{
         CkksCollectionConfig, CollectionEncryptionConfig, CollectionParams, CryptoMigrationState,
-        EncryptionRuleRef, EncryptionSelector,
+        EncryptionRuleRef, EncryptionSelector, RedactedLegacyCkksValue,
     };
     use collection::operations::types::PeerMetadata;
     use collection::shards::shard::PeerId;
@@ -810,6 +810,14 @@ mod tests {
         collection_params_require_crypto_runtime_transfer_parity,
         validate_encrypted_transfer_crypto_runtime_parity,
     };
+
+    fn legacy_ckks_config() -> CkksCollectionConfig {
+        CkksCollectionConfig {
+            legacy_fields: [("enabled".to_string(), RedactedLegacyCkksValue)]
+                .into_iter()
+                .collect(),
+        }
+    }
 
     #[test]
     fn encrypted_collection_requires_transfer_parity_enforcement() {
@@ -840,12 +848,7 @@ mod tests {
         ));
 
         let legacy = CollectionParams {
-            ckks: Some(CkksCollectionConfig {
-                enabled: true,
-                key_id: Some("tenant-a:docs".to_string()),
-                payload_text_fields: vec!["body".to_string()],
-                vector_names: Vec::new(),
-            }),
+            ckks: Some(legacy_ckks_config()),
             ..CollectionParams::empty()
         };
         assert!(collection_params_require_crypto_runtime_transfer_parity(

@@ -4446,7 +4446,8 @@ mod tests {
 
     use collection::config::{
         CkksCollectionConfig, CollectionConfigInternal, CollectionEncryptionConfig,
-        CollectionParams, CryptoMigrationState, EncryptionRuleRef, EncryptionSelector, WalConfig,
+        CollectionParams, CryptoMigrationState, EncryptionRuleRef, EncryptionSelector,
+        RedactedLegacyCkksValue, WalConfig,
     };
     use collection::operations::vector_params_builder::VectorParamsBuilder;
     use collection::optimizers_builder::OptimizersConfig;
@@ -4463,6 +4464,15 @@ mod tests {
 
     use super::*;
     use crate::settings::{CkksConfig, CryptoInstanceConfig};
+
+    fn legacy_ckks_collection_config(fields: &[&str]) -> CkksCollectionConfig {
+        CkksCollectionConfig {
+            legacy_fields: fields
+                .iter()
+                .map(|field| ((*field).to_string(), RedactedLegacyCkksValue))
+                .collect(),
+        }
+    }
 
     fn with_embedding_vector(mut params: CollectionParams, distance: Distance) -> CollectionParams {
         params.vectors = collection::operations::types::VectorsConfig::Multi(BTreeMap::from([(
@@ -9547,12 +9557,10 @@ mod tests {
             ..Settings::new(None).unwrap()
         };
         let params = CollectionParams {
-            ckks: Some(CkksCollectionConfig {
-                enabled: true,
-                key_id: Some("tenant-a:docs".to_string()),
-                payload_text_fields: vec!["body".to_string()],
-                vector_names: Vec::new(),
-            }),
+            ckks: Some(legacy_ckks_collection_config(&[
+                "enabled",
+                "payload_text_fields",
+            ])),
             ..CollectionParams::empty()
         };
 
@@ -9580,12 +9588,10 @@ mod tests {
             ..Settings::new(None).unwrap()
         };
         let params = CollectionParams {
-            ckks: Some(CkksCollectionConfig {
-                enabled: true,
-                key_id: Some("tenant-a:docs".to_string()),
-                payload_text_fields: vec!["body".to_string()],
-                vector_names: Vec::new(),
-            }),
+            ckks: Some(legacy_ckks_collection_config(&[
+                "enabled",
+                "payload_text_fields",
+            ])),
             ..CollectionParams::empty()
         };
 
@@ -9844,12 +9850,7 @@ mod tests {
         );
 
         let legacy_params = CollectionParams {
-            ckks: Some(CkksCollectionConfig {
-                enabled: true,
-                key_id: Some("tenant-a:docs".to_string()),
-                payload_text_fields: Vec::new(),
-                vector_names: vec!["embedding".to_string()],
-            }),
+            ckks: Some(legacy_ckks_collection_config(&["enabled", "vector_names"])),
             ..CollectionParams::empty()
         };
         let err = validate_create_collection_crypto_runtime(
@@ -9861,7 +9862,7 @@ mod tests {
         assert!(
             matches!(err, StorageError::BadInput { ref description }
                 if description.contains("collection docs crypto config is invalid")
-                    && description.contains("unsupported_ckks_vector_selector")),
+                    && description.contains("legacy_ckks_config_unsupported")),
             "unexpected error: {err:?}",
         );
     }
@@ -9957,20 +9958,15 @@ mod tests {
         );
 
         let legacy_params = CollectionParams {
-            ckks: Some(CkksCollectionConfig {
-                enabled: true,
-                key_id: Some("tenant-a:docs".to_string()),
-                payload_text_fields: Vec::new(),
-                vector_names: vec!["embedding".to_string()],
-            }),
+            ckks: Some(legacy_ckks_collection_config(&["enabled", "vector_names"])),
             ..CollectionParams::empty()
         };
         let err = validate_recovered_collection_crypto_runtime(&settings, "docs", &legacy_params)
             .expect_err("recovered legacy vector selector must fail schema validation");
         assert!(
             matches!(err, StorageError::BadInput { ref description }
-                if description.contains("recovered collection docs ckks config is invalid")
-                    && description.contains("unsupported_ckks_vector_selector")),
+                if description.contains("collection docs crypto config is invalid")
+                    && description.contains("legacy_ckks_config_unsupported")),
             "unexpected error: {err:?}",
         );
     }
@@ -10025,12 +10021,10 @@ mod tests {
                     binding: Some("payload-field/v1".to_string()),
                 }],
             }),
-            ckks: Some(CkksCollectionConfig {
-                enabled: true,
-                key_id: Some("tenant-a:docs".to_string()),
-                payload_text_fields: vec!["body".to_string()],
-                vector_names: Vec::new(),
-            }),
+            ckks: Some(legacy_ckks_collection_config(&[
+                "enabled",
+                "payload_text_fields",
+            ])),
             ..CollectionParams::empty()
         };
         let err = validate_recovered_collection_crypto_runtime(&settings, "docs", &conflicting)

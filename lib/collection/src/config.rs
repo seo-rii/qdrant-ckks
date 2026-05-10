@@ -16,7 +16,7 @@ use segment::types::{
     SparseVectorDataConfig, StrictModeConfig, VectorDataConfig, VectorName, VectorNameBuf,
     VectorStorageDatatype, VectorStorageType,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 use validator::{Validate, ValidationError, ValidationErrors};
 use wal::WalOptions;
@@ -74,22 +74,40 @@ mod ckks_tests {
 
     use super::*;
 
+    fn legacy_ckks_config(fields: &[&str]) -> CkksCollectionConfig {
+        CkksCollectionConfig {
+            legacy_fields: fields
+                .iter()
+                .map(|field| ((*field).to_string(), RedactedLegacyCkksValue))
+                .collect(),
+        }
+    }
+
     #[test]
     fn ckks_collection_config_deserializes_but_is_unsupported() {
-        let params = CollectionParams {
-            ckks: Some(CkksCollectionConfig {
-                enabled: true,
-                key_id: Some("tenant-a:docs".to_string()),
-                payload_text_fields: vec!["body".to_string(), "document.summary".to_string()],
-                vector_names: Vec::new(),
-            }),
-            ..CollectionParams::empty()
-        };
+        let raw = r#"{
+            "ckks": {
+                "enabled": true,
+                "key_id": "tenant-a:docs",
+                "payload_text_fields": ["body", "document.summary"]
+            }
+        }"#;
+        let params: CollectionParams = serde_json::from_str(raw).unwrap();
+
+        assert_eq!(
+            params.ckks,
+            Some(legacy_ckks_config(&[
+                "enabled",
+                "key_id",
+                "payload_text_fields"
+            ]))
+        );
 
         let serialized = serde_json::to_string(&params).unwrap();
         assert!(serialized.contains("\"ckks\""));
-        assert!(serialized.contains("tenant-a:docs"));
-        assert!(!serialized.contains("master_key"));
+        assert!(serialized.contains("payload_text_fields"));
+        assert!(!serialized.contains("tenant-a:docs"));
+        assert!(serialized.contains("[redacted]"));
 
         let deserialized: CollectionParams = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized.ckks, params.ckks);
@@ -100,63 +118,16 @@ mod ckks_tests {
     }
 
     #[test]
-    fn ckks_collection_config_rejects_invalid_key_ids_and_field_paths() {
-        let invalid_key = CkksCollectionConfig {
-            enabled: true,
-            key_id: Some("tenant/key".to_string()),
-            payload_text_fields: vec!["body".to_string()],
-            vector_names: Vec::new(),
+    fn empty_ckks_collection_config_is_still_rejected_when_present() {
+        let params = CollectionParams {
+            ckks: Some(CkksCollectionConfig::default()),
+            ..CollectionParams::empty()
         };
-        assert!(invalid_key.validate().is_err());
 
-        let invalid_field = CkksCollectionConfig {
-            enabled: true,
-            key_id: Some("tenant-a:docs".to_string()),
-            payload_text_fields: vec!["body..text".to_string()],
-            vector_names: Vec::new(),
-        };
-        assert!(invalid_field.validate().is_err());
-
-        let marker_field = CkksCollectionConfig {
-            enabled: true,
-            key_id: Some("tenant-a:docs".to_string()),
-            payload_text_fields: vec!["$qdrant_sec.body".to_string()],
-            vector_names: Vec::new(),
-        };
-        assert!(marker_field.validate().is_err());
-
-        for payload_text_field in [
-            "$qdrant_client_aead.body",
-            "$qdrant_ciphertext.body",
-            "items[].name",
-            "items.*.name",
-            "items.0.name",
-        ] {
-            let invalid_selector = CkksCollectionConfig {
-                enabled: true,
-                key_id: Some("tenant-a:docs".to_string()),
-                payload_text_fields: vec![payload_text_field.to_string()],
-                vector_names: Vec::new(),
-            };
-            assert!(invalid_selector.validate().is_err());
-        }
-
-        let vector_field = CkksCollectionConfig {
-            enabled: true,
-            key_id: Some("tenant-a:docs".to_string()),
-            payload_text_fields: vec!["body".to_string()],
-            vector_names: vec!["embedding".to_string()],
-        };
-        let err = vector_field.validate().unwrap_err();
-        assert!(format!("{err:?}").contains("unsupported_ckks_vector_selector"));
-
-        let empty_enabled = CkksCollectionConfig {
-            enabled: true,
-            key_id: Some("tenant-a:docs".to_string()),
-            payload_text_fields: Vec::new(),
-            vector_names: Vec::new(),
-        };
-        assert!(empty_enabled.validate().is_err());
+        let err = params
+            .validate()
+            .expect_err("legacy ckks collection config must be rejected");
+        assert!(err.to_string().contains("legacy_ckks_config_unsupported"));
     }
 
     #[test]
@@ -187,12 +158,7 @@ mod ckks_tests {
         deserialized.validate().unwrap();
 
         let conflicting = CollectionParams {
-            ckks: Some(CkksCollectionConfig {
-                enabled: true,
-                key_id: Some("tenant-a:docs".to_string()),
-                payload_text_fields: vec!["body".to_string()],
-                vector_names: Vec::new(),
-            }),
+            ckks: Some(legacy_ckks_config(&["enabled", "payload_text_fields"])),
             ..params
         };
         assert!(conflicting.validate().is_err());
@@ -1180,12 +1146,7 @@ mod ckks_tests {
 
     #[test]
     fn collection_params_reject_encryption_changes_without_migration() {
-        let ckks = CkksCollectionConfig {
-            enabled: true,
-            key_id: Some("tenant-a:docs".to_string()),
-            payload_text_fields: vec!["body".to_string()],
-            vector_names: Vec::new(),
-        };
+        let ckks = legacy_ckks_config(&["enabled", "payload_text_fields"]);
         let ckks_params = CollectionParams {
             ckks: Some(ckks.clone()),
             ..CollectionParams::empty()
@@ -1193,12 +1154,7 @@ mod ckks_tests {
         assert!(ckks_params.check_compatible(&ckks_params).is_ok());
 
         let disabled_ckks = CollectionParams {
-            ckks: Some(CkksCollectionConfig {
-                enabled: false,
-                key_id: ckks.key_id.clone(),
-                payload_text_fields: Vec::new(),
-                vector_names: Vec::new(),
-            }),
+            ckks: Some(legacy_ckks_config(&["key_id"])),
             ..CollectionParams::empty()
         };
         assert!(ckks_params.check_compatible(&disabled_ckks).is_err());
@@ -1275,12 +1231,7 @@ mod ckks_tests {
                     binding: Some("payload-field/v1".to_string()),
                 }],
             }),
-            ckks: Some(CkksCollectionConfig {
-                enabled: true,
-                key_id: Some("tenant-a:docs".to_string()),
-                payload_text_fields: vec!["body".to_string()],
-                vector_names: Vec::new(),
-            }),
+            ckks: Some(legacy_ckks_config(&["enabled", "payload_text_fields"])),
             ..CollectionParams::empty()
         };
 
@@ -1750,54 +1701,46 @@ pub enum CryptoMigrationCheckpointStatus {
     RolledBack,
 }
 
+#[derive(Debug, Clone, Copy, Default, JsonSchema, Anonymize, PartialEq, Eq, Hash)]
+pub struct RedactedLegacyCkksValue;
+
+impl Serialize for RedactedLegacyCkksValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str("[redacted]")
+    }
+}
+
+impl<'de> Deserialize<'de> for RedactedLegacyCkksValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        serde::de::IgnoredAny::deserialize(deserializer).map(|_| Self)
+    }
+}
+
 #[derive(
     Debug, Deserialize, Serialize, JsonSchema, Validate, Anonymize, Clone, PartialEq, Eq, Hash,
 )]
-#[validate(schema(function = "validate_ckks_collection_config"))]
 #[serde(rename_all = "snake_case")]
 pub struct CkksCollectionConfig {
-    /// Legacy collection encryption switch retained only to reject old configs explicitly.
-    #[serde(default)]
+    /// Unsupported legacy `params.ckks` fields. Values are ignored and
+    /// serialized redacted so old inline key material never becomes part of the
+    /// canonical collection config model.
+    #[serde(flatten)]
     #[anonymize(false)]
-    pub enabled: bool,
-    /// Legacy key id retained only for reject-only deserialization.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[validate(custom(function = "validate_ckks_key_id"))]
-    #[anonymize(false)]
-    pub key_id: Option<String>,
-    /// Legacy payload selector retained only for reject-only deserialization.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[validate(custom(function = "validate_ckks_payload_fields"))]
-    #[anonymize(true)]
-    pub payload_text_fields: Vec<String>,
-    /// Legacy vector selector retained only for reject-only deserialization.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[anonymize(false)]
-    pub vector_names: Vec<VectorNameBuf>,
+    pub legacy_fields: BTreeMap<String, RedactedLegacyCkksValue>,
 }
 
 impl Default for CkksCollectionConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
-            key_id: None,
-            payload_text_fields: Vec::new(),
-            vector_names: Vec::new(),
+            legacy_fields: BTreeMap::new(),
         }
     }
-}
-
-fn validate_ckks_key_id(key_id: &str) -> Result<(), validator::ValidationError> {
-    if key_id.is_empty()
-        || key_id.len() > 128
-        || !key_id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b':' | b'-'))
-    {
-        return Err(validator::ValidationError::new("invalid_ckks_key_id"));
-    }
-
-    Ok(())
 }
 
 fn validate_encryption_key_id(key_id: &str) -> Result<(), validator::ValidationError> {
@@ -1808,38 +1751,6 @@ fn validate_encryption_key_id(key_id: &str) -> Result<(), validator::ValidationE
         })
     {
         return Err(validator::ValidationError::new("invalid_encryption_key_id"));
-    }
-
-    Ok(())
-}
-
-fn validate_ckks_payload_fields(fields: &[String]) -> Result<(), validator::ValidationError> {
-    for field in fields {
-        if field.is_empty()
-            || field.starts_with('.')
-            || field.ends_with('.')
-            || field.split('.').any(invalid_payload_encryption_path_part)
-        {
-            return Err(validator::ValidationError::new(
-                "invalid_ckks_payload_field",
-            ));
-        }
-    }
-
-    Ok(())
-}
-
-fn validate_ckks_collection_config(
-    config: &CkksCollectionConfig,
-) -> Result<(), validator::ValidationError> {
-    if config.enabled && !config.vector_names.is_empty() {
-        return Err(validator::ValidationError::new(
-            "unsupported_ckks_vector_selector",
-        ));
-    }
-
-    if config.enabled && config.payload_text_fields.is_empty() && config.vector_names.is_empty() {
-        return Err(validator::ValidationError::new("empty_ckks_selectors"));
     }
 
     Ok(())

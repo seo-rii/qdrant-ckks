@@ -8,7 +8,8 @@ use collection::collection::distance_matrix::CollectionSearchMatrixRequest;
 use collection::config::{
     CkksCollectionConfig, CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams,
     CryptoMigrationCheckpoint, CryptoMigrationCheckpointStatus, CryptoMigrationPlan,
-    CryptoMigrationState, EncryptionRuleRef, EncryptionSelector, WalConfig,
+    CryptoMigrationState, EncryptionRuleRef, EncryptionSelector, RedactedLegacyCkksValue,
+    WalConfig,
 };
 use collection::discovery::discover;
 use collection::grouping::GroupBy;
@@ -4775,10 +4776,12 @@ async fn collection_params_diff_rejects_crypto_mutation() {
             on_disk_payload: None,
             encryption: None,
             ckks: Some(CkksCollectionConfig {
-                enabled: true,
-                key_id: Some("tenant-a:docs".to_string()),
-                payload_text_fields: vec!["document.body".to_string()],
-                vector_names: Vec::new(),
+                legacy_fields: [
+                    ("enabled".to_string(), RedactedLegacyCkksValue),
+                    ("payload_text_fields".to_string(), RedactedLegacyCkksValue),
+                ]
+                .into_iter()
+                .collect(),
             }),
         })
         .await

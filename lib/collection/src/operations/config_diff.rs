@@ -544,6 +544,15 @@ mod tests {
     use crate::operations::vector_params_builder::VectorParamsBuilder;
     use crate::optimizers_builder::OptimizersConfig;
 
+    fn legacy_ckks_config(fields: &[&str]) -> CkksCollectionConfig {
+        CkksCollectionConfig {
+            legacy_fields: fields
+                .iter()
+                .map(|field| ((*field).to_string(), crate::config::RedactedLegacyCkksValue))
+                .collect(),
+        }
+    }
+
     #[test]
     fn test_update_collection_params() {
         let params = CollectionParams {
@@ -606,24 +615,14 @@ mod tests {
             read_fan_out_delay_ms: None,
             on_disk_payload: None,
             encryption: None,
-            ckks: Some(CkksCollectionConfig {
-                enabled: false,
-                key_id: Some("tenant-a:docs".to_string()),
-                payload_text_fields: Vec::new(),
-                vector_names: Vec::new(),
-            }),
+            ckks: Some(legacy_ckks_config(&["key_id"])),
         };
         assert!(legacy_diff.validate().is_err());
     }
 
     #[test]
     fn test_ckks_collection_params_update_ignores_crypto_sections() {
-        let enabled_ckks = CkksCollectionConfig {
-            enabled: true,
-            key_id: Some("tenant-a:docs".to_string()),
-            payload_text_fields: vec!["body".to_string()],
-            vector_names: Vec::new(),
-        };
+        let enabled_ckks = legacy_ckks_config(&["enabled", "payload_text_fields"]);
         let params = CollectionParams {
             ckks: Some(enabled_ckks.clone()),
             ..CollectionParams::empty()
@@ -640,12 +639,7 @@ mod tests {
         });
         assert_eq!(unchanged.ckks, Some(enabled_ckks.clone()));
 
-        let disabled = CkksCollectionConfig {
-            enabled: false,
-            key_id: Some("tenant-a:docs".to_string()),
-            payload_text_fields: Vec::new(),
-            vector_names: Vec::new(),
-        };
+        let disabled = legacy_ckks_config(&["key_id"]);
         let updated = params.update(&CollectionParamsDiff {
             replication_factor: None,
             write_consistency_factor: None,
@@ -698,23 +692,13 @@ mod tests {
             read_fan_out_delay_ms: None,
             on_disk_payload: None,
             encryption: None,
-            ckks: Some(CkksCollectionConfig {
-                enabled: true,
-                key_id: Some("tenant-a:docs".to_string()),
-                payload_text_fields: vec!["body".to_string()],
-                vector_names: Vec::new(),
-            }),
+            ckks: Some(legacy_ckks_config(&["enabled", "payload_text_fields"])),
         });
         assert_eq!(ignored.encryption, params.encryption);
         assert!(ignored.ckks.is_none());
 
         let conflicting = CollectionParamsDiff {
-            ckks: Some(CkksCollectionConfig {
-                enabled: true,
-                key_id: Some("tenant-a:docs".to_string()),
-                payload_text_fields: vec!["body".to_string()],
-                vector_names: Vec::new(),
-            }),
+            ckks: Some(legacy_ckks_config(&["enabled", "payload_text_fields"])),
             ..CollectionParamsDiff {
                 replication_factor: None,
                 write_consistency_factor: None,
