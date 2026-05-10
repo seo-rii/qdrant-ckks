@@ -1352,7 +1352,9 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
                 "wrapped_by": material.wrapped_by,
                 "wrap_algorithm": material.wrap_algorithm,
                 "has_nonce": material.nonce.is_some(),
+                "nonce_sha256_b64": optional_config_value_digest(material.nonce.as_deref()),
                 "has_wrapped_key_b64": material.wrapped_key_b64.is_some(),
+                "wrapped_key_b64_sha256_b64": optional_config_value_digest(material.wrapped_key_b64.as_deref()),
                 "rk_epoch": material.rk_epoch,
                 "state": material.state,
                 "scope": material.scope,
@@ -1387,6 +1389,13 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
         .expect("serializing sanitized crypto runtime capability fingerprint cannot fail");
     let digest = Sha256::digest(&canonical);
     BASE64URL_NOPAD.encode(&digest)
+}
+
+fn optional_config_value_digest(value: Option<&str>) -> Option<String> {
+    value.map(|value| {
+        let digest = Sha256::digest(value.as_bytes());
+        BASE64URL_NOPAD.encode(digest.as_ref())
+    })
 }
 
 #[cfg(test)]
@@ -5771,26 +5780,43 @@ mod tests {
         )
         .unwrap();
 
-        let mut peer_with_different_secret_bytes = settings.clone();
-        peer_with_different_secret_bytes
+        let mut peer_with_different_direct_secret_bytes = settings.clone();
+        peer_with_different_direct_secret_bytes
             .crypto
             .materials
             .get_mut("tenant-a/mk")
             .unwrap()
             .value_b64 = Some(BASE64URL_NOPAD.encode(&[9_u8; 32]));
-        peer_with_different_secret_bytes
-            .crypto
-            .materials
-            .get_mut("tenant-a/docs-rk")
-            .unwrap()
-            .wrapped_key_b64 = Some(BASE64URL_NOPAD.encode(&[8_u8; 48]));
         let peer_secret_fingerprint =
-            crypto_runtime_capability_fingerprint(&peer_with_different_secret_bytes);
+            crypto_runtime_capability_fingerprint(&peer_with_different_direct_secret_bytes);
         validate_crypto_runtime_capability_parity(
             &settings,
             [("peer-secret-redacted", peer_secret_fingerprint.as_str())],
         )
         .unwrap();
+
+        let mut peer_with_different_wrapped_resource_key = settings.clone();
+        peer_with_different_wrapped_resource_key
+            .crypto
+            .materials
+            .get_mut("tenant-a/docs-rk")
+            .unwrap()
+            .wrapped_key_b64 = Some(BASE64URL_NOPAD.encode(&[8_u8; 48]));
+        let peer_wrapped_resource_key_fingerprint =
+            crypto_runtime_capability_fingerprint(&peer_with_different_wrapped_resource_key);
+        let err = validate_crypto_runtime_capability_parity(
+            &settings,
+            [(
+                "peer-wrapped-rk",
+                peer_wrapped_resource_key_fingerprint.as_str(),
+            )],
+        )
+        .expect_err("wrapped RK blob mismatch must fail closed");
+        assert!(
+            err.to_string()
+                .contains("crypto runtime capability mismatch")
+        );
+        assert!(err.to_string().contains("peer-wrapped-rk"));
 
         let mut peer_with_different_epoch = settings.clone();
         peer_with_different_epoch
