@@ -462,7 +462,7 @@ pub fn ckks_vector_sidecar_envelope_key(
     }))
 }
 
-pub fn ckks_vector_verified_sidecar_key(
+fn ckks_vector_verified_sidecar_key(
     value: &Value,
     collection_id: &str,
     point_id: &str,
@@ -748,6 +748,25 @@ where
             values.len(),
             &ciphertext,
         )
+    }
+
+    pub fn encrypt_sidecar_payload_value(
+        &self,
+        collection: &str,
+        point_id: &str,
+        public_material: &CkksPublicMaterial,
+        values: &[f64],
+    ) -> Result<(Value, CkksVectorVerifiedSidecarKey), CkksError> {
+        let collection_context = self.collection_context(collection)?;
+        let encrypted = self.encrypt(collection, point_id, public_material, values)?;
+        let value = encrypted_ckks_vector_payload_value(&encrypted)?;
+        let verified_sidecar_key = ckks_vector_verified_sidecar_key(
+            &value,
+            collection_context,
+            point_id,
+            &self.vector_name,
+        )?;
+        Ok((value, verified_sidecar_key))
     }
 
     pub fn encrypt_batch(

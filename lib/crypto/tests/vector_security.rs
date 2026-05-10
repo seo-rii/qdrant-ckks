@@ -11,6 +11,7 @@ use qdrant_sec::{
     CkksPlaintextQueryScoreBatchInput, CkksPlaintextQueryScoreInput, CkksPublicMaterial,
     CkksVectorBackend, CkksVectorBatchItem, CkksVectorEncryptor, CommandOpenFheBackend,
     EncryptedCkksVector, EncryptionContext, EncryptionError, SecretKey,
+    ckks_vector_sidecar_envelope_key,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -208,6 +209,29 @@ fn encryptor() -> CkksVectorEncryptor<SealedTestBackend> {
         SealedTestBackend,
     )
     .unwrap()
+}
+
+#[test]
+fn encrypt_sidecar_payload_value_returns_runtime_verified_proof() {
+    let encryptor = encryptor()
+        .with_collection_identity("collection-uuid-1")
+        .unwrap();
+    let material = public_material();
+    let (value, proof) = encryptor
+        .encrypt_sidecar_payload_value("docs", "point-1", &material, &[1.0, 2.0])
+        .unwrap();
+
+    let envelope_key =
+        ckks_vector_sidecar_envelope_key(&value, "collection-uuid-1", "point-1", "embedding")
+            .unwrap()
+            .unwrap();
+    assert_eq!(proof.envelope_key(), &envelope_key);
+
+    let wrong_point_key =
+        ckks_vector_sidecar_envelope_key(&value, "collection-uuid-1", "point-2", "embedding")
+            .unwrap()
+            .unwrap();
+    assert_ne!(proof.envelope_key(), &wrong_point_key);
 }
 
 #[test]

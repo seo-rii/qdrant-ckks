@@ -13,7 +13,7 @@ use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_VECTOR_KEY_DOMAIN,
     CLIENT_PAYLOAD_ENVELOPE_BINDING, CkksParameters, CkksPublicMaterial, CkksVectorEncryptor,
-    ClientPayloadNonceReplayKey, ClientPayloadSignatureVerification,
+    CkksVectorVerifiedSidecarKey, ClientPayloadNonceReplayKey, ClientPayloadSignatureVerification,
     ClientPayloadValidationContext, ClientPayloadVerifiedEnvelopeKey, CommandOpenFheBackend,
     EncryptedCkksVector, ExistingPayloadMode, LocalMasterKeyProvider,
     METADATA_BLIND_INDEX_PROVIDER, METADATA_EXACT_MATCH_TOKEN_BINDING, MasterKeyProvider,
@@ -21,8 +21,7 @@ use qdrant_sec::{
     PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
     RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, ServerPayloadVerifiedEnvelopeKey,
     VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER, WrappedKeyBlob,
-    client_payload_nonce_replay_key, client_payload_signature_key_id,
-    encrypted_ckks_vector_payload_value, rewrap_resource_key,
+    client_payload_nonce_replay_key, client_payload_signature_key_id, rewrap_resource_key,
     validate_client_payload_value_for_runtime,
 };
 use segment::json_path::JsonPath;
@@ -735,7 +734,7 @@ impl VectorWritePlan {
         point_id: &str,
         vector_name: &str,
         values: &[f32],
-    ) -> Result<Option<Value>, StorageError> {
+    ) -> Result<Option<(Value, CkksVectorVerifiedSidecarKey)>, StorageError> {
         let Some(rule) = self
             .rules
             .iter()
@@ -746,7 +745,7 @@ impl VectorWritePlan {
         let values: Vec<f64> = values.iter().map(|value| *value as f64).collect();
         let encrypted = rule
             .encryptor
-            .encrypt(
+            .encrypt_sidecar_payload_value(
                 collection_name,
                 point_id,
                 &rule.public_material,
@@ -757,12 +756,7 @@ impl VectorWritePlan {
                     "CKKS vector encryption failed for vector '{vector_name}' in collection {collection_name}: {err}",
                 ))
             })?;
-        encrypted_ckks_vector_payload_value(&encrypted).map_err(|err| {
-            StorageError::service_error(format!(
-                "failed to serialize CKKS vector envelope for vector '{vector_name}' in collection {collection_name}: {err}",
-            ))
-        })
-        .map(Some)
+        Ok(Some(encrypted))
     }
 
     pub(crate) fn score_encrypted_query_batch(

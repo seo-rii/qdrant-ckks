@@ -47,13 +47,14 @@ use fs_err::{self as fs, File};
 use itertools::Itertools;
 use qdrant_sec::{
     AeadCipher, CLIENT_ENCRYPTED_PAYLOAD_MARKER, CLIENT_PAYLOAD_ENVELOPE_BINDING,
-    ClientPayloadSignatureVerification, ClientPayloadValidationContext,
-    ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_PAYLOAD_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD,
-    METADATA_EXACT_MATCH_TOKEN_BINDING, PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionPolicy,
-    PayloadTextEncryptor, SecretKey, ServerPayloadValidationContext,
-    ckks_vector_verified_sidecar_key, client_payload_signature_message,
-    is_client_encrypted_payload_value, is_encrypted_payload_value,
-    validate_client_payload_value_for_runtime, validate_server_payload_value_for_runtime,
+    CkksEncryptionInput, CkksError, CkksParameters, CkksPublicMaterial, CkksVectorBackend,
+    CkksVectorEncryptor, CkksVectorVerifiedSidecarKey, ClientPayloadSignatureVerification,
+    ClientPayloadValidationContext, ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_PAYLOAD_MARKER,
+    ENCRYPTED_VECTOR_SIDECAR_FIELD, METADATA_EXACT_MATCH_TOKEN_BINDING, PAYLOAD_TEXT_KEY_DOMAIN,
+    PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey, ServerPayloadValidationContext,
+    client_payload_signature_message, is_client_encrypted_payload_value,
+    is_encrypted_payload_value, validate_client_payload_value_for_runtime,
+    validate_server_payload_value_for_runtime,
 };
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -274,6 +275,19 @@ fn vector_encryption_config() -> CollectionEncryptionConfig {
             instance: "docs_vector_v1".to_string(),
             binding: Some("vector-envelope/v1".to_string()),
         }],
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CollectionTestCkksBackend;
+
+impl CkksVectorBackend for CollectionTestCkksBackend {
+    fn encrypt(&self, input: CkksEncryptionInput<'_>) -> Result<Vec<u8>, CkksError> {
+        Ok(format!(
+            "test-ciphertext:{}:{}:{}",
+            input.collection, input.point_id, input.vector_name
+        )
+        .into_bytes())
     }
 }
 
@@ -3625,61 +3639,76 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
     let collection_crypto_id = collection.config_snapshot().await.uuid.unwrap().to_string();
 
     let vector_sidecar = |vector_name: &str,
-                          key_id: &str,
-                          nonce: serde_json::Value,
-                          ciphertext: serde_json::Value| {
+                          key_id: &str|
+     -> (Payload, CkksVectorVerifiedSidecarKey) {
+        let encryptor = CkksVectorEncryptor::new_from_resource_key_with_metadata(
+            key_id,
+            vector_name,
+            CkksParameters::default(),
+            &SecretKey::from_bytes([31u8; 32]),
+            "tenant-a/vector@v1",
+            "tenant-a/vector-rk@v1",
+            1,
+            CollectionTestCkksBackend,
+        )
+        .unwrap()
+        .with_collection_identity(collection_crypto_id.clone())
+        .unwrap();
+        let public_material =
+            CkksPublicMaterial::new(b"openfhe context".to_vec(), b"openfhe public key".to_vec())
+                .unwrap();
+        let (envelope, verified_sidecar_key) = encryptor
+            .encrypt_sidecar_payload_value("docs", "1", &public_material, &[1.0, 2.0])
+            .unwrap();
         let mut sidecar = Map::new();
-        sidecar.insert(
-            vector_name.to_string(),
-            serde_json::json!({
-                ENCRYPTED_CKKS_VECTOR_MARKER: {
-                    "version": 1,
-                    "scheme": "openfhe-ckks",
-                    "envelope": {
-                        "version": 1,
-                        "algorithm": "AES-256-GCM",
-                        "key_id": key_id,
-                        "material_fingerprint": "tenant-a/vector@v1",
-                        "nonce": nonce,
-                        "ciphertext": ciphertext,
-                    },
-                },
-            }),
-        );
+        sidecar.insert(vector_name.to_string(), envelope);
         let mut payload = Map::new();
         payload.insert(
             ENCRYPTED_VECTOR_SIDECAR_FIELD.to_string(),
             serde_json::Value::Object(sidecar),
         );
-        Payload(payload)
+        (Payload(payload), verified_sidecar_key)
     };
-    let valid_nonce = || serde_json::Value::String(BASE64URL_NOPAD.encode(&[1u8; 12]));
+    let vector_sidecar_with_raw_parts =
+        |vector_name: &str,
+         key_id: &str,
+         nonce: serde_json::Value,
+         ciphertext: serde_json::Value| {
+            let mut sidecar = Map::new();
+            sidecar.insert(
+                vector_name.to_string(),
+                serde_json::json!({
+                    ENCRYPTED_CKKS_VECTOR_MARKER: {
+                        "version": 1,
+                        "scheme": "openfhe-ckks",
+                        "envelope": {
+                            "version": 1,
+                            "algorithm": "AES-256-GCM",
+                            "key_id": key_id,
+                            "material_fingerprint": "tenant-a/vector@v1",
+                            "rk_id": "tenant-a/vector-rk@v1",
+                            "rk_epoch": 1,
+                            "nonce": nonce,
+                            "ciphertext": ciphertext,
+                        },
+                    },
+                }),
+            );
+            let mut payload = Map::new();
+            payload.insert(
+                ENCRYPTED_VECTOR_SIDECAR_FIELD.to_string(),
+                serde_json::Value::Object(sidecar),
+            );
+            Payload(payload)
+        };
     let valid_ciphertext = || serde_json::Value::String(BASE64URL_NOPAD.encode(&[2u8; 16]));
-    let vector_sidecar_provenance = |payload: &Payload, vector_name: &str| {
-        let sidecar_value = payload
-            .0
-            .get(ENCRYPTED_VECTOR_SIDECAR_FIELD)
-            .and_then(|sidecar| sidecar.as_object())
-            .and_then(|sidecar| sidecar.get(vector_name))
-            .unwrap();
-        CollectionUpdateProvenance::runtime_encrypted_vectors(vec![
-            ckks_vector_verified_sidecar_key(
-                sidecar_value,
-                &collection_crypto_id,
-                "1",
-                vector_name,
-            )
-            .unwrap(),
-        ])
+    let vector_sidecar_provenance = |verified_sidecar_key: CkksVectorVerifiedSidecarKey| {
+        CollectionUpdateProvenance::runtime_encrypted_vectors(vec![verified_sidecar_key])
     };
 
-    let wrong_key_payload = vector_sidecar(
-        DEFAULT_VECTOR_NAME,
-        "tenant-a:wrong",
-        valid_nonce(),
-        valid_ciphertext(),
-    );
-    let wrong_key_provenance = vector_sidecar_provenance(&wrong_key_payload, DEFAULT_VECTOR_NAME);
+    let (wrong_key_payload, wrong_key_verified_sidecar_key) =
+        vector_sidecar(DEFAULT_VECTOR_NAME, "tenant-a:wrong");
+    let wrong_key_provenance = vector_sidecar_provenance(wrong_key_verified_sidecar_key);
     let wrong_key_sidecar =
         CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
             payload: wrong_key_payload,
@@ -3706,9 +3735,9 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
                 && description.contains("key id does not match")
     ));
 
-    let unconfigured_payload =
-        vector_sidecar("other", "tenant-a:docs", valid_nonce(), valid_ciphertext());
-    let unconfigured_provenance = vector_sidecar_provenance(&unconfigured_payload, "other");
+    let (unconfigured_payload, unconfigured_verified_sidecar_key) =
+        vector_sidecar("other", "tenant-a:docs");
+    let unconfigured_provenance = vector_sidecar_provenance(unconfigured_verified_sidecar_key);
     let unconfigured_vector_sidecar =
         CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
             payload: unconfigured_payload,
@@ -3735,7 +3764,7 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
                 && description.contains("not configured")
     ));
 
-    let malformed_nonce_payload = vector_sidecar(
+    let malformed_nonce_payload = vector_sidecar_with_raw_parts(
         DEFAULT_VECTOR_NAME,
         "tenant-a:docs",
         serde_json::Value::String("not-base64url".to_string()),
@@ -3767,13 +3796,9 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
                 && description.contains("nonce")
     ));
 
-    let mut tampered_payload = vector_sidecar(
-        DEFAULT_VECTOR_NAME,
-        "tenant-a:docs",
-        valid_nonce(),
-        valid_ciphertext(),
-    );
-    let tampered_provenance = vector_sidecar_provenance(&tampered_payload, DEFAULT_VECTOR_NAME);
+    let (mut tampered_payload, tampered_verified_sidecar_key) =
+        vector_sidecar(DEFAULT_VECTOR_NAME, "tenant-a:docs");
+    let tampered_provenance = vector_sidecar_provenance(tampered_verified_sidecar_key);
     let sidecar_entry = tampered_payload
         .0
         .get_mut(ENCRYPTED_VECTOR_SIDECAR_FIELD)
@@ -3815,14 +3840,10 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
                 && description.contains("requires runtime vector encryption")
     ));
 
-    let mut tampered_fingerprint_payload = vector_sidecar(
-        DEFAULT_VECTOR_NAME,
-        "tenant-a:docs",
-        valid_nonce(),
-        valid_ciphertext(),
-    );
+    let (mut tampered_fingerprint_payload, tampered_fingerprint_verified_sidecar_key) =
+        vector_sidecar(DEFAULT_VECTOR_NAME, "tenant-a:docs");
     let tampered_fingerprint_provenance =
-        vector_sidecar_provenance(&tampered_fingerprint_payload, DEFAULT_VECTOR_NAME);
+        vector_sidecar_provenance(tampered_fingerprint_verified_sidecar_key);
     let sidecar_entry = tampered_fingerprint_payload
         .0
         .get_mut(ENCRYPTED_VECTOR_SIDECAR_FIELD)
@@ -3864,14 +3885,9 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
                 && description.contains("requires runtime vector encryption")
     ));
 
-    let wrong_point_payload = vector_sidecar(
-        DEFAULT_VECTOR_NAME,
-        "tenant-a:docs",
-        valid_nonce(),
-        valid_ciphertext(),
-    );
-    let wrong_point_provenance =
-        vector_sidecar_provenance(&wrong_point_payload, DEFAULT_VECTOR_NAME);
+    let (wrong_point_payload, wrong_point_verified_sidecar_key) =
+        vector_sidecar(DEFAULT_VECTOR_NAME, "tenant-a:docs");
+    let wrong_point_provenance = vector_sidecar_provenance(wrong_point_verified_sidecar_key);
     let wrong_point_sidecar =
         CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
             payload: wrong_point_payload,

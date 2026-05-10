@@ -19,7 +19,6 @@ use common::counter::hardware_accumulator::HwMeasurementAcc;
 use qdrant_sec::{
     CkksVectorVerifiedSidecarKey, ClientPayloadNonceReplayKey, ClientPayloadVerifiedEnvelopeKey,
     ENCRYPTED_VECTOR_SIDECAR_FIELD, PayloadEncryptionError, ServerPayloadVerifiedEnvelopeKey,
-    ckks_vector_verified_sidecar_key,
 };
 use schemars::JsonSchema;
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
@@ -1593,7 +1592,6 @@ async fn maybe_encrypt_upsert_vectors(
             for point in points {
                 verified_sidecar_keys.extend(encrypt_vectors_for_point(
                     &plan,
-                    &collection_crypto_id,
                     collection_name,
                     &point.id.to_string(),
                     &mut point.vector,
@@ -1604,7 +1602,6 @@ async fn maybe_encrypt_upsert_vectors(
         PointInsertOperationsInternal::PointsBatch(batch) => {
             verified_sidecar_keys.extend(encrypt_vectors_for_batch(
                 &plan,
-                &collection_crypto_id,
                 collection_name,
                 &batch.ids,
                 &mut batch.vectors,
@@ -1659,7 +1656,6 @@ async fn maybe_encrypt_update_vectors(
         let mut payload = None;
         let point_verified_sidecar_keys = encrypt_vectors_for_point(
             &plan,
-            &collection_crypto_id,
             collection_name,
             &point.id.to_string(),
             &mut point.vector,
@@ -1762,7 +1758,6 @@ fn batch_vectors_touch_encrypted_config(
 
 fn encrypt_vectors_for_point(
     plan: &crate::common::crypto::VectorWritePlan,
-    collection_crypto_id: &str,
     collection_name: &str,
     point_id: &str,
     vector: &mut VectorStructPersisted,
@@ -1774,7 +1769,7 @@ fn encrypt_vectors_for_point(
                 return Ok(Vec::new());
             }
             let values = std::mem::take(values);
-            let envelope = plan
+            let (envelope, verified_sidecar_key) = plan
                 .encrypt_dense_vector_payload_value(
                     collection_name,
                     point_id,
@@ -1782,13 +1777,7 @@ fn encrypt_vectors_for_point(
                     &values,
                 )?
                 .expect("default vector was selected");
-            let verified_sidecar_key = insert_encrypted_vector_sidecar(
-                payload,
-                collection_crypto_id,
-                point_id,
-                DEFAULT_VECTOR_NAME,
-                envelope,
-            )?;
+            insert_encrypted_vector_sidecar(payload, DEFAULT_VECTOR_NAME, envelope)?;
             *vector = VectorStructPersisted::Named(HashMap::new());
             Ok(vec![verified_sidecar_key])
         }
@@ -1814,7 +1803,7 @@ fn encrypt_vectors_for_point(
                         "encrypted vector '{vector_name}' only supports dense vectors; sparse and multi-dense vector encryption is not implemented",
                     )));
                 };
-                let envelope = plan
+                let (envelope, verified_sidecar_key) = plan
                     .encrypt_dense_vector_payload_value(
                         collection_name,
                         point_id,
@@ -1822,13 +1811,8 @@ fn encrypt_vectors_for_point(
                         &values,
                     )?
                     .expect("vector was selected");
-                verified_sidecar_keys.push(insert_encrypted_vector_sidecar(
-                    payload,
-                    collection_crypto_id,
-                    point_id,
-                    &vector_name,
-                    envelope,
-                )?);
+                insert_encrypted_vector_sidecar(payload, &vector_name, envelope)?;
+                verified_sidecar_keys.push(verified_sidecar_key);
             }
             Ok(verified_sidecar_keys)
         }
@@ -1837,7 +1821,6 @@ fn encrypt_vectors_for_point(
 
 fn encrypt_vectors_for_batch(
     plan: &crate::common::crypto::VectorWritePlan,
-    collection_crypto_id: &str,
     collection_name: &str,
     ids: &[segment::types::PointIdType],
     vectors: &mut BatchVectorStructPersisted,
@@ -1858,7 +1841,7 @@ fn encrypt_vectors_for_batch(
             let payloads = payloads.as_mut().expect("payloads were created");
             let mut verified_sidecar_keys = Vec::with_capacity(ids.len());
             for ((point_id, values), payload) in ids.iter().zip(batch_values).zip(payloads) {
-                let envelope = plan
+                let (envelope, verified_sidecar_key) = plan
                     .encrypt_dense_vector_payload_value(
                         collection_name,
                         &point_id.to_string(),
@@ -1866,13 +1849,8 @@ fn encrypt_vectors_for_batch(
                         &values,
                     )?
                     .expect("default vector was selected");
-                verified_sidecar_keys.push(insert_encrypted_vector_sidecar(
-                    payload,
-                    collection_crypto_id,
-                    &point_id.to_string(),
-                    DEFAULT_VECTOR_NAME,
-                    envelope,
-                )?);
+                insert_encrypted_vector_sidecar(payload, DEFAULT_VECTOR_NAME, envelope)?;
+                verified_sidecar_keys.push(verified_sidecar_key);
             }
             *vectors = BatchVectorStructPersisted::Named(HashMap::new());
             Ok(verified_sidecar_keys)
@@ -1910,7 +1888,7 @@ fn encrypt_vectors_for_batch(
                             "encrypted vector '{vector_name}' only supports dense vectors; sparse and multi-dense vector encryption is not implemented",
                         )));
                     };
-                    let envelope = plan
+                    let (envelope, verified_sidecar_key) = plan
                         .encrypt_dense_vector_payload_value(
                             collection_name,
                             &point_id.to_string(),
@@ -1918,13 +1896,8 @@ fn encrypt_vectors_for_batch(
                             &values,
                         )?
                         .expect("vector was selected");
-                    verified_sidecar_keys.push(insert_encrypted_vector_sidecar(
-                        payload,
-                        collection_crypto_id,
-                        &point_id.to_string(),
-                        &vector_name,
-                        envelope,
-                    )?);
+                    insert_encrypted_vector_sidecar(payload, &vector_name, envelope)?;
+                    verified_sidecar_keys.push(verified_sidecar_key);
                 }
             }
             Ok(verified_sidecar_keys)
@@ -1950,22 +1923,9 @@ fn ensure_batch_payloads(
 
 fn insert_encrypted_vector_sidecar(
     payload: &mut Option<Payload>,
-    collection_crypto_id: &str,
-    point_id: &str,
     vector_name: &str,
     envelope: Value,
-) -> Result<CkksVectorVerifiedSidecarKey, StorageError> {
-    let verified_sidecar_key = ckks_vector_verified_sidecar_key(
-        &envelope,
-        collection_crypto_id,
-        point_id,
-        vector_name,
-    )
-    .map_err(|err| {
-        StorageError::service_error(format!(
-            "runtime CKKS vector sidecar for '{vector_name}' is invalid after encryption: {err}",
-        ))
-    })?;
+) -> Result<(), StorageError> {
     let payload = payload.get_or_insert_with(Payload::default);
     let sidecar = payload
         .0
@@ -1977,7 +1937,7 @@ fn insert_encrypted_vector_sidecar(
         )));
     };
     sidecar.insert(vector_name.to_string(), envelope);
-    Ok(verified_sidecar_key)
+    Ok(())
 }
 
 async fn split_encrypted_vector_delete_names(
