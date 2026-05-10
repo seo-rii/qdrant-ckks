@@ -2038,7 +2038,25 @@ fn ckks_sidecar_hnsw_load_persisted_graph(
             "failed to open CKKS sidecar HNSW graph cache {path:?}: {err}",
         ))
     })?;
-    let mut content = String::with_capacity(metadata.len() as usize);
+    let opened_metadata = file.metadata().map_err(|err| {
+        StorageError::service_error(format!(
+            "failed to inspect opened CKKS sidecar HNSW graph cache {path:?}: {err}",
+        ))
+    })?;
+    if !opened_metadata.is_file() {
+        return Err(StorageError::service_error(format!(
+            "opened CKKS sidecar HNSW graph cache {path:?} must be a regular file",
+        )));
+    }
+    if opened_metadata.len() > CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES {
+        return Err(StorageError::service_error(format!(
+            "CKKS sidecar HNSW graph cache {path:?} exceeds maximum size",
+        )));
+    }
+    #[cfg(unix)]
+    ckks_sidecar_hnsw_validate_cache_file_unix_metadata(&path, &opened_metadata, "opened file")?;
+
+    let mut content = String::with_capacity(opened_metadata.len() as usize);
     let mut limited_file = file.take(CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES + 1);
     limited_file.read_to_string(&mut content).map_err(|err| {
         StorageError::service_error(format!(
