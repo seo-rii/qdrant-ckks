@@ -33,7 +33,7 @@ use segment::data_types::vectors::{
 };
 use segment::json_path::JsonPath;
 use segment::types::{
-    Filter, Order, PayloadContainer, PointIdType, ScoredPoint, SearchParams, ShardKey,
+    Distance, Filter, Order, PayloadContainer, PointIdType, ScoredPoint, SearchParams, ShardKey,
     WithPayloadInterface, WithVector,
 };
 use segment::utils::scored_point_ties::ScoredPointTies;
@@ -152,6 +152,7 @@ static CKKS_SIDECAR_HNSW_GRAPH_CACHE: LazyLock<Mutex<CkksSidecarHnswGraphCache>>
 struct CkksSidecarHnswGraphCacheKey {
     collection_identity: String,
     vector_name: String,
+    distance: &'static str,
     score_order: &'static str,
     m: usize,
     records_fingerprint: String,
@@ -168,6 +169,7 @@ struct CkksSidecarHnswGraphDisk {
     version: u8,
     collection_identity: String,
     vector_name: String,
+    distance: String,
     score_order: String,
     m: usize,
     records_fingerprint: String,
@@ -1371,6 +1373,7 @@ async fn ckks_vector_search_points_with_scoring(
             plan,
             &hnsw_records,
             hnsw_query,
+            distance,
             score_order,
             score_threshold,
             hnsw_ef,
@@ -1836,6 +1839,15 @@ fn ckks_sidecar_hnsw_score_order_cache_tag(score_order: Order) -> &'static str {
     }
 }
 
+fn ckks_sidecar_hnsw_distance_cache_tag(distance: Distance) -> &'static str {
+    match distance {
+        Distance::Cosine => "cosine",
+        Distance::Euclid => "euclid",
+        Distance::Dot => "dot",
+        Distance::Manhattan => "manhattan",
+    }
+}
+
 fn ckks_sidecar_hnsw_records_fingerprint(records: &[CkksSidecarSearchRecord]) -> String {
     let mut hasher = Sha256::new();
     hasher.update((records.len() as u64).to_be_bytes());
@@ -1878,6 +1890,7 @@ fn ckks_sidecar_hnsw_graph_cache_file_name(key: &CkksSidecarHnswGraphCacheKey) -
     for value in [
         key.collection_identity.as_str(),
         key.vector_name.as_str(),
+        key.distance,
         key.score_order,
         key.records_fingerprint.as_str(),
     ] {
@@ -2044,6 +2057,7 @@ fn ckks_sidecar_hnsw_load_persisted_graph(
     if disk.version != CKKS_SIDECAR_HNSW_GRAPH_CACHE_VERSION
         || disk.collection_identity != key.collection_identity
         || disk.vector_name != key.vector_name
+        || disk.distance != key.distance
         || disk.score_order != key.score_order
         || disk.m != key.m
         || disk.records_fingerprint != key.records_fingerprint
@@ -2102,6 +2116,7 @@ fn ckks_sidecar_hnsw_persist_graph(
         version: CKKS_SIDECAR_HNSW_GRAPH_CACHE_VERSION,
         collection_identity: key.collection_identity.clone(),
         vector_name: key.vector_name.clone(),
+        distance: key.distance.to_string(),
         score_order: key.score_order.to_string(),
         m: key.m,
         records_fingerprint: key.records_fingerprint.clone(),
@@ -2357,6 +2372,7 @@ fn ckks_sidecar_hnsw_search_points(
     plan: &crate::common::crypto::VectorWritePlan,
     records: &[CkksSidecarSearchRecord],
     query: CkksSidecarHnswQuery<'_>,
+    distance: Distance,
     score_order: Order,
     score_threshold: Option<f32>,
     hnsw_ef: usize,
@@ -2428,6 +2444,7 @@ fn ckks_sidecar_hnsw_search_points(
     let cache_key = CkksSidecarHnswGraphCacheKey {
         collection_identity: collection_crypto_id.to_string(),
         vector_name: vector_name.to_string(),
+        distance: ckks_sidecar_hnsw_distance_cache_tag(distance),
         score_order: ckks_sidecar_hnsw_score_order_cache_tag(score_order),
         m,
         records_fingerprint: ckks_sidecar_hnsw_records_fingerprint(records),
@@ -6718,6 +6735,7 @@ mod tests {
         let first = CkksSidecarHnswGraphCacheKey {
             collection_identity: "collection-uuid-a".to_string(),
             vector_name: "vector".to_string(),
+            distance: "dot",
             score_order: "large",
             m: 16,
             records_fingerprint: "fingerprint-a".to_string(),
@@ -6730,6 +6748,27 @@ mod tests {
         assert_ne!(
             ckks_sidecar_hnsw_graph_cache_file_name(&first),
             ckks_sidecar_hnsw_graph_cache_file_name(&second),
+        );
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_graph_cache_key_uses_distance_metric() {
+        let dot = CkksSidecarHnswGraphCacheKey {
+            collection_identity: "collection-uuid".to_string(),
+            vector_name: "vector".to_string(),
+            distance: "dot",
+            score_order: "large",
+            m: 16,
+            records_fingerprint: "fingerprint-a".to_string(),
+        };
+        let cosine = CkksSidecarHnswGraphCacheKey {
+            distance: "cosine",
+            ..dot.clone()
+        };
+
+        assert_ne!(
+            ckks_sidecar_hnsw_graph_cache_file_name(&dot),
+            ckks_sidecar_hnsw_graph_cache_file_name(&cosine),
         );
     }
 
@@ -6764,6 +6803,7 @@ mod tests {
         CkksSidecarHnswGraphCacheKey {
             collection_identity: "collection-uuid".to_string(),
             vector_name: "vector".to_string(),
+            distance: "dot",
             score_order: "large",
             m: 16,
             records_fingerprint: records_fingerprint.into(),
@@ -6778,6 +6818,7 @@ mod tests {
             version: CKKS_SIDECAR_HNSW_GRAPH_CACHE_VERSION,
             collection_identity: key.collection_identity.clone(),
             vector_name: key.vector_name.clone(),
+            distance: key.distance.to_string(),
             score_order: key.score_order.to_string(),
             m: key.m,
             records_fingerprint: key.records_fingerprint.clone(),
@@ -6847,6 +6888,21 @@ mod tests {
         let key = ckks_sidecar_test_graph_cache_key("fingerprint-a");
         let mut disk = ckks_sidecar_test_graph_disk(&key, vec![vec![1], vec![0]]);
         disk.collection_identity = "other-collection-uuid".to_string();
+        write_ckks_sidecar_test_graph_disk(dir.path(), &key, &disk);
+
+        assert!(
+            ckks_sidecar_hnsw_load_persisted_graph(dir.path(), &key, 2)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_ignores_distance_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = ckks_sidecar_test_graph_cache_key("fingerprint-a");
+        let mut disk = ckks_sidecar_test_graph_disk(&key, vec![vec![1], vec![0]]);
+        disk.distance = "cosine".to_string();
         write_ckks_sidecar_test_graph_disk(dir.path(), &key, &disk);
 
         assert!(
