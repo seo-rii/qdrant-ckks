@@ -5793,6 +5793,41 @@ esac
                         && description.contains("payload sidecar only")
             ));
 
+            let err = crate::common::query::do_recommend_points(
+                &toc,
+                "vector_docs",
+                RecommendRequestInternal {
+                    positive: vec![RecommendExample::Dense(vec![0.0, 0.0])],
+                    negative: Vec::new(),
+                    strategy: Some(api::rest::RecommendStrategy::AverageVector),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Selector(vec![
+                        DEFAULT_VECTOR_NAME.to_string(),
+                    ])),
+                    score_threshold: None,
+                    using: None,
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cannot recommend encrypted vector")
+                        && description.contains("payload sidecar only")
+            ));
+
             let err = crate::common::query::do_discover_points(
                 &toc,
                 "vector_docs",
@@ -5821,6 +5856,39 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains("cannot discover encrypted vectors")
+                        && description.contains("payload sidecar only")
+            ));
+
+            let err = crate::common::query::do_discover_points(
+                &toc,
+                "vector_docs",
+                DiscoverRequestInternal {
+                    target: Some(RecommendExample::Dense(vec![0.0, 0.0])),
+                    context: None,
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Selector(vec![
+                        DEFAULT_VECTOR_NAME.to_string(),
+                    ])),
+                    using: None,
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cannot discover encrypted vector")
                         && description.contains("payload sidecar only")
             ));
 
@@ -5998,6 +6066,45 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains("cannot recommend groups encrypted vectors")
+                        && description.contains("payload sidecar only")
+            ));
+
+            let err = crate::common::query::do_recommend_point_groups(
+                &toc,
+                "vector_docs",
+                RecommendGroupsRequestInternal {
+                    positive: vec![RecommendExample::Dense(vec![0.0, 0.0])],
+                    negative: Vec::new(),
+                    strategy: Some(api::rest::RecommendStrategy::AverageVector),
+                    filter: None,
+                    params: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Selector(vec![
+                        DEFAULT_VECTOR_NAME.to_string(),
+                    ])),
+                    score_threshold: None,
+                    using: None,
+                    lookup_from: None,
+                    group_request: BaseGroupRequest {
+                        group_by: "group".parse().unwrap(),
+                        group_size: 1,
+                        limit: 1,
+                        with_lookup: None,
+                    },
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cannot recommend groups encrypted vector")
                         && description.contains("payload sidecar only")
             ));
 
