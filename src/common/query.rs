@@ -6831,6 +6831,90 @@ mod tests {
     }
 
     #[test]
+    fn ckks_sidecar_hnsw_graph_cache_key_uses_vector_name() {
+        let first = CkksSidecarHnswGraphCacheKey {
+            collection_identity: "collection-uuid".to_string(),
+            vector_name: "embedding".to_string(),
+            distance: "dot",
+            score_order: "large",
+            m: 16,
+            records_fingerprint: "fingerprint-a".to_string(),
+        };
+        let second = CkksSidecarHnswGraphCacheKey {
+            vector_name: "image".to_string(),
+            ..first.clone()
+        };
+
+        assert_ne!(
+            ckks_sidecar_hnsw_graph_cache_file_name(&first),
+            ckks_sidecar_hnsw_graph_cache_file_name(&second),
+        );
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_graph_cache_key_uses_score_order() {
+        let large_better = CkksSidecarHnswGraphCacheKey {
+            collection_identity: "collection-uuid".to_string(),
+            vector_name: "vector".to_string(),
+            distance: "dot",
+            score_order: "large",
+            m: 16,
+            records_fingerprint: "fingerprint-a".to_string(),
+        };
+        let small_better = CkksSidecarHnswGraphCacheKey {
+            score_order: "small",
+            ..large_better.clone()
+        };
+
+        assert_ne!(
+            ckks_sidecar_hnsw_graph_cache_file_name(&large_better),
+            ckks_sidecar_hnsw_graph_cache_file_name(&small_better),
+        );
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_graph_cache_key_uses_graph_degree() {
+        let first = CkksSidecarHnswGraphCacheKey {
+            collection_identity: "collection-uuid".to_string(),
+            vector_name: "vector".to_string(),
+            distance: "dot",
+            score_order: "large",
+            m: 16,
+            records_fingerprint: "fingerprint-a".to_string(),
+        };
+        let second = CkksSidecarHnswGraphCacheKey {
+            m: 32,
+            ..first.clone()
+        };
+
+        assert_ne!(
+            ckks_sidecar_hnsw_graph_cache_file_name(&first),
+            ckks_sidecar_hnsw_graph_cache_file_name(&second),
+        );
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_graph_cache_key_uses_records_fingerprint() {
+        let first = CkksSidecarHnswGraphCacheKey {
+            collection_identity: "collection-uuid".to_string(),
+            vector_name: "vector".to_string(),
+            distance: "dot",
+            score_order: "large",
+            m: 16,
+            records_fingerprint: "fingerprint-a".to_string(),
+        };
+        let second = CkksSidecarHnswGraphCacheKey {
+            records_fingerprint: "fingerprint-b".to_string(),
+            ..first.clone()
+        };
+
+        assert_ne!(
+            ckks_sidecar_hnsw_graph_cache_file_name(&first),
+            ckks_sidecar_hnsw_graph_cache_file_name(&second),
+        );
+    }
+
+    #[test]
     fn ckks_sidecar_hnsw_graph_cache_evicts_old_entries() {
         let mut cache = CkksSidecarHnswGraphCache::default();
         let original_key = ckks_sidecar_test_graph_cache_key("original");
