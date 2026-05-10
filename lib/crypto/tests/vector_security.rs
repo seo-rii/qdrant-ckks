@@ -1056,6 +1056,64 @@ printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext
 
 #[cfg(unix)]
 #[test]
+fn command_openfhe_backend_reuses_registered_context_material() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("cached-context-openfhe-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+count=0
+while IFS= read -r request; do
+  count=$((count + 1))
+  case "$request" in
+    *'"operation":"encrypt"'*'"scheme":"openfhe-ckks"'*'"context_id"'*) ;;
+    *) exit 7 ;;
+  esac
+  if [[ "$count" -eq 1 ]]; then
+    case "$request" in
+      *'"parameters"'*'"crypto_context"'*'"public_key"'*) ;;
+      *) exit 8 ;;
+    esac
+  elif [[ "$count" -eq 2 ]]; then
+    case "$request" in
+      *'"parameters"'*|*'"crypto_context"'*|*'"public_key"'*) exit 9 ;;
+    esac
+  else
+    exit 10
+  fi
+  printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
+done
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+        .with_args([script_path.display().to_string()]);
+    let encryptor = test_ckks_encryptor(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+
+    encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0, 2.0])
+        .unwrap();
+    encryptor
+        .encrypt("docs", "point-2", &public_material(), &[3.0, 4.0])
+        .unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn command_openfhe_backend_rejects_security_profile_mismatch() {
     use std::os::unix::fs::PermissionsExt;
 

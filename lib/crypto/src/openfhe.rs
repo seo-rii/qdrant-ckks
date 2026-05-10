@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::{self, BufReader, Read, Write};
 use std::num::NonZeroUsize;
 #[cfg(target_os = "linux")]
@@ -75,6 +76,7 @@ struct WorkerProcess {
     stdin: Mutex<ChildStdin>,
     stdout_rx: Mutex<mpsc::Receiver<BridgeStdoutEvent>>,
     stderr_truncated: Arc<AtomicBool>,
+    registered_contexts: Mutex<HashSet<String>>,
     terminated: AtomicBool,
     request_lock: Mutex<()>,
     stdout_thread: Mutex<Option<JoinHandle<()>>>,
@@ -586,20 +588,25 @@ impl CkksVectorBackend for CommandOpenFheBackend {
             collection: input.collection,
             point_id: input.point_id,
             vector_name: input.vector_name,
-            context_id,
-            parameters: input.parameters,
-            crypto_context: BASE64URL_NOPAD.encode(input.public_material.crypto_context()),
-            public_key: BASE64URL_NOPAD.encode(input.public_material.public_key()),
+            context_id: context_id.clone(),
+            parameters: Some(input.parameters),
+            crypto_context: Some(BASE64URL_NOPAD.encode(input.public_material.crypto_context())),
+            public_key: Some(BASE64URL_NOPAD.encode(input.public_material.public_key())),
             values: input.values,
         };
-        let request_bytes = serde_json::to_vec(&request).map_err(|err| {
-            CkksError::Backend(format!("failed to serialize OpenFHE bridge request: {err}"))
-        })?;
+        let request_bytes = serialize_bridge_request(&request, "OpenFHE bridge request")?;
+        let cached_request_bytes =
+            serialize_bridge_request_without_public_material(&request, "OpenFHE bridge request")?;
 
         let expected_security_profile = expected_security_profile(input.parameters)?;
-        self.send_bridge_request(&request_bytes, |response_bytes| {
-            decode_single_bridge_response(response_bytes, expected_security_profile)
-        })
+        self.send_bridge_request_with_context(
+            &context_id,
+            &request_bytes,
+            &cached_request_bytes,
+            |response_bytes| {
+                decode_single_bridge_response(response_bytes, expected_security_profile)
+            },
+        )
     }
 
     fn encrypt_batch(
@@ -638,26 +645,31 @@ impl CkksVectorBackend for CommandOpenFheBackend {
             scheme: CKKS_SCHEME,
             collection: input.collection,
             vector_name: input.vector_name,
-            context_id,
-            parameters: input.parameters,
-            crypto_context: BASE64URL_NOPAD.encode(input.public_material.crypto_context()),
-            public_key: BASE64URL_NOPAD.encode(input.public_material.public_key()),
+            context_id: context_id.clone(),
+            parameters: Some(input.parameters),
+            crypto_context: Some(BASE64URL_NOPAD.encode(input.public_material.crypto_context())),
+            public_key: Some(BASE64URL_NOPAD.encode(input.public_material.public_key())),
             items,
         };
-        let request_bytes = serde_json::to_vec(&request).map_err(|err| {
-            CkksError::Backend(format!(
-                "failed to serialize OpenFHE bridge batch request: {err}"
-            ))
-        })?;
+        let request_bytes = serialize_bridge_request(&request, "OpenFHE bridge batch request")?;
+        let cached_request_bytes = serialize_bridge_request_without_public_material(
+            &request,
+            "OpenFHE bridge batch request",
+        )?;
 
         let expected_security_profile = expected_security_profile(input.parameters)?;
-        self.send_bridge_request(&request_bytes, |response_bytes| {
-            decode_batch_bridge_response(
-                response_bytes,
-                input.items.len(),
-                expected_security_profile,
-            )
-        })
+        self.send_bridge_request_with_context(
+            &context_id,
+            &request_bytes,
+            &cached_request_bytes,
+            |response_bytes| {
+                decode_batch_bridge_response(
+                    response_bytes,
+                    input.items.len(),
+                    expected_security_profile,
+                )
+            },
+        )
     }
 
     fn encrypt_query(&self, input: CkksQueryEncryptionInput<'_>) -> Result<Vec<u8>, CkksError> {
@@ -668,22 +680,28 @@ impl CkksVectorBackend for CommandOpenFheBackend {
             scheme: CKKS_SCHEME,
             collection: input.collection,
             vector_name: input.vector_name,
-            context_id,
-            parameters: input.parameters,
-            crypto_context: BASE64URL_NOPAD.encode(input.public_material.crypto_context()),
-            public_key: BASE64URL_NOPAD.encode(input.public_material.public_key()),
+            context_id: context_id.clone(),
+            parameters: Some(input.parameters),
+            crypto_context: Some(BASE64URL_NOPAD.encode(input.public_material.crypto_context())),
+            public_key: Some(BASE64URL_NOPAD.encode(input.public_material.public_key())),
             values: input.values,
         };
-        let request_bytes = serde_json::to_vec(&request).map_err(|err| {
-            CkksError::Backend(format!(
-                "failed to serialize OpenFHE bridge query encryption request: {err}"
-            ))
-        })?;
+        let request_bytes =
+            serialize_bridge_request(&request, "OpenFHE bridge query encryption request")?;
+        let cached_request_bytes = serialize_bridge_request_without_public_material(
+            &request,
+            "OpenFHE bridge query encryption request",
+        )?;
 
         let expected_security_profile = expected_security_profile(input.parameters)?;
-        self.send_bridge_request(&request_bytes, |response_bytes| {
-            decode_single_bridge_response(response_bytes, expected_security_profile)
-        })
+        self.send_bridge_request_with_context(
+            &context_id,
+            &request_bytes,
+            &cached_request_bytes,
+            |response_bytes| {
+                decode_single_bridge_response(response_bytes, expected_security_profile)
+            },
+        )
     }
 
     fn score_plaintext_query(
@@ -699,23 +717,28 @@ impl CkksVectorBackend for CommandOpenFheBackend {
             point_id: input.point_id,
             vector_name: input.vector_name,
             distance: input.distance,
-            context_id,
-            parameters: input.parameters,
-            crypto_context: BASE64URL_NOPAD.encode(input.public_material.crypto_context()),
-            public_key: BASE64URL_NOPAD.encode(input.public_material.public_key()),
+            context_id: context_id.clone(),
+            parameters: Some(input.parameters),
+            crypto_context: Some(BASE64URL_NOPAD.encode(input.public_material.crypto_context())),
+            public_key: Some(BASE64URL_NOPAD.encode(input.public_material.public_key())),
             query_values: input.query_values,
             ciphertext: BASE64URL_NOPAD.encode(input.ciphertext),
         };
-        let request_bytes = serde_json::to_vec(&request).map_err(|err| {
-            CkksError::Backend(format!(
-                "failed to serialize OpenFHE bridge score request: {err}"
-            ))
-        })?;
+        let request_bytes = serialize_bridge_request(&request, "OpenFHE bridge score request")?;
+        let cached_request_bytes = serialize_bridge_request_without_public_material(
+            &request,
+            "OpenFHE bridge score request",
+        )?;
 
         let expected_security_profile = expected_security_profile(input.parameters)?;
-        self.send_bridge_request(&request_bytes, |response_bytes| {
-            decode_score_bridge_response(response_bytes, expected_security_profile)
-        })
+        self.send_bridge_request_with_context(
+            &context_id,
+            &request_bytes,
+            &cached_request_bytes,
+            |response_bytes| {
+                decode_score_bridge_response(response_bytes, expected_security_profile)
+            },
+        )
     }
 
     fn score_plaintext_query_batch(
@@ -757,27 +780,33 @@ impl CkksVectorBackend for CommandOpenFheBackend {
             collection: input.collection,
             vector_name: input.vector_name,
             distance: input.distance,
-            context_id,
-            parameters: input.parameters,
-            crypto_context: BASE64URL_NOPAD.encode(input.public_material.crypto_context()),
-            public_key: BASE64URL_NOPAD.encode(input.public_material.public_key()),
+            context_id: context_id.clone(),
+            parameters: Some(input.parameters),
+            crypto_context: Some(BASE64URL_NOPAD.encode(input.public_material.crypto_context())),
+            public_key: Some(BASE64URL_NOPAD.encode(input.public_material.public_key())),
             query_values: input.query_values,
             items,
         };
-        let request_bytes = serde_json::to_vec(&request).map_err(|err| {
-            CkksError::Backend(format!(
-                "failed to serialize OpenFHE bridge score batch request: {err}"
-            ))
-        })?;
+        let request_bytes =
+            serialize_bridge_request(&request, "OpenFHE bridge score batch request")?;
+        let cached_request_bytes = serialize_bridge_request_without_public_material(
+            &request,
+            "OpenFHE bridge score batch request",
+        )?;
 
         let expected_security_profile = expected_security_profile(input.parameters)?;
-        self.send_bridge_request(&request_bytes, |response_bytes| {
-            decode_score_batch_bridge_response(
-                response_bytes,
-                input.items.len(),
-                expected_security_profile,
-            )
-        })
+        self.send_bridge_request_with_context(
+            &context_id,
+            &request_bytes,
+            &cached_request_bytes,
+            |response_bytes| {
+                decode_score_batch_bridge_response(
+                    response_bytes,
+                    input.items.len(),
+                    expected_security_profile,
+                )
+            },
+        )
     }
 
     fn score_encrypted_query(
@@ -793,23 +822,29 @@ impl CkksVectorBackend for CommandOpenFheBackend {
             point_id: input.point_id,
             vector_name: input.vector_name,
             distance: input.distance,
-            context_id,
-            parameters: input.parameters,
-            crypto_context: BASE64URL_NOPAD.encode(input.public_material.crypto_context()),
-            public_key: BASE64URL_NOPAD.encode(input.public_material.public_key()),
+            context_id: context_id.clone(),
+            parameters: Some(input.parameters),
+            crypto_context: Some(BASE64URL_NOPAD.encode(input.public_material.crypto_context())),
+            public_key: Some(BASE64URL_NOPAD.encode(input.public_material.public_key())),
             encrypted_query: BASE64URL_NOPAD.encode(input.encrypted_query),
             ciphertext: BASE64URL_NOPAD.encode(input.ciphertext),
         };
-        let request_bytes = serde_json::to_vec(&request).map_err(|err| {
-            CkksError::Backend(format!(
-                "failed to serialize OpenFHE bridge encrypted-query score request: {err}"
-            ))
-        })?;
+        let request_bytes =
+            serialize_bridge_request(&request, "OpenFHE bridge encrypted-query score request")?;
+        let cached_request_bytes = serialize_bridge_request_without_public_material(
+            &request,
+            "OpenFHE bridge encrypted-query score request",
+        )?;
 
         let expected_security_profile = expected_security_profile(input.parameters)?;
-        self.send_bridge_request(&request_bytes, |response_bytes| {
-            decode_score_bridge_response(response_bytes, expected_security_profile)
-        })
+        self.send_bridge_request_with_context(
+            &context_id,
+            &request_bytes,
+            &cached_request_bytes,
+            |response_bytes| {
+                decode_score_bridge_response(response_bytes, expected_security_profile)
+            },
+        )
     }
 
     fn score_encrypted_query_batch(
@@ -851,39 +886,61 @@ impl CkksVectorBackend for CommandOpenFheBackend {
             collection: input.collection,
             vector_name: input.vector_name,
             distance: input.distance,
-            context_id,
-            parameters: input.parameters,
-            crypto_context: BASE64URL_NOPAD.encode(input.public_material.crypto_context()),
-            public_key: BASE64URL_NOPAD.encode(input.public_material.public_key()),
+            context_id: context_id.clone(),
+            parameters: Some(input.parameters),
+            crypto_context: Some(BASE64URL_NOPAD.encode(input.public_material.crypto_context())),
+            public_key: Some(BASE64URL_NOPAD.encode(input.public_material.public_key())),
             encrypted_query: BASE64URL_NOPAD.encode(input.encrypted_query),
             items,
         };
-        let request_bytes = serde_json::to_vec(&request).map_err(|err| {
-            CkksError::Backend(format!(
-                "failed to serialize OpenFHE bridge encrypted-query score batch request: {err}"
-            ))
-        })?;
+        let request_bytes = serialize_bridge_request(
+            &request,
+            "OpenFHE bridge encrypted-query score batch request",
+        )?;
+        let cached_request_bytes = serialize_bridge_request_without_public_material(
+            &request,
+            "OpenFHE bridge encrypted-query score batch request",
+        )?;
 
         let expected_security_profile = expected_security_profile(input.parameters)?;
-        self.send_bridge_request(&request_bytes, |response_bytes| {
-            decode_score_batch_bridge_response(
-                response_bytes,
-                input.items.len(),
-                expected_security_profile,
-            )
-        })
+        self.send_bridge_request_with_context(
+            &context_id,
+            &request_bytes,
+            &cached_request_bytes,
+            |response_bytes| {
+                decode_score_batch_bridge_response(
+                    response_bytes,
+                    input.items.len(),
+                    expected_security_profile,
+                )
+            },
+        )
     }
 }
 
 impl CommandOpenFheBackend {
-    fn send_bridge_request<T>(
+    fn send_bridge_request_with_context<T>(
         &self,
-        request_bytes: &[u8],
+        context_id: &str,
+        request_with_public_material: &[u8],
+        request_with_registered_context: &[u8],
         decode_response: impl Fn(&[u8]) -> Result<T, CkksError>,
     ) -> Result<T, CkksError> {
-        let mut request_bytes = request_bytes.to_vec();
-        request_bytes.push(b'\n');
+        self.send_bridge_request_impl(
+            Some(context_id),
+            request_with_public_material,
+            Some(request_with_registered_context),
+            decode_response,
+        )
+    }
 
+    fn send_bridge_request_impl<T>(
+        &self,
+        context_id: Option<&str>,
+        request_with_public_material: &[u8],
+        request_with_registered_context: Option<&[u8]>,
+        decode_response: impl Fn(&[u8]) -> Result<T, CkksError>,
+    ) -> Result<T, CkksError> {
         for attempt in 0..=1 {
             let worker_process = self.worker_process()?;
             let _request_guard = worker_process.request_lock.lock().map_err(|_| {
@@ -896,6 +953,27 @@ impl CommandOpenFheBackend {
                     self.max_output_bytes,
                 )));
             }
+
+            let context_registered = if let Some(context_id) = context_id {
+                worker_process
+                    .registered_contexts
+                    .lock()
+                    .map_err(|_| {
+                        CkksError::Backend(
+                            "OpenFHE bridge context cache mutex was poisoned".to_string(),
+                        )
+                    })?
+                    .contains(context_id)
+            } else {
+                false
+            };
+            let selected_request = if context_registered {
+                request_with_registered_context.unwrap_or(request_with_public_material)
+            } else {
+                request_with_public_material
+            };
+            let mut request_bytes = selected_request.to_vec();
+            request_bytes.push(b'\n');
 
             let write_result = {
                 let mut stdin = worker_process.stdin.lock().map_err(|_| {
@@ -1043,7 +1121,22 @@ impl CommandOpenFheBackend {
             }
 
             return match decode_response(&response_bytes) {
-                Ok(response) => Ok(response),
+                Ok(response) => {
+                    if let Some(context_id) = context_id
+                        && !context_registered
+                    {
+                        worker_process
+                            .registered_contexts
+                            .lock()
+                            .map_err(|_| {
+                                CkksError::Backend(
+                                    "OpenFHE bridge context cache mutex was poisoned".to_string(),
+                                )
+                            })?
+                            .insert(context_id.to_string());
+                    }
+                    Ok(response)
+                }
                 Err(err) => {
                     self.discard_worker(&worker_process, false)?;
                     Err(err)
@@ -1197,6 +1290,7 @@ impl CommandOpenFheBackend {
             stdin: Mutex::new(stdin),
             stdout_rx: Mutex::new(stdout_rx),
             stderr_truncated,
+            registered_contexts: Mutex::new(HashSet::new()),
             terminated: AtomicBool::new(false),
             request_lock: Mutex::new(()),
             stdout_thread: Mutex::new(Some(stdout_thread)),
@@ -1223,6 +1317,31 @@ impl CommandOpenFheBackend {
         }
         Ok(())
     }
+}
+
+fn serialize_bridge_request<T: Serialize>(
+    request: &T,
+    request_name: &str,
+) -> Result<Vec<u8>, CkksError> {
+    serde_json::to_vec(request)
+        .map_err(|err| CkksError::Backend(format!("failed to serialize {request_name}: {err}")))
+}
+
+trait CommandOpenFheContextRequest: Serialize + Clone {
+    fn remove_public_material(&mut self);
+}
+
+fn serialize_bridge_request_without_public_material<T: CommandOpenFheContextRequest>(
+    request: &T,
+    request_name: &str,
+) -> Result<Vec<u8>, CkksError> {
+    let mut request = request.clone();
+    request.remove_public_material();
+    serde_json::to_vec(&request).map_err(|err| {
+        CkksError::Backend(format!(
+            "failed to serialize cached-context {request_name}: {err}"
+        ))
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -1260,7 +1379,7 @@ fn configure_bridge_command_sandbox(command: &mut Command) {
 #[cfg(not(target_os = "linux"))]
 fn configure_bridge_command_sandbox(_command: &mut Command) {}
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 struct CommandOpenFheRequest<'a> {
     version: u8,
@@ -1270,13 +1389,16 @@ struct CommandOpenFheRequest<'a> {
     point_id: &'a str,
     vector_name: &'a str,
     context_id: String,
-    parameters: &'a CkksParameters,
-    crypto_context: String,
-    public_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parameters: Option<&'a CkksParameters>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crypto_context: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    public_key: Option<String>,
     values: &'a [f64],
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 struct CommandOpenFheBatchRequest<'a> {
     version: u8,
@@ -1285,20 +1407,23 @@ struct CommandOpenFheBatchRequest<'a> {
     collection: &'a str,
     vector_name: &'a str,
     context_id: String,
-    parameters: &'a CkksParameters,
-    crypto_context: String,
-    public_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parameters: Option<&'a CkksParameters>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crypto_context: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    public_key: Option<String>,
     items: Vec<CommandOpenFheBatchItem<'a>>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 struct CommandOpenFheBatchItem<'a> {
     point_id: &'a str,
     values: &'a [f64],
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 struct CommandOpenFheQueryRequest<'a> {
     version: u8,
@@ -1307,13 +1432,16 @@ struct CommandOpenFheQueryRequest<'a> {
     collection: &'a str,
     vector_name: &'a str,
     context_id: String,
-    parameters: &'a CkksParameters,
-    crypto_context: String,
-    public_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parameters: Option<&'a CkksParameters>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crypto_context: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    public_key: Option<String>,
     values: &'a [f64],
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 struct CommandOpenFheScoreRequest<'a> {
     version: u8,
@@ -1324,14 +1452,17 @@ struct CommandOpenFheScoreRequest<'a> {
     vector_name: &'a str,
     distance: &'a str,
     context_id: String,
-    parameters: &'a CkksParameters,
-    crypto_context: String,
-    public_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parameters: Option<&'a CkksParameters>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crypto_context: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    public_key: Option<String>,
     query_values: &'a [f64],
     ciphertext: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 struct CommandOpenFheScoreBatchRequest<'a> {
     version: u8,
@@ -1341,21 +1472,24 @@ struct CommandOpenFheScoreBatchRequest<'a> {
     vector_name: &'a str,
     distance: &'a str,
     context_id: String,
-    parameters: &'a CkksParameters,
-    crypto_context: String,
-    public_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parameters: Option<&'a CkksParameters>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crypto_context: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    public_key: Option<String>,
     query_values: &'a [f64],
     items: Vec<CommandOpenFheScoreBatchItem<'a>>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 struct CommandOpenFheScoreBatchItem<'a> {
     point_id: &'a str,
     ciphertext: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 struct CommandOpenFheEncryptedScoreRequest<'a> {
     version: u8,
@@ -1366,14 +1500,17 @@ struct CommandOpenFheEncryptedScoreRequest<'a> {
     vector_name: &'a str,
     distance: &'a str,
     context_id: String,
-    parameters: &'a CkksParameters,
-    crypto_context: String,
-    public_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parameters: Option<&'a CkksParameters>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crypto_context: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    public_key: Option<String>,
     encrypted_query: String,
     ciphertext: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 struct CommandOpenFheEncryptedScoreBatchRequest<'a> {
     version: u8,
@@ -1383,12 +1520,35 @@ struct CommandOpenFheEncryptedScoreBatchRequest<'a> {
     vector_name: &'a str,
     distance: &'a str,
     context_id: String,
-    parameters: &'a CkksParameters,
-    crypto_context: String,
-    public_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parameters: Option<&'a CkksParameters>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crypto_context: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    public_key: Option<String>,
     encrypted_query: String,
     items: Vec<CommandOpenFheScoreBatchItem<'a>>,
 }
+
+macro_rules! impl_command_openfhe_context_request {
+    ($request:ty) => {
+        impl<'a> CommandOpenFheContextRequest for $request {
+            fn remove_public_material(&mut self) {
+                self.parameters = None;
+                self.crypto_context = None;
+                self.public_key = None;
+            }
+        }
+    };
+}
+
+impl_command_openfhe_context_request!(CommandOpenFheRequest<'a>);
+impl_command_openfhe_context_request!(CommandOpenFheBatchRequest<'a>);
+impl_command_openfhe_context_request!(CommandOpenFheQueryRequest<'a>);
+impl_command_openfhe_context_request!(CommandOpenFheScoreRequest<'a>);
+impl_command_openfhe_context_request!(CommandOpenFheScoreBatchRequest<'a>);
+impl_command_openfhe_context_request!(CommandOpenFheEncryptedScoreRequest<'a>);
+impl_command_openfhe_context_request!(CommandOpenFheEncryptedScoreBatchRequest<'a>);
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -855,15 +855,21 @@ requests use `operation: encrypt_query`. Encrypted-query scoring requests use
 `operation: score_encrypted_query_batch` for scroll-batch scoring. Legacy
 `score_plaintext_query` operations are kept as a backend compatibility API but
 the Qdrant search path uses encrypted-query scoring. All bridge
-requests include a deterministic `context_id`, the profile parameters, OpenFHE
-public material, and collection/vector routing metadata. The `context_id` is
-the base64url SHA-256 digest Qdrant also stores in CKKS vector envelopes, so a
-bridge can cache OpenFHE contexts/public keys by id while still validating the
-full material sent in the request. Scoring requests additionally include the
-collection `distance` metric (`dot`, `cosine`, `euclid`, or `manhattan`), an
-encrypted query ciphertext, and stored CKKS ciphertext bytes. Batch responses must
-preserve request item order and return exactly one ciphertext or finite score
-per item. All encrypt, batch encrypt, and scoring responses must include
+requests include a deterministic `context_id` and collection/vector routing
+metadata. The first successful request for a `context_id` on a bridge worker
+also includes the profile parameters plus OpenFHE public material. After that,
+Qdrant treats the context as registered on that worker and omits `parameters`,
+`crypto_context`, and `public_key` from subsequent requests using the same
+`context_id`. If the worker exits or is discarded, the replacement worker must
+receive the full material again before it can process cached-context requests.
+The `context_id` is the base64url SHA-256 digest Qdrant also stores in CKKS
+vector envelopes, so the bridge can cache OpenFHE contexts/public keys by id
+while Qdrant avoids sending large public material on every vector operation.
+Scoring requests additionally include the collection `distance` metric (`dot`,
+`cosine`, `euclid`, or `manhattan`), an encrypted query ciphertext, and stored
+CKKS ciphertext bytes. Batch responses must preserve request item order and
+return exactly one ciphertext or finite score per item. All encrypt, batch
+encrypt, and scoring responses must include
 `security_profile`, and it must equal the configured allowlisted CKKS profile.
 The subprocess backend still enforces a positive `timeout_ms` and caps
 stdout/stderr collection so a hung or noisy bridge cannot block Qdrant
@@ -916,6 +922,25 @@ Request fields:
 }
 ```
 
+After the worker has successfully processed one request for the same
+`context_id`, later requests omit the public material fields:
+
+```json
+{
+  "version": 1,
+  "operation": "score_encrypted_query_batch",
+  "scheme": "openfhe-ckks",
+  "collection": "docs",
+  "vector_name": "embedding",
+  "distance": "dot",
+  "context_id": "base64url-no-pad-context-digest",
+  "encrypted_query": "base64url-no-pad-query-ciphertext",
+  "items": [
+    { "point_id": "point-1", "ciphertext": "base64url-no-pad-ciphertext-1" }
+  ]
+}
+```
+
 Response fields:
 
 ```json
@@ -928,8 +953,9 @@ Response fields:
 
 The Rust `CkksVectorBackend` trait also exposes `encrypt_batch` so backends can
 amortize vector encryption overhead. `CommandOpenFheBackend` sends one
-newline-delimited batch request with shared parameters/material and per-point
-items:
+newline-delimited batch request with shared context and per-point items. The
+first request for a worker/context carries the public material shown below;
+subsequent requests for the same context omit those public material fields:
 
 ```json
 {
