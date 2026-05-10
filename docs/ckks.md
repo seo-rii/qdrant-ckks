@@ -609,7 +609,11 @@ mode, parent directory, and optional SHA-256 pin checks have passed.
 Collection encryption rules and runtime instances must use the same explicit
 provider instance and `key_id`; runtime validation rejects missing instances,
 missing material, provider/selector mismatches, and key-id mismatches instead of
-falling back to legacy defaults. The configured 32-byte RK is not used directly
+falling back to legacy defaults. For server-side payload/vector AEAD envelopes,
+`key_id` uses the narrower AEAD key-id syntax `[A-Za-z0-9._:-]`; resource-key
+ids, material fingerprint ids, client `rk_id`, and signature key ids may use the
+bounded qdrant-sec crypto identifier syntax that also permits `/` and `@`.
+The configured 32-byte RK is not used directly
 as an AEAD key. Qdrant derives purpose-specific HKDF-SHA256 subkeys for payload text
 (`qdrant-sec/payload-text/v1`) and CKKS vector envelopes
 (`qdrant-sec/vector-envelope/v1`) before constructing AES-GCM ciphers.
