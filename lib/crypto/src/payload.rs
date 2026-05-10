@@ -317,14 +317,18 @@ impl PayloadTextEncryptor {
         material_fingerprint_id: impl Into<String>,
     ) -> Result<Self, PayloadEncryptionError> {
         let payload_key = resource_key.derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)?;
-        Self::new_with_derived_cipher_unchecked(
-            collection,
-            AeadCipher::new_with_material_fingerprint(
-                key_id,
-                payload_key,
-                material_fingerprint_id,
-            )?,
-        )
+        // SAFETY: `payload_key` is derived above with the payload-text HKDF
+        // domain, so the raw-cipher constructor contract is satisfied.
+        unsafe {
+            Self::new_with_derived_cipher_unchecked(
+                collection,
+                AeadCipher::new_with_material_fingerprint(
+                    key_id,
+                    payload_key,
+                    material_fingerprint_id,
+                )?,
+            )
+        }
     }
 
     pub fn new_from_resource_key_with_metadata(
@@ -342,7 +346,8 @@ impl PayloadTextEncryptor {
             material_fingerprint_id,
         )?
         .with_resource_key_metadata(rk_id, rk_epoch)?;
-        Self::new_with_derived_cipher_unchecked(collection, cipher)
+        // SAFETY: `cipher` is built from a payload-text HKDF subkey above.
+        unsafe { Self::new_with_derived_cipher_unchecked(collection, cipher) }
     }
 
     /// Builds an encryptor from an already domain-separated AEAD cipher.
@@ -350,17 +355,19 @@ impl PayloadTextEncryptor {
     /// Runtime code that starts from a collection/rule resource key should use
     /// `new_from_resource_key*` so the payload-text HKDF domain is applied in
     /// one place.
-    pub fn new_with_derived_cipher_unchecked(
+    pub unsafe fn new_with_derived_cipher_unchecked(
         collection: impl Into<String>,
         cipher: AeadCipher,
     ) -> Result<Self, PayloadEncryptionError> {
-        Self::new_with_derived_keyring_unchecked(collection, AeadKeyring::new(cipher))
+        // SAFETY: caller guarantees `cipher` is already domain-separated for
+        // payload text encryption.
+        unsafe { Self::new_with_derived_keyring_unchecked(collection, AeadKeyring::new(cipher)) }
     }
 
     /// Builds an encryptor from an already domain-separated AEAD keyring.
     ///
     /// Prefer `new_from_resource_key*` for production runtime code.
-    pub fn new_with_derived_keyring_unchecked(
+    pub unsafe fn new_with_derived_keyring_unchecked(
         collection: impl Into<String>,
         keyring: AeadKeyring,
     ) -> Result<Self, PayloadEncryptionError> {

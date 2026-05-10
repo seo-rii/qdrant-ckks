@@ -2401,15 +2401,19 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
                 && description.contains("document.body")
     ));
 
-    let wrong_key_encryptor = PayloadTextEncryptor::new_with_derived_cipher_unchecked(
-        "docs",
-        AeadCipher::new_with_material_fingerprint(
-            "tenant-a:other",
-            SecretKey::from_bytes([7u8; 32]),
-            "tenant-a/other@v1",
+    // SAFETY: this regression fixture intentionally creates a malformed
+    // server envelope with a directly supplied test cipher.
+    let wrong_key_encryptor = unsafe {
+        PayloadTextEncryptor::new_with_derived_cipher_unchecked(
+            "docs",
+            AeadCipher::new_with_material_fingerprint(
+                "tenant-a:other",
+                SecretKey::from_bytes([7u8; 32]),
+                "tenant-a/other@v1",
+            )
+            .unwrap(),
         )
-        .unwrap(),
-    )
+    }
     .unwrap();
     let mut wrong_key_payload: Payload =
         serde_json::from_str(r#"{"document":{"body":"wrong key marker"}}"#).unwrap();
@@ -2467,15 +2471,19 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
         .contains("key id does not match"),
     );
 
-    let valid_key_encryptor = PayloadTextEncryptor::new_with_derived_cipher_unchecked(
-        &collection_crypto_id,
-        AeadCipher::new_with_material_fingerprint(
-            "tenant-a:docs",
-            SecretKey::from_bytes([8u8; 32]),
-            "tenant-a/docs@v1",
+    // SAFETY: this fixture uses a known test cipher to produce a
+    // runtime-encrypted marker and matching proof.
+    let valid_key_encryptor = unsafe {
+        PayloadTextEncryptor::new_with_derived_cipher_unchecked(
+            &collection_crypto_id,
+            AeadCipher::new_with_material_fingerprint(
+                "tenant-a:docs",
+                SecretKey::from_bytes([8u8; 32]),
+                "tenant-a/docs@v1",
+            )
+            .unwrap(),
         )
-        .unwrap(),
-    )
+    }
     .unwrap();
     let mut point_bound_payload: Payload =
         serde_json::from_str(r#"{"document":{"body":"point-bound marker"}}"#).unwrap();
@@ -3606,15 +3614,19 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     let metadata_key = SecretKey::from_bytes([31u8; 32])
         .derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)
         .unwrap();
-    let encryptor = PayloadTextEncryptor::new_with_derived_cipher_unchecked(
-        &collection_crypto_id,
-        AeadCipher::new_with_material_fingerprint(
-            "tenant-a:docs",
-            metadata_key,
-            "tenant-a/docs@v1",
+    // SAFETY: the metadata key is explicitly derived with the payload-text
+    // domain above for this leakage fixture.
+    let encryptor = unsafe {
+        PayloadTextEncryptor::new_with_derived_cipher_unchecked(
+            &collection_crypto_id,
+            AeadCipher::new_with_material_fingerprint(
+                "tenant-a:docs",
+                metadata_key,
+                "tenant-a/docs@v1",
+            )
+            .unwrap(),
         )
-        .unwrap(),
-    )
+    }
     .unwrap();
     let policy = PayloadEncryptionPolicy::new(vec!["document.body".to_string()]).unwrap();
     let (changed, verified_server_envelope_keys) = encryptor
