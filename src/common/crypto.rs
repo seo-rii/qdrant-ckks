@@ -2631,6 +2631,71 @@ fn validate_backend(
     Ok(())
 }
 
+fn validate_collection_runtime_backend_metadata(
+    collection_name: &str,
+    instance_name: &str,
+    backend_name: &str,
+    backend: &CryptoBackendConfig,
+) -> Result<(), StorageError> {
+    match backend.kind.as_str() {
+        "process_pool" => {
+            if backend.size == Some(0) {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {instance_name} backend {backend_name} process_pool size must be at least 1",
+                )));
+            }
+        }
+        "process" => {
+            if backend.size.is_some_and(|size| size > 1) {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {instance_name} backend {backend_name} process size must be omitted or 1",
+                )));
+            }
+        }
+        _ => {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} vector crypto instance {instance_name} backend {backend_name} has unsupported kind {}",
+                backend.kind,
+            )));
+        }
+    }
+
+    match backend.program.as_deref() {
+        Some(program) if !program.is_empty() => {}
+        _ => {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} vector crypto instance {instance_name} backend {backend_name} requires program",
+            )));
+        }
+    }
+
+    let Some(expected_sha256_b64) = backend.sha256_b64.as_deref() else {
+        return Err(StorageError::bad_input(format!(
+            "collection {collection_name} vector crypto instance {instance_name} backend {backend_name} requires sha256_b64 program pin",
+        )));
+    };
+    let digest = BASE64URL_NOPAD
+        .decode(expected_sha256_b64.as_bytes())
+        .map_err(|_| {
+            StorageError::bad_input(format!(
+                "collection {collection_name} vector crypto instance {instance_name} backend {backend_name} sha256_b64 must be base64url without padding",
+            ))
+        })?;
+    if digest.len() != 32 {
+        return Err(StorageError::bad_input(format!(
+            "collection {collection_name} vector crypto instance {instance_name} backend {backend_name} sha256_b64 must decode to 32 bytes",
+        )));
+    }
+
+    if backend.timeout_ms == Some(0) {
+        return Err(StorageError::bad_input(format!(
+            "collection {collection_name} vector crypto instance {instance_name} backend {backend_name} timeout_ms must be at least 1",
+        )));
+    }
+
+    Ok(())
+}
+
 fn validate_backend_program_path_with_sha256(
     backend_name: &str,
     program: &str,
@@ -3466,12 +3531,18 @@ fn validate_generic_collection_crypto_runtime(
                 rule.instance
             )));
         };
-        if !runtime_settings.backends.contains_key(backend_ref) {
+        let Some(backend) = runtime_settings.backends.get(backend_ref) else {
             return Err(StorageError::bad_input(format!(
                 "collection {collection_name} vector crypto instance {} references unknown backend {backend_ref}",
                 rule.instance
             )));
-        }
+        };
+        validate_collection_runtime_backend_metadata(
+            collection_name,
+            &rule.instance,
+            backend_ref,
+            backend,
+        )?;
 
         let Some(material_ref) = instance.materials.get(PAYLOAD_SYM_KEY_ROLE) else {
             return Err(StorageError::bad_input(format!(
@@ -9760,7 +9831,7 @@ mod tests {
                     CryptoBackendConfig {
                         kind: "process_pool".to_string(),
                         program: Some("/usr/local/bin/openfhe-bridge".to_string()),
-                        sha256_b64: None,
+                        sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
                         size: Some(1),
                         timeout_ms: Some(5_000),
                     },
@@ -9940,7 +10011,7 @@ mod tests {
                 version: 1,
                 key_id: Some("tenant-a:docs".to_string()),
                 crypto_schema_version: 1,
-                encryption_epoch: 0,
+                encryption_epoch: 3,
                 migration_state: CryptoMigrationState::Active,
                 rules: vec![EncryptionRuleRef {
                     id: "body_blind_eq".to_string(),
@@ -10407,7 +10478,7 @@ mod tests {
                     CryptoBackendConfig {
                         kind: "process_pool".to_string(),
                         program: Some("/usr/local/bin/openfhe-bridge".to_string()),
-                        sha256_b64: None,
+                        sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
                         size: Some(1),
                         timeout_ms: Some(5_000),
                     },
@@ -10438,6 +10509,81 @@ mod tests {
         );
 
         validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap();
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_rejects_vector_backend_without_sha_pin() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_vector_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: VECTOR_OPENFHE_CKKS_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            "tenant-a/vector-v1".to_string(),
+                        )]),
+                        backend_ref: Some("openfhe_local".to_string()),
+                        options: json!({
+                            "key_id": "tenant-a:docs",
+                            "material_fingerprint_id": "tenant-a/vector@v2",
+                            "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                            "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                            "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([(
+                    "tenant-a/vector-v1".to_string(),
+                    CryptoMaterialConfig {
+                        kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        env: None,
+                        path: None,
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[8u8; 32])),
+                        ..CryptoMaterialConfig::default()
+                    },
+                )]),
+                backends: HashMap::from([(
+                    "openfhe_local".to_string(),
+                    CryptoBackendConfig {
+                        kind: "process_pool".to_string(),
+                        program: Some("/usr/local/bin/openfhe-bridge".to_string()),
+                        sha256_b64: None,
+                        size: Some(1),
+                        timeout_ms: Some(5_000),
+                    },
+                )]),
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = with_embedding_vector(
+            CollectionParams {
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 0,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "embedding_conf".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec!["embedding".to_string()],
+                        },
+                        instance: "docs_vector_v1".to_string(),
+                        binding: Some("vector-envelope/v1".to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            },
+            Distance::Dot,
+        );
+
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
+        assert!(
+            matches!(err, StorageError::BadInput { description } if description.contains("requires sha256_b64 program pin"))
+        );
     }
 
     #[test]
@@ -10534,7 +10680,7 @@ mod tests {
                     CryptoBackendConfig {
                         kind: "process_pool".to_string(),
                         program: Some("/usr/local/bin/openfhe-bridge".to_string()),
-                        sha256_b64: None,
+                        sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
                         size: Some(1),
                         timeout_ms: Some(5_000),
                     },
@@ -10603,7 +10749,7 @@ mod tests {
                     CryptoBackendConfig {
                         kind: "process_pool".to_string(),
                         program: Some("/usr/local/bin/openfhe-bridge".to_string()),
-                        sha256_b64: None,
+                        sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
                         size: Some(1),
                         timeout_ms: Some(5_000),
                     },
@@ -10674,7 +10820,7 @@ mod tests {
                     CryptoBackendConfig {
                         kind: "process_pool".to_string(),
                         program: Some("/usr/local/bin/openfhe-bridge".to_string()),
-                        sha256_b64: None,
+                        sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
                         size: Some(1),
                         timeout_ms: Some(5_000),
                     },
@@ -10732,7 +10878,7 @@ mod tests {
                     CryptoBackendConfig {
                         kind: "process_pool".to_string(),
                         program: Some("/usr/local/bin/openfhe-bridge".to_string()),
-                        sha256_b64: None,
+                        sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
                         size: Some(1),
                         timeout_ms: Some(5_000),
                     },
