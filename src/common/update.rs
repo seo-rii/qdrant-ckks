@@ -6791,6 +6791,51 @@ esac
             );
             assert_eq!(grpc_groups[0].hits[0].score, 9.0);
 
+            for params in [
+                api::grpc::qdrant::SearchParams {
+                    indexed_only: Some(true),
+                    ..Default::default()
+                },
+                api::grpc::qdrant::SearchParams {
+                    quantization: Some(api::grpc::qdrant::QuantizationSearchParams::default()),
+                    ..Default::default()
+                },
+                api::grpc::qdrant::SearchParams {
+                    acorn: Some(api::grpc::qdrant::AcornSearchParams::default()),
+                    ..Default::default()
+                },
+            ] {
+                let err = crate::tonic::api::query_common::search_groups(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::SearchPointGroups {
+                        collection_name: "vector_docs".to_string(),
+                        limit: 1,
+                        group_size: 1,
+                        group_by: "group".to_string(),
+                        vector_name: Some(DEFAULT_VECTOR_NAME.to_string()),
+                        params: Some(params),
+                        ckks_encrypted_query: Some(fake_grpc_ckks_client_query(
+                            b"fake-ckks-query:2",
+                            2,
+                        )),
+                        ..Default::default()
+                    },
+                    None,
+                    auth.clone(),
+                    storage::content_manager::toc::request_hw_counter::RequestHwCounter::new(
+                        HwMeasurementAcc::disposable(),
+                        false,
+                    ),
+                    Some(&vector_settings),
+                )
+                .await
+                .unwrap_err();
+                assert!(
+                    err.message()
+                        .contains("does not support quantization, indexed_only, or ACORN")
+                );
+            }
+
             let mut wrong_context_query = fake_ckks_client_query(b"fake-ckks-query:2", 2);
             wrong_context_query.context_digest = BASE64URL_NOPAD.encode(&[9u8; 32]);
             let err = crate::common::query::do_query_points(
