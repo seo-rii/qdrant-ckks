@@ -325,6 +325,43 @@ mod tests {
     }
 
     #[test]
+    fn redaction_removes_encrypted_envelope_material() {
+        let mut value = json!({
+            "client_payload": {
+                "$qdrant_client_aead": {
+                    "key_id": "tenant-a/payload-rk",
+                    "rk_id": "tenant-a/payload-rk",
+                    "nonce": "qdrant-sec-log-nonce-sentinel",
+                    "ciphertext": "qdrant-sec-log-ciphertext-sentinel",
+                    "signature": {
+                        "alg": "ed25519",
+                        "key_id": "tenant-a/signing-key",
+                        "sig": "qdrant-sec-log-signature-sentinel"
+                    }
+                }
+            },
+            "ckks_query": {
+                "context_digest": "qdrant-sec-log-context-digest-sentinel",
+                "encrypted_query": "qdrant-sec-log-encrypted-query-sentinel",
+                "public_key": "qdrant-sec-log-public-key-sentinel",
+                "crypto_context": "qdrant-sec-log-crypto-context-sentinel"
+            }
+        });
+
+        redact_sensitive_log_fields(&mut value);
+        let serialized = serde_json::to_string(&value).unwrap();
+
+        assert!(!serialized.contains("qdrant-sec-log-nonce-sentinel"));
+        assert!(!serialized.contains("qdrant-sec-log-ciphertext-sentinel"));
+        assert!(!serialized.contains("qdrant-sec-log-signature-sentinel"));
+        assert!(!serialized.contains("qdrant-sec-log-context-digest-sentinel"));
+        assert!(!serialized.contains("qdrant-sec-log-encrypted-query-sentinel"));
+        assert!(!serialized.contains("qdrant-sec-log-public-key-sentinel"));
+        assert!(!serialized.contains("qdrant-sec-log-crypto-context-sentinel"));
+        assert!(serialized.contains("tenant-a/payload-rk"));
+    }
+
+    #[test]
     fn mmr_query_log_value_redacts_query_vector() {
         let request = vec![ShardQueryRequest {
             prefetches: vec![],
