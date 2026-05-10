@@ -123,6 +123,7 @@ impl Default for ClientPayloadNonceReplayCache {
 impl ClientPayloadNonceReplayCache {
     fn load(path: &Path) -> CollectionResult<Self> {
         let cache_path = path.join(CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE);
+        validate_client_payload_nonce_replay_cache_parent(&cache_path)?;
         #[cfg(unix)]
         let file = {
             use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -1227,6 +1228,7 @@ impl Collection {
 }
 
 fn append_client_payload_nonce_replay_cache(path: &Path, keys: &[String]) -> CollectionResult<()> {
+    validate_client_payload_nonce_replay_cache_parent(path)?;
     let mut options = OpenOptions::new();
     options.create(true).append(true);
     #[cfg(unix)]
@@ -1282,6 +1284,7 @@ fn rewrite_client_payload_nonce_replay_cache(
     path: &Path,
     keys: &VecDeque<String>,
 ) -> CollectionResult<()> {
+    validate_client_payload_nonce_replay_cache_parent(path)?;
     let temp_path = path.with_extension("tmp");
     let mut options = OpenOptions::new();
     options.create(true).write(true).truncate(true);
@@ -1338,6 +1341,37 @@ fn rewrite_client_payload_nonce_replay_cache(
         ))
     })?;
     sync_client_payload_nonce_replay_cache_parent(path)
+}
+
+#[cfg(unix)]
+fn validate_client_payload_nonce_replay_cache_parent(path: &Path) -> CollectionResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    let metadata = std::fs::symlink_metadata(parent).map_err(|err| {
+        CollectionError::service_error(format!(
+            "failed to inspect client payload nonce replay cache directory {parent:?}: {err}",
+        ))
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(CollectionError::service_error(format!(
+            "client payload nonce replay cache directory {parent:?} must be a regular directory",
+        )));
+    }
+    if metadata.permissions().mode() & 0o022 != 0 {
+        return Err(CollectionError::service_error(format!(
+            "client payload nonce replay cache directory {parent:?} must not be group/world writable",
+        )));
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_client_payload_nonce_replay_cache_parent(_path: &Path) -> CollectionResult<()> {
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -1553,6 +1587,28 @@ mod tests {
 
         let err = ClientPayloadNonceReplayCache::load(dir.path()).unwrap_err();
         assert!(format!("{err:?}").contains("must not be group/world accessible"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_payload_nonce_replay_cache_rejects_group_world_writable_parent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
+        let cache_path = dir.path().join(CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE);
+
+        let err = ClientPayloadNonceReplayCache::load(dir.path()).unwrap_err();
+        assert!(format!("{err:?}").contains("must not be group/world writable"));
+
+        let err = append_client_payload_nonce_replay_cache(&cache_path, &["nonce-a".to_string()])
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("must not be group/world writable"));
+
+        let mut keys = VecDeque::new();
+        keys.push_back("nonce-b".to_string());
+        let err = rewrite_client_payload_nonce_replay_cache(&cache_path, &keys).unwrap_err();
+        assert!(format!("{err:?}").contains("must not be group/world writable"));
     }
 
     #[cfg(unix)]
