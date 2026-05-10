@@ -94,7 +94,7 @@ impl Default for CollectionUpdateProvenance {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 struct RuntimeVerifiedClientEnvelopes {
-    verified_envelope_keys: Arc<HashSet<ClientPayloadEnvelopeKey>>,
+    verified_envelope_keys: Arc<HashSet<ClientPayloadVerifiedEnvelopeKey>>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -131,17 +131,24 @@ impl RuntimeVerifiedClientEnvelopes {
         verified_envelope_keys: impl IntoIterator<Item = ClientPayloadVerifiedEnvelopeKey>,
     ) -> Self {
         Self {
-            verified_envelope_keys: Arc::new(
-                verified_envelope_keys
-                    .into_iter()
-                    .map(|key| key.envelope_key().clone())
-                    .collect(),
-            ),
+            verified_envelope_keys: Arc::new(verified_envelope_keys.into_iter().collect()),
         }
     }
 
     fn contains(&self, envelope_key: &ClientPayloadEnvelopeKey) -> bool {
-        self.verified_envelope_keys.contains(envelope_key)
+        self.verified_envelope_keys
+            .iter()
+            .any(|verified| verified.envelope_key() == envelope_key)
+    }
+
+    fn proof_for(
+        &self,
+        envelope_key: &ClientPayloadEnvelopeKey,
+    ) -> Option<ClientPayloadVerifiedEnvelopeKey> {
+        self.verified_envelope_keys
+            .iter()
+            .find(|verified| verified.envelope_key() == envelope_key)
+            .cloned()
     }
 }
 
@@ -311,6 +318,21 @@ impl CollectionUpdateProvenance {
     ) -> bool {
         envelope_key.matches_binding(collection_id, point_id, field_path)
             && self.allows_client_envelope_key(envelope_key)
+    }
+
+    pub fn verified_client_envelope_key_for_binding(
+        &self,
+        envelope_key: &ClientPayloadEnvelopeKey,
+        collection_id: &str,
+        point_id: &str,
+        field_path: &str,
+    ) -> Option<ClientPayloadVerifiedEnvelopeKey> {
+        if !envelope_key.matches_binding(collection_id, point_id, field_path) {
+            return None;
+        }
+        self.verified_client_envelopes
+            .as_ref()
+            .and_then(|verified| verified.proof_for(envelope_key))
     }
 }
 

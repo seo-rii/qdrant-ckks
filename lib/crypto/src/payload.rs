@@ -671,8 +671,20 @@ pub fn validate_client_payload_value(
 pub fn validate_client_payload_value_after_runtime_verification(
     value: &Value,
     context: ClientPayloadValidationContext<'_>,
+    verified_envelope_key: &ClientPayloadVerifiedEnvelopeKey,
 ) -> Result<(), PayloadEncryptionError> {
-    validate_client_payload_value_inner(value, context)
+    validate_client_payload_value_inner(value, context)?;
+    let envelope_key =
+        client_payload_envelope_key(value, context.field_path)?.ok_or_else(|| {
+            PayloadEncryptionError::ExpectedEncryptedEnvelope {
+                field: context.field_path.to_string(),
+                found: json_type_name(value),
+            }
+        })?;
+    if verified_envelope_key.envelope_key() != &envelope_key {
+        return Err(PayloadEncryptionError::InvalidClientSignature);
+    }
+    Ok(())
 }
 
 fn validate_client_payload_value_inner(

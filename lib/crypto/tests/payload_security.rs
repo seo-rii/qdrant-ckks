@@ -9,7 +9,7 @@ use qdrant_sec::{
     client_payload_signature_message, is_client_encrypted_payload_value,
     is_encrypted_payload_value, validate_client_payload_value,
     validate_client_payload_value_after_runtime_verification,
-    validate_server_payload_value_metadata,
+    validate_client_payload_value_for_runtime, validate_server_payload_value_metadata,
 };
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -305,7 +305,7 @@ fn payload_envelopes_reject_unknown_metadata_fields() {
 fn client_payload_envelope_rejects_aad_and_key_mismatch() {
     let envelope = client_envelope("point-1", "body");
     assert_eq!(
-        validate_client_payload_value_after_runtime_verification(
+        validate_client_payload_value(
             &envelope,
             ClientPayloadValidationContext {
                 collection_id: "docs",
@@ -488,7 +488,7 @@ fn client_payload_envelope_enforces_resource_key_policy() {
         Err(PayloadEncryptionError::ClientResourceKeyIdMismatch),
     );
     assert_eq!(
-        validate_client_payload_value_after_runtime_verification(
+        validate_client_payload_value(
             &envelope,
             ClientPayloadValidationContext {
                 collection_id: "docs",
@@ -661,7 +661,7 @@ fn client_payload_envelope_rejects_invalid_signature_key_id() {
         )),
     );
     assert_eq!(
-        validate_client_payload_value_after_runtime_verification(
+        validate_client_payload_value(
             &envelope,
             ClientPayloadValidationContext {
                 collection_id: "docs",
@@ -672,13 +672,86 @@ fn client_payload_envelope_rejects_invalid_signature_key_id() {
                 min_rk_epoch: None,
                 max_rk_epoch: None,
                 key_id_required: true,
-                signature_required: true,
+                signature_required: false,
                 signature_verification: None,
             },
         ),
         Err(PayloadEncryptionError::Crypto(
             EncryptionError::InvalidResourceKeyId,
         )),
+    );
+}
+
+#[test]
+fn post_runtime_client_payload_validation_requires_verified_proof_match() {
+    let (envelope, public_key) = signed_client_envelope("point-1", "body");
+    let verified = validate_client_payload_value_for_runtime(
+        &envelope,
+        ClientPayloadValidationContext {
+            collection_id: "docs",
+            point_id: "point-1",
+            field_path: "body",
+            expected_key_id: Some("tenant-a/client-rk-2026-04"),
+            expected_rk_id: Some("tenant-a/client-rk-2026-04"),
+            min_rk_epoch: Some(3),
+            max_rk_epoch: Some(3),
+            key_id_required: true,
+            signature_required: true,
+            signature_verification: Some(ClientPayloadSignatureVerification {
+                expected_key_id: "tenant-a/client-signing-v1",
+                public_key: &public_key,
+            }),
+        },
+    )
+    .unwrap();
+
+    validate_client_payload_value_after_runtime_verification(
+        &envelope,
+        ClientPayloadValidationContext {
+            collection_id: "docs",
+            point_id: "point-1",
+            field_path: "body",
+            expected_key_id: Some("tenant-a/client-rk-2026-04"),
+            expected_rk_id: Some("tenant-a/client-rk-2026-04"),
+            min_rk_epoch: Some(3),
+            max_rk_epoch: Some(3),
+            key_id_required: true,
+            signature_required: true,
+            signature_verification: None,
+        },
+        &verified,
+    )
+    .unwrap();
+
+    let mut different_ciphertext = envelope.clone();
+    different_ciphertext
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert(
+            "ciphertext".to_string(),
+            Value::String("AQEBAQEBAQEBAQEBAQEBAQ".to_string()),
+        );
+
+    assert_eq!(
+        validate_client_payload_value_after_runtime_verification(
+            &different_ciphertext,
+            ClientPayloadValidationContext {
+                collection_id: "docs",
+                point_id: "point-1",
+                field_path: "body",
+                expected_key_id: Some("tenant-a/client-rk-2026-04"),
+                expected_rk_id: Some("tenant-a/client-rk-2026-04"),
+                min_rk_epoch: Some(3),
+                max_rk_epoch: Some(3),
+                key_id_required: true,
+                signature_required: true,
+                signature_verification: None,
+            },
+            &verified,
+        ),
+        Err(PayloadEncryptionError::InvalidClientSignature),
     );
 }
 
