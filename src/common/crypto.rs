@@ -10612,6 +10612,22 @@ mod tests {
         assert!(
             matches!(err, StorageError::BadInput { description } if description.contains("sha256_b64 must decode to 32 bytes"))
         );
+
+        let backend = settings.crypto.backends.get_mut("openfhe_local").unwrap();
+        backend.sha256_b64 = Some(BASE64URL_NOPAD.encode(&[17_u8; 32]));
+        backend.size = Some(0);
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
+        assert!(
+            matches!(err, StorageError::BadInput { description } if description.contains("process_pool size must be at least 1"))
+        );
+
+        let backend = settings.crypto.backends.get_mut("openfhe_local").unwrap();
+        backend.size = Some(1);
+        backend.timeout_ms = Some(0);
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
+        assert!(
+            matches!(err, StorageError::BadInput { description } if description.contains("timeout_ms must be at least 1"))
+        );
     }
 
     #[test]
