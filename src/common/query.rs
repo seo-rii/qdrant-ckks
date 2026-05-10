@@ -7094,10 +7094,16 @@ mod tests {
     fn ckks_sidecar_hnsw_persisted_graph_ignores_cache_metadata_mismatches() {
         let mismatches = [
             (
+                "cache version",
+                Box::new(|disk: &mut CkksSidecarHnswGraphDisk| {
+                    disk.version += 1;
+                }) as Box<dyn Fn(&mut CkksSidecarHnswGraphDisk)>,
+            ),
+            (
                 "vector name",
                 Box::new(|disk: &mut CkksSidecarHnswGraphDisk| {
                     disk.vector_name = "other-vector".to_string();
-                }) as Box<dyn Fn(&mut CkksSidecarHnswGraphDisk)>,
+                }),
             ),
             (
                 "score order",
