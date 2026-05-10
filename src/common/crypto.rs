@@ -1043,7 +1043,7 @@ fn generic_vector_write_plan(
                 rule.instance
             ))
         })?;
-        let backend = openfhe_backend_from_config(backend_ref, backend_config)?;
+        let backend = openfhe_backend_from_config(backend_ref, backend_config, runtime_settings)?;
 
         for vector_name in names {
             let distance = ckks_vector_distance(params, collection_name, vector_name)?;
@@ -1145,6 +1145,7 @@ fn required_base64url_option(
 fn openfhe_backend_from_config(
     backend_name: &str,
     backend: &CryptoBackendConfig,
+    settings: &CryptoSettings,
 ) -> Result<CommandOpenFheBackend, StorageError> {
     let Some(program) = backend.program.as_deref() else {
         return Err(StorageError::bad_input(format!(
@@ -1167,6 +1168,7 @@ fn openfhe_backend_from_config(
     if let Some(timeout_ms) = backend.timeout_ms {
         command_backend = command_backend.with_timeout(Duration::from_millis(timeout_ms));
     }
+    command_backend = command_backend.with_sensitive_env_names(crypto_secret_env_names(settings));
     let pool_size = match backend.kind.as_str() {
         "process_pool" => backend.size.unwrap_or(1),
         "process" => 1,
@@ -1182,6 +1184,14 @@ fn openfhe_backend_from_config(
         )));
     };
     Ok(command_backend.with_pool_size(pool_size))
+}
+
+fn crypto_secret_env_names(settings: &CryptoSettings) -> Vec<String> {
+    settings
+        .materials
+        .values()
+        .filter_map(|material| material.env.clone())
+        .collect()
 }
 
 pub fn validate_create_collection_crypto_runtime(
@@ -7125,6 +7135,7 @@ mod tests {
                 size: None,
                 timeout_ms: Some(5_000),
             },
+            &CryptoSettings::default(),
         )
         .expect_err("backend construction must reject missing bridge sha256 pin");
 
@@ -7133,6 +7144,50 @@ mod tests {
             StorageError::BadInput { description }
                 if description.contains("requires sha256_b64 program pin")
         ));
+    }
+
+    #[test]
+    fn openfhe_backend_factory_tracks_crypto_material_env_names() {
+        let program = std::env::current_exe().unwrap();
+        let settings = CryptoSettings {
+            materials: HashMap::from([
+                (
+                    "tenant-a/payload-rk".to_string(),
+                    CryptoMaterialConfig {
+                        kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                        source: Some("env".to_string()),
+                        env: Some("TENANT_A_PAYLOAD_RK".to_string()),
+                        ..CryptoMaterialConfig::default()
+                    },
+                ),
+                (
+                    "tenant-a/vault-token".to_string(),
+                    CryptoMaterialConfig {
+                        kind: WRAPPING_KEY_32_KIND.to_string(),
+                        source: Some("vault_kv2".to_string()),
+                        env: Some("TENANT_A_VAULT_TOKEN".to_string()),
+                        path: Some("https://vault.example.com/v1/secret/data/docs".to_string()),
+                        vault_field: Some("material".to_string()),
+                        ..CryptoMaterialConfig::default()
+                    },
+                ),
+            ]),
+            ..CryptoSettings::default()
+        };
+        let backend = openfhe_backend_from_config(
+            "openfhe_local",
+            &CryptoBackendConfig {
+                kind: "process".to_string(),
+                program: Some(program.to_string_lossy().to_string()),
+                sha256_b64: Some(current_exe_sha256_b64()),
+                size: None,
+                timeout_ms: Some(5_000),
+            },
+            &settings,
+        )
+        .unwrap();
+
+        assert!(format!("{backend:?}").contains("sensitive_env_names_count: 2"));
     }
 
     #[test]

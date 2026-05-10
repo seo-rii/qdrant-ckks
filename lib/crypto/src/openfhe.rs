@@ -32,6 +32,7 @@ pub struct CommandOpenFheBackend {
     pool_size: NonZeroUsize,
     checked_program: bool,
     expected_sha256_b64: Option<String>,
+    sensitive_env_names: Vec<String>,
     workers: Arc<Mutex<Vec<Arc<WorkerProcess>>>>,
     next_worker: Arc<AtomicUsize>,
 }
@@ -49,6 +50,7 @@ impl std::fmt::Debug for CommandOpenFheBackend {
                 "expected_sha256_b64",
                 &self.expected_sha256_b64.as_ref().map(|_| "<configured>"),
             )
+            .field("sensitive_env_names_count", &self.sensitive_env_names.len())
             .finish()
     }
 }
@@ -62,6 +64,7 @@ impl PartialEq for CommandOpenFheBackend {
             && self.pool_size == other.pool_size
             && self.checked_program == other.checked_program
             && self.expected_sha256_b64 == other.expected_sha256_b64
+            && self.sensitive_env_names == other.sensitive_env_names
     }
 }
 
@@ -160,6 +163,7 @@ impl CommandOpenFheBackend {
             pool_size: NonZeroUsize::new(1).expect("pool size must be non-zero"),
             checked_program: false,
             expected_sha256_b64: None,
+            sensitive_env_names: Vec::new(),
             workers: Arc::new(Mutex::new(Vec::new())),
             next_worker: Arc::new(AtomicUsize::new(0)),
         }
@@ -226,6 +230,21 @@ impl CommandOpenFheBackend {
 
     pub fn with_pool_size(mut self, pool_size: NonZeroUsize) -> Self {
         self.pool_size = pool_size;
+        self.workers = Arc::new(Mutex::new(Vec::new()));
+        self.next_worker = Arc::new(AtomicUsize::new(0));
+        self
+    }
+
+    pub fn with_sensitive_env_names<I, S>(mut self, env_names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.sensitive_env_names = env_names
+            .into_iter()
+            .map(Into::into)
+            .filter(|name| !name.is_empty())
+            .collect();
         self.workers = Arc::new(Mutex::new(Vec::new()));
         self.next_worker = Arc::new(AtomicUsize::new(0));
         self
@@ -1088,6 +1107,9 @@ impl CommandOpenFheBackend {
             if name_string == "QDRANT" || name_string.starts_with("QDRANT_") {
                 command.env_remove(name);
             }
+        }
+        for name in &self.sensitive_env_names {
+            command.env_remove(name);
         }
         configure_bridge_command_sandbox(&mut command);
 

@@ -895,9 +895,10 @@ for name in (
     "QDRANT_CRYPTO_BRIDGE_ENV_SECRET_FOR_TEST",
     "QDRANT__CKKS__BRIDGE_ENV_SECRET_FOR_TEST",
     "QDRANT_CKKS_BRIDGE_ENV_SECRET_FOR_TEST",
+    "TENANT_PAYLOAD_KEY_FOR_TEST",
 ):
     if os.environ.get(name):
-        print(f"qdrant env leaked to bridge: {name}", file=sys.stderr)
+        print(f"secret env leaked to bridge: {name}", file=sys.stderr)
         raise SystemExit(20)
 
 sys.stdin.readline()
@@ -917,12 +918,15 @@ print('{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext"
         "QDRANT_CRYPTO_BRIDGE_ENV_SECRET_FOR_TEST",
         "QDRANT__CKKS__BRIDGE_ENV_SECRET_FOR_TEST",
         "QDRANT_CKKS_BRIDGE_ENV_SECRET_FOR_TEST",
+        "TENANT_PAYLOAD_KEY_FOR_TEST",
     ] {
         unsafe {
             std::env::set_var(name, "must-not-reach-bridge");
         }
     }
-    let backend = CommandOpenFheBackend::new_checked(&script_path).unwrap();
+    let backend = CommandOpenFheBackend::new_checked(&script_path)
+        .unwrap()
+        .with_sensitive_env_names(["TENANT_PAYLOAD_KEY_FOR_TEST"]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -941,6 +945,7 @@ print('{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext"
         "QDRANT_CRYPTO_BRIDGE_ENV_SECRET_FOR_TEST",
         "QDRANT__CKKS__BRIDGE_ENV_SECRET_FOR_TEST",
         "QDRANT_CKKS_BRIDGE_ENV_SECRET_FOR_TEST",
+        "TENANT_PAYLOAD_KEY_FOR_TEST",
     ] {
         unsafe {
             std::env::remove_var(name);
