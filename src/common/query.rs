@@ -6789,6 +6789,34 @@ mod tests {
     }
 
     #[test]
+    fn ckks_sidecar_hnsw_records_fingerprint_tracks_point_identity_changes() {
+        let first = ckks_sidecar_hnsw_records_fingerprint(&[
+            ckks_sidecar_test_record(1, "ciphertext-a"),
+            ckks_sidecar_test_record(2, "ciphertext-b"),
+        ]);
+        let changed = ckks_sidecar_hnsw_records_fingerprint(&[
+            ckks_sidecar_test_record(1, "ciphertext-a"),
+            ckks_sidecar_test_record(3, "ciphertext-b"),
+        ]);
+
+        assert_ne!(first, changed);
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_records_fingerprint_tracks_resource_key_metadata() {
+        let first =
+            ckks_sidecar_hnsw_records_fingerprint(&[ckks_sidecar_test_record(1, "ciphertext-a")]);
+        let mut rotated = ckks_sidecar_test_record(1, "ciphertext-a");
+        rotated.encrypted.envelope.key_id = "test-key-v2".to_string();
+        rotated.encrypted.envelope.material_fingerprint = "test-material-v2".to_string();
+        rotated.encrypted.envelope.rk_id = "test-rk-v2".to_string();
+        rotated.encrypted.envelope.rk_epoch = Some(2);
+        let changed = ckks_sidecar_hnsw_records_fingerprint(&[rotated]);
+
+        assert_ne!(first, changed);
+    }
+
+    #[test]
     fn ckks_sidecar_hnsw_graph_cache_key_uses_collection_identity() {
         let first = CkksSidecarHnswGraphCacheKey {
             collection_identity: "collection-uuid-a".to_string(),
