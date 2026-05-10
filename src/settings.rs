@@ -10,6 +10,7 @@ use collection::shards::shard::PeerId;
 use common::flags::FeatureFlags;
 use config::{Config, ConfigError, Environment, File, FileFormat, Source};
 use serde::Deserialize;
+use serde_json::Value;
 use storage::types::StorageConfig;
 use validator::{Validate, ValidationError, ValidationErrors};
 
@@ -404,144 +405,69 @@ impl CryptoSettings {
 
 #[derive(Deserialize, Clone, Default, Validate)]
 pub struct CkksCollectionKeyConfig {
-    /// Legacy runtime key id retained only so old `ckks` configs deserialize and fail validation.
-    #[serde(default)]
-    pub key_id: Option<String>,
-    /// Legacy base64url-no-padding encoded 32-byte direct RK.
-    #[serde(default)]
-    pub master_key_b64: Option<String>,
-    /// Legacy direct 32-byte collection resource key spelling.
-    ///
-    /// Any configured legacy `ckks` runtime field is rejected by startup validation.
-    #[serde(default)]
-    pub resource_key_b64: Option<String>,
-    /// Legacy OpenFHE bridge executable path retained for reject-only deserialization.
-    #[serde(default)]
-    pub openfhe_bridge_path: Option<String>,
-    /// Legacy bridge SHA-256 pin retained for reject-only deserialization.
-    #[serde(default)]
-    pub openfhe_bridge_sha256_b64: Option<String>,
+    /// Legacy collection-scoped runtime fields are unsupported. They are kept
+    /// only as redacted field names so any non-empty old `ckks.collections.*`
+    /// entry fails validation instead of being silently ignored.
+    #[serde(flatten)]
+    pub legacy_fields: HashMap<String, Value>,
 }
 
 impl fmt::Debug for CkksCollectionKeyConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut legacy_field_names: Vec<_> = self.legacy_fields.keys().collect();
+        legacy_field_names.sort();
         f.debug_struct("CkksCollectionKeyConfig")
-            .field("key_id", &self.key_id)
-            .field(
-                "master_key_b64",
-                &self.master_key_b64.as_ref().map(|_| "[redacted]"),
-            )
-            .field(
-                "resource_key_b64",
-                &self.resource_key_b64.as_ref().map(|_| "[redacted]"),
-            )
-            .field("openfhe_bridge_path", &self.openfhe_bridge_path)
-            .field("openfhe_bridge_sha256_b64", &self.openfhe_bridge_sha256_b64)
+            .field("legacy_fields", &legacy_field_names)
             .finish()
     }
 }
 
 impl CkksCollectionKeyConfig {
     pub fn is_configured(&self) -> bool {
-        self.key_id.is_some()
-            || self.master_key_b64.is_some()
-            || self.resource_key_b64.is_some()
-            || self.openfhe_bridge_path.is_some()
-            || self.openfhe_bridge_sha256_b64.is_some()
-    }
-
-    pub fn direct_resource_key_b64(&self) -> Option<&str> {
-        self.resource_key_b64
-            .as_deref()
-            .or(self.master_key_b64.as_deref())
+        !self.legacy_fields.is_empty()
     }
 }
 
 #[derive(Deserialize, Clone, Validate)]
 pub struct CkksConfig {
-    /// Legacy CKKS runtime switch retained only to reject old config files.
-    #[serde(default)]
-    pub enabled: bool,
-    /// Legacy inline-material flag retained only to reject old config files.
-    #[serde(default = "default_allow_inline_key_material")]
-    pub allow_inline_key_material: bool,
-    /// Legacy default key id retained only to reject old config files.
-    #[serde(default)]
-    pub key_id: Option<String>,
-    /// Legacy base64url-no-padding encoded 32-byte direct RK.
-    #[serde(default)]
-    pub master_key_b64: Option<String>,
-    /// Legacy direct default resource key spelling.
-    ///
-    /// Any configured legacy `ckks` runtime field is rejected by startup validation.
-    #[serde(default)]
-    pub resource_key_b64: Option<String>,
-    /// Legacy OpenFHE bridge executable path retained for reject-only deserialization.
-    #[serde(default)]
-    pub openfhe_bridge_path: Option<String>,
-    /// Legacy bridge SHA-256 pin retained for reject-only deserialization.
-    #[serde(default)]
-    pub openfhe_bridge_sha256_b64: Option<String>,
     /// Legacy collection-specific runtime settings retained only to reject old config files.
     #[serde(default)]
     #[validate(nested)]
     pub collections: HashMap<String, CkksCollectionKeyConfig>,
+    /// Unsupported legacy top-level `ckks` fields. Values are never inspected or
+    /// printed because they may contain old inline key material.
+    #[serde(flatten)]
+    pub legacy_fields: HashMap<String, Value>,
 }
 
 impl Default for CkksConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
-            allow_inline_key_material: default_allow_inline_key_material(),
-            key_id: None,
-            master_key_b64: None,
-            resource_key_b64: None,
-            openfhe_bridge_path: None,
-            openfhe_bridge_sha256_b64: None,
             collections: HashMap::new(),
+            legacy_fields: HashMap::new(),
         }
     }
 }
 
 impl fmt::Debug for CkksConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut legacy_field_names: Vec<_> = self.legacy_fields.keys().collect();
+        legacy_field_names.sort();
         f.debug_struct("CkksConfig")
-            .field("enabled", &self.enabled)
-            .field("allow_inline_key_material", &self.allow_inline_key_material)
-            .field("key_id", &self.key_id)
-            .field(
-                "master_key_b64",
-                &self.master_key_b64.as_ref().map(|_| "[redacted]"),
-            )
-            .field(
-                "resource_key_b64",
-                &self.resource_key_b64.as_ref().map(|_| "[redacted]"),
-            )
-            .field("openfhe_bridge_path", &self.openfhe_bridge_path)
-            .field("openfhe_bridge_sha256_b64", &self.openfhe_bridge_sha256_b64)
             .field("collections", &self.collections)
+            .field("legacy_fields", &legacy_field_names)
             .finish()
     }
 }
 
 impl CkksConfig {
     pub fn is_configured(&self) -> bool {
-        self.enabled
-            || self.key_id.is_some()
-            || self.master_key_b64.is_some()
-            || self.resource_key_b64.is_some()
-            || self.openfhe_bridge_path.is_some()
-            || self.openfhe_bridge_sha256_b64.is_some()
+        !self.legacy_fields.is_empty()
+            || !self.collections.is_empty()
             || self
                 .collections
                 .values()
                 .any(CkksCollectionKeyConfig::is_configured)
-    }
-
-    pub fn direct_resource_key_b64(&self) -> Option<&str> {
-        self.resource_key_b64
-            .as_deref()
-            .or(self.master_key_b64.as_deref())
     }
 }
 
@@ -864,8 +790,7 @@ mod tests {
             default_http_client_disconnect_timeout_sec()
         );
         assert!(!config.crypto.is_configured());
-        assert!(!config.ckks.enabled);
-        assert!(config.ckks.collections.is_empty());
+        assert!(!config.ckks.is_configured());
 
         config
             .validate()
@@ -1006,9 +931,39 @@ ckks:
     }
 
     #[test]
+    fn test_legacy_ckks_collection_runtime_is_rejected_and_redacted() {
+        let secret = "legacy-secret-material-must-not-leak";
+        let config = Config::builder()
+            .add_source(File::from_str(DEFAULT_CONFIG, FileFormat::Yaml))
+            .add_source(File::from_str(
+                &format!(
+                    r#"
+ckks:
+  collections:
+    docs:
+      master_key_b64: {secret}
+"#
+                ),
+                FileFormat::Yaml,
+            ))
+            .build()
+            .expect("failed to build config")
+            .try_deserialize::<Settings>()
+            .expect("failed to deserialize config");
+
+        let debug = format!("{:?}", config.ckks);
+        assert!(debug.contains("master_key_b64"));
+        assert!(!debug.contains(secret));
+
+        let err = config
+            .validate()
+            .expect_err("legacy ckks collection runtime settings must be rejected");
+        assert!(format!("{err:?}").contains("legacy_ckks_runtime_unsupported"));
+    }
+
+    #[test]
     fn test_inline_key_material_defaults_to_disabled() {
         assert!(!CryptoSettings::default().allow_inline_key_material);
-        assert!(!CkksConfig::default().allow_inline_key_material);
     }
 
     #[expect(clippy::disallowed_types, reason = "#[sealed_test] uses std::fs::File")]

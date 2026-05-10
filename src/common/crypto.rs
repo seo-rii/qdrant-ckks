@@ -5663,9 +5663,14 @@ mod tests {
         let baseline = Settings::new(None).unwrap();
         let with_legacy = Settings {
             ckks: CkksConfig {
-                enabled: true,
-                key_id: Some("tenant-a:legacy".to_string()),
-                resource_key_b64: Some(BASE64URL_NOPAD.encode(&[7_u8; 32])),
+                legacy_fields: HashMap::from([
+                    ("enabled".to_string(), json!(true)),
+                    ("key_id".to_string(), json!("tenant-a:legacy")),
+                    (
+                        "resource_key_b64".to_string(),
+                        json!(BASE64URL_NOPAD.encode(&[7_u8; 32])),
+                    ),
+                ]),
                 ..CkksConfig::default()
             },
             ..Settings::new(None).unwrap()
@@ -9528,10 +9533,15 @@ mod tests {
     fn payload_write_plan_rejects_legacy_collection_and_runtime_ckks() {
         let settings = Settings {
             ckks: CkksConfig {
-                enabled: true,
-                allow_inline_key_material: true,
-                key_id: Some("tenant-a:docs".to_string()),
-                master_key_b64: Some(BASE64URL_NOPAD.encode(&[9u8; 32])),
+                legacy_fields: HashMap::from([
+                    ("enabled".to_string(), json!(true)),
+                    ("allow_inline_key_material".to_string(), json!(true)),
+                    ("key_id".to_string(), json!("tenant-a:docs")),
+                    (
+                        "master_key_b64".to_string(),
+                        json!(BASE64URL_NOPAD.encode(&[9u8; 32])),
+                    ),
+                ]),
                 ..CkksConfig::default()
             },
             ..Settings::new(None).unwrap()
@@ -9556,10 +9566,15 @@ mod tests {
     fn legacy_payload_write_plan_rejects_explicit_crypto_collection_id() {
         let settings = Settings {
             ckks: CkksConfig {
-                enabled: true,
-                allow_inline_key_material: true,
-                key_id: Some("tenant-a:docs".to_string()),
-                resource_key_b64: Some(BASE64URL_NOPAD.encode(&[5u8; 32])),
+                legacy_fields: HashMap::from([
+                    ("enabled".to_string(), json!(true)),
+                    ("allow_inline_key_material".to_string(), json!(true)),
+                    ("key_id".to_string(), json!("tenant-a:docs")),
+                    (
+                        "resource_key_b64".to_string(),
+                        json!(BASE64URL_NOPAD.encode(&[5u8; 32])),
+                    ),
+                ]),
                 ..CkksConfig::default()
             },
             ..Settings::new(None).unwrap()
