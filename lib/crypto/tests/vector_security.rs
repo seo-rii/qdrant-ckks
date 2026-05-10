@@ -1114,6 +1114,114 @@ done
 
 #[cfg(unix)]
 #[test]
+fn command_openfhe_backend_reuses_registered_context_for_score_and_query_requests() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir
+        .path()
+        .join("cached-context-score-query-openfhe-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+count=0
+while IFS= read -r request; do
+  count=$((count + 1))
+  case "$request" in
+    *'"scheme":"openfhe-ckks"'*'"context_id"'*) ;;
+    *) exit 7 ;;
+  esac
+  if [[ "$count" -eq 1 ]]; then
+    case "$request" in
+      *'"operation":"encrypt"'*'"parameters"'*'"crypto_context"'*'"public_key"'*) ;;
+      *) exit 8 ;;
+    esac
+  else
+    case "$request" in
+      *'"parameters"'*|*'"crypto_context"'*|*'"public_key"'*) exit 9 ;;
+    esac
+  fi
+  case "$count:$request" in
+    1:*'"operation":"encrypt"'*|2:*'"operation":"encrypt"'*)
+      printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
+      ;;
+    3:*'"operation":"score_plaintext_query"'*'"distance":"dot"'*'"query_values":[0.5,0.25]'*'"ciphertext":"b3BlbmZoZS1jaXBoZXI"'*)
+      printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","score":12.5}\n'
+      ;;
+    4:*'"operation":"score_plaintext_query_batch"'*'"distance":"dot"'*'"items":[{"point_id":"point-1","ciphertext":"b3BlbmZoZS1jaXBoZXI"},{"point_id":"point-2","ciphertext":"b3BlbmZoZS1jaXBoZXI"}]'*)
+      printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[12.5,7.25]}\n'
+      ;;
+    5:*'"operation":"encrypt_query"'*'"values":[0.5,0.25]'*)
+      printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1xdWVyeQ"}\n'
+      ;;
+    6:*'"operation":"score_encrypted_query_batch"'*'"encrypted_query":"b3BlbmZoZS1xdWVyeQ"'*'"items":[{"point_id":"point-1","ciphertext":"b3BlbmZoZS1jaXBoZXI"},{"point_id":"point-2","ciphertext":"b3BlbmZoZS1jaXBoZXI"}]'*)
+      printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[9.5,4.25]}\n'
+      ;;
+    *) exit 10 ;;
+  esac
+done
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+        .with_args([script_path.display().to_string()]);
+    let encryptor = test_ckks_encryptor(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+    let first = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0, 2.0])
+        .unwrap();
+    let second = encryptor
+        .encrypt("docs", "point-2", &public_material(), &[3.0, 4.0])
+        .unwrap();
+
+    let score = encryptor
+        .score_plaintext_query(
+            "docs",
+            "point-1",
+            &public_material(),
+            &first,
+            "dot",
+            &[0.5, 0.25],
+        )
+        .unwrap();
+    assert_eq!(score, 12.5);
+
+    let scores = encryptor
+        .score_plaintext_query_batch(
+            "docs",
+            &public_material(),
+            &[("point-1", &first), ("point-2", &second)],
+            "dot",
+            &[0.5, 0.25],
+        )
+        .unwrap();
+    assert_eq!(scores, vec![12.5, 7.25]);
+
+    let encrypted_scores = encryptor
+        .score_encrypted_query_batch(
+            "docs",
+            &public_material(),
+            &[("point-1", &first), ("point-2", &second)],
+            "dot",
+            &[0.5, 0.25],
+        )
+        .unwrap();
+    assert_eq!(encrypted_scores, vec![9.5, 4.25]);
+}
+
+#[cfg(unix)]
+#[test]
 fn command_openfhe_backend_rejects_security_profile_mismatch() {
     use std::os::unix::fs::PermissionsExt;
 
