@@ -1181,6 +1181,60 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_cluster_transfer_variants_require_endpoint_crypto_runtime_parity() {
+        let operations = [
+            ClusterOperations::MoveShard(MoveShardOperation {
+                move_shard: collection::operations::cluster_ops::MoveShard {
+                    shard_id: 1,
+                    to_shard_id: None,
+                    from_peer_id: 1,
+                    to_peer_id: 2,
+                    method: None,
+                },
+            }),
+            ClusterOperations::RestartTransfer(RestartTransferOperation {
+                restart_transfer: RestartTransfer {
+                    shard_id: 1,
+                    to_shard_id: None,
+                    from_peer_id: 1,
+                    to_peer_id: 2,
+                    method: collection::shards::transfer::ShardTransferMethod::StreamRecords,
+                },
+            }),
+        ];
+
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            1,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "local-fingerprint".to_string(),
+            )),
+        );
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "different-fingerprint".to_string(),
+            )),
+        );
+
+        for operation in operations {
+            let err = validate_encrypted_cluster_data_movement_parity(
+                "docs",
+                true,
+                &operation,
+                1,
+                &[1, 2],
+                &metadata,
+            )
+            .expect_err("encrypted shard transfer variants must fail closed on endpoint mismatch");
+            assert!(
+                err.to_string().contains("crypto runtime parity"),
+                "unexpected error for {operation:?}: {err}",
+            );
+        }
+    }
+
+    #[test]
     fn encrypted_cluster_replicate_points_requires_all_peer_crypto_runtime_parity() {
         let operation = ClusterOperations::ReplicatePoints(ReplicatePointsOperation {
             replicate_points: ReplicatePoints {
