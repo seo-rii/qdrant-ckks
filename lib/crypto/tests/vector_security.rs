@@ -1305,6 +1305,131 @@ done
 
 #[cfg(unix)]
 #[test]
+fn command_openfhe_backend_rejects_batch_weak_security_level_metadata() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("weak-batch-level-openfhe-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+IFS= read -r request
+case "$request" in
+  *'"operation":"encrypt_batch"'*'"items"'*) ;;
+  *) exit 7 ;;
+esac
+printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","security_level_bits":80,"ciphertexts":["YmF0Y2gtb25l","YmF0Y2gtdHdv"]}\n'
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+        .with_args([script_path.display().to_string()]);
+    let encryptor = test_ckks_encryptor(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+    let first = [1.0, 2.0];
+    let second = [3.0, 4.0];
+    let err = encryptor
+        .encrypt_batch(
+            "docs",
+            &public_material(),
+            &[
+                CkksVectorBatchItem {
+                    point_id: "point-1",
+                    values: &first,
+                },
+                CkksVectorBatchItem {
+                    point_id: "point-2",
+                    values: &second,
+                },
+            ],
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CkksError::Backend(message)
+            if message.contains("security level 80 bits")
+                && message.contains("required 128 bits")
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn command_openfhe_backend_rejects_score_batch_invalid_noise_budget_metadata() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("bad-score-batch-noise-openfhe-bridge.sh");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+while IFS= read -r request; do
+  case "$request" in
+    *'"operation":"score_plaintext_query_batch"'*)
+      printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","noise_budget_bits":-0.5,"scores":[12.5,7.25]}\n'
+      ;;
+    *'"scheme":"openfhe-ckks"'*)
+      printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
+      ;;
+    *) exit 7 ;;
+  esac
+done
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+        .with_args([script_path.display().to_string()]);
+    let encryptor = test_ckks_encryptor(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+    let first = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0, 2.0])
+        .unwrap();
+    let second = encryptor
+        .encrypt("docs", "point-2", &public_material(), &[3.0, 4.0])
+        .unwrap();
+
+    let err = encryptor
+        .score_plaintext_query_batch(
+            "docs",
+            &public_material(),
+            &[("point-1", &first), ("point-2", &second)],
+            "dot",
+            &[0.5, 0.25],
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CkksError::Backend(message)
+            if message.contains("invalid noise budget")
+                && message.contains("-0.5")
+    ));
+}
+
+#[cfg(unix)]
+#[test]
 fn command_openfhe_backend_uses_plaintext_query_score_protocol() {
     use std::os::unix::fs::PermissionsExt;
 
