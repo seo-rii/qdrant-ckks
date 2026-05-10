@@ -2800,6 +2800,83 @@ esac
 
     #[cfg(unix)]
     #[test]
+    fn vector_write_plan_moves_batch_vectors_into_encrypted_sidecars() {
+        let bridge = fake_openfhe_bridge();
+        let settings = vector_runtime_settings(&bridge.path().join("openfhe-bridge"));
+        let params = encrypted_vector_params();
+        let plan = vector_write_plan_for_collection_with_crypto_id(
+            &settings,
+            "docs",
+            "docs-crypto-id",
+            &params,
+        )
+        .unwrap()
+        .unwrap();
+        let ids = vec![1.into(), 2.into()];
+        let mut vectors = BatchVectorStructPersisted::Named(HashMap::from([(
+            "embedding".to_string(),
+            vec![
+                VectorPersisted::Dense(vec![0.125, -42.5]),
+                VectorPersisted::Dense(vec![0.25, -84.0]),
+            ],
+        )]));
+        let mut payloads = None;
+
+        let encrypted =
+            encrypt_vectors_for_batch(&plan, "docs", &ids, &mut vectors, &mut payloads).unwrap();
+
+        assert_eq!(encrypted.len(), 2);
+        assert!(
+            matches!(vectors, BatchVectorStructPersisted::Named(ref vectors) if vectors.is_empty())
+        );
+        let payloads = payloads.unwrap();
+        assert_eq!(payloads.len(), 2);
+        for payload in payloads {
+            let payload = payload.unwrap();
+            let sidecar = payload
+                .0
+                .get(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                .and_then(Value::as_object)
+                .unwrap();
+            assert!(is_encrypted_ckks_vector_payload_value(
+                sidecar.get("embedding").unwrap()
+            ));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vector_write_plan_rejects_batch_vector_count_mismatch() {
+        let bridge = fake_openfhe_bridge();
+        let settings = vector_runtime_settings(&bridge.path().join("openfhe-bridge"));
+        let params = encrypted_vector_params();
+        let plan = vector_write_plan_for_collection_with_crypto_id(
+            &settings,
+            "docs",
+            "docs-crypto-id",
+            &params,
+        )
+        .unwrap()
+        .unwrap();
+        let ids = vec![1.into(), 2.into()];
+        let mut vectors = BatchVectorStructPersisted::Named(HashMap::from([(
+            "embedding".to_string(),
+            vec![VectorPersisted::Dense(vec![0.125, -42.5])],
+        )]));
+        let mut payloads = None;
+
+        let err = encrypt_vectors_for_batch(&plan, "docs", &ids, &mut vectors, &mut payloads)
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("batch vector count for 'embedding'")
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn ckks_vector_search_groups_uses_sidecar_scores() {
         let runtime = Runtime::new().unwrap();
         let storage_dir = Builder::new().prefix("vector-groups").tempdir().unwrap();
