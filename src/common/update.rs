@@ -5683,6 +5683,147 @@ esac
             .unwrap_err();
             assert!(err.message().contains("cannot scroll encrypted vector"));
 
+            let err = crate::tonic::api::query_common::recommend(
+                UncheckedTocProvider::new_unchecked(&toc),
+                api::grpc::qdrant::RecommendPoints {
+                    collection_name: "vector_docs".to_string(),
+                    positive: vec![segment::types::PointIdType::from(1).into()],
+                    negative: Vec::new(),
+                    filter: None,
+                    limit: 1,
+                    with_payload: None,
+                    params: None,
+                    score_threshold: None,
+                    offset: None,
+                    using: Some(DEFAULT_VECTOR_NAME.to_string()),
+                    with_vectors: Some(api::grpc::qdrant::WithVectorsSelector {
+                        selector_options: Some(
+                            api::grpc::qdrant::with_vectors_selector::SelectorOptions::Include(
+                                api::grpc::qdrant::VectorsSelector {
+                                    names: vec![DEFAULT_VECTOR_NAME.to_string()],
+                                },
+                            ),
+                        ),
+                    }),
+                    lookup_from: None,
+                    read_consistency: None,
+                    strategy: None,
+                    positive_vectors: Vec::new(),
+                    negative_vectors: Vec::new(),
+                    timeout: None,
+                    shard_key_selector: None,
+                },
+                auth.clone(),
+                storage::content_manager::toc::request_hw_counter::RequestHwCounter::new(
+                    HwMeasurementAcc::disposable(),
+                    false,
+                ),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                err.message().contains("cannot recommend encrypted vector")
+                    && err.message().contains("payload sidecar only")
+            );
+
+            let err = crate::tonic::api::query_common::recommend_groups(
+                UncheckedTocProvider::new_unchecked(&toc),
+                api::grpc::qdrant::RecommendPointGroups {
+                    collection_name: "vector_docs".to_string(),
+                    positive: vec![segment::types::PointIdType::from(1).into()],
+                    negative: Vec::new(),
+                    filter: None,
+                    limit: 1,
+                    with_payload: None,
+                    params: None,
+                    score_threshold: None,
+                    using: Some(DEFAULT_VECTOR_NAME.to_string()),
+                    with_vectors: Some(api::grpc::qdrant::WithVectorsSelector {
+                        selector_options: Some(
+                            api::grpc::qdrant::with_vectors_selector::SelectorOptions::Include(
+                                api::grpc::qdrant::VectorsSelector {
+                                    names: vec![DEFAULT_VECTOR_NAME.to_string()],
+                                },
+                            ),
+                        ),
+                    }),
+                    lookup_from: None,
+                    group_by: "group".to_string(),
+                    group_size: 1,
+                    read_consistency: None,
+                    with_lookup: None,
+                    strategy: None,
+                    positive_vectors: Vec::new(),
+                    negative_vectors: Vec::new(),
+                    timeout: None,
+                    shard_key_selector: None,
+                },
+                auth.clone(),
+                storage::content_manager::toc::request_hw_counter::RequestHwCounter::new(
+                    HwMeasurementAcc::disposable(),
+                    false,
+                ),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                err.message()
+                    .contains("cannot recommend groups encrypted vector")
+                    && err.message().contains("payload sidecar only")
+            );
+
+            let err = crate::tonic::api::query_common::discover(
+                UncheckedTocProvider::new_unchecked(&toc),
+                api::grpc::qdrant::DiscoverPoints {
+                    collection_name: "vector_docs".to_string(),
+                    target: Some(api::grpc::qdrant::TargetVector {
+                        target: Some(api::grpc::qdrant::target_vector::Target::Single(
+                            api::grpc::qdrant::VectorExample {
+                                example: Some(
+                                    api::grpc::qdrant::vector_example::Example::Id(
+                                        segment::types::PointIdType::from(1).into(),
+                                    ),
+                                ),
+                            },
+                        )),
+                    }),
+                    context: Vec::new(),
+                    filter: None,
+                    limit: 1,
+                    with_payload: None,
+                    params: None,
+                    offset: None,
+                    using: Some(DEFAULT_VECTOR_NAME.to_string()),
+                    with_vectors: Some(api::grpc::qdrant::WithVectorsSelector {
+                        selector_options: Some(
+                            api::grpc::qdrant::with_vectors_selector::SelectorOptions::Include(
+                                api::grpc::qdrant::VectorsSelector {
+                                    names: vec![DEFAULT_VECTOR_NAME.to_string()],
+                                },
+                            ),
+                        ),
+                    }),
+                    lookup_from: None,
+                    read_consistency: None,
+                    timeout: None,
+                    shard_key_selector: None,
+                },
+                auth.clone(),
+                storage::content_manager::toc::request_hw_counter::RequestHwCounter::new(
+                    HwMeasurementAcc::disposable(),
+                    false,
+                ),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                err.message().contains("cannot discover encrypted vector")
+                    && err.message().contains("payload sidecar only")
+            );
+
             let err = crate::common::query::do_search_points_matrix(
                 &toc,
                 "vector_docs",
