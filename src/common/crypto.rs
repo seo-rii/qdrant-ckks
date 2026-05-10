@@ -2289,6 +2289,13 @@ fn validate_material_vault_kv2_source(
             reason: "Vault KV v2 URL must include the secret data path".to_string(),
         });
     }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: url.to_string(),
+            reason: "Vault KV v2 URL must not include credentials".to_string(),
+        });
+    }
     if parsed.query().is_some() || parsed.fragment().is_some() {
         return Err(CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
@@ -6228,6 +6235,24 @@ mod tests {
             validate_material("tenant-a/payload-v1", &fragment_material, false),
             Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
                 if reason.contains("query or fragment")
+        ));
+    }
+
+    #[test]
+    fn validate_material_vault_kv2_source_rejects_url_credentials() {
+        let credential_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("vault_kv2".to_string()),
+            env: Some("QDRANT_TEST_VAULT_TOKEN".to_string()),
+            path: Some("https://user:pass@vault.example.com/v1/secret/data/docs".to_string()),
+            vault_field: Some("material".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        assert!(matches!(
+            validate_material("tenant-a/payload-v1", &credential_material, false),
+            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("credentials")
         ));
     }
 
