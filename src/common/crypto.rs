@@ -189,6 +189,22 @@ fn unsupported_material_role(
         .cloned()
 }
 
+fn validate_optional_instance_key_id(
+    instance_name: &str,
+    instance: &CryptoInstanceConfig,
+    provider: &str,
+) -> Result<(), CryptoSetupError> {
+    match instance.options.get("key_id") {
+        None | Some(Value::Null) => Ok(()),
+        Some(Value::String(key_id)) if is_crypto_identifier(key_id) => Ok(()),
+        Some(_) => Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: "key_id".to_string(),
+            reason: format!("{provider} key_id must be a crypto identifier string"),
+        }),
+    }
+}
+
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum PayloadWriteSetupError {
     #[error("collection {collection} references unknown payload crypto instance {instance}")]
@@ -1669,6 +1685,9 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                 reason: "unsupported option for payload/aes-256-gcm@v1".to_string(),
             });
         }
+        if instance.provider == PAYLOAD_AES_GCM_PROVIDER {
+            validate_optional_instance_key_id(instance_name, instance, PAYLOAD_AES_GCM_PROVIDER)?;
+        }
         if instance.provider == PAYLOAD_AES_GCM_PROVIDER && instance.backend_ref.is_some() {
             return Err(CryptoSetupError::InvalidInstanceOption {
                 instance: instance_name.clone(),
@@ -1761,6 +1780,11 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
             });
         }
         if instance.provider == VECTOR_OPENFHE_CKKS_PROVIDER {
+            validate_optional_instance_key_id(
+                instance_name,
+                instance,
+                VECTOR_OPENFHE_CKKS_PROVIDER,
+            )?;
             match instance.options.get(CKKS_PROFILE_OPTION) {
                 Some(Value::String(profile))
                     if profile == CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50 => {}
@@ -3345,10 +3369,10 @@ fn validate_generic_collection_crypto_runtime(
 
         let instance_key_id = match instance.options.get("key_id") {
             None | Some(Value::Null) => None,
-            Some(Value::String(key_id)) => Some(key_id.as_str()),
+            Some(Value::String(key_id)) if is_crypto_identifier(key_id) => Some(key_id.as_str()),
             Some(_) => {
                 return Err(StorageError::bad_input(format!(
-                    "collection {collection_name} vector crypto instance {} key_id option must be a string",
+                    "collection {collection_name} vector crypto instance {} key_id option must be a crypto identifier string",
                     rule.instance
                 )));
             }
@@ -5029,6 +5053,90 @@ mod tests {
             validate_crypto_settings(&vector_with_extra_material_role),
             Err(CryptoSetupError::InvalidInstanceOption { option, .. })
                 if option == "materials.payload_key"
+        ));
+    }
+
+    #[test]
+    fn validate_crypto_settings_rejects_invalid_server_provider_key_id_options() {
+        let payload_with_invalid_key_id = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::from([(
+                "docs_payload_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: PAYLOAD_AES_GCM_PROVIDER.to_string(),
+                    materials: HashMap::from([(
+                        PAYLOAD_SYM_KEY_ROLE.to_string(),
+                        "tenant-a/payload-v1".to_string(),
+                    )]),
+                    backend_ref: None,
+                    options: json!({
+                        "key_id": "not valid",
+                        "material_fingerprint_id": "tenant-a/payload@v1",
+                    }),
+                },
+            )]),
+            materials: HashMap::from([(
+                "tenant-a/payload-v1".to_string(),
+                CryptoMaterialConfig {
+                    kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                    source: Some("inline".to_string()),
+                    value_b64: Some(BASE64URL_NOPAD.encode(&[1_u8; 32])),
+                    ..CryptoMaterialConfig::default()
+                },
+            )]),
+            backends: HashMap::new(),
+        };
+        assert!(matches!(
+            validate_crypto_settings(&payload_with_invalid_key_id),
+            Err(CryptoSetupError::InvalidInstanceOption { option, .. })
+                if option == "key_id"
+        ));
+
+        let bridge_program = std::env::current_exe().unwrap().display().to_string();
+        let vector_with_invalid_key_id = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::from([(
+                "docs_vector_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: VECTOR_OPENFHE_CKKS_PROVIDER.to_string(),
+                    materials: HashMap::from([(
+                        PAYLOAD_SYM_KEY_ROLE.to_string(),
+                        "tenant-a/vector-v1".to_string(),
+                    )]),
+                    backend_ref: Some("openfhe_local".to_string()),
+                    options: json!({
+                        "key_id": "not valid",
+                        "material_fingerprint_id": "tenant-a/vector@v1",
+                        "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                        "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                        "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                    }),
+                },
+            )]),
+            materials: HashMap::from([(
+                "tenant-a/vector-v1".to_string(),
+                CryptoMaterialConfig {
+                    kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                    source: Some("inline".to_string()),
+                    value_b64: Some(BASE64URL_NOPAD.encode(&[2_u8; 32])),
+                    ..CryptoMaterialConfig::default()
+                },
+            )]),
+            backends: HashMap::from([(
+                "openfhe_local".to_string(),
+                CryptoBackendConfig {
+                    kind: "process".to_string(),
+                    program: Some(bridge_program),
+                    sha256_b64: Some(current_exe_sha256_b64()),
+                    size: None,
+                    timeout_ms: Some(1000),
+                },
+            )]),
+        };
+        assert!(matches!(
+            validate_crypto_settings(&vector_with_invalid_key_id),
+            Err(CryptoSetupError::InvalidInstanceOption { option, .. })
+                if option == "key_id"
         ));
     }
 
