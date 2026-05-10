@@ -2661,7 +2661,12 @@ fn validate_collection_runtime_backend_metadata(
     }
 
     match backend.program.as_deref() {
-        Some(program) if !program.is_empty() => {}
+        Some(program) if !program.is_empty() && Path::new(program).is_absolute() => {}
+        Some(_) => {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} vector crypto instance {instance_name} backend {backend_name} requires absolute program path",
+            )));
+        }
         _ => {
             return Err(StorageError::bad_input(format!(
                 "collection {collection_name} vector crypto instance {instance_name} backend {backend_name} requires program",
@@ -10512,8 +10517,8 @@ mod tests {
     }
 
     #[test]
-    fn validate_collection_crypto_runtime_rejects_vector_backend_without_sha_pin() {
-        let settings = Settings {
+    fn validate_collection_crypto_runtime_rejects_invalid_vector_backend_metadata() {
+        let mut settings = Settings {
             crypto: CryptoSettings {
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
@@ -10583,6 +10588,14 @@ mod tests {
         let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
         assert!(
             matches!(err, StorageError::BadInput { description } if description.contains("requires sha256_b64 program pin"))
+        );
+
+        let backend = settings.crypto.backends.get_mut("openfhe_local").unwrap();
+        backend.sha256_b64 = Some(BASE64URL_NOPAD.encode(&[17_u8; 32]));
+        backend.program = Some("relative-openfhe-bridge".to_string());
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
+        assert!(
+            matches!(err, StorageError::BadInput { description } if description.contains("requires absolute program path"))
         );
     }
 
