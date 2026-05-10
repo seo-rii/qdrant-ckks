@@ -2042,3 +2042,101 @@ fn condition_touches_encrypted_vector<'a>(
         | Condition::CustomIdChecker(_) => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use segment::types::{FieldCondition, IsEmptyCondition, Match, ValueVariants};
+
+    use super::*;
+
+    fn blind_index_token(byte: u8) -> String {
+        BASE64URL_NOPAD.encode(&[byte; 32])
+    }
+
+    fn blind_index_filter(key: &str, r#match: Match) -> Filter {
+        Filter::new_must(Condition::Field(FieldCondition::new_match(
+            key.parse().unwrap(),
+            r#match,
+        )))
+    }
+
+    #[test]
+    fn metadata_blind_index_filter_allows_exact_match_token_strings() {
+        let metadata_path = "body__blind_eq".parse::<JsonPath>().unwrap();
+        let metadata_key = "body__blind_eq";
+        let first_token = blind_index_token(1);
+        let second_token = blind_index_token(2);
+
+        validate_filter_metadata_blind_index_tokens(
+            &blind_index_filter(metadata_key, first_token.clone().into()),
+            &metadata_path,
+            metadata_key,
+        )
+        .unwrap();
+
+        validate_filter_metadata_blind_index_tokens(
+            &blind_index_filter(
+                metadata_key,
+                Match::from(vec![first_token, second_token.clone()]),
+            ),
+            &metadata_path,
+            metadata_key,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn metadata_blind_index_filter_rejects_non_exact_match_conditions() {
+        let metadata_path = "body__blind_eq".parse::<JsonPath>().unwrap();
+        let metadata_key = "body__blind_eq";
+
+        for filter in [
+            blind_index_filter(metadata_key, Match::new_text("plaintext")),
+            blind_index_filter(metadata_key, Match::new_value(ValueVariants::Integer(42))),
+            Filter::new_must(Condition::IsEmpty(IsEmptyCondition::from(
+                metadata_key.parse::<JsonPath>().unwrap(),
+            ))),
+        ] {
+            let err =
+                validate_filter_metadata_blind_index_tokens(&filter, &metadata_path, metadata_key)
+                    .unwrap_err();
+            assert!(format!("{err}").contains("metadata blind-index field"));
+        }
+    }
+
+    #[test]
+    fn metadata_blind_index_filter_rejects_malformed_tokens() {
+        let metadata_path = "body__blind_eq".parse::<JsonPath>().unwrap();
+        let metadata_key = "body__blind_eq";
+
+        for token in [
+            "not base64!".to_string(),
+            BASE64URL_NOPAD.encode(&[7_u8; 31]),
+        ] {
+            let filter = blind_index_filter(metadata_key, token.to_string().into());
+            let err =
+                validate_filter_metadata_blind_index_tokens(&filter, &metadata_path, metadata_key)
+                    .unwrap_err();
+            assert!(format!("{err}").contains("metadata blind-index field"));
+        }
+    }
+
+    #[test]
+    fn metadata_blind_index_payload_write_requires_token_shape() {
+        let metadata_key = "body__blind_eq";
+        validate_metadata_blind_index_json_value(
+            &serde_json::Value::String(blind_index_token(9)),
+            metadata_key,
+        )
+        .unwrap();
+
+        for value in [
+            serde_json::json!("not base64!"),
+            serde_json::json!(BASE64URL_NOPAD.encode(&[9_u8; 31])),
+            serde_json::json!(42),
+        ] {
+            let err = validate_metadata_blind_index_json_value(&value, metadata_key).unwrap_err();
+            assert!(format!("{err}").contains("metadata blind-index field"));
+        }
+    }
+}
