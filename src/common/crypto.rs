@@ -10597,6 +10597,21 @@ mod tests {
         assert!(
             matches!(err, StorageError::BadInput { description } if description.contains("requires absolute program path"))
         );
+
+        let backend = settings.crypto.backends.get_mut("openfhe_local").unwrap();
+        backend.program = Some("/usr/local/bin/openfhe-bridge".to_string());
+        backend.sha256_b64 = Some("not+base64url".to_string());
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
+        assert!(
+            matches!(err, StorageError::BadInput { description } if description.contains("sha256_b64 must be base64url without padding"))
+        );
+
+        let backend = settings.crypto.backends.get_mut("openfhe_local").unwrap();
+        backend.sha256_b64 = Some(BASE64URL_NOPAD.encode(&[17_u8; 31]));
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
+        assert!(
+            matches!(err, StorageError::BadInput { description } if description.contains("sha256_b64 must decode to 32 bytes"))
+        );
     }
 
     #[test]
