@@ -7211,6 +7211,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_rejects_malformed_cache_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = ckks_sidecar_test_graph_cache_key("malformed");
+        let cache_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &key);
+        let cache_directory = cache_path.parent().unwrap();
+        std::fs::create_dir_all(cache_directory).unwrap();
+        set_ckks_sidecar_test_private_directory_permissions(cache_directory);
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).write(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            options.mode(0o600);
+        }
+        let mut file = options.open(&cache_path).unwrap();
+        file.write_all(b"{not-json").unwrap();
+
+        let err = ckks_sidecar_hnsw_load_persisted_graph(dir.path(), &key, 0).unwrap_err();
+        assert!(format!("{err}").contains("failed to parse CKKS sidecar HNSW graph cache"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn ckks_sidecar_hnsw_persisted_graph_rejects_symlink_cache_file() {
