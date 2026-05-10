@@ -3943,6 +3943,30 @@ pub fn rewrap_runtime_resource_key_materials_by_master_key(
     Ok(rewrapped)
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "reserved for the admin MK rotation operation that atomically rewrites runtime settings"
+    )
+)]
+pub fn rewrap_crypto_settings_resource_keys_by_master_key(
+    runtime_settings: &CryptoSettings,
+    old_wrapped_by: &str,
+    new_wrapped_by: &str,
+) -> Result<CryptoSettings, PayloadWriteSetupError> {
+    let rewrapped = rewrap_runtime_resource_key_materials_by_master_key(
+        runtime_settings,
+        old_wrapped_by,
+        new_wrapped_by,
+    )?;
+    let mut updated = runtime_settings.clone();
+    for (material_name, material) in rewrapped {
+        updated.materials.insert(material_name, material);
+    }
+    Ok(updated)
+}
+
 fn resource_key_wrap_aad(
     material_name: &str,
     material: &CryptoMaterialConfig,
@@ -9418,10 +9442,31 @@ mod tests {
             Some(2),
         );
 
-        let mut rewrapped_settings = runtime_settings.clone();
-        for (material_name, material) in rewrapped {
-            rewrapped_settings.materials.insert(material_name, material);
-        }
+        let rewrapped_settings = rewrap_crypto_settings_resource_keys_by_master_key(
+            &runtime_settings,
+            old_mk_material,
+            new_mk_material,
+        )
+        .unwrap();
+        assert_eq!(
+            runtime_settings
+                .materials
+                .get(active_rk_material)
+                .unwrap()
+                .wrapped_by
+                .as_deref(),
+            Some(old_mk_material),
+            "MK rewrap must not mutate input settings in place",
+        );
+        assert_eq!(
+            rewrapped_settings
+                .materials
+                .get(active_rk_material)
+                .unwrap()
+                .wrapped_by
+                .as_deref(),
+            Some(new_mk_material),
+        );
         let new_active_resource_key = decode_wrapped_resource_key(
             &rewrapped_settings,
             active_rk_material,
