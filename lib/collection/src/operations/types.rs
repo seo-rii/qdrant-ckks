@@ -21,7 +21,7 @@ use common::{defaults, save_on_disk};
 use issues::IssueRecord;
 use qdrant_sec::{
     CkksVectorSidecarEnvelopeKey, CkksVectorVerifiedSidecarKey, ClientPayloadEnvelopeKey,
-    ClientPayloadVerifiedEnvelopeKey,
+    ClientPayloadVerifiedEnvelopeKey, ServerPayloadEnvelopeKey, ServerPayloadVerifiedEnvelopeKey,
 };
 use schemars::JsonSchema;
 use segment::common::anonymize::Anonymize;
@@ -81,7 +81,7 @@ pub enum CollectionStatus {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct CollectionUpdateProvenance {
-    server_envelopes: bool,
+    server_envelopes: Option<RuntimeEncryptedPayloadEnvelopes>,
     vector_sidecars: Option<RuntimeEncryptedVectorSidecars>,
     verified_client_envelopes: Option<RuntimeVerifiedClientEnvelopes>,
 }
@@ -98,8 +98,32 @@ pub struct RuntimeVerifiedClientEnvelopes {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+pub struct RuntimeEncryptedPayloadEnvelopes {
+    verified_envelope_keys: Arc<HashSet<ServerPayloadEnvelopeKey>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct RuntimeEncryptedVectorSidecars {
     verified_sidecar_keys: Arc<HashSet<CkksVectorSidecarEnvelopeKey>>,
+}
+
+impl RuntimeEncryptedPayloadEnvelopes {
+    fn from_verified(
+        verified_envelope_keys: impl IntoIterator<Item = ServerPayloadVerifiedEnvelopeKey>,
+    ) -> Self {
+        Self {
+            verified_envelope_keys: Arc::new(
+                verified_envelope_keys
+                    .into_iter()
+                    .map(|key| key.envelope_key().clone())
+                    .collect(),
+            ),
+        }
+    }
+
+    pub fn contains(&self, envelope_key: &ServerPayloadEnvelopeKey) -> bool {
+        self.verified_envelope_keys.contains(envelope_key)
+    }
 }
 
 impl RuntimeVerifiedClientEnvelopes {
@@ -143,15 +167,21 @@ impl RuntimeEncryptedVectorSidecars {
 impl CollectionUpdateProvenance {
     pub const fn client_plaintext() -> Self {
         Self {
-            server_envelopes: false,
+            server_envelopes: None,
             vector_sidecars: None,
             verified_client_envelopes: None,
         }
     }
 
-    pub fn runtime_encrypted_payloads() -> Self {
+    pub fn runtime_encrypted_payloads(
+        verified_envelope_keys: impl IntoIterator<Item = ServerPayloadVerifiedEnvelopeKey>,
+    ) -> Self {
+        let verified = RuntimeEncryptedPayloadEnvelopes::from_verified(verified_envelope_keys);
+        if verified.verified_envelope_keys.is_empty() {
+            return Self::client_plaintext();
+        }
         Self {
-            server_envelopes: true,
+            server_envelopes: Some(verified),
             vector_sidecars: None,
             verified_client_envelopes: None,
         }
@@ -165,7 +195,7 @@ impl CollectionUpdateProvenance {
             return Self::client_plaintext();
         }
         Self {
-            server_envelopes: false,
+            server_envelopes: None,
             vector_sidecars: Some(verified),
             verified_client_envelopes: None,
         }
@@ -179,21 +209,39 @@ impl CollectionUpdateProvenance {
             return Self::client_plaintext();
         }
         Self {
-            server_envelopes: false,
+            server_envelopes: None,
             vector_sidecars: None,
             verified_client_envelopes: Some(verified),
         }
     }
 
     pub fn runtime_encrypted_payloads_and_verified_client_envelopes(
+        verified_server_envelope_keys: impl IntoIterator<Item = ServerPayloadVerifiedEnvelopeKey>,
         verified_envelope_keys: impl IntoIterator<Item = ClientPayloadVerifiedEnvelopeKey>,
     ) -> Self {
+        let server_verified =
+            RuntimeEncryptedPayloadEnvelopes::from_verified(verified_server_envelope_keys);
         let verified = RuntimeVerifiedClientEnvelopes::from_verified(verified_envelope_keys);
+        if server_verified.verified_envelope_keys.is_empty() {
+            return if verified.verified_envelope_keys.is_empty() {
+                Self::client_plaintext()
+            } else {
+                Self {
+                    server_envelopes: None,
+                    vector_sidecars: None,
+                    verified_client_envelopes: Some(verified),
+                }
+            };
+        }
         if verified.verified_envelope_keys.is_empty() {
-            return Self::runtime_encrypted_payloads();
+            return Self {
+                server_envelopes: Some(server_verified),
+                vector_sidecars: None,
+                verified_client_envelopes: None,
+            };
         }
         Self {
-            server_envelopes: true,
+            server_envelopes: Some(server_verified),
             vector_sidecars: None,
             verified_client_envelopes: Some(verified),
         }
@@ -207,7 +255,24 @@ impl CollectionUpdateProvenance {
     }
 
     pub const fn allows_server_envelopes(&self) -> bool {
+        self.server_envelopes.is_some()
+    }
+
+    pub fn allows_server_envelope_key(&self, envelope_key: &ServerPayloadEnvelopeKey) -> bool {
         self.server_envelopes
+            .as_ref()
+            .is_some_and(|verified| verified.contains(envelope_key))
+    }
+
+    pub fn allows_server_envelope_key_for_binding(
+        &self,
+        envelope_key: &ServerPayloadEnvelopeKey,
+        collection_id: &str,
+        point_id: &str,
+        field_path: &str,
+    ) -> bool {
+        envelope_key.matches_binding(collection_id, point_id, field_path)
+            && self.allows_server_envelope_key(envelope_key)
     }
 
     pub const fn allows_vector_sidecars(&self) -> bool {

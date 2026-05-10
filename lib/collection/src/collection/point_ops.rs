@@ -13,8 +13,8 @@ use qdrant_sec::{
     ClientPayloadValidationContext, ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD,
     EncryptedCkksVector, ServerPayloadValidationContext, ckks_vector_sidecar_envelope_key,
     client_payload_envelope_key, client_payload_nonce_replay_key,
-    is_client_encrypted_payload_value, is_encrypted_payload_value, validate_client_payload_value,
-    validate_server_payload_value_metadata,
+    is_client_encrypted_payload_value, is_encrypted_payload_value, server_payload_envelope_key,
+    validate_client_payload_value, validate_server_payload_value_metadata,
 };
 use segment::data_types::order_by::{Direction, OrderBy};
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
@@ -638,7 +638,33 @@ impl Collection {
 
                 for value in encrypted_path.value_get(&payload.0) {
                     if is_encrypted_payload_value(value) {
-                        if !update_provenance.allows_server_envelopes() {
+                        let Some(point_id) = point_id else {
+                            return Err(CollectionError::bad_input(format!(
+                                "encrypted payload marker for field '{encrypted_path_str}' requires point-specific runtime payload encryption before collection write",
+                            )));
+                        };
+                        let Some(envelope_key) = server_payload_envelope_key(
+                            value,
+                            &collection_crypto_id,
+                            point_id,
+                            encrypted_path_str,
+                        )
+                        .map_err(|err| {
+                            CollectionError::bad_input(format!(
+                                "encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: {err}",
+                            ))
+                        })?
+                        else {
+                            return Err(CollectionError::bad_input(format!(
+                                "encrypted payload marker for field '{encrypted_path_str}' requires runtime payload encryption before collection write",
+                            )));
+                        };
+                        if !update_provenance.allows_server_envelope_key_for_binding(
+                            &envelope_key,
+                            &collection_crypto_id,
+                            point_id,
+                            encrypted_path_str,
+                        ) {
                             return Err(CollectionError::bad_input(format!(
                                 "encrypted payload marker for field '{encrypted_path_str}' requires runtime payload encryption before collection write",
                             )));

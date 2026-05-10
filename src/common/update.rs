@@ -18,7 +18,8 @@ use collection::shards::shard::ShardId;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use qdrant_sec::{
     CkksVectorVerifiedSidecarKey, ClientPayloadNonceReplayKey, ClientPayloadVerifiedEnvelopeKey,
-    ENCRYPTED_VECTOR_SIDECAR_FIELD, PayloadEncryptionError, ckks_vector_verified_sidecar_key,
+    ENCRYPTED_VECTOR_SIDECAR_FIELD, PayloadEncryptionError, ServerPayloadVerifiedEnvelopeKey,
+    ckks_vector_verified_sidecar_key,
 };
 use schemars::JsonSchema;
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
@@ -1495,6 +1496,7 @@ async fn maybe_encrypt_upsert_payloads(
     let mut local_seen_client_nonces = std::collections::HashSet::new();
     let seen_client_nonces = client_nonce_replay_cache.unwrap_or(&mut local_seen_client_nonces);
     let seen_client_nonces_before = seen_client_nonces.clone();
+    let mut verified_server_envelope_keys = std::collections::HashSet::new();
     let mut verified_client_envelope_keys = std::collections::HashSet::new();
 
     match &mut operation {
@@ -1510,6 +1512,7 @@ async fn maybe_encrypt_upsert_payloads(
                         .map_err(|err| {
                             payload_write_error_to_storage_error(collection_name, err)
                         })?;
+                    verified_server_envelope_keys.extend(outcome.verified_server_envelope_keys);
                     verified_client_envelope_keys.extend(outcome.verified_client_envelope_keys);
                 }
             }
@@ -1527,6 +1530,7 @@ async fn maybe_encrypt_upsert_payloads(
                             .map_err(|err| {
                                 payload_write_error_to_storage_error(collection_name, err)
                             })?;
+                        verified_server_envelope_keys.extend(outcome.verified_server_envelope_keys);
                         verified_client_envelope_keys.extend(outcome.verified_client_envelope_keys);
                     }
                 }
@@ -1535,6 +1539,7 @@ async fn maybe_encrypt_upsert_payloads(
     }
     let update_provenance = payload_update_provenance(
         plan.has_server_encrypt_rules(),
+        verified_server_envelope_keys,
         verified_client_envelope_keys,
     );
     record_process_client_nonce_replay_cache(
@@ -2144,14 +2149,17 @@ async fn maybe_encrypt_point_payload_update(
             )));
         }
         let mut encrypted_operations = Vec::with_capacity(points.len());
+        let mut verified_server_envelope_keys = std::collections::HashSet::new();
         for point_id in points {
             let mut payload = operation.payload.clone();
-            plan.encrypt_payload_with_replay_cache(
-                &point_id.to_string(),
-                &mut payload,
-                &mut *seen_client_nonces,
-            )
-            .map_err(|err| payload_write_error_to_storage_error(collection_name, err))?;
+            let outcome = plan
+                .process_payload_with_replay_cache(
+                    &point_id.to_string(),
+                    &mut payload,
+                    &mut *seen_client_nonces,
+                )
+                .map_err(|err| payload_write_error_to_storage_error(collection_name, err))?;
+            verified_server_envelope_keys.extend(outcome.verified_server_envelope_keys);
             encrypted_operations.push(SetPayload {
                 points: Some(vec![point_id.clone()]),
                 payload,
@@ -2169,7 +2177,11 @@ async fn maybe_encrypt_point_payload_update(
         .await?;
         return Ok((
             PayloadUpdatePlan::Fanout(encrypted_operations),
-            CollectionUpdateProvenance::runtime_encrypted_payloads(),
+            payload_update_provenance(
+                plan.has_server_encrypt_rules(),
+                verified_server_envelope_keys,
+                std::collections::HashSet::new(),
+            ),
         ));
     }
 
@@ -2189,6 +2201,7 @@ async fn maybe_encrypt_point_payload_update(
         .map_err(|err| payload_write_error_to_storage_error(collection_name, err))?;
     let update_provenance = payload_update_provenance(
         plan.has_server_encrypt_rules(),
+        outcome.verified_server_envelope_keys,
         outcome.verified_client_envelope_keys,
     );
     record_process_client_nonce_replay_cache(
@@ -2217,22 +2230,30 @@ fn ensure_client_envelope_cluster_nonce_ledger_available(
 
 fn payload_update_provenance(
     has_server_encrypt_rules: bool,
+    verified_server_envelope_keys: std::collections::HashSet<ServerPayloadVerifiedEnvelopeKey>,
     verified_client_envelope_keys: std::collections::HashSet<ClientPayloadVerifiedEnvelopeKey>,
 ) -> CollectionUpdateProvenance {
     match (
         has_server_encrypt_rules,
+        verified_server_envelope_keys.is_empty(),
         verified_client_envelope_keys.is_empty(),
     ) {
-        (true, false) => {
+        (true, false, false) => {
             CollectionUpdateProvenance::runtime_encrypted_payloads_and_verified_client_envelopes(
+                verified_server_envelope_keys,
                 verified_client_envelope_keys,
             )
         }
-        (true, true) => CollectionUpdateProvenance::runtime_encrypted_payloads(),
-        (false, false) => CollectionUpdateProvenance::runtime_verified_client_envelopes(
+        (true, false, true) => {
+            CollectionUpdateProvenance::runtime_encrypted_payloads(verified_server_envelope_keys)
+        }
+        (true, true, false) => CollectionUpdateProvenance::runtime_verified_client_envelopes(
             verified_client_envelope_keys,
         ),
-        (false, true) => CollectionUpdateProvenance::client_plaintext(),
+        (true, true, true) | (false, _, true) => CollectionUpdateProvenance::client_plaintext(),
+        (false, _, false) => CollectionUpdateProvenance::runtime_verified_client_envelopes(
+            verified_client_envelope_keys,
+        ),
     }
 }
 

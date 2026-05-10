@@ -19,8 +19,9 @@ use qdrant_sec::{
     METADATA_BLIND_INDEX_PROVIDER, METADATA_EXACT_MATCH_TOKEN_BINDING, MasterKeyProvider,
     PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER, PAYLOAD_FIELD_BINDING,
     PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
-    RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER,
-    WrappedKeyBlob, client_payload_nonce_replay_key, client_payload_signature_key_id,
+    RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, ServerPayloadVerifiedEnvelopeKey,
+    VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER, WrappedKeyBlob,
+    client_payload_nonce_replay_key, client_payload_signature_key_id,
     encrypted_ckks_vector_payload_value, rewrap_resource_key,
     validate_client_payload_value_for_runtime,
 };
@@ -418,6 +419,7 @@ pub struct PayloadWritePlan {
 
 pub(crate) struct PayloadWriteOutcome {
     pub changed: usize,
+    pub verified_server_envelope_keys: HashSet<ServerPayloadVerifiedEnvelopeKey>,
     pub verified_client_envelope_keys: HashSet<ClientPayloadVerifiedEnvelopeKey>,
 }
 
@@ -444,6 +446,13 @@ impl PayloadWritePlan {
         self.encrypt_payload_with_replay_cache(point_id, payload, &mut seen_client_nonces)
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "kept for focused unit tests; production update paths call process_payload_with_replay_cache"
+        )
+    )]
     pub(crate) fn encrypt_payload_with_replay_cache(
         &self,
         point_id: &str,
@@ -462,6 +471,7 @@ impl PayloadWritePlan {
         seen_client_nonces: &mut HashSet<ClientPayloadNonceReplayKey>,
     ) -> Result<PayloadWriteOutcome, PayloadWriteSetupError> {
         let mut changed = 0;
+        let mut verified_server_envelope_keys = HashSet::new();
         let mut verified_client_envelope_keys = HashSet::new();
 
         for rule in &self.rules {
@@ -473,6 +483,28 @@ impl PayloadWritePlan {
                         policy,
                         ExistingPayloadMode::FailIfExisting,
                     )?;
+                    for field in policy.fields() {
+                        let encrypted_path = field.parse::<JsonPath>().map_err(|_| {
+                            PayloadWriteSetupError::Payload(
+                                PayloadEncryptionError::InvalidFieldPath(field.clone()),
+                            )
+                        })?;
+                        for value in encrypted_path.value_get(&payload.0) {
+                            let verified_envelope_key =
+                                qdrant_sec::validate_server_payload_value_for_runtime(
+                                    value,
+                                    &self.collection_crypto_id,
+                                    point_id,
+                                    qdrant_sec::ServerPayloadValidationContext {
+                                        field_path: field,
+                                        key_id: Some(encryptor.key_id()),
+                                        crypto_schema_version: encryptor.crypto_schema_version(),
+                                        encryption_epoch: encryptor.encryption_epoch(),
+                                    },
+                                )?;
+                            verified_server_envelope_keys.insert(verified_envelope_key);
+                        }
+                    }
                 }
                 PayloadWriteRule::ClientEnvelope {
                     policy,
@@ -532,6 +564,7 @@ impl PayloadWritePlan {
 
         Ok(PayloadWriteOutcome {
             changed,
+            verified_server_envelope_keys,
             verified_client_envelope_keys,
         })
     }

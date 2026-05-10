@@ -195,8 +195,28 @@ pub struct ClientPayloadEnvelopeKey {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ServerPayloadEnvelopeKey {
+    collection_id: String,
+    point_id: String,
+    field_path: String,
+    key_id: String,
+    material_fingerprint: String,
+    rk_id: String,
+    rk_epoch: Option<u64>,
+    schema_version: u16,
+    encryption_epoch: u64,
+    nonce: String,
+    ciphertext_sha256_b64: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ClientPayloadVerifiedEnvelopeKey {
     envelope_key: ClientPayloadEnvelopeKey,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ServerPayloadVerifiedEnvelopeKey {
+    envelope_key: ServerPayloadEnvelopeKey,
 }
 
 impl ClientPayloadNonceReplayKey {
@@ -263,7 +283,21 @@ impl ClientPayloadVerifiedEnvelopeKey {
     }
 }
 
+impl ServerPayloadVerifiedEnvelopeKey {
+    pub fn envelope_key(&self) -> &ServerPayloadEnvelopeKey {
+        &self.envelope_key
+    }
+}
+
 impl ClientPayloadEnvelopeKey {
+    pub fn matches_binding(&self, collection_id: &str, point_id: &str, field_path: &str) -> bool {
+        self.collection_id == collection_id
+            && self.point_id == point_id
+            && self.field_path == field_path
+    }
+}
+
+impl ServerPayloadEnvelopeKey {
     pub fn matches_binding(&self, collection_id: &str, point_id: &str, field_path: &str) -> bool {
         self.collection_id == collection_id
             && self.point_id == point_id
@@ -343,6 +377,18 @@ impl PayloadTextEncryptor {
     pub fn with_encryption_epoch(mut self, encryption_epoch: u64) -> Self {
         self.encryption_epoch = encryption_epoch;
         self
+    }
+
+    pub fn key_id(&self) -> &str {
+        self.keyring.key_id()
+    }
+
+    pub const fn crypto_schema_version(&self) -> u16 {
+        self.crypto_schema_version
+    }
+
+    pub const fn encryption_epoch(&self) -> u64 {
+        self.encryption_epoch
     }
 
     pub fn with_retired_resource_key(
@@ -591,6 +637,23 @@ pub fn validate_server_payload_value_metadata(
     Ok(())
 }
 
+pub fn validate_server_payload_value_for_runtime(
+    value: &Value,
+    collection_id: &str,
+    point_id: &str,
+    context: ServerPayloadValidationContext<'_>,
+) -> Result<ServerPayloadVerifiedEnvelopeKey, PayloadEncryptionError> {
+    validate_server_payload_value_metadata(value, context)?;
+    let envelope_key =
+        server_payload_envelope_key(value, collection_id, point_id, context.field_path)?
+            .ok_or_else(|| PayloadEncryptionError::ExpectedEncryptedEnvelope {
+                field: context.field_path.to_string(),
+                found: json_type_name(value),
+            })?;
+
+    Ok(ServerPayloadVerifiedEnvelopeKey { envelope_key })
+}
+
 pub fn validate_client_payload_value(
     value: &Value,
     context: ClientPayloadValidationContext<'_>,
@@ -765,6 +828,37 @@ pub fn client_payload_envelope_key(
         ciphertext_sha256_b64,
         signature_key_id: signature.key_id,
         signature_sha256_b64,
+    }))
+}
+
+pub fn server_payload_envelope_key(
+    value: &Value,
+    collection_id: &str,
+    point_id: &str,
+    field_path: &str,
+) -> Result<Option<ServerPayloadEnvelopeKey>, PayloadEncryptionError> {
+    let Some(envelope) = extract_envelope(value, field_path)? else {
+        return Ok(None);
+    };
+    validate_encrypted_envelope_metadata(&envelope.envelope)?;
+    let ciphertext = BASE64URL_NOPAD
+        .decode(envelope.envelope.ciphertext.as_bytes())
+        .map_err(|_| PayloadEncryptionError::MalformedEnvelope(field_path.to_string()))?;
+    let ciphertext_digest = Sha256::digest(&ciphertext);
+    let ciphertext_sha256_b64 = BASE64URL_NOPAD.encode(ciphertext_digest.as_ref());
+
+    Ok(Some(ServerPayloadEnvelopeKey {
+        collection_id: collection_id.to_string(),
+        point_id: point_id.to_string(),
+        field_path: field_path.to_string(),
+        key_id: envelope.envelope.key_id,
+        material_fingerprint: envelope.envelope.material_fingerprint,
+        rk_id: envelope.envelope.rk_id,
+        rk_epoch: envelope.envelope.rk_epoch,
+        schema_version: envelope.schema_version,
+        encryption_epoch: envelope.encryption_epoch,
+        nonce: envelope.envelope.nonce,
+        ciphertext_sha256_b64,
     }))
 }
 
