@@ -1028,6 +1028,16 @@ fn validate_encrypted_cluster_data_movement_parity(
                 .peer_id
                 .map_or_else(|| all_peer_ids.to_vec(), |peer_id| vec![peer_id]),
         ),
+        ClusterOperations::FinishMigratingPoints(_) => {
+            ("finish_migrating_points", all_peer_ids.to_vec())
+        }
+        ClusterOperations::CommitReadHashRing(_) => {
+            ("commit_read_hash_ring", all_peer_ids.to_vec())
+        }
+        ClusterOperations::CommitWriteHashRing(_) => {
+            ("commit_write_hash_ring", all_peer_ids.to_vec())
+        }
+        ClusterOperations::FinishResharding(_) => ("finish_resharding", all_peer_ids.to_vec()),
         _ => return Ok(()),
     };
 
@@ -1313,6 +1323,74 @@ mod tests {
             &metadata,
         )
         .expect("matching all-peer crypto runtime parity should allow encrypted resharding");
+    }
+
+    #[test]
+    fn encrypted_cluster_resharding_lifecycle_requires_all_peer_crypto_runtime_parity() {
+        let operations = [
+            ClusterOperations::FinishMigratingPoints(
+                collection::operations::cluster_ops::FinishMigratingPointsOperation {
+                    finish_migrating_points:
+                        collection::operations::cluster_ops::FinishMigratingPoints {
+                            shard_id: Some(1),
+                            peer_id: Some(2),
+                        },
+                },
+            ),
+            ClusterOperations::CommitReadHashRing(
+                collection::operations::cluster_ops::CommitReadHashRingOperation {
+                    commit_read_hash_ring:
+                        collection::operations::cluster_ops::CommitReadHashRing {},
+                },
+            ),
+            ClusterOperations::CommitWriteHashRing(
+                collection::operations::cluster_ops::CommitWriteHashRingOperation {
+                    commit_write_hash_ring:
+                        collection::operations::cluster_ops::CommitWriteHashRing {},
+                },
+            ),
+            ClusterOperations::FinishResharding(
+                collection::operations::cluster_ops::FinishReshardingOperation {
+                    finish_resharding: collection::operations::cluster_ops::FinishResharding {},
+                },
+            ),
+        ];
+
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            1,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "local-fingerprint".to_string(),
+            )),
+        );
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "local-fingerprint".to_string(),
+            )),
+        );
+        metadata.insert(
+            3,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "different-fingerprint".to_string(),
+            )),
+        );
+
+        for operation in operations {
+            let err = validate_encrypted_cluster_data_movement_parity(
+                "docs",
+                true,
+                &operation,
+                1,
+                &[1, 2, 3],
+                &metadata,
+            )
+            .expect_err("encrypted resharding lifecycle must fail closed on any peer mismatch");
+            assert!(
+                err.to_string().contains("crypto runtime parity"),
+                "unexpected error for {operation:?}: {err}",
+            );
+        }
     }
 
     #[test]
