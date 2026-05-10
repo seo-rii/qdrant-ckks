@@ -1158,7 +1158,7 @@ mod ckks_tests {
                 version: 1,
                 key_id: Some("tenant-a:docs".to_string()),
                 crypto_schema_version: 1,
-                encryption_epoch: 0,
+                encryption_epoch: 3,
                 migration_state: CryptoMigrationState::Active,
                 rules: vec![EncryptionRuleRef {
                     id: "body_blind_eq".to_string(),
@@ -1173,6 +1173,26 @@ mod ckks_tests {
         };
 
         params.validate().unwrap();
+
+        let mut missing_key_id = params.clone();
+        missing_key_id.encryption.as_mut().unwrap().key_id = None;
+        let err = missing_key_id
+            .validate()
+            .expect_err("metadata blind-index token rule must require collection key id");
+        assert!(
+            err.to_string()
+                .contains("metadata_blind_index_requires_key_id")
+        );
+
+        let mut missing_epoch = params;
+        missing_epoch.encryption.as_mut().unwrap().encryption_epoch = 0;
+        let err = missing_epoch
+            .validate()
+            .expect_err("metadata blind-index token rule must require RK epoch");
+        assert!(
+            err.to_string()
+                .contains("metadata_blind_index_requires_rk_epoch")
+        );
     }
 
     #[test]
@@ -1687,6 +1707,24 @@ fn validate_collection_encryption_config(
     }) {
         return Err(validator::ValidationError::new(
             "client_payload_envelope_requires_rk_epoch",
+        ));
+    }
+
+    if config.rules.iter().any(|rule| {
+        rule.binding.as_deref() == Some(METADATA_EXACT_MATCH_TOKEN_BINDING)
+            && config.key_id.as_deref().is_none_or(str::is_empty)
+    }) {
+        return Err(validator::ValidationError::new(
+            "metadata_blind_index_requires_key_id",
+        ));
+    }
+
+    if config.rules.iter().any(|rule| {
+        rule.binding.as_deref() == Some(METADATA_EXACT_MATCH_TOKEN_BINDING)
+            && config.encryption_epoch == 0
+    }) {
+        return Err(validator::ValidationError::new(
+            "metadata_blind_index_requires_rk_epoch",
         ));
     }
 

@@ -326,7 +326,9 @@ is currently limited to exact-match blind-index token fields using
 `metadata-exact-match-token/v1` with the `metadata/blind-index-hmac@v1`
 provider. Payload filtering over encrypted metadata, including range, geo, and
 full-text filtering, remains unsupported unless the client supplies and queries
-a separate blind-index token.
+a separate blind-index token. Collection config must still set a non-empty
+`key_id` and non-zero `encryption_epoch` for these token fields so restore,
+rotation, and runtime parity checks have explicit key-lineage metadata.
 
 ```yaml
 params:
