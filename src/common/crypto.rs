@@ -6714,6 +6714,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn decode_direct_material_key_rejects_invalid_vault_kv2_token_header() {
+        unsafe {
+            std::env::set_var("QDRANT_TEST_VAULT_TOKEN_INVALID_HEADER", "token\nleak");
+        }
+
+        let vault_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("vault_kv2".to_string()),
+            env: Some("QDRANT_TEST_VAULT_TOKEN_INVALID_HEADER".to_string()),
+            path: Some("https://vault.example.com/v1/secret/data/docs".to_string()),
+            vault_field: Some("material".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        assert!(matches!(
+            decode_direct_material_key("tenant-a/payload-v1", &vault_material),
+            Err(PayloadWriteSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("valid HTTP header")
+        ));
+        unsafe {
+            std::env::remove_var("QDRANT_TEST_VAULT_TOKEN_INVALID_HEADER");
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn decode_direct_material_key_rejects_symlink_file_source() {
