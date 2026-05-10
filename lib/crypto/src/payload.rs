@@ -549,6 +549,11 @@ impl PayloadTextEncryptor {
         policy: &PayloadEncryptionPolicy,
         collection_id: &str,
     ) -> Result<(usize, Vec<ServerPayloadVerifiedEnvelopeKey>), PayloadEncryptionError> {
+        if collection_id != self.collection {
+            return Err(PayloadEncryptionError::InvalidFieldPath(
+                "collection_id".to_string(),
+            ));
+        }
         let changed = self.encrypt_selected_fields_with_mode(
             point_id,
             payload,

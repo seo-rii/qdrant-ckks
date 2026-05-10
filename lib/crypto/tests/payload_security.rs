@@ -806,6 +806,25 @@ fn post_runtime_server_payload_validation_requires_verified_proof_match() {
 }
 
 #[test]
+fn runtime_server_payload_proof_requires_encryptor_collection_identity() {
+    let encryptor = encryptor();
+    let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
+    let mut payload = object(json!({ "body": "secret" }));
+
+    assert_eq!(
+        encryptor.encrypt_selected_fields_for_runtime(
+            "point-1",
+            &mut payload,
+            &policy,
+            "other-collection",
+        ),
+        Err(PayloadEncryptionError::InvalidFieldPath(
+            "collection_id".to_string(),
+        )),
+    );
+}
+
+#[test]
 fn public_client_payload_validation_requires_signature_verifier_when_signature_is_required() {
     let mut envelope = client_envelope("point-1", "body");
     envelope
