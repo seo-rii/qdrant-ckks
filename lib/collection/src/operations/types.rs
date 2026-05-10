@@ -93,17 +93,17 @@ impl Default for CollectionUpdateProvenance {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct RuntimeVerifiedClientEnvelopes {
+struct RuntimeVerifiedClientEnvelopes {
     verified_envelope_keys: Arc<HashSet<ClientPayloadEnvelopeKey>>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct RuntimeEncryptedPayloadEnvelopes {
+struct RuntimeEncryptedPayloadEnvelopes {
     verified_envelope_keys: Arc<HashSet<ServerPayloadEnvelopeKey>>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct RuntimeEncryptedVectorSidecars {
+struct RuntimeEncryptedVectorSidecars {
     verified_sidecar_keys: Arc<HashSet<CkksVectorSidecarEnvelopeKey>>,
 }
 
@@ -121,7 +121,7 @@ impl RuntimeEncryptedPayloadEnvelopes {
         }
     }
 
-    pub fn contains(&self, envelope_key: &ServerPayloadEnvelopeKey) -> bool {
+    fn contains(&self, envelope_key: &ServerPayloadEnvelopeKey) -> bool {
         self.verified_envelope_keys.contains(envelope_key)
     }
 }
@@ -140,7 +140,7 @@ impl RuntimeVerifiedClientEnvelopes {
         }
     }
 
-    pub fn contains(&self, envelope_key: &ClientPayloadEnvelopeKey) -> bool {
+    fn contains(&self, envelope_key: &ClientPayloadEnvelopeKey) -> bool {
         self.verified_envelope_keys.contains(envelope_key)
     }
 }
@@ -159,7 +159,7 @@ impl RuntimeEncryptedVectorSidecars {
         }
     }
 
-    pub fn contains(&self, sidecar_key: &CkksVectorSidecarEnvelopeKey) -> bool {
+    fn contains(&self, sidecar_key: &CkksVectorSidecarEnvelopeKey) -> bool {
         self.verified_sidecar_keys.contains(sidecar_key)
     }
 }
