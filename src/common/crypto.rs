@@ -9855,6 +9855,38 @@ mod tests {
             &recovered_config(params, None),
         )
         .unwrap();
+
+        let conflicting = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Disabled,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "missing_runtime_instance".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ckks: Some(CkksCollectionConfig {
+                enabled: true,
+                key_id: Some("tenant-a:docs".to_string()),
+                payload_text_fields: vec!["body".to_string()],
+                vector_names: Vec::new(),
+            }),
+            ..CollectionParams::empty()
+        };
+        let err = validate_recovered_collection_crypto_runtime(&settings, "docs", &conflicting)
+            .expect_err("disabled audit metadata must not hide legacy ckks conflicts");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("legacy ckks config is unsupported")),
+            "unexpected error: {err:?}",
+        );
     }
 
     #[test]
