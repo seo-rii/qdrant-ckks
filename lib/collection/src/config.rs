@@ -384,6 +384,69 @@ mod ckks_tests {
     }
 
     #[test]
+    fn encryption_config_rejects_quantized_or_multi_vector_encrypted_vectors() {
+        let encrypted_vector_rule = EncryptionRuleRef {
+            id: "embedding_conf".to_string(),
+            selector: EncryptionSelector::VectorNames {
+                names: vec!["embedding".to_string()],
+            },
+            instance: "docs_vector_v1".to_string(),
+            binding: Some("vector-envelope/v1".to_string()),
+        };
+        let base_vector = VectorParams {
+            size: std::num::NonZeroU64::new(4).unwrap(),
+            distance: Distance::Dot,
+            hnsw_config: None,
+            quantization_config: None,
+            on_disk: None,
+            datatype: None,
+            multivector_config: None,
+        };
+        let encrypted_params = |vector: VectorParams| CollectionParams {
+            vectors: VectorsConfig::Multi(BTreeMap::from([("embedding".into(), vector)])),
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![encrypted_vector_rule.clone()],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        encrypted_params(base_vector.clone()).validate().unwrap();
+
+        let mut quantized_vector = base_vector.clone();
+        quantized_vector.quantization_config = Some(QuantizationConfig::Scalar(
+            segment::types::ScalarQuantization {
+                scalar: segment::types::ScalarQuantizationConfig {
+                    r#type: segment::types::ScalarType::Int8,
+                    quantile: Some(0.99),
+                    always_ram: Some(true),
+                },
+            },
+        ));
+        let err = encrypted_params(quantized_vector)
+            .validate()
+            .expect_err("encrypted vector selector must reject quantized dense vector params");
+        assert!(
+            err.to_string()
+                .contains("encrypted_vector_quantization_unsupported")
+        );
+
+        let mut multi_vector = base_vector;
+        multi_vector.multivector_config = Some(Default::default());
+        let err = encrypted_params(multi_vector)
+            .validate()
+            .expect_err("encrypted vector selector must reject multi-vector params");
+        assert!(
+            err.to_string()
+                .contains("encrypted_vector_multivector_unsupported")
+        );
+    }
+
+    #[test]
     fn encryption_config_rejects_direct_migration_state_changes() {
         let params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
@@ -2102,6 +2165,29 @@ fn validate_collection_encryption_sections(
         return Err(validator::ValidationError::new(
             "conflicting_collection_encryption_sections",
         ));
+    }
+
+    if let Some(encryption) = &params.encryption {
+        for rule in &encryption.rules {
+            let EncryptionSelector::VectorNames { names } = &rule.selector else {
+                continue;
+            };
+            for name in names {
+                let Some(vector_params) = params.vectors.get_params(name.as_str()) else {
+                    continue;
+                };
+                if vector_params.quantization_config.is_some() {
+                    return Err(validator::ValidationError::new(
+                        "encrypted_vector_quantization_unsupported",
+                    ));
+                }
+                if vector_params.multivector_config.is_some() {
+                    return Err(validator::ValidationError::new(
+                        "encrypted_vector_multivector_unsupported",
+                    ));
+                }
+            }
+        }
     }
 
     Ok(())
