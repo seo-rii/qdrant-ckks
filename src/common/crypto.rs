@@ -2308,11 +2308,20 @@ fn validate_material_vault_kv2_source(
                 .to_string(),
         });
     }
-    if parsed.path().is_empty() || parsed.path() == "/" {
+    let vault_path = parsed.path();
+    if vault_path.is_empty() || vault_path == "/" {
         return Err(CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
             path: url.to_string(),
             reason: "Vault KV v2 URL must include the secret data path".to_string(),
+        });
+    }
+    if !vault_path.contains("/data/") || vault_path.ends_with("/data/") {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: url.to_string(),
+            reason: "Vault KV v2 URL must use the data endpoint path /.../data/<secret>"
+                .to_string(),
         });
     }
     if !parsed.username().is_empty() || parsed.password().is_some() {
@@ -6478,6 +6487,37 @@ mod tests {
             validate_material("tenant-a/payload-v1", &fragment_material, false),
             Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
                 if reason.contains("query or fragment")
+        ));
+    }
+
+    #[test]
+    fn validate_material_vault_kv2_source_rejects_non_data_endpoint() {
+        let metadata_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("vault_kv2".to_string()),
+            env: Some("QDRANT_TEST_VAULT_TOKEN".to_string()),
+            path: Some("https://vault.example.com/v1/secret/metadata/docs".to_string()),
+            vault_field: Some("material".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        assert!(matches!(
+            validate_material("tenant-a/payload-v1", &metadata_material, false),
+            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("data endpoint")
+        ));
+
+        let mount_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("vault_kv2".to_string()),
+            env: Some("QDRANT_TEST_VAULT_TOKEN".to_string()),
+            path: Some("https://vault.example.com/v1/secret/data/".to_string()),
+            vault_field: Some("material".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        assert!(matches!(
+            validate_material("tenant-a/payload-v1", &mount_material, false),
+            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("data endpoint")
         ));
     }
 
