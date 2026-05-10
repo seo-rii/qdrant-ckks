@@ -2658,15 +2658,8 @@ esac
         )]));
         let mut payload = None;
 
-        let encrypted = encrypt_vectors_for_point(
-            &plan,
-            "docs-crypto-id",
-            "docs",
-            "point-1",
-            &mut vector,
-            &mut payload,
-        )
-        .unwrap();
+        let encrypted =
+            encrypt_vectors_for_point(&plan, "docs", "point-1", &mut vector, &mut payload).unwrap();
 
         assert_eq!(encrypted.len(), 1);
         assert!(matches!(vector, VectorStructPersisted::Named(ref vectors) if vectors.is_empty()));
@@ -2708,15 +2701,8 @@ esac
         )]));
         let mut payload = None;
 
-        let err = encrypt_vectors_for_point(
-            &plan,
-            "docs-crypto-id",
-            "docs",
-            "point-1",
-            &mut vector,
-            &mut payload,
-        )
-        .unwrap_err();
+        let err = encrypt_vectors_for_point(&plan, "docs", "point-1", &mut vector, &mut payload)
+            .unwrap_err();
 
         assert!(matches!(
             err,
