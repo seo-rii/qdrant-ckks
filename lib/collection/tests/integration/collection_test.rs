@@ -54,7 +54,7 @@ use qdrant_sec::{
     PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey, ServerPayloadValidationContext,
     client_payload_signature_message, is_client_encrypted_payload_value,
     is_encrypted_payload_value, validate_client_payload_value_for_runtime,
-    validate_server_payload_value_for_runtime,
+    validate_server_payload_value_metadata,
 };
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -133,57 +133,6 @@ fn runtime_verified_client_envelopes_for_operation(
     }
 
     CollectionUpdateProvenance::runtime_verified_client_envelopes(verified_envelope_keys)
-}
-
-fn runtime_encrypted_server_envelopes_for_operation(
-    operation: &CollectionUpdateOperations,
-    collection_crypto_id: &str,
-) -> CollectionUpdateProvenance {
-    let mut verified_envelope_keys = Vec::new();
-    let mut collect_payload = |point_id: &PointIdType, payload: &Payload| {
-        let Some(value) = payload
-            .0
-            .get("document")
-            .and_then(|document| document.get("body"))
-        else {
-            return;
-        };
-        let key = validate_server_payload_value_for_runtime(
-            value,
-            collection_crypto_id,
-            &point_id.to_string(),
-            ServerPayloadValidationContext {
-                field_path: "document.body",
-                key_id: Some("tenant-a:docs"),
-                crypto_schema_version: 1,
-                encryption_epoch: 0,
-            },
-        )
-        .unwrap();
-        verified_envelope_keys.push(key);
-    };
-
-    match operation {
-        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
-            PointInsertOperationsInternal::PointsList(points),
-        )) => {
-            for point in points {
-                if let Some(payload) = &point.payload {
-                    collect_payload(&point.id, payload);
-                }
-            }
-        }
-        CollectionUpdateOperations::PointOperation(PointOperations::SyncPoints(operation)) => {
-            for point in &operation.points {
-                if let Some(payload) = &point.payload {
-                    collect_payload(&point.id, payload);
-                }
-            }
-        }
-        _ => {}
-    }
-
-    CollectionUpdateProvenance::runtime_encrypted_payloads(verified_envelope_keys)
 }
 
 fn sign_client_payload(payload: &mut Payload, key_pair: &Ed25519KeyPair) {
@@ -2097,10 +2046,8 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
         .and_then(|document| document.get("body"))
         .unwrap();
     assert!(
-        validate_server_payload_value_for_runtime(
+        validate_server_payload_value_metadata(
             wrong_key_value,
-            &collection_crypto_id,
-            "4",
             ServerPayloadValidationContext {
                 field_path: "document.body",
                 key_id: Some("tenant-a:docs"),
@@ -2114,7 +2061,7 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
     );
 
     let valid_key_encryptor = PayloadTextEncryptor::new_with_derived_cipher_unchecked(
-        "docs",
+        &collection_crypto_id,
         AeadCipher::new_with_material_fingerprint(
             "tenant-a:docs",
             SecretKey::from_bytes([8u8; 32]),
@@ -2125,30 +2072,14 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
     .unwrap();
     let mut point_bound_payload: Payload =
         serde_json::from_str(r#"{"document":{"body":"point-bound marker"}}"#).unwrap();
-    valid_key_encryptor
-        .encrypt_selected_fields(
+    let (_changed, point_bound_proofs) = valid_key_encryptor
+        .encrypt_selected_fields_for_runtime(
             "6",
             &mut point_bound_payload.0,
             &PayloadEncryptionPolicy::new(["document.body"]).unwrap(),
+            &collection_crypto_id,
         )
         .unwrap();
-    let point_bound_value = point_bound_payload
-        .0
-        .get("document")
-        .and_then(|document| document.get("body"))
-        .unwrap();
-    let point_bound_proof = validate_server_payload_value_for_runtime(
-        point_bound_value,
-        &collection_crypto_id,
-        "6",
-        ServerPayloadValidationContext {
-            field_path: "document.body",
-            key_id: Some("tenant-a:docs"),
-            crypto_schema_version: 1,
-            encryption_epoch: 0,
-        },
-    )
-    .unwrap();
     let point_bound_replay =
         CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
             PointInsertOperationsInternal::from(vec![PointStructPersisted {
@@ -2165,7 +2096,7 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::runtime_encrypted_payloads([point_bound_proof]),
+            CollectionUpdateProvenance::runtime_encrypted_payloads(point_bound_proofs),
         )
         .await
         .unwrap_err();
@@ -2212,10 +2143,8 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
         .and_then(|document| document.get("body"))
         .unwrap();
     assert!(
-        validate_server_payload_value_for_runtime(
+        validate_server_payload_value_metadata(
             malformed_header_value,
-            &collection_crypto_id,
-            "5",
             ServerPayloadValidationContext {
                 field_path: "document.body",
                 key_id: Some("tenant-a:docs"),
@@ -3271,7 +3200,7 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
         .derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)
         .unwrap();
     let encryptor = PayloadTextEncryptor::new_with_derived_cipher_unchecked(
-        "test",
+        &collection_crypto_id,
         AeadCipher::new_with_material_fingerprint(
             "tenant-a:docs",
             metadata_key,
@@ -3281,12 +3210,15 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     )
     .unwrap();
     let policy = PayloadEncryptionPolicy::new(vec!["document.body".to_string()]).unwrap();
-    assert_eq!(
-        encryptor
-            .encrypt_selected_fields("1", &mut encrypted_payload.0, &policy)
-            .unwrap(),
-        1,
-    );
+    let (changed, verified_server_envelope_keys) = encryptor
+        .encrypt_selected_fields_for_runtime(
+            "1",
+            &mut encrypted_payload.0,
+            &policy,
+            &collection_crypto_id,
+        )
+        .unwrap();
+    assert_eq!(changed, 1);
 
     let encrypted_upsert =
         CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
@@ -3296,8 +3228,6 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
                 payload: Some(encrypted_payload),
             }]),
         ));
-    let provenance =
-        runtime_encrypted_server_envelopes_for_operation(&encrypted_upsert, &collection_crypto_id);
     collection
         .update_from_client(
             encrypted_upsert,
@@ -3306,7 +3236,7 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            provenance,
+            CollectionUpdateProvenance::runtime_encrypted_payloads(verified_server_envelope_keys),
         )
         .await
         .unwrap();
