@@ -10628,6 +10628,23 @@ mod tests {
         assert!(
             matches!(err, StorageError::BadInput { description } if description.contains("timeout_ms must be at least 1"))
         );
+
+        let backend = settings.crypto.backends.get_mut("openfhe_local").unwrap();
+        backend.timeout_ms = Some(5_000);
+        backend.kind = "process".to_string();
+        backend.size = Some(2);
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
+        assert!(
+            matches!(err, StorageError::BadInput { description } if description.contains("process size must be omitted or 1"))
+        );
+
+        let backend = settings.crypto.backends.get_mut("openfhe_local").unwrap();
+        backend.kind = "shell".to_string();
+        backend.size = Some(1);
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
+        assert!(
+            matches!(err, StorageError::BadInput { description } if description.contains("unsupported kind shell"))
+        );
     }
 
     #[test]
