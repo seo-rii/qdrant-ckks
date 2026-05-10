@@ -135,12 +135,6 @@ impl RuntimeVerifiedClientEnvelopes {
         }
     }
 
-    fn contains(&self, envelope_key: &ClientPayloadEnvelopeKey) -> bool {
-        self.verified_envelope_keys
-            .iter()
-            .any(|verified| verified.envelope_key() == envelope_key)
-    }
-
     fn proof_for(
         &self,
         envelope_key: &ClientPayloadEnvelopeKey,
@@ -301,23 +295,6 @@ impl CollectionUpdateProvenance {
     ) -> bool {
         sidecar_key.matches_binding(collection_id, point_id, vector_name)
             && self.allows_vector_sidecar_key(sidecar_key)
-    }
-
-    pub fn allows_client_envelope_key(&self, envelope_key: &ClientPayloadEnvelopeKey) -> bool {
-        self.verified_client_envelopes
-            .as_ref()
-            .is_some_and(|verified| verified.contains(envelope_key))
-    }
-
-    pub fn allows_client_envelope_key_for_binding(
-        &self,
-        envelope_key: &ClientPayloadEnvelopeKey,
-        collection_id: &str,
-        point_id: &str,
-        field_path: &str,
-    ) -> bool {
-        envelope_key.matches_binding(collection_id, point_id, field_path)
-            && self.allows_client_envelope_key(envelope_key)
     }
 
     pub fn verified_client_envelope_key_for_binding(
