@@ -2764,6 +2764,42 @@ esac
 
     #[cfg(unix)]
     #[test]
+    fn vector_write_plan_rejects_reserved_sidecar_collision() {
+        let bridge = fake_openfhe_bridge();
+        let settings = vector_runtime_settings(&bridge.path().join("openfhe-bridge"));
+        let params = encrypted_vector_params();
+        let plan = vector_write_plan_for_collection_with_crypto_id(
+            &settings,
+            "docs",
+            "docs-crypto-id",
+            &params,
+        )
+        .unwrap()
+        .unwrap();
+        let mut vector = VectorStructPersisted::Named(HashMap::from([(
+            "embedding".to_string(),
+            VectorPersisted::Dense(vec![0.125, -42.5]),
+        )]));
+        let mut payload = Some(segment::types::Payload(
+            json!({ ENCRYPTED_VECTOR_SIDECAR_FIELD: "client-controlled sidecar" })
+                .as_object()
+                .unwrap()
+                .clone(),
+        ));
+
+        let err = encrypt_vectors_for_point(&plan, "docs", "point-1", &mut vector, &mut payload)
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("reserved encrypted vector sidecar field")
+                    && description.contains("already set to a non-object value")
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn ckks_vector_search_groups_uses_sidecar_scores() {
         let runtime = Runtime::new().unwrap();
         let storage_dir = Builder::new().prefix("vector-groups").tempdir().unwrap();
