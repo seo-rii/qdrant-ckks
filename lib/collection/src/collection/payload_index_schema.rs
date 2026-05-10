@@ -4,7 +4,7 @@ use common::counter::hardware_accumulator::HwMeasurementAcc;
 use common::save_on_disk::SaveOnDisk;
 use qdrant_sec::ENCRYPTED_VECTOR_SIDECAR_FIELD;
 use segment::json_path::JsonPath;
-use segment::types::{Filter, PayloadFieldSchema};
+use segment::types::{Filter, PayloadFieldSchema, PayloadSchemaType};
 use shard::files::PAYLOAD_INDEX_CONFIG_FILE;
 pub use shard::payload_index_schema::PayloadIndexSchema;
 
@@ -66,6 +66,59 @@ pub fn validate_payload_index_paths_for_encrypted_paths<'a>(
     Ok(())
 }
 
+pub fn validate_payload_index_entry_for_encryption(
+    field_name: &JsonPath,
+    field_schema: &PayloadFieldSchema,
+    collection_params: &CollectionParams,
+    action: &str,
+) -> CollectionResult<()> {
+    validate_payload_index_paths_for_encrypted_paths([field_name], collection_params, action)?;
+
+    let Some(encryption) = collection_params.effective_encryption() else {
+        return Ok(());
+    };
+
+    for rule in &encryption.rules {
+        let EncryptionSelector::MetadataKeys { keys } = &rule.selector else {
+            continue;
+        };
+
+        for metadata_key in keys {
+            let metadata_path = metadata_key.parse::<JsonPath>().map_err(|err| {
+                CollectionError::bad_input(format!(
+                    "metadata blind-index field path '{metadata_key}' is invalid: {err:?}",
+                ))
+            })?;
+            if field_name.compatible(&metadata_path)
+                && field_schema.kind() != PayloadSchemaType::Keyword
+            {
+                return Err(CollectionError::bad_input(format!(
+                    "cannot {action} payload index schema on metadata blind-index field '{field_name}' because it overlaps token field '{metadata_key}'; blind-index token indexes must use keyword schema",
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub fn validate_payload_index_schema_for_encryption<'a>(
+    entries: impl IntoIterator<Item = (&'a JsonPath, &'a PayloadFieldSchema)>,
+    collection_params: &CollectionParams,
+    action: &str,
+) -> CollectionResult<()> {
+    for (field_name, field_schema) in entries {
+        validate_payload_index_entry_for_encryption(
+            field_name,
+            field_schema,
+            collection_params,
+            action,
+        )?;
+    }
+
+    Ok(())
+}
+
 impl Collection {
     pub(crate) fn payload_index_file(collection_path: &Path) -> PathBuf {
         collection_path.join(PAYLOAD_INDEX_CONFIG_FILE)
@@ -107,45 +160,13 @@ impl Collection {
         wait: bool,
         hw_acc: HwMeasurementAcc,
     ) -> CollectionResult<Option<UpdateResult>> {
-        if let Some(encryption) = self
-            .collection_config
-            .read()
-            .await
-            .params
-            .effective_encryption()
-        {
-            if encryption
-                .rules
-                .iter()
-                .any(|rule| matches!(rule.selector, EncryptionSelector::VectorNames { .. }))
-            {
-                let sidecar_path = encrypted_vector_sidecar_path()?;
-                if field_name.compatible(&sidecar_path) {
-                    return Err(CollectionError::bad_input(format!(
-                        "cannot create payload index on encrypted vector sidecar field '{field_name}'; use encrypted vector search APIs instead",
-                    )));
-                }
-            }
-
-            for rule in &encryption.rules {
-                let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
-                    continue;
-                };
-
-                for encrypted_path in paths {
-                    let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
-                        CollectionError::bad_input(format!(
-                            "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                        ))
-                    })?;
-                    if field_name.compatible(&encrypted_json_path) {
-                        return Err(CollectionError::bad_input(format!(
-                            "cannot create payload index on encrypted payload field '{field_name}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
-                        )));
-                    }
-                }
-            }
-        }
+        let collection_params = self.collection_config.read().await.params.clone();
+        validate_payload_index_entry_for_encryption(
+            &field_name,
+            &field_schema,
+            &collection_params,
+            "create",
+        )?;
 
         self.payload_index_schema.write(|schema| {
             schema
@@ -269,4 +290,67 @@ pub fn one_unindexed_expression_key(
     expr: &ExpressionInternal,
 ) -> Option<(JsonPath, Vec<PayloadFieldSchema>)> {
     one_unindexed_key(schema, PotentiallyUnindexed::Expression(expr))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::config::{
+        CollectionEncryptionConfig, CryptoMigrationState, EncryptionRuleRef, EncryptionSelector,
+    };
+
+    fn params_with_metadata_blind_index_key(key: &str) -> CollectionParams {
+        CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:payload".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "payload_blind_eq".to_string(),
+                    selector: EncryptionSelector::MetadataKeys {
+                        keys: vec![key.to_string()],
+                    },
+                    instance: "docs_blind_v1".to_string(),
+                    binding: Some("metadata-exact-match-token/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        }
+    }
+
+    #[test]
+    fn recovered_payload_index_schema_requires_keyword_for_metadata_blind_index() {
+        let collection_params = params_with_metadata_blind_index_key("document_body__blind_eq");
+        let mut schema = HashMap::new();
+        schema.insert(
+            "document_body__blind_eq".parse().unwrap(),
+            PayloadFieldSchema::FieldType(PayloadSchemaType::Text),
+        );
+
+        let err = validate_payload_index_schema_for_encryption(
+            schema.iter(),
+            &collection_params,
+            "recover",
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            CollectionError::BadInput { description }
+                if description.contains("recover payload index schema")
+                    && description.contains("metadata blind-index field")
+                    && description.contains("keyword schema")
+        ));
+
+        schema.insert(
+            "document_body__blind_eq".parse().unwrap(),
+            PayloadFieldSchema::FieldType(PayloadSchemaType::Keyword),
+        );
+        validate_payload_index_schema_for_encryption(schema.iter(), &collection_params, "recover")
+            .unwrap();
+    }
 }

@@ -37,7 +37,7 @@ use super::resharding::{ReshardState, ReshardingStage};
 use super::transfer::RecoveryStage;
 use super::transfer::transfer_tasks_pool::{RecoveryProgress, TransferTasksPool};
 use crate::collection::payload_index_schema::{
-    PayloadIndexSchema, validate_payload_index_paths_for_encrypted_paths,
+    PayloadIndexSchema, validate_payload_index_schema_for_encryption,
 };
 use crate::common::collection_size_stats::CollectionSizeStats;
 use crate::common::snapshot_stream::SnapshotStream;
@@ -1572,7 +1572,7 @@ fn validate_payload_index_schema_for_encrypted_paths(
     schema: &HashMap<JsonPath, PayloadFieldSchema>,
     collection_params: &CollectionParams,
 ) -> CollectionResult<()> {
-    validate_payload_index_paths_for_encrypted_paths(schema.keys(), collection_params, "recover")
+    validate_payload_index_schema_for_encryption(schema.iter(), collection_params, "recover")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1593,6 +1593,7 @@ mod tests {
     use segment::types::PayloadSchemaType;
 
     use super::*;
+    use crate::collection::payload_index_schema::validate_payload_index_paths_for_encrypted_paths;
     use crate::config::{
         CollectionEncryptionConfig, CryptoMigrationState, EncryptionRuleRef, EncryptionSelector,
     };

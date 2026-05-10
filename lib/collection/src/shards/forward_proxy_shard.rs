@@ -11,8 +11,8 @@ use parking_lot::Mutex as ParkingMutex;
 use segment::data_types::facets::{FacetParams, FacetResponse};
 use segment::index::field_index::CardinalityEstimation;
 use segment::types::{
-    ExtendedPointId, Filter, PointIdType, ScoredPoint, SizeStats, SnapshotFormat, WithPayload,
-    WithPayloadInterface, WithVector,
+    ExtendedPointId, Filter, PayloadFieldSchema, PointIdType, ScoredPoint, SizeStats,
+    SnapshotFormat, WithPayload, WithPayloadInterface, WithVector,
 };
 use shard::count::CountRequestInternal;
 use shard::retrieve::record_internal::RecordInternal;
@@ -24,7 +24,7 @@ use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use super::shard::ShardId;
 use super::update_tracker::UpdateTracker;
-use crate::collection::payload_index_schema::validate_payload_index_paths_for_encrypted_paths;
+use crate::collection::payload_index_schema::validate_payload_index_schema_for_encryption;
 use crate::collection_manager::optimizers::TrackerLog;
 use crate::hash_ring::HashRingRouter;
 use crate::operations::point_ops::{
@@ -172,8 +172,18 @@ impl ForwardProxyShard {
             .await
             .params
             .clone();
-        validate_payload_index_paths_for_encrypted_paths(
-            payload_schema.keys(),
+        let payload_schema_for_validation = payload_schema
+            .iter()
+            .map(|(index_key, index_info)| {
+                PayloadFieldSchema::try_from(index_info.clone())
+                    .map(|field_schema| (index_key.clone(), field_schema))
+                    .map_err(CollectionError::bad_input)
+            })
+            .collect::<CollectionResult<Vec<_>>>()?;
+        validate_payload_index_schema_for_encryption(
+            payload_schema_for_validation
+                .iter()
+                .map(|(index_key, field_schema)| (index_key, field_schema)),
             &collection_params,
             "transfer",
         )?;

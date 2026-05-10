@@ -1588,6 +1588,22 @@ async fn encrypted_payload_blind_index_token_filter_is_searchable() {
         .await
         .unwrap();
 
+    let err = collection
+        .create_payload_index_with_wait(
+            "document_body__blind_eq".parse().unwrap(),
+            PayloadFieldSchema::FieldType(PayloadSchemaType::Text),
+            true,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("metadata blind-index field 'document_body__blind_eq'")
+                && description.contains("keyword schema")
+    ));
+
     collection
         .create_payload_index_with_wait(
             "document_body__blind_eq".parse().unwrap(),

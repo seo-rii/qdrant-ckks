@@ -5,6 +5,7 @@ use std::time::Duration;
 use api::rest::models::InferenceUsage;
 use api::rest::*;
 use collection::collection::Collection;
+use collection::collection::payload_index_schema::validate_payload_index_entry_for_encryption;
 use collection::config::CollectionParams;
 use collection::operations::conversions::write_ordering_from_proto;
 use collection::operations::point_ops::*;
@@ -1185,8 +1186,13 @@ pub async fn do_create_index(
 
     let toc = dispatcher.toc(&auth, &pass).clone();
 
-    ensure_payload_index_allowed_by_encryption(&toc, &collection_name, &operation.field_name)
-        .await?;
+    ensure_payload_index_allowed_by_encryption(
+        &toc,
+        &collection_name,
+        &operation.field_name,
+        Some(&field_schema),
+    )
+    .await?;
 
     // TODO: Is `submit_collection_meta_op` cancel-safe!? Should be, I think?.. 🤔
     dispatcher
@@ -1218,7 +1224,13 @@ pub async fn do_create_index_internal(
     params: UpdateParams,
     hw_measurement_acc: HwMeasurementAcc,
 ) -> Result<UpdateResult, StorageError> {
-    ensure_payload_index_allowed_by_encryption(&toc, &collection_name, &field_name).await?;
+    ensure_payload_index_allowed_by_encryption(
+        &toc,
+        &collection_name,
+        &field_name,
+        field_schema.as_ref(),
+    )
+    .await?;
 
     let operation = CollectionUpdateOperations::FieldIndexOperation(
         FieldIndexOperations::CreateIndex(CreateIndex {
@@ -1313,6 +1325,7 @@ async fn ensure_payload_index_allowed_by_encryption(
     toc: &TableOfContent,
     collection_name: &str,
     field_name: &JsonPath,
+    field_schema: Option<&PayloadFieldSchema>,
 ) -> Result<(), StorageError> {
     let multipass = CollectionMultipass;
     let collection_pass = multipass.issue_pass(collection_name);
@@ -1346,7 +1359,45 @@ async fn ensure_payload_index_allowed_by_encryption(
         }
     }
 
+    if let Some(field_schema) = field_schema {
+        validate_payload_index_entry_for_encryption(
+            field_name,
+            field_schema,
+            &collection_config.params,
+            "create",
+        )
+        .map_err(collection_error_to_storage_error)?;
+    } else {
+        for rule in &encryption.rules {
+            let collection::config::EncryptionSelector::MetadataKeys { keys } = &rule.selector
+            else {
+                continue;
+            };
+            for metadata_key in keys {
+                let metadata_path = metadata_key.parse::<JsonPath>().map_err(|err| {
+                    StorageError::bad_input(format!(
+                        "metadata blind-index field path '{metadata_key}' is invalid: {err:?}",
+                    ))
+                })?;
+                if field_name.compatible(&metadata_path) {
+                    return Err(StorageError::bad_input(format!(
+                        "cannot create payload index schema on metadata blind-index field '{field_name}' because it overlaps token field '{metadata_key}'; blind-index token indexes must use keyword schema",
+                    )));
+                }
+            }
+        }
+    }
+
     Ok(())
+}
+
+fn collection_error_to_storage_error(err: CollectionError) -> StorageError {
+    match err {
+        CollectionError::BadInput { description } => StorageError::bad_input(description),
+        err => StorageError::service_error(format!(
+            "collection encryption payload index validation failed: {err}"
+        )),
+    }
 }
 
 #[expect(clippy::too_many_arguments)]
