@@ -1171,6 +1171,151 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_cluster_replicate_points_requires_all_peer_crypto_runtime_parity() {
+        let operation = ClusterOperations::ReplicatePoints(ReplicatePointsOperation {
+            replicate_points: ReplicatePoints {
+                filter: None,
+                from_shard_key: "source".into(),
+                to_shard_key: "target".into(),
+            },
+        });
+
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            1,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "local-fingerprint".to_string(),
+            )),
+        );
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "local-fingerprint".to_string(),
+            )),
+        );
+        metadata.insert(
+            3,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "different-fingerprint".to_string(),
+            )),
+        );
+
+        let err = validate_encrypted_cluster_data_movement_parity(
+            "docs",
+            true,
+            &operation,
+            1,
+            &[1, 2, 3],
+            &metadata,
+        )
+        .expect_err("encrypted point replication must fail closed on any peer mismatch");
+        assert!(matches!(err, StorageError::BadRequest { .. }));
+        assert!(err.to_string().contains("crypto runtime parity"));
+
+        metadata.insert(
+            3,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "local-fingerprint".to_string(),
+            )),
+        );
+        validate_encrypted_cluster_data_movement_parity(
+            "docs",
+            true,
+            &operation,
+            1,
+            &[1, 2, 3],
+            &metadata,
+        )
+        .expect("matching all-peer crypto runtime parity should allow point replication");
+    }
+
+    #[test]
+    fn encrypted_cluster_resharding_requires_target_peer_crypto_runtime_parity() {
+        let operation = ClusterOperations::StartResharding(
+            collection::operations::cluster_ops::StartReshardingOperation {
+                start_resharding: StartResharding {
+                    uuid: Some(Uuid::from_u128(1)),
+                    direction: ReshardingDirection::Up,
+                    peer_id: Some(2),
+                    shard_key: None,
+                },
+            },
+        );
+
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            1,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "local-fingerprint".to_string(),
+            )),
+        );
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "different-fingerprint".to_string(),
+            )),
+        );
+
+        let err = validate_encrypted_cluster_data_movement_parity(
+            "docs",
+            true,
+            &operation,
+            1,
+            &[1, 2, 3],
+            &metadata,
+        )
+        .expect_err("encrypted resharding must fail closed on target peer mismatch");
+        assert!(matches!(err, StorageError::BadRequest { .. }));
+        assert!(err.to_string().contains("crypto runtime parity"));
+
+        let operation = ClusterOperations::StartResharding(
+            collection::operations::cluster_ops::StartReshardingOperation {
+                start_resharding: StartResharding {
+                    uuid: Some(Uuid::from_u128(2)),
+                    direction: ReshardingDirection::Up,
+                    peer_id: None,
+                    shard_key: None,
+                },
+            },
+        );
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "local-fingerprint".to_string(),
+            )),
+        );
+        let err = validate_encrypted_cluster_data_movement_parity(
+            "docs",
+            true,
+            &operation,
+            1,
+            &[1, 2, 3],
+            &metadata,
+        )
+        .expect_err(
+            "encrypted all-peer resharding must fail closed when any peer is missing metadata",
+        );
+        assert!(matches!(err, StorageError::BadRequest { .. }));
+        assert!(err.to_string().contains("peer 3 has not published"));
+
+        metadata.insert(
+            3,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "local-fingerprint".to_string(),
+            )),
+        );
+        validate_encrypted_cluster_data_movement_parity(
+            "docs",
+            true,
+            &operation,
+            1,
+            &[1, 2, 3],
+            &metadata,
+        )
+        .expect("matching all-peer crypto runtime parity should allow encrypted resharding");
+    }
+
+    #[test]
     fn encrypted_cluster_non_data_movement_is_not_blocked_by_crypto_guard() {
         let operation = ClusterOperations::AbortTransfer(AbortTransferOperation {
             abort_transfer: collection::operations::cluster_ops::AbortShardTransfer {
