@@ -643,6 +643,10 @@ rotation must introduce a distinct active RK before the old RK becomes
 read-only. `retired_rk_id` is only valid on rotation transitions. Completion
 transitions cannot be marked as `dry_run`, so a dry-run preflight cannot be
 reused as the operation that marks encrypted data verified or decrypted.
+After a verified `Decrypting -> Disabled` completion, the stored encryption
+section remains as audit/migration metadata, but it is not treated as effective
+encryption for write/read guards. Re-enabling encryption must start a new admin
+migration transition rather than relying on ordinary params updates.
 Read paths currently return stored encrypted markers as raw payload values.
 There is no `decrypt_payload` response option, RBAC capability, or automatic
 server-side payload decryption policy yet; adding decrypted responses requires
