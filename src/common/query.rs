@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -2092,7 +2092,15 @@ fn ckks_sidecar_hnsw_persist_graph(
 ) -> Result<(), StorageError> {
     let directory = collection_path.join(CKKS_SIDECAR_HNSW_GRAPH_CACHE_DIR);
     if !ckks_sidecar_hnsw_existing_cache_directory_is_safe(&directory)? {
-        fs::create_dir_all(&directory).map_err(|err| {
+        let mut builder = DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+
+            builder.mode(0o700);
+        }
+        builder.create(&directory).map_err(|err| {
             StorageError::service_error(format!(
                 "failed to create CKKS sidecar HNSW graph cache directory {directory:?}: {err}",
             ))
@@ -6866,6 +6874,14 @@ mod tests {
         };
 
         ckks_sidecar_hnsw_persist_graph(dir.path(), &key, &graph).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let cache_dir = dir.path().join(CKKS_SIDECAR_HNSW_GRAPH_CACHE_DIR);
+            let mode = std::fs::metadata(cache_dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700);
+        }
         let loaded = ckks_sidecar_hnsw_load_persisted_graph(dir.path(), &key, 3)
             .unwrap()
             .unwrap();
