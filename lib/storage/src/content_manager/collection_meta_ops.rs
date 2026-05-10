@@ -234,11 +234,8 @@ impl CreateCollectionOperation {
             }
         }
 
-        let crypto_identity_bound = create_collection.encryption.is_some()
-            || create_collection
-                .ckks
-                .as_ref()
-                .is_some_and(|config| config.enabled);
+        let crypto_identity_bound =
+            create_collection.encryption.is_some() || create_collection.ckks.is_some();
         if crypto_identity_bound && create_collection.uuid.is_none() {
             create_collection.uuid = Some(Uuid::new_v4());
         }

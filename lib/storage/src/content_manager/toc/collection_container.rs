@@ -111,7 +111,7 @@ impl CollectionContainer for TableOfContent {
 }
 
 fn collection_params_bind_crypto_identity(params: &CollectionParams) -> bool {
-    params.effective_encryption().is_some()
+    params.effective_encryption().is_some() || params.ckks.is_some()
 }
 
 fn encrypted_uuid_mismatch_requires_fail_closed(

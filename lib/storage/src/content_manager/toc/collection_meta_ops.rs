@@ -753,11 +753,7 @@ impl TableOfContent {
 }
 
 fn collection_params_require_crypto_runtime_transfer_parity(params: &CollectionParams) -> bool {
-    params.encryption.is_some()
-        || params
-            .ckks
-            .as_ref()
-            .is_some_and(|ckks| ckks.enabled || !ckks.payload_text_fields.is_empty())
+    params.encryption.is_some() || params.ckks.is_some()
 }
 
 fn validate_encrypted_transfer_crypto_runtime_parity(
