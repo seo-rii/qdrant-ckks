@@ -143,6 +143,13 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "geo_polygon"
                         | "Vector"
                         | "Mmr"
+                        | "ciphertext"
+                        | "encrypted_query"
+                        | "nonce"
+                        | "signature"
+                        | "sig"
+                        | "public_key"
+                        | "crypto_context"
                 ) {
                     *value = Value::String("[redacted]".to_string());
                 } else {
@@ -336,6 +343,37 @@ mod tests {
 
         assert!(!serialized.contains("54321.125"));
         assert!(!serialized.contains("-12345.25"));
+        assert!(serialized.contains("[redacted]"));
+    }
+
+    #[test]
+    fn log_value_redacts_crypto_envelope_fields_recursively() {
+        let mut value = json!({
+            "outer": {
+                "ciphertext": "qdrant-sec-ciphertext-log-sentinel",
+                "nonce": "qdrant-sec-nonce-log-sentinel",
+                "signature": {
+                    "sig": "qdrant-sec-signature-log-sentinel",
+                    "public_key": "qdrant-sec-public-key-log-sentinel"
+                },
+                "crypto_context": "qdrant-sec-context-log-sentinel",
+                "encrypted_query": "qdrant-sec-encrypted-query-log-sentinel"
+            }
+        });
+
+        redact_sensitive_log_fields(&mut value);
+        let serialized = serde_json::to_string(&value).unwrap();
+
+        for sentinel in [
+            "qdrant-sec-ciphertext-log-sentinel",
+            "qdrant-sec-nonce-log-sentinel",
+            "qdrant-sec-signature-log-sentinel",
+            "qdrant-sec-public-key-log-sentinel",
+            "qdrant-sec-context-log-sentinel",
+            "qdrant-sec-encrypted-query-log-sentinel",
+        ] {
+            assert!(!serialized.contains(sentinel));
+        }
         assert!(serialized.contains("[redacted]"));
     }
 }
