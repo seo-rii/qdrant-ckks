@@ -385,6 +385,41 @@ fn keyring_returns_open_failed_for_matching_retired_tamper() {
 }
 
 #[test]
+fn keyring_does_not_fallback_after_matching_active_open_failure() {
+    let context = payload_context("42");
+    let active_cipher = test_cipher("tenant-a:payload", 38, "tenant-a/payload@v1");
+    let retired_cipher = test_cipher("tenant-a:payload", 39, "tenant-a/payload@v1");
+    let envelope = retired_cipher
+        .encrypt(b"old key material", context)
+        .unwrap();
+    let keyring = AeadKeyring::new(active_cipher).with_retired(retired_cipher);
+
+    assert_eq!(
+        keyring.decrypt(&envelope, context),
+        Err(EncryptionError::OpenFailed),
+    );
+}
+
+#[test]
+fn keyring_does_not_try_later_retired_keys_after_matching_retired_open_failure() {
+    let context = payload_context("42");
+    let active_cipher = test_cipher("tenant-a:payload-new", 40, "tenant-a/payload-new@v1");
+    let first_retired = test_cipher("tenant-a:payload-old", 41, "tenant-a/payload-old@v1");
+    let later_retired = test_cipher("tenant-a:payload-old", 42, "tenant-a/payload-old@v1");
+    let envelope = later_retired
+        .encrypt(b"ambiguous retired metadata", context)
+        .unwrap();
+    let keyring = AeadKeyring::new(active_cipher)
+        .with_retired(first_retired)
+        .with_retired(later_retired);
+
+    assert_eq!(
+        keyring.decrypt(&envelope, context),
+        Err(EncryptionError::OpenFailed),
+    );
+}
+
+#[test]
 fn envelope_records_and_authenticates_resource_key_metadata() {
     let context = payload_context("42");
     let secret = SecretKey::from_bytes([36u8; 32]);
