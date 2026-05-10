@@ -5591,6 +5591,39 @@ esac
                         && description.contains("payload sidecar only")
             ));
 
+            let err = crate::tonic::api::query_common::get(
+                UncheckedTocProvider::new_unchecked(&toc),
+                api::grpc::qdrant::GetPoints {
+                    collection_name: "vector_docs".to_string(),
+                    ids: vec![segment::types::PointIdType::from(1).into()],
+                    with_payload: None,
+                    with_vectors: Some(api::grpc::qdrant::WithVectorsSelector {
+                        selector_options: Some(
+                            api::grpc::qdrant::with_vectors_selector::SelectorOptions::Include(
+                                api::grpc::qdrant::VectorsSelector {
+                                    names: vec![DEFAULT_VECTOR_NAME.to_string()],
+                                },
+                            ),
+                        ),
+                    }),
+                    read_consistency: None,
+                    shard_key_selector: None,
+                    timeout: None,
+                },
+                None,
+                auth.clone(),
+                storage::content_manager::toc::request_hw_counter::RequestHwCounter::new(
+                    HwMeasurementAcc::disposable(),
+                    false,
+                ),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                err.message()
+                    .contains("cannot retrieve encrypted vector")
+            );
+
             let err = crate::common::query::do_scroll_points(
                 &toc,
                 "vector_docs",
@@ -5616,6 +5649,39 @@ esac
                     if description.contains("cannot scroll encrypted vectors")
                         && description.contains("payload sidecar only")
             ));
+
+            let err = crate::tonic::api::query_common::scroll(
+                UncheckedTocProvider::new_unchecked(&toc),
+                api::grpc::qdrant::ScrollPoints {
+                    collection_name: "vector_docs".to_string(),
+                    filter: None,
+                    offset: None,
+                    limit: Some(1),
+                    with_payload: None,
+                    with_vectors: Some(api::grpc::qdrant::WithVectorsSelector {
+                        selector_options: Some(
+                            api::grpc::qdrant::with_vectors_selector::SelectorOptions::Include(
+                                api::grpc::qdrant::VectorsSelector {
+                                    names: vec![DEFAULT_VECTOR_NAME.to_string()],
+                                },
+                            ),
+                        ),
+                    }),
+                    read_consistency: None,
+                    shard_key_selector: None,
+                    order_by: None,
+                    timeout: None,
+                },
+                None,
+                auth.clone(),
+                storage::content_manager::toc::request_hw_counter::RequestHwCounter::new(
+                    HwMeasurementAcc::disposable(),
+                    false,
+                ),
+            )
+            .await
+            .unwrap_err();
+            assert!(err.message().contains("cannot scroll encrypted vector"));
 
             let err = crate::common::query::do_search_points_matrix(
                 &toc,
