@@ -1509,7 +1509,7 @@ async fn ckks_fill_scored_points_payload_or_vectors(
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
 ) -> Result<(), StorageError> {
-    if points.is_empty() || (!with_payload.is_required() && !with_vector.is_enabled()) {
+    if points.is_empty() {
         return Ok(());
     }
 
@@ -1532,6 +1532,7 @@ async fn ckks_fill_scored_points_payload_or_vectors(
         .collect::<std::collections::HashMap<_, _>>();
     for point in points {
         if let Some(record) = records_by_id.remove(&point.id) {
+            point.version = record.version;
             point.payload = record.payload;
             point.vector = record.vector;
             point.shard_key = record.shard_key.or_else(|| point.shard_key.clone());

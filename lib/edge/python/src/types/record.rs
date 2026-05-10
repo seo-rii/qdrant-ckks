@@ -44,6 +44,7 @@ impl PyRecord {
         // Every field should have a getter method
         let RecordInternal {
             id: _,
+            version: _,
             payload: _,
             vector: _,
             shard_key: _, // not relevant for Qdrant Edge

@@ -57,7 +57,9 @@ pub fn retrieve_blocking(
             deferred_behavior,
         )? {
             // We expect all points to be found since we already checked their versions
-            point_records.insert(id, RecordInternal::from(record));
+            let mut record = RecordInternal::from(record);
+            record.version = point_version.get(&id).copied().unwrap_or_default();
+            point_records.insert(id, record);
             applied += 1;
         }
 

@@ -126,7 +126,7 @@ impl LocalShard {
             .into_iter()
             .map(|record| ScoredPoint {
                 id: record.id,
-                version: 0,
+                version: record.version,
                 score: 1.0,
                 payload: record.payload,
                 vector: record.vector,

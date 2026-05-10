@@ -151,6 +151,7 @@ pub fn try_record_from_grpc(
 
     Ok(RecordInternal {
         id,
+        version: 0,
         payload,
         vector,
         shard_key: convert_shard_key_from_grpc_opt(shard_key),

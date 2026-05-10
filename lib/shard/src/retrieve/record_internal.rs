@@ -1,7 +1,7 @@
 use segment::data_types::order_by::OrderValue;
 use segment::data_types::segment_record::SegmentRecord;
 use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, VectorRef, VectorStructInternal};
-use segment::types::{Payload, PointIdType, ShardKey, VectorName};
+use segment::types::{Payload, PointIdType, SeqNumberType, ShardKey, VectorName};
 
 use crate::operations::point_ops::{PointStructPersisted, VectorStructPersisted};
 
@@ -10,6 +10,8 @@ use crate::operations::point_ops::{PointStructPersisted, VectorStructPersisted};
 pub struct RecordInternal {
     /// Id of the point
     pub id: PointIdType,
+    /// Last sequence number applied to the point
+    pub version: SeqNumberType,
     /// Payload - values assigned to the point
     pub payload: Option<Payload>,
     /// Vector of the point
@@ -24,6 +26,7 @@ impl RecordInternal {
     pub fn new_empty(id: PointIdType) -> Self {
         Self {
             id,
+            version: 0,
             payload: None,
             vector: None,
             shard_key: None,
@@ -54,6 +57,7 @@ impl From<SegmentRecord> for RecordInternal {
         } = record;
         Self {
             id,
+            version: 0,
             payload,
             vector: vectors.map(VectorStructInternal::from),
             shard_key: None,
@@ -69,6 +73,7 @@ impl TryFrom<RecordInternal> for PointStructPersisted {
     fn try_from(record: RecordInternal) -> Result<Self, Self::Error> {
         let RecordInternal {
             id,
+            version: _,
             payload,
             vector,
             shard_key: _,
@@ -95,6 +100,7 @@ impl From<RecordInternal> for api::grpc::qdrant::RetrievedPoint {
 
         let RecordInternal {
             id,
+            version: _,
             payload,
             vector,
             shard_key,
@@ -115,6 +121,7 @@ impl From<RecordInternal> for api::rest::Record {
     fn from(value: RecordInternal) -> Self {
         let RecordInternal {
             id,
+            version: _,
             payload,
             vector,
             shard_key,

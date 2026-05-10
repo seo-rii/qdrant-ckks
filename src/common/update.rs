@@ -5407,6 +5407,44 @@ esac
             .await
             .unwrap();
 
+            do_upsert_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "vector_docs".to_string(),
+                PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                    points: vec![api::rest::PointStruct {
+                        id: 1.into(),
+                        vector: api::rest::VectorStruct::Named(HashMap::from([
+                            (
+                                DEFAULT_VECTOR_NAME.to_string(),
+                                api::rest::Vector::Dense(vec![0.7, -0.25]),
+                            ),
+                            (
+                                "plain".to_string(),
+                                api::rest::Vector::Dense(vec![0.3, 0.4]),
+                            ),
+                        ])),
+                        payload: Some(segment::types::Payload(
+                            json!({ "group": "a" }).as_object().unwrap().clone(),
+                        )),
+                    }],
+                    shard_key: None,
+                    update_filter: None,
+                    update_mode: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+
             let vector_collection_pass = auth
                 .check_collection_access("vector_docs", AccessRequirements::new(), "test")
                 .unwrap();
@@ -5852,6 +5890,10 @@ esac
             .unwrap();
             assert_eq!(search_result.len(), 1);
             assert_eq!(search_result[0].id, 1.into());
+            assert!(
+                search_result[0].version > 0,
+                "CKKS sidecar search must preserve the updated point version"
+            );
             assert_eq!(search_result[0].score, 9.0);
 
             let hnsw_search_result = crate::common::query::do_core_search_points(
@@ -5912,6 +5954,10 @@ esac
             .unwrap();
             assert_eq!(hnsw_graph_search_result.len(), 1);
             assert_eq!(hnsw_graph_search_result[0].id, 1.into());
+            assert!(
+                hnsw_graph_search_result[0].version > 0,
+                "CKKS HNSW sidecar search must preserve the updated point version"
+            );
             assert_eq!(hnsw_graph_search_result[0].score, 9.0);
 
             let point_id_hnsw_query_result = crate::common::query::do_query_points(
