@@ -1203,6 +1203,85 @@ async fn crypto_migration_plan_updates_collection_config_through_admin_path() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn crypto_migration_decrypt_completion_disables_effective_encryption() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
+
+    collection
+        .apply_crypto_migration_plan(&CryptoMigrationPlan {
+            from: CryptoMigrationState::Active,
+            to: CryptoMigrationState::Rotating,
+            target_epoch: 1,
+            active_rk_id: Some("tenant-a/payload-rk-v2".to_string()),
+            retired_rk_id: Some("tenant-a/payload-rk-v1".to_string()),
+            dry_run: false,
+            checkpoints: Vec::new(),
+        })
+        .await
+        .unwrap();
+    collection
+        .apply_crypto_migration_plan(&CryptoMigrationPlan {
+            from: CryptoMigrationState::Rotating,
+            to: CryptoMigrationState::Active,
+            target_epoch: 1,
+            active_rk_id: Some("tenant-a/payload-rk-v2".to_string()),
+            retired_rk_id: Some("tenant-a/payload-rk-v1".to_string()),
+            dry_run: false,
+            checkpoints: vec![CryptoMigrationCheckpoint {
+                shard_id: 0,
+                total_points: 1,
+                processed_points: 1,
+                rewritten_points: 1,
+                status: CryptoMigrationCheckpointStatus::Verified,
+            }],
+        })
+        .await
+        .unwrap();
+
+    collection
+        .apply_crypto_migration_plan(&CryptoMigrationPlan {
+            from: CryptoMigrationState::Active,
+            to: CryptoMigrationState::Decrypting,
+            target_epoch: 1,
+            active_rk_id: Some("tenant-a/payload-rk-v2".to_string()),
+            retired_rk_id: None,
+            dry_run: false,
+            checkpoints: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    let decrypting_config = collection.config_snapshot().await;
+    assert!(decrypting_config.params.effective_encryption().is_some());
+
+    collection
+        .apply_crypto_migration_plan(&CryptoMigrationPlan {
+            from: CryptoMigrationState::Decrypting,
+            to: CryptoMigrationState::Disabled,
+            target_epoch: 1,
+            active_rk_id: Some("tenant-a/payload-rk-v2".to_string()),
+            retired_rk_id: None,
+            dry_run: false,
+            checkpoints: vec![CryptoMigrationCheckpoint {
+                shard_id: 0,
+                total_points: 1,
+                processed_points: 1,
+                rewritten_points: 1,
+                status: CryptoMigrationCheckpointStatus::Verified,
+            }],
+        })
+        .await
+        .unwrap();
+
+    let disabled_config = collection.config_snapshot().await;
+    assert!(
+        disabled_config.params.effective_encryption().is_none(),
+        "verified decrypt completion must stop enforcing encryption guards",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn crypto_migration_completion_requires_all_collection_shards() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection =
