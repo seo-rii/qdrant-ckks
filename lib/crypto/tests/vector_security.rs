@@ -451,16 +451,34 @@ fn context_digest_changes_with_public_material_and_parameters() {
     let base = public_material();
     let other_key =
         CkksPublicMaterial::new(b"openfhe crypto context".to_vec(), b"other key".to_vec()).unwrap();
-    let mut other_params = CkksParameters::openfhe_default_128_bit();
-    other_params.multiplicative_depth += 1;
-
+    let default_params = CkksParameters::openfhe_default_128_bit();
     let base_digest = base.digest_for(&CkksParameters::openfhe_default_128_bit());
 
     assert_ne!(
         base_digest,
         other_key.digest_for(&CkksParameters::openfhe_default_128_bit()),
     );
-    assert_ne!(base_digest, base.digest_for(&other_params));
+
+    let mut changed_poly = default_params;
+    changed_poly.poly_modulus_degree += 1;
+    let mut changed_depth = default_params;
+    changed_depth.multiplicative_depth += 1;
+    let mut changed_scale = default_params;
+    changed_scale.scaling_mod_size += 1;
+    let mut changed_first = default_params;
+    changed_first.first_mod_size += 1;
+    let mut changed_batch = default_params;
+    changed_batch.batch_size += 1;
+
+    for changed_params in [
+        changed_poly,
+        changed_depth,
+        changed_scale,
+        changed_first,
+        changed_batch,
+    ] {
+        assert_ne!(base_digest, base.digest_for(&changed_params));
+    }
 }
 
 #[test]
