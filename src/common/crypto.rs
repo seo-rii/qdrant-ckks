@@ -9362,6 +9362,97 @@ mod tests {
     }
 
     #[test]
+    fn validate_recovered_collection_crypto_config_rejects_wrong_wrapped_rk_key() {
+        let mk_material = "tenant-a/mk-v1";
+        let rk_material = "tenant-a/payload-rk-v3";
+        let mut wrapped_rk_config = CryptoMaterialConfig {
+            kind: WRAPPED_SYMMETRIC_KEY_32_KIND.to_string(),
+            wrapped_by: Some(mk_material.to_string()),
+            wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
+            rk_epoch: Some(3),
+            scope: Some("collection:docs".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        let aad = resource_key_wrap_aad(
+            rk_material,
+            &wrapped_rk_config,
+            mk_material,
+            RESOURCE_KEY_WRAP_ALGORITHM,
+        );
+        let wrapped = LocalMasterKeyProvider::new(mk_material, SecretKey::from_bytes([91u8; 32]))
+            .unwrap()
+            .wrap_resource_key(&SecretKey::from_bytes([92u8; 32]), &aad)
+            .unwrap();
+        wrapped_rk_config.nonce = Some(wrapped.nonce);
+        wrapped_rk_config.wrapped_key_b64 = Some(wrapped.wrapped_key);
+
+        let settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_payload_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_AES_GCM_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            rk_material.to_string(),
+                        )]),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a:docs",
+                            "material_fingerprint_id": "tenant-a/payload-rk@v3",
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([
+                    (
+                        mk_material.to_string(),
+                        CryptoMaterialConfig {
+                            kind: WRAPPING_KEY_32_KIND.to_string(),
+                            source: Some("inline".to_string()),
+                            value_b64: Some(BASE64URL_NOPAD.encode(&[90u8; 32])),
+                            ..CryptoMaterialConfig::default()
+                        },
+                    ),
+                    (rk_material.to_string(), wrapped_rk_config),
+                ]),
+                backends: HashMap::new(),
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = validate_recovered_collection_crypto_config(
+            &settings,
+            "docs",
+            &recovered_config(params, Some(Uuid::new_v4())),
+        )
+        .expect_err("wrong wrapped RK key must fail restore preflight");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("payload crypto runtime validation failed")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
     fn validate_collection_crypto_runtime_rejects_snapshot_vector_rule_without_runtime_instance() {
         let settings = Settings::new(None).unwrap();
         let params = CollectionParams {
