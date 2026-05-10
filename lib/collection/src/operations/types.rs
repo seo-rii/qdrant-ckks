@@ -99,7 +99,7 @@ struct RuntimeVerifiedClientEnvelopes {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 struct RuntimeEncryptedPayloadEnvelopes {
-    verified_envelope_keys: Arc<HashSet<ServerPayloadEnvelopeKey>>,
+    verified_envelope_keys: Arc<HashSet<ServerPayloadVerifiedEnvelopeKey>>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -112,17 +112,18 @@ impl RuntimeEncryptedPayloadEnvelopes {
         verified_envelope_keys: impl IntoIterator<Item = ServerPayloadVerifiedEnvelopeKey>,
     ) -> Self {
         Self {
-            verified_envelope_keys: Arc::new(
-                verified_envelope_keys
-                    .into_iter()
-                    .map(|key| key.envelope_key().clone())
-                    .collect(),
-            ),
+            verified_envelope_keys: Arc::new(verified_envelope_keys.into_iter().collect()),
         }
     }
 
-    fn contains(&self, envelope_key: &ServerPayloadEnvelopeKey) -> bool {
-        self.verified_envelope_keys.contains(envelope_key)
+    fn proof_for(
+        &self,
+        envelope_key: &ServerPayloadEnvelopeKey,
+    ) -> Option<ServerPayloadVerifiedEnvelopeKey> {
+        self.verified_envelope_keys
+            .iter()
+            .find(|verified| verified.envelope_key() == envelope_key)
+            .cloned()
     }
 }
 
@@ -255,25 +256,19 @@ impl CollectionUpdateProvenance {
         self
     }
 
-    pub const fn allows_server_envelopes(&self) -> bool {
-        self.server_envelopes.is_some()
-    }
-
-    pub fn allows_server_envelope_key(&self, envelope_key: &ServerPayloadEnvelopeKey) -> bool {
-        self.server_envelopes
-            .as_ref()
-            .is_some_and(|verified| verified.contains(envelope_key))
-    }
-
-    pub fn allows_server_envelope_key_for_binding(
+    pub fn verified_server_envelope_key_for_binding(
         &self,
         envelope_key: &ServerPayloadEnvelopeKey,
         collection_id: &str,
         point_id: &str,
         field_path: &str,
-    ) -> bool {
-        envelope_key.matches_binding(collection_id, point_id, field_path)
-            && self.allows_server_envelope_key(envelope_key)
+    ) -> Option<ServerPayloadVerifiedEnvelopeKey> {
+        if !envelope_key.matches_binding(collection_id, point_id, field_path) {
+            return None;
+        }
+        self.server_envelopes
+            .as_ref()
+            .and_then(|verified| verified.proof_for(envelope_key))
     }
 
     pub const fn allows_vector_sidecars(&self) -> bool {

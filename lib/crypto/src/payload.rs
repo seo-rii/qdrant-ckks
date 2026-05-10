@@ -69,6 +69,8 @@ pub enum PayloadEncryptionError {
     UnsupportedClientSignatureAlgorithm(String),
     #[error("payload field client envelope signature verification failed")]
     InvalidClientSignature,
+    #[error("payload field encrypted envelope does not match runtime verification proof")]
+    RuntimeEnvelopeProofMismatch,
     #[error("payload field contains unsupported qdrant crypto schema version: {0}")]
     UnsupportedSchemaVersion(u16),
     #[error("payload field encryption epoch does not match active policy")]
@@ -656,6 +658,28 @@ pub fn validate_server_payload_value_for_runtime(
     Ok(ServerPayloadVerifiedEnvelopeKey { envelope_key })
 }
 
+/// Validate a server-side envelope after an ingress runtime plan already
+/// encrypted it and passed a matching verified-envelope proof onward.
+pub fn validate_server_payload_value_after_runtime_encryption(
+    value: &Value,
+    collection_id: &str,
+    point_id: &str,
+    context: ServerPayloadValidationContext<'_>,
+    verified_envelope_key: &ServerPayloadVerifiedEnvelopeKey,
+) -> Result<(), PayloadEncryptionError> {
+    validate_server_payload_value_metadata(value, context)?;
+    let envelope_key =
+        server_payload_envelope_key(value, collection_id, point_id, context.field_path)?
+            .ok_or_else(|| PayloadEncryptionError::ExpectedEncryptedEnvelope {
+                field: context.field_path.to_string(),
+                found: json_type_name(value),
+            })?;
+    if verified_envelope_key.envelope_key() != &envelope_key {
+        return Err(PayloadEncryptionError::RuntimeEnvelopeProofMismatch);
+    }
+    Ok(())
+}
+
 pub fn validate_client_payload_value(
     value: &Value,
     context: ClientPayloadValidationContext<'_>,
@@ -682,7 +706,7 @@ pub fn validate_client_payload_value_after_runtime_verification(
             }
         })?;
     if verified_envelope_key.envelope_key() != &envelope_key {
-        return Err(PayloadEncryptionError::InvalidClientSignature);
+        return Err(PayloadEncryptionError::RuntimeEnvelopeProofMismatch);
     }
     Ok(())
 }

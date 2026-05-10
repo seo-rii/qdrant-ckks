@@ -15,7 +15,7 @@ use qdrant_sec::{
     client_payload_envelope_key, client_payload_nonce_replay_key,
     is_client_encrypted_payload_value, is_encrypted_payload_value, server_payload_envelope_key,
     validate_client_payload_value_after_runtime_verification,
-    validate_server_payload_value_metadata,
+    validate_server_payload_value_after_runtime_encryption,
 };
 use segment::data_types::order_by::{Direction, OrderBy};
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
@@ -660,30 +660,35 @@ impl Collection {
                                 "encrypted payload marker for field '{encrypted_path_str}' requires runtime payload encryption before collection write",
                             )));
                         };
-                        if !update_provenance.allows_server_envelope_key_for_binding(
-                            &envelope_key,
-                            &collection_crypto_id,
-                            point_id,
-                            encrypted_path_str,
-                        ) {
+                        let Some(verified_envelope_key) = update_provenance
+                            .verified_server_envelope_key_for_binding(
+                                &envelope_key,
+                                &collection_crypto_id,
+                                point_id,
+                                encrypted_path_str,
+                            )
+                        else {
                             return Err(CollectionError::bad_input(format!(
                                 "encrypted payload marker for field '{encrypted_path_str}' requires runtime payload encryption before collection write",
                             )));
-                        }
-                        validate_server_payload_value_metadata(
-                                value,
-                                ServerPayloadValidationContext {
-                                    field_path: encrypted_path_str,
-                                    key_id: encryption.key_id.as_deref(),
-                                    crypto_schema_version: encryption.crypto_schema_version,
-                                    encryption_epoch: encryption.encryption_epoch,
-                                },
-                            )
-                            .map_err(|err| {
-                                CollectionError::bad_input(format!(
-                                    "encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: {err}",
-                                ))
-                            })?;
+                        };
+                        validate_server_payload_value_after_runtime_encryption(
+                            value,
+                            &collection_crypto_id,
+                            point_id,
+                            ServerPayloadValidationContext {
+                                field_path: encrypted_path_str,
+                                key_id: encryption.key_id.as_deref(),
+                                crypto_schema_version: encryption.crypto_schema_version,
+                                encryption_epoch: encryption.encryption_epoch,
+                            },
+                            &verified_envelope_key,
+                        )
+                        .map_err(|err| {
+                            CollectionError::bad_input(format!(
+                                "encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: {err}",
+                            ))
+                        })?;
                         continue;
                     }
                     if allow_client_envelope && is_client_encrypted_payload_value(value) {

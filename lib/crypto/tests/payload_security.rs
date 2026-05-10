@@ -9,7 +9,9 @@ use qdrant_sec::{
     client_payload_signature_message, is_client_encrypted_payload_value,
     is_encrypted_payload_value, validate_client_payload_value,
     validate_client_payload_value_after_runtime_verification,
-    validate_client_payload_value_for_runtime, validate_server_payload_value_metadata,
+    validate_client_payload_value_for_runtime,
+    validate_server_payload_value_after_runtime_encryption,
+    validate_server_payload_value_for_runtime, validate_server_payload_value_metadata,
 };
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -751,7 +753,57 @@ fn post_runtime_client_payload_validation_requires_verified_proof_match() {
             },
             &verified,
         ),
-        Err(PayloadEncryptionError::InvalidClientSignature),
+        Err(PayloadEncryptionError::RuntimeEnvelopeProofMismatch),
+    );
+}
+
+#[test]
+fn post_runtime_server_payload_validation_requires_verified_proof_match() {
+    let encryptor = encryptor();
+    let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
+    let mut payload = object(json!({ "body": "secret" }));
+    encryptor
+        .encrypt_selected_fields("point-1", &mut payload, &policy)
+        .unwrap();
+    let body = payload.get("body").unwrap();
+    let context = ServerPayloadValidationContext {
+        field_path: "body",
+        key_id: Some("tenant-a:payload"),
+        crypto_schema_version: 1,
+        encryption_epoch: 0,
+    };
+    let verified =
+        validate_server_payload_value_for_runtime(body, "docs", "point-1", context).unwrap();
+
+    validate_server_payload_value_after_runtime_encryption(
+        body, "docs", "point-1", context, &verified,
+    )
+    .unwrap();
+
+    let mut different_ciphertext = body.clone();
+    different_ciphertext
+        .get_mut(ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut("envelope")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert(
+            "ciphertext".to_string(),
+            Value::String("AQEBAQEBAQEBAQEBAQEBAQ".to_string()),
+        );
+
+    assert_eq!(
+        validate_server_payload_value_after_runtime_encryption(
+            &different_ciphertext,
+            "docs",
+            "point-1",
+            context,
+            &verified,
+        ),
+        Err(PayloadEncryptionError::RuntimeEnvelopeProofMismatch),
     );
 }
 
