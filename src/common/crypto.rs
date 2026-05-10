@@ -5933,6 +5933,53 @@ mod tests {
     }
 
     #[test]
+    fn crypto_runtime_capability_fingerprint_tracks_backend_policy() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                backends: HashMap::from([(
+                    "openfhe_bridge_v1".to_string(),
+                    CryptoBackendConfig {
+                        kind: "process_pool".to_string(),
+                        program: Some("/usr/local/bin/qdrant-sec-openfhe".to_string()),
+                        sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
+                        size: Some(2),
+                        timeout_ms: Some(5_000),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let fingerprint = crypto_runtime_capability_fingerprint(&settings);
+
+        let mut peer_with_different_pin = settings.clone();
+        peer_with_different_pin
+            .crypto
+            .backends
+            .get_mut("openfhe_bridge_v1")
+            .unwrap()
+            .sha256_b64 = Some(BASE64URL_NOPAD.encode(&[18_u8; 32]));
+        assert_ne!(
+            fingerprint,
+            crypto_runtime_capability_fingerprint(&peer_with_different_pin),
+            "bridge binary pin drift must change the parity fingerprint",
+        );
+
+        let mut peer_with_different_pool = settings.clone();
+        peer_with_different_pool
+            .crypto
+            .backends
+            .get_mut("openfhe_bridge_v1")
+            .unwrap()
+            .size = Some(4);
+        assert_ne!(
+            fingerprint,
+            crypto_runtime_capability_fingerprint(&peer_with_different_pool),
+            "bridge pool sizing drift must change the parity fingerprint",
+        );
+    }
+
+    #[test]
     fn crypto_runtime_capability_fingerprint_tracks_vault_material_field() {
         let settings = Settings {
             crypto: CryptoSettings {
