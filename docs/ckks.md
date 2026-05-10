@@ -352,6 +352,12 @@ params:
 Clients should compute `body__blind_eq` outside Qdrant with a domain-separated
 blind-index key such as `qdrant-sec/client-payload-blind-index/v1`, then query
 that token field with ordinary exact-match payload filters.
+Token payload values must be base64url-no-padding strings that decode to a
+32-byte HMAC-SHA256 output. Qdrant does not hold the blind-index key, but it
+does fail closed on missing, non-string, malformed, or wrong-length token
+fields before writing them to storage. Key-path payload updates to blind-index
+token fields are rejected; write them as full payload objects so the collection
+guard can validate the token shape.
 
 ```json
 {

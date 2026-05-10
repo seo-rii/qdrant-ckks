@@ -1609,6 +1609,92 @@ async fn encrypted_payload_blind_index_token_filter_is_searchable() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn metadata_blind_index_writes_require_hmac_token_shape() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection = encrypted_collection_fixture(
+        collection_dir.path(),
+        1,
+        payload_encryption_with_blind_index_config(),
+    )
+    .await;
+    let valid_token = BASE64URL_NOPAD.encode(&[7_u8; 32]);
+
+    collection
+        .update_from_client_simple(
+            CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+                PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                    id: 1.into(),
+                    vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                    payload: Some(
+                        serde_json::from_value(serde_json::json!({
+                            "document_body__blind_eq": valid_token,
+                        }))
+                        .unwrap(),
+                    ),
+                }]),
+            )),
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+
+    let err = collection
+        .update_from_client_simple(
+            CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+                PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                    id: 2.into(),
+                    vector: VectorStructPersisted::from(vec![0.0, 1.0, 0.0, 0.0]),
+                    payload: Some(
+                        serde_json::from_value(serde_json::json!({
+                            "document_body__blind_eq": "client-token-v1",
+                        }))
+                        .unwrap(),
+                    ),
+                }]),
+            )),
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("metadata blind-index field 'document_body__blind_eq'")
+                && description.contains("base64url")
+    ));
+
+    let err = collection
+        .update_from_client_simple(
+            CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
+                payload: serde_json::from_value(serde_json::json!({
+                    "token": BASE64URL_NOPAD.encode(&[8_u8; 32]),
+                }))
+                .unwrap(),
+                points: Some(vec![1.into()]),
+                filter: None,
+                key: Some("document_body__blind_eq".parse().unwrap()),
+            })),
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("must be written as a full payload object")
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn encrypted_payload_field_rejects_update_filters() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection =

@@ -628,6 +628,48 @@ impl Collection {
         }
         if let Some(encryption) = encryption {
             let mut seen_client_nonces = std::collections::HashSet::new();
+            let validate_metadata_blind_index_token = |value: &serde_json::Value,
+                                                       metadata_key: &str|
+             -> CollectionResult<()> {
+                let Some(token) = value.as_str() else {
+                    return Err(CollectionError::bad_input(format!(
+                        "metadata blind-index field '{metadata_key}' must contain a base64url-no-padding HMAC-SHA256 token string",
+                    )));
+                };
+                let token = BASE64URL_NOPAD.decode(token.as_bytes()).map_err(|_| {
+                        CollectionError::bad_input(format!(
+                            "metadata blind-index field '{metadata_key}' token must be base64url-no-padding encoded",
+                        ))
+                    })?;
+                if token.len() != 32 {
+                    return Err(CollectionError::bad_input(format!(
+                        "metadata blind-index field '{metadata_key}' token must decode to 32 bytes",
+                    )));
+                }
+                Ok(())
+            };
+            let payload_write_touches_metadata_blind_index =
+                |payload: &Payload,
+                 key: Option<&JsonPath>,
+                 metadata_path: &JsonPath,
+                 metadata_key: &str|
+                 -> CollectionResult<bool> {
+                    if let Some(key) = key {
+                        if key.compatible(metadata_path) {
+                            return Err(CollectionError::bad_input(format!(
+                                "metadata blind-index field '{metadata_key}' must be written as a full payload object so its token can be validated",
+                            )));
+                        }
+                        return Ok(false);
+                    }
+
+                    let mut touches = false;
+                    for value in metadata_path.value_get(&payload.0) {
+                        validate_metadata_blind_index_token(value, metadata_key)?;
+                        touches = true;
+                    }
+                    Ok(touches)
+                };
             let mut payload_write_touches_encrypted_path = |payload: &Payload,
                                                             key: Option<&JsonPath>,
                                                             point_id: Option<&str>,
@@ -989,7 +1031,89 @@ impl Collection {
                             }
                         }
                     }
-                    EncryptionSelector::MetadataKeys { .. } => {}
+                    EncryptionSelector::MetadataKeys { keys } => {
+                        for metadata_key in keys {
+                            let metadata_path = metadata_key.parse::<JsonPath>().map_err(|err| {
+                                CollectionError::bad_input(format!(
+                                    "metadata blind-index field path '{metadata_key}' is invalid: {err:?}",
+                                ))
+                            })?;
+
+                            match &operation {
+                                CollectionUpdateOperations::PointOperation(point_operation) => {
+                                    match point_operation {
+                                        PointOperations::UpsertPoints(insert_operation)
+                                        | PointOperations::UpsertPointsConditional(
+                                            shard::operations::point_ops::ConditionalInsertOperationInternal {
+                                                points_op: insert_operation,
+                                                condition: _,
+                                                update_mode: _,
+                                            },
+                                        ) => match insert_operation {
+                                            PointInsertOperationsInternal::PointsBatch(batch) => {
+                                                if let Some(payloads) = batch.payloads.as_ref() {
+                                                    for payload in payloads.iter().flatten() {
+                                                        payload_write_touches_metadata_blind_index(
+                                                            payload,
+                                                            None,
+                                                            &metadata_path,
+                                                            metadata_key,
+                                                        )?;
+                                                    }
+                                                }
+                                            }
+                                            PointInsertOperationsInternal::PointsList(points) => {
+                                                for payload in
+                                                    points.iter().filter_map(|point| {
+                                                        point.payload.as_ref()
+                                                    })
+                                                {
+                                                    payload_write_touches_metadata_blind_index(
+                                                        payload,
+                                                        None,
+                                                        &metadata_path,
+                                                        metadata_key,
+                                                    )?;
+                                                }
+                                            }
+                                        },
+                                        PointOperations::SyncPoints(sync_operation) => {
+                                            for payload in sync_operation
+                                                .points
+                                                .iter()
+                                                .filter_map(|point| point.payload.as_ref())
+                                            {
+                                                payload_write_touches_metadata_blind_index(
+                                                    payload,
+                                                    None,
+                                                    &metadata_path,
+                                                    metadata_key,
+                                                )?;
+                                            }
+                                        }
+                                        PointOperations::DeletePoints { .. }
+                                        | PointOperations::DeletePointsByFilter(_) => {}
+                                    }
+                                }
+                                CollectionUpdateOperations::PayloadOperation(
+                                    PayloadOps::SetPayload(operation)
+                                    | PayloadOps::OverwritePayload(operation),
+                                ) => {
+                                    payload_write_touches_metadata_blind_index(
+                                        &operation.payload,
+                                        operation.key.as_ref(),
+                                        &metadata_path,
+                                        metadata_key,
+                                    )?;
+                                }
+                                CollectionUpdateOperations::PayloadOperation(_)
+                                | CollectionUpdateOperations::VectorOperation(_)
+                                | CollectionUpdateOperations::FieldIndexOperation(_) => {}
+                                #[cfg(feature = "staging")]
+                                CollectionUpdateOperations::StagingOperation(_) => {}
+                            }
+                        }
+                    }
                 }
             }
 
