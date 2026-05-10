@@ -472,12 +472,12 @@ data endpoint URL, for example `/v1/<mount>/data/<secret>`. Metadata/list
 endpoints and bare mount paths are rejected. `env` must name the environment
 variable that contains the Vault token, and `vault_field` must name the string
 field under `data.data` that contains the base64url-no-pad 32-byte material. The
-URL must use HTTPS; loopback HTTP is accepted only for tests/dev. Query strings
-and fragments are rejected so Vault tokens or field selectors are not
-accidentally placed in config URLs. Username/password URL credentials are also
-rejected; use the `env` token source instead. Vault material fetches do not
-follow HTTP redirects; redirects must be resolved in the configured, validated
-URL.
+Vault token value must be non-empty and a valid HTTP header value. The URL must
+use HTTPS; loopback HTTP is accepted only for tests/dev. Query strings and
+fragments are rejected so Vault tokens or field selectors are not accidentally
+placed in config URLs. Username/password URL credentials are also rejected; use
+the `env` token source instead. Vault material fetches do not follow HTTP
+redirects; redirects must be resolved in the configured, validated URL.
 Vault-backed material keeps the MK/RK out of config files, but the Vault token
 source, Vault policy, and Vault availability become part of the key-management
 TCB and must be identical across nodes that can write encrypted collections.

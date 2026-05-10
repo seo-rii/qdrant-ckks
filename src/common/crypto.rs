@@ -4150,6 +4150,22 @@ fn read_material_vault_kv2_to_string(
             env: token_env.to_string(),
         }
     })?);
+    if token.is_empty() {
+        return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: url.to_string(),
+            reason: "Vault token env value must not be empty".to_string(),
+        });
+    }
+    let mut token_header =
+        reqwest::header::HeaderValue::from_str(token.as_str()).map_err(|_| {
+            PayloadWriteSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: url.to_string(),
+                reason: "Vault token env value is not a valid HTTP header value".to_string(),
+            }
+        })?;
+    token_header.set_sensitive(true);
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(5))
         .redirect(reqwest::redirect::Policy::none())
@@ -4160,7 +4176,10 @@ fn read_material_vault_kv2_to_string(
         })?;
     let response = client
         .get(url)
-        .header("X-Vault-Token", token.as_str())
+        .header(
+            reqwest::header::HeaderName::from_static("x-vault-token"),
+            token_header,
+        )
         .send()
         .map_err(|_| PayloadWriteSetupError::UnreadableMaterialFile {
             material: material_name.to_string(),
@@ -6667,6 +6686,31 @@ mod tests {
         ));
         unsafe {
             std::env::remove_var("QDRANT_TEST_VAULT_TOKEN_REDIRECT");
+        }
+    }
+
+    #[test]
+    fn decode_direct_material_key_rejects_empty_vault_kv2_token() {
+        unsafe {
+            std::env::set_var("QDRANT_TEST_VAULT_TOKEN_EMPTY", "");
+        }
+
+        let vault_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("vault_kv2".to_string()),
+            env: Some("QDRANT_TEST_VAULT_TOKEN_EMPTY".to_string()),
+            path: Some("https://vault.example.com/v1/secret/data/docs".to_string()),
+            vault_field: Some("material".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        assert!(matches!(
+            decode_direct_material_key("tenant-a/payload-v1", &vault_material),
+            Err(PayloadWriteSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("must not be empty")
+        ));
+        unsafe {
+            std::env::remove_var("QDRANT_TEST_VAULT_TOKEN_EMPTY");
         }
     }
 
