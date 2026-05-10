@@ -6636,6 +6636,43 @@ esac
             );
             assert_eq!(grpc_client_encrypted_search.result[0].score, 9.0);
 
+            let grpc_with_vector_selector_err = crate::tonic::api::query_common::search(
+                UncheckedTocProvider::new_unchecked(&toc),
+                api::grpc::qdrant::SearchPoints {
+                    collection_name: "vector_docs".to_string(),
+                    limit: 1,
+                    vector_name: Some(DEFAULT_VECTOR_NAME.to_string()),
+                    with_vectors: Some(api::grpc::qdrant::WithVectorsSelector {
+                        selector_options: Some(
+                            api::grpc::qdrant::with_vectors_selector::SelectorOptions::Include(
+                                api::grpc::qdrant::VectorsSelector {
+                                    names: vec![DEFAULT_VECTOR_NAME.to_string()],
+                                },
+                            ),
+                        ),
+                    }),
+                    ckks_encrypted_query: Some(fake_grpc_ckks_client_query(
+                        b"fake-ckks-query:2",
+                        2,
+                    )),
+                    ..Default::default()
+                },
+                None,
+                auth.clone(),
+                storage::content_manager::toc::request_hw_counter::RequestHwCounter::new(
+                    HwMeasurementAcc::disposable(),
+                    false,
+                ),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                grpc_with_vector_selector_err
+                    .message()
+                    .contains("cannot return encrypted vector")
+            );
+
             for params in [
                 api::grpc::qdrant::SearchParams {
                     indexed_only: Some(true),
@@ -6790,6 +6827,46 @@ esac
                 Some(segment::types::PointIdType::from(1).into())
             );
             assert_eq!(grpc_groups[0].hits[0].score, 9.0);
+
+            let grpc_group_with_vector_selector_err =
+                crate::tonic::api::query_common::search_groups(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::SearchPointGroups {
+                        collection_name: "vector_docs".to_string(),
+                        limit: 1,
+                        group_size: 1,
+                        group_by: "group".to_string(),
+                        vector_name: Some(DEFAULT_VECTOR_NAME.to_string()),
+                        with_vectors: Some(api::grpc::qdrant::WithVectorsSelector {
+                            selector_options: Some(
+                                api::grpc::qdrant::with_vectors_selector::SelectorOptions::Include(
+                                    api::grpc::qdrant::VectorsSelector {
+                                        names: vec![DEFAULT_VECTOR_NAME.to_string()],
+                                    },
+                                ),
+                            ),
+                        }),
+                        ckks_encrypted_query: Some(fake_grpc_ckks_client_query(
+                            b"fake-ckks-query:2",
+                            2,
+                        )),
+                        ..Default::default()
+                    },
+                    None,
+                    auth.clone(),
+                    storage::content_manager::toc::request_hw_counter::RequestHwCounter::new(
+                        HwMeasurementAcc::disposable(),
+                        false,
+                    ),
+                    Some(&vector_settings),
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                grpc_group_with_vector_selector_err
+                    .message()
+                    .contains("cannot return encrypted vector")
+            );
 
             for params in [
                 api::grpc::qdrant::SearchParams {
