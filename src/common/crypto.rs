@@ -4082,6 +4082,7 @@ fn read_material_vault_kv2_to_string(
     })?);
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|_| PayloadWriteSetupError::UnreadableMaterialFile {
             material: material_name.to_string(),
@@ -6453,6 +6454,45 @@ mod tests {
         ));
         unsafe {
             std::env::remove_var("QDRANT_TEST_VAULT_TOKEN_OVERSIZED");
+        }
+    }
+
+    #[test]
+    fn decode_direct_material_key_rejects_vault_kv2_redirect() {
+        let mut server = mockito::Server::new();
+        let encoded = BASE64URL_NOPAD.encode(&[23u8; 32]);
+        let _redirect = server
+            .mock("GET", "/v1/secret/data/redirect")
+            .match_header("x-vault-token", "test-token")
+            .with_status(302)
+            .with_header("location", &format!("{}/v1/secret/data/docs", server.url()))
+            .create();
+        let _target = server
+            .mock("GET", "/v1/secret/data/docs")
+            .match_header("x-vault-token", "test-token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!({ "data": { "data": { "material": encoded } } }).to_string())
+            .create();
+        unsafe {
+            std::env::set_var("QDRANT_TEST_VAULT_TOKEN_REDIRECT", "test-token");
+        }
+
+        let vault_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("vault_kv2".to_string()),
+            env: Some("QDRANT_TEST_VAULT_TOKEN_REDIRECT".to_string()),
+            path: Some(format!("{}/v1/secret/data/redirect", server.url())),
+            vault_field: Some("material".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        assert!(matches!(
+            decode_direct_material_key("tenant-a/payload-v1", &vault_material),
+            Err(PayloadWriteSetupError::UnreadableMaterialFile { .. })
+        ));
+        unsafe {
+            std::env::remove_var("QDRANT_TEST_VAULT_TOKEN_REDIRECT");
         }
     }
 
