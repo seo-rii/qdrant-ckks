@@ -2061,6 +2061,20 @@ fn validate_material(
                 && material.path.is_none() =>
         {
             if allow_inline_key_material {
+                let decoded = BASE64URL_NOPAD
+                    .decode(material.value_b64.as_deref().unwrap().trim().as_bytes());
+                let decoded = decoded.map_err(|_| CryptoSetupError::InvalidMaterialFileSource {
+                    material: material_name.to_string(),
+                    path: "inline".to_string(),
+                    reason: "inline material must be base64url without padding".to_string(),
+                })?;
+                if decoded.len() != 32 {
+                    return Err(CryptoSetupError::InvalidMaterialFileSource {
+                        material: material_name.to_string(),
+                        path: "inline".to_string(),
+                        reason: "inline material must decode to exactly 32 bytes".to_string(),
+                    });
+                }
                 Ok(())
             } else {
                 Err(CryptoSetupError::InlineMaterialDisabled {
@@ -5738,6 +5752,44 @@ mod tests {
             Err(CryptoSetupError::InlineMaterialDisabled {
                 material: "tenant-a/payload-v1".to_string(),
             }),
+        );
+    }
+
+    #[test]
+    fn validate_material_inline_source_checks_encoding_and_length() {
+        let invalid_encoding = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("inline".to_string()),
+            value_b64: Some("not valid base64".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        assert!(matches!(
+            validate_material("tenant-a/payload-v1", &invalid_encoding, true),
+            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("base64url")
+        ));
+
+        let invalid_length = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("inline".to_string()),
+            value_b64: Some(BASE64URL_NOPAD.encode(&[7u8; 31])),
+            ..CryptoMaterialConfig::default()
+        };
+        assert!(matches!(
+            validate_material("tenant-a/payload-v1", &invalid_length, true),
+            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("exactly 32 bytes")
+        ));
+
+        let valid = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("inline".to_string()),
+            value_b64: Some(BASE64URL_NOPAD.encode(&[7u8; 32])),
+            ..CryptoMaterialConfig::default()
+        };
+        assert_eq!(
+            validate_material("tenant-a/payload-v1", &valid, true),
+            Ok(())
         );
     }
 
