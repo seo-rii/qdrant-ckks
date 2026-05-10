@@ -684,6 +684,18 @@ mod ckks_tests {
         };
         valid_start.validate_admin_plan().unwrap();
 
+        let start_with_stale_checkpoint = CryptoMigrationPlan {
+            checkpoints: vec![CryptoMigrationCheckpoint {
+                shard_id: 0,
+                total_points: 10,
+                processed_points: 10,
+                rewritten_points: 10,
+                status: CryptoMigrationCheckpointStatus::Verified,
+            }],
+            ..valid_start.clone()
+        };
+        assert!(start_with_stale_checkpoint.validate_admin_plan().is_err());
+
         let incomplete_initial_completion = CryptoMigrationPlan {
             from: Encrypting,
             to: Active,
@@ -1575,6 +1587,12 @@ impl CryptoMigrationPlan {
         if self.dry_run && requires_verified_completion {
             return Err(ValidationError::new(
                 "crypto_migration_completion_cannot_be_dry_run",
+            ));
+        }
+
+        if !requires_verified_completion && !self.checkpoints.is_empty() {
+            return Err(ValidationError::new(
+                "unexpected_crypto_migration_checkpoints",
             ));
         }
 
