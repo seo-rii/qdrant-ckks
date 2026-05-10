@@ -1567,6 +1567,28 @@ async fn encrypted_payload_blind_index_token_filter_is_searchable() {
     )));
 
     collection
+        .update_from_client_simple(
+            CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+                PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                    id: 1.into(),
+                    vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                    payload: Some(
+                        serde_json::from_value(serde_json::json!({
+                            "document_body__blind_eq": BASE64URL_NOPAD.encode(&[9_u8; 32]),
+                        }))
+                        .unwrap(),
+                    ),
+                }]),
+            )),
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+
+    collection
         .create_payload_index_with_wait(
             "document_body__blind_eq".parse().unwrap(),
             PayloadFieldSchema::FieldType(PayloadSchemaType::Keyword),
@@ -1576,7 +1598,7 @@ async fn encrypted_payload_blind_index_token_filter_is_searchable() {
         .await
         .unwrap();
 
-    collection
+    let records = collection
         .scroll_by(
             ScrollRequestInternal {
                 offset: None,
@@ -1593,8 +1615,10 @@ async fn encrypted_payload_blind_index_token_filter_is_searchable() {
         )
         .await
         .unwrap();
+    assert_eq!(records.points.len(), 1);
+    assert_eq!(records.points[0].id, 1.into());
 
-    collection
+    let count = collection
         .count(
             CountRequestInternal {
                 filter: Some(blind_filter),
@@ -1607,6 +1631,7 @@ async fn encrypted_payload_blind_index_token_filter_is_searchable() {
         )
         .await
         .unwrap();
+    assert_eq!(count.count, 1);
 
     let invalid_blind_filter = Filter::new_must(Condition::Field(FieldCondition::new_match(
         "document_body__blind_eq".parse().unwrap(),
