@@ -3915,6 +3915,13 @@ fn decode_direct_material_key(
                     env: "<missing>".to_string(),
                 }
             })?;
+            if !is_material_env_name(env) {
+                return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
+                    material: material_name.to_string(),
+                    path: env.to_string(),
+                    reason: "environment variable name is invalid".to_string(),
+                });
+            }
             std::env::var(env).map_err(|_| PayloadWriteSetupError::MissingMaterialEnv {
                 material: material_name.to_string(),
                 env: env.to_string(),
@@ -5934,6 +5941,22 @@ mod tests {
         assert!(matches!(
             validate_material("tenant-a/payload-v1", &empty_env_material, false),
             Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("environment variable")
+        ));
+    }
+
+    #[test]
+    fn decode_direct_material_key_revalidates_env_source_name() {
+        let env_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("env".to_string()),
+            env: Some("QDRANT/PAYLOAD_KEY".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        assert!(matches!(
+            decode_direct_material_key("tenant-a/payload-v1", &env_material),
+            Err(PayloadWriteSetupError::InvalidMaterialFileSource { reason, .. })
                 if reason.contains("environment variable")
         ));
     }
