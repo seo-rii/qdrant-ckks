@@ -542,6 +542,39 @@ impl PayloadTextEncryptor {
         Ok(encrypted)
     }
 
+    pub fn encrypt_selected_fields_for_runtime(
+        &self,
+        point_id: &str,
+        payload: &mut Map<String, Value>,
+        policy: &PayloadEncryptionPolicy,
+        collection_id: &str,
+    ) -> Result<(usize, Vec<ServerPayloadVerifiedEnvelopeKey>), PayloadEncryptionError> {
+        let changed = self.encrypt_selected_fields_with_mode(
+            point_id,
+            payload,
+            policy,
+            ExistingPayloadMode::FailIfExisting,
+        )?;
+        let mut verified_envelope_keys = Vec::new();
+        for field in policy.fields() {
+            let Some(value) = locate_path_mut(payload, field)? else {
+                continue;
+            };
+            verified_envelope_keys.push(server_payload_verified_envelope_key(
+                value,
+                collection_id,
+                point_id,
+                ServerPayloadValidationContext {
+                    field_path: field,
+                    key_id: Some(self.key_id()),
+                    crypto_schema_version: self.crypto_schema_version,
+                    encryption_epoch: self.encryption_epoch,
+                },
+            )?);
+        }
+        Ok((changed, verified_envelope_keys))
+    }
+
     pub fn decrypt_selected_fields(
         &self,
         point_id: &str,
@@ -641,7 +674,7 @@ pub fn validate_server_payload_value_metadata(
     Ok(())
 }
 
-pub fn validate_server_payload_value_for_runtime(
+fn server_payload_verified_envelope_key(
     value: &Value,
     collection_id: &str,
     point_id: &str,

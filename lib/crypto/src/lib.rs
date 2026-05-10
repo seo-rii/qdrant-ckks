@@ -37,8 +37,7 @@ pub use payload::{
     is_encrypted_payload_value, server_payload_envelope_key, validate_client_payload_value,
     validate_client_payload_value_after_runtime_verification,
     validate_client_payload_value_for_runtime,
-    validate_server_payload_value_after_runtime_encryption,
-    validate_server_payload_value_for_runtime, validate_server_payload_value_metadata,
+    validate_server_payload_value_after_runtime_encryption, validate_server_payload_value_metadata,
 };
 pub use vector::{
     CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_SCHEME, CkksBatchEncryptionInput,

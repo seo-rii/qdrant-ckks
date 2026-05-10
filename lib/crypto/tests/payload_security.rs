@@ -10,8 +10,7 @@ use qdrant_sec::{
     is_encrypted_payload_value, validate_client_payload_value,
     validate_client_payload_value_after_runtime_verification,
     validate_client_payload_value_for_runtime,
-    validate_server_payload_value_after_runtime_encryption,
-    validate_server_payload_value_for_runtime, validate_server_payload_value_metadata,
+    validate_server_payload_value_after_runtime_encryption, validate_server_payload_value_metadata,
 };
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -762,8 +761,8 @@ fn post_runtime_server_payload_validation_requires_verified_proof_match() {
     let encryptor = encryptor();
     let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
     let mut payload = object(json!({ "body": "secret" }));
-    encryptor
-        .encrypt_selected_fields("point-1", &mut payload, &policy)
+    let (_, verified_keys) = encryptor
+        .encrypt_selected_fields_for_runtime("point-1", &mut payload, &policy, "docs")
         .unwrap();
     let body = payload.get("body").unwrap();
     let context = ServerPayloadValidationContext {
@@ -772,8 +771,7 @@ fn post_runtime_server_payload_validation_requires_verified_proof_match() {
         crypto_schema_version: 1,
         encryption_epoch: 0,
     };
-    let verified =
-        validate_server_payload_value_for_runtime(body, "docs", "point-1", context).unwrap();
+    let verified = verified_keys.into_iter().next().unwrap();
 
     validate_server_payload_value_after_runtime_encryption(
         body, "docs", "point-1", context, &verified,

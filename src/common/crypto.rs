@@ -476,34 +476,15 @@ impl PayloadWritePlan {
         for rule in &self.rules {
             match rule {
                 PayloadWriteRule::ServerEncrypt { encryptor, policy } => {
-                    changed += encryptor.encrypt_selected_fields_with_mode(
-                        point_id,
-                        &mut payload.0,
-                        policy,
-                        ExistingPayloadMode::FailIfExisting,
-                    )?;
-                    for field in policy.fields() {
-                        let encrypted_path = field.parse::<JsonPath>().map_err(|_| {
-                            PayloadWriteSetupError::Payload(
-                                PayloadEncryptionError::InvalidFieldPath(field.clone()),
-                            )
-                        })?;
-                        for value in encrypted_path.value_get(&payload.0) {
-                            let verified_envelope_key =
-                                qdrant_sec::validate_server_payload_value_for_runtime(
-                                    value,
-                                    &self.collection_crypto_id,
-                                    point_id,
-                                    qdrant_sec::ServerPayloadValidationContext {
-                                        field_path: field,
-                                        key_id: Some(encryptor.key_id()),
-                                        crypto_schema_version: encryptor.crypto_schema_version(),
-                                        encryption_epoch: encryptor.encryption_epoch(),
-                                    },
-                                )?;
-                            verified_server_envelope_keys.insert(verified_envelope_key);
-                        }
-                    }
+                    let (encrypted, verified_keys) = encryptor
+                        .encrypt_selected_fields_for_runtime(
+                            point_id,
+                            &mut payload.0,
+                            policy,
+                            &self.collection_crypto_id,
+                        )?;
+                    changed += encrypted;
+                    verified_server_envelope_keys.extend(verified_keys);
                 }
                 PayloadWriteRule::ClientEnvelope {
                     policy,
