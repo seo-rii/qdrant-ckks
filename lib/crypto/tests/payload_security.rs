@@ -8,6 +8,7 @@ use qdrant_sec::{
     client_payload_nonce_replay_key, client_payload_signature_key_id,
     client_payload_signature_message, is_client_encrypted_payload_value,
     is_encrypted_payload_value, validate_client_payload_value,
+    validate_client_payload_value_after_runtime_verification,
     validate_server_payload_value_metadata,
 };
 use ring::rand::SystemRandom;
@@ -304,7 +305,7 @@ fn payload_envelopes_reject_unknown_metadata_fields() {
 fn client_payload_envelope_rejects_aad_and_key_mismatch() {
     let envelope = client_envelope("point-1", "body");
     assert_eq!(
-        validate_client_payload_value(
+        validate_client_payload_value_after_runtime_verification(
             &envelope,
             ClientPayloadValidationContext {
                 collection_id: "docs",
@@ -487,7 +488,7 @@ fn client_payload_envelope_enforces_resource_key_policy() {
         Err(PayloadEncryptionError::ClientResourceKeyIdMismatch),
     );
     assert_eq!(
-        validate_client_payload_value(
+        validate_client_payload_value_after_runtime_verification(
             &envelope,
             ClientPayloadValidationContext {
                 collection_id: "docs",
@@ -660,7 +661,7 @@ fn client_payload_envelope_rejects_invalid_signature_key_id() {
         )),
     );
     assert_eq!(
-        validate_client_payload_value(
+        validate_client_payload_value_after_runtime_verification(
             &envelope,
             ClientPayloadValidationContext {
                 collection_id: "docs",
@@ -678,6 +679,43 @@ fn client_payload_envelope_rejects_invalid_signature_key_id() {
         Err(PayloadEncryptionError::Crypto(
             EncryptionError::InvalidResourceKeyId,
         )),
+    );
+}
+
+#[test]
+fn public_client_payload_validation_requires_signature_verifier_when_signature_is_required() {
+    let mut envelope = client_envelope("point-1", "body");
+    envelope
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert(
+            "signature".to_string(),
+            json!({
+                "alg": "ed25519",
+                "key_id": "tenant-a/client-signing-v1",
+                "sig": BASE64URL_NOPAD.encode(&[0u8; 64])
+            }),
+        );
+
+    assert_eq!(
+        validate_client_payload_value(
+            &envelope,
+            ClientPayloadValidationContext {
+                collection_id: "docs",
+                point_id: "point-1",
+                field_path: "body",
+                expected_key_id: Some("tenant-a/client-rk-2026-04"),
+                expected_rk_id: None,
+                min_rk_epoch: None,
+                max_rk_epoch: None,
+                key_id_required: true,
+                signature_required: true,
+                signature_verification: None,
+            },
+        ),
+        Err(PayloadEncryptionError::InvalidClientSignature),
     );
 }
 

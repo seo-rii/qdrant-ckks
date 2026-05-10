@@ -660,6 +660,25 @@ pub fn validate_client_payload_value(
     value: &Value,
     context: ClientPayloadValidationContext<'_>,
 ) -> Result<(), PayloadEncryptionError> {
+    if context.signature_required && context.signature_verification.is_none() {
+        return Err(PayloadEncryptionError::InvalidClientSignature);
+    }
+    validate_client_payload_value_inner(value, context)
+}
+
+/// Validate a client envelope after an ingress runtime plan already verified its
+/// cryptographic signature and passed a matching verified-envelope proof onward.
+pub fn validate_client_payload_value_after_runtime_verification(
+    value: &Value,
+    context: ClientPayloadValidationContext<'_>,
+) -> Result<(), PayloadEncryptionError> {
+    validate_client_payload_value_inner(value, context)
+}
+
+fn validate_client_payload_value_inner(
+    value: &Value,
+    context: ClientPayloadValidationContext<'_>,
+) -> Result<(), PayloadEncryptionError> {
     let envelope = extract_client_envelope(value, context.field_path)?.ok_or_else(|| {
         PayloadEncryptionError::ExpectedEncryptedEnvelope {
             field: context.field_path.to_string(),

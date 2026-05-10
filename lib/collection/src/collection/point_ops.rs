@@ -14,7 +14,8 @@ use qdrant_sec::{
     EncryptedCkksVector, ServerPayloadValidationContext, ckks_vector_sidecar_envelope_key,
     client_payload_envelope_key, client_payload_nonce_replay_key,
     is_client_encrypted_payload_value, is_encrypted_payload_value, server_payload_envelope_key,
-    validate_client_payload_value, validate_server_payload_value_metadata,
+    validate_client_payload_value_after_runtime_verification,
+    validate_server_payload_value_metadata,
 };
 use segment::data_types::order_by::{Direction, OrderBy};
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
@@ -713,7 +714,7 @@ impl Collection {
                                 "client encrypted payload marker for field '{encrypted_path_str}' requires runtime envelope verification before collection write",
                             )));
                         }
-                        validate_client_payload_value(
+                        validate_client_payload_value_after_runtime_verification(
                                 value,
                                 ClientPayloadValidationContext {
                                     collection_id: &collection_crypto_id,
