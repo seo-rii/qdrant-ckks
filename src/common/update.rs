@@ -5997,7 +5997,7 @@ esac
             .await
             .unwrap_err();
             assert!(
-                err.message().contains("cannot recommend encrypted vector")
+                err.message().contains("cannot return encrypted vector")
                     && err.message().contains("payload sidecar only")
             );
 
@@ -6043,8 +6043,7 @@ esac
             .await
             .unwrap_err();
             assert!(
-                err.message()
-                    .contains("cannot recommend groups encrypted vector")
+                err.message().contains("cannot return encrypted vector")
                     && err.message().contains("payload sidecar only")
             );
 
@@ -6094,7 +6093,7 @@ esac
             .await
             .unwrap_err();
             assert!(
-                err.message().contains("cannot discover encrypted vector")
+                err.message().contains("cannot return encrypted vector")
                     && err.message().contains("payload sidecar only")
             );
 
@@ -6141,7 +6140,7 @@ esac
             .await
             .unwrap_err();
             assert!(
-                err.message().contains("cannot recommend encrypted vector")
+                err.message().contains("cannot return encrypted vector")
                     && err.message().contains("payload sidecar only")
             );
 
@@ -6194,7 +6193,7 @@ esac
             .await
             .unwrap_err();
             assert!(
-                err.message().contains("cannot discover encrypted vector")
+                err.message().contains("cannot return encrypted vector")
                     && err.message().contains("payload sidecar only")
             );
 
@@ -6502,7 +6501,7 @@ esac
             assert!(matches!(
                 err,
                 StorageError::BadInput { description }
-                    if description.contains("cannot search groups encrypted vectors")
+                    if description.contains("cannot search groups encrypted vector")
                         && description.contains("payload sidecar only")
             ));
 
@@ -6537,7 +6536,7 @@ esac
             assert!(matches!(
                 err,
                 StorageError::BadInput { description }
-                    if description.contains("cannot search groups encrypted vectors")
+                    if description.contains("cannot search groups encrypted vector")
                         && description.contains("payload sidecar only")
             ));
 
@@ -6573,7 +6572,7 @@ esac
             assert!(matches!(
                 err,
                 StorageError::BadInput { description }
-                    if description.contains("cannot query groups encrypted vectors")
+                    if description.contains("cannot query groups encrypted vector")
                         && description.contains("payload sidecar only")
             ));
 
@@ -6609,7 +6608,7 @@ esac
             assert!(matches!(
                 err,
                 StorageError::BadInput { description }
-                    if description.contains("cannot query groups encrypted vectors")
+                    if description.contains("cannot query groups encrypted vector")
                         && description.contains("payload sidecar only")
             ));
 
@@ -6646,7 +6645,7 @@ esac
             assert!(matches!(
                 err,
                 StorageError::BadInput { description }
-                    if description.contains("cannot recommend groups encrypted vectors")
+                    if description.contains("cannot recommend groups encrypted vector")
                         && description.contains("payload sidecar only")
             ));
 
