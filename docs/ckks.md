@@ -659,6 +659,32 @@ rotation must introduce a distinct active RK before the old RK becomes
 read-only. `retired_rk_id` is only valid on rotation transitions. Completion
 transitions cannot be marked as `dry_run`, so a dry-run preflight cannot be
 reused as the operation that marks encrypted data verified or decrypted.
+The REST control plane is split into three admin-only steps:
+
+```text
+POST /collections/{collection_name}/crypto/migration/plan
+POST /collections/{collection_name}/crypto/migration/rewrite-payloads
+POST /collections/{collection_name}/crypto/migration/decrypt-payloads
+```
+
+Use `plan` to start `Disabled -> Encrypting`, `Active -> Rotating`, or
+`Active -> Decrypting`. While a collection is in `Encrypting` or `Rotating`,
+`rewrite-payloads` scans local shards, opens stale server-side payload
+envelopes with the active plus retired runtime keyring, and reseals them under
+the active RK/epoch. While a collection is in `Decrypting`, `decrypt-payloads`
+opens server-side payload envelopes and writes plaintext payload values back.
+Client-side `$qdrant_client_aead` envelopes are store-only and cannot be
+decrypted by Qdrant, so decrypt migration rejects collections that still bind a
+client-side payload provider.
+
+Both rewrite endpoints return `CryptoMigrationCheckpoint` values. A verified
+checkpoint represents shard coverage, not only bytes changed: rerunning a
+migration over already-current payloads still returns `rewritten_points ==
+total_points` so the checkpoint can close the migration safely. Submit those
+checkpoints back to `plan` for `Encrypting -> Active`, `Rotating -> Active`, or
+`Decrypting -> Disabled` completion. If a rewrite request fails after nonce/key
+or payload validation, do not mark the plan complete; fix the runtime/material
+state and rerun the rewrite endpoint to produce fresh verified checkpoints.
 After a verified `Decrypting -> Disabled` completion, the stored encryption
 section remains as audit/migration metadata, but it is not treated as effective
 encryption for write/read guards. Re-enabling encryption must start a new admin
