@@ -344,10 +344,11 @@ impl UpdateCollectionOperation {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Validate, PartialEq, Eq, Hash, Clone)]
 #[serde(rename_all = "snake_case")]
 pub struct ApplyCryptoMigrationPlan {
     pub collection_name: String,
+    #[validate(nested)]
     pub plan: CryptoMigrationPlan,
 }
 
@@ -521,7 +522,8 @@ impl From<CollectionConfigInternal> for CreateCollection {
 #[cfg(test)]
 mod tests {
     use collection::config::{
-        CollectionEncryptionConfig, CryptoMigrationState, EncryptionRuleRef, EncryptionSelector,
+        CollectionEncryptionConfig, CryptoMigrationPlan, CryptoMigrationState, EncryptionRuleRef,
+        EncryptionSelector,
     };
 
     use super::*;
@@ -594,5 +596,27 @@ mod tests {
             CreateCollectionOperation::new("docs".to_string(), create_collection).unwrap();
 
         assert_eq!(operation.create_collection.uuid, Some(uuid));
+    }
+
+    #[test]
+    fn apply_crypto_migration_plan_validates_nested_plan() {
+        let operation = ApplyCryptoMigrationPlan {
+            collection_name: "docs".to_string(),
+            plan: CryptoMigrationPlan {
+                from: CryptoMigrationState::Active,
+                to: CryptoMigrationState::Active,
+                target_epoch: 3,
+                active_rk_id: Some("rk/docs/3".to_string()),
+                retired_rk_id: None,
+                dry_run: false,
+                checkpoints: Vec::new(),
+            },
+        };
+
+        let err = operation.validate().unwrap_err();
+        assert!(
+            format!("{err:?}").contains("invalid_crypto_migration_transition"),
+            "nested ApplyCryptoMigrationPlan validation must reject unsafe migration plans: {err:?}",
+        );
     }
 }

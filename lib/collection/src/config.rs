@@ -572,6 +572,10 @@ mod ckks_tests {
             checkpoints: Vec::new(),
         };
         assert!(noop.validate_admin_plan().is_err());
+        assert!(
+            noop.validate().is_err(),
+            "validator trait must reject the same unsafe plan as the admin migration path",
+        );
 
         let direct_active = CryptoMigrationPlan {
             from: Disabled,
@@ -649,6 +653,7 @@ mod ckks_tests {
             checkpoints: Vec::new(),
         };
         valid_start.validate_admin_plan().unwrap();
+        valid_start.validate().unwrap();
 
         let start_with_stale_checkpoint = CryptoMigrationPlan {
             checkpoints: vec![CryptoMigrationCheckpoint {
@@ -1448,7 +1453,10 @@ impl CryptoMigrationState {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Anonymize, Clone, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Deserialize, Serialize, JsonSchema, Validate, Anonymize, Clone, PartialEq, Eq, Hash,
+)]
+#[validate(schema(function = "validate_crypto_migration_plan"))]
 #[serde(rename_all = "snake_case")]
 pub struct CryptoMigrationPlan {
     pub from: CryptoMigrationState,
@@ -1467,6 +1475,10 @@ pub struct CryptoMigrationPlan {
     pub dry_run: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub checkpoints: Vec<CryptoMigrationCheckpoint>,
+}
+
+fn validate_crypto_migration_plan(plan: &CryptoMigrationPlan) -> Result<(), ValidationError> {
+    plan.validate_admin_plan()
 }
 
 impl CryptoMigrationPlan {
