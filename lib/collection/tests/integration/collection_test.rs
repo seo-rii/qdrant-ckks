@@ -1171,6 +1171,29 @@ async fn crypto_migration_plan_updates_collection_config_through_admin_path() {
     );
     assert_eq!(rotating_encryption.encryption_epoch, 1);
 
+    let regular_write_err = collection
+        .update_from_client_simple(
+            CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+                PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                    id: 99.into(),
+                    vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                    payload: None,
+                }]),
+            )),
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        regular_write_err,
+        CollectionError::BadInput { description }
+            if description.contains("encryption migration")
+                && description.contains("regular writes")
+    ));
+
     let stale_start = CryptoMigrationPlan {
         from: CryptoMigrationState::Active,
         to: CryptoMigrationState::Rotating,

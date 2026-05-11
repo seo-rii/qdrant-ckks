@@ -30,7 +30,7 @@ use shard::retrieve::record_internal::RecordInternal;
 use shard::scroll::ScrollRequestInternal;
 
 use super::Collection;
-use crate::config::EncryptionSelector;
+use crate::config::{CryptoMigrationState, EncryptionSelector};
 use crate::operations::consistency_params::ReadConsistency;
 use crate::operations::payload_ops::PayloadOps;
 use crate::operations::point_ops::{
@@ -329,6 +329,14 @@ impl Collection {
                 collection_config.stable_crypto_id(self.name())?,
             )
         };
+        if let Some(encryption) = encryption.as_ref()
+            && encryption.migration_state != CryptoMigrationState::Active
+        {
+            return Err(CollectionError::bad_input(format!(
+                "collection encryption migration is {:?}; regular writes require migration_state=active and crypto migration jobs must use the dedicated migration path",
+                encryption.migration_state,
+            )));
+        }
         if encryption.is_some() {
             match &operation {
                 CollectionUpdateOperations::PointOperation(
