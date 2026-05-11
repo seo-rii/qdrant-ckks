@@ -8,7 +8,9 @@ use collection::operations::types::{PointRequest, PointRequestInternal, ScrollRe
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use futures::TryFutureExt;
 use itertools::Itertools;
-use segment::types::{PointIdType, WithPayloadInterface};
+use segment::types::{
+    EncryptedPayloadReadMode, PayloadEncryptedReadPolicy, PointIdType, WithPayloadInterface,
+};
 use serde::Deserialize;
 use shard::retrieve::record_internal::RecordInternal;
 use storage::content_manager::collection_verification::{
@@ -37,10 +39,42 @@ struct PointPath {
     id: String,
 }
 
+#[derive(Deserialize, Validate)]
+struct PointReadParams {
+    #[serde(flatten)]
+    #[validate(nested)]
+    read: ReadParams,
+    /// Optional single-point GET equivalent of `with_payload: {"encrypted_payload": ...}`.
+    encrypted_payload: Option<EncryptedPayloadReadMode>,
+}
+
+impl PointReadParams {
+    fn timeout(&self) -> Option<Duration> {
+        self.read.timeout()
+    }
+
+    fn timeout_as_secs(&self) -> Option<usize> {
+        self.read.timeout_as_secs()
+    }
+
+    fn consistency(&self) -> Option<ReadConsistency> {
+        self.read.consistency
+    }
+
+    fn with_payload(&self) -> WithPayloadInterface {
+        self.encrypted_payload
+            .map(|encrypted_payload| {
+                WithPayloadInterface::Encrypted(PayloadEncryptedReadPolicy { encrypted_payload })
+            })
+            .unwrap_or(WithPayloadInterface::Bool(true))
+    }
+}
+
 async fn do_get_point(
     toc: &TableOfContent,
     collection_name: &str,
     point_id: PointIdType,
+    with_payload: WithPayloadInterface,
     read_consistency: Option<ReadConsistency>,
     timeout: Option<Duration>,
     auth: Auth,
@@ -48,7 +82,7 @@ async fn do_get_point(
 ) -> Result<Option<RecordInternal>, StorageError> {
     let request = PointRequestInternal {
         ids: vec![point_id],
-        with_payload: Some(WithPayloadInterface::Bool(true)),
+        with_payload: Some(with_payload),
         with_vector: true.into(),
     };
 
@@ -73,7 +107,7 @@ async fn get_point(
     dispatcher: web::Data<Dispatcher>,
     collection: Path<CollectionPath>,
     point: Path<PointPath>,
-    params: Query<ReadParams>,
+    params: Query<PointReadParams>,
     service_config: web::Data<ServiceConfig>,
     ActixAuth(auth): ActixAuth,
 ) -> impl Responder {
@@ -108,7 +142,8 @@ async fn get_point(
         dispatcher.toc(&auth, &pass),
         &collection.collection_name,
         point_id,
-        params.consistency,
+        params.with_payload(),
+        params.consistency(),
         params.timeout(),
         auth,
         request_hw_counter.get_counter(),
@@ -237,4 +272,30 @@ async fn scroll_points(
     .await;
 
     process_response(res, timing, request_hw_counter.to_rest_api())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn point_read_params_support_encrypted_payload_query_mode() {
+        let params: PointReadParams =
+            serde_urlencoded::from_str("encrypted_payload=redacted").unwrap();
+
+        assert_eq!(params.read, ReadParams::default());
+        assert_eq!(
+            params.with_payload(),
+            WithPayloadInterface::Encrypted(PayloadEncryptedReadPolicy {
+                encrypted_payload: EncryptedPayloadReadMode::Redacted,
+            }),
+        );
+    }
+
+    #[test]
+    fn point_read_params_keep_default_payload_enabled() {
+        let params: PointReadParams = serde_urlencoded::from_str("consistency=majority").unwrap();
+
+        assert_eq!(params.with_payload(), WithPayloadInterface::Bool(true));
+    }
 }

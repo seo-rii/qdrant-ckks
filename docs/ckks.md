@@ -731,6 +731,9 @@ values replaced by redaction sentinels. `encrypted_payload: "decrypted"` is a
 reserved mode and fails closed until a dedicated RBAC capability and response
 decryption policy exists across retrieve, scroll, search, export, logs, and
 telemetry.
+The REST single-point `GET /collections/{collection}/points/{id}` endpoint has
+no request body, so it accepts the same read policy through the
+`encrypted_payload=raw|redacted|decrypted` query parameter.
 Generic server-side crypto instances require
 `options.material_fingerprint_id` to be an opaque deployment-local key version
 id. Payload and vector runtime validation rejects missing values so envelopes
