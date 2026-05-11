@@ -5525,6 +5525,18 @@ esac
 
     #[test]
     fn do_upsert_points_encrypts_payload_before_storage() {
+        if std::env::var_os("QDRANT_SEC_LONG_UPDATE_TEST_STACK").is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("common::update::tests::do_upsert_points_encrypts_payload_before_storage")
+                .arg("--exact")
+                .env("QDRANT_SEC_LONG_UPDATE_TEST_STACK", "1")
+                .env("RUST_MIN_STACK", "33554432")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+
         let runtime = Runtime::new().unwrap();
         let storage_dir = Builder::new().prefix("storage").tempdir().unwrap();
         let temp_dir = Builder::new().prefix("storage-temp").tempdir().unwrap();
