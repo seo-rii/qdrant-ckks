@@ -29,14 +29,16 @@ client-supplied CKKS encrypted query ciphertext envelope. Qdrant
 validates the envelope version, scheme, allowlisted profile, context digest, and
 slot count against the active vector rule, then sends the ciphertext directly to
 `score_encrypted_query_batch` without asking the bridge to encrypt a plaintext
-query. Score decryption and native Qdrant segment `HNSWIndex` storage for CKKS
-ciphertexts remain out of scope. The experimental sidecar HNSW graph can
-be cached on disk by ciphertext fingerprint, but it remains separate from
-Qdrant's segment-native vector index files.
+query. Score decryption and reuse of Qdrant's plaintext-vector `HNSWIndex` file
+format for CKKS ciphertexts remain out of scope. The experimental sidecar HNSW
+path now uses a segment-level CKKS ciphertext vector index primitive; that
+primitive can expose and persist its graph as a segment index artifact, while
+the serving query path still sources encrypted records from the reserved
+payload sidecar.
 
 Unsupported search/index features for CKKS ciphertext vectors in this branch:
 
-- native Qdrant segment `HNSWIndex` graph files directly over CKKS ciphertext
+- reuse of the plaintext-vector `HNSWIndex` graph file format directly over CKKS ciphertext
 - quantization over CKKS ciphertext
 - recommend/discover/context flows that require client-supplied encrypted query
   ciphertexts or server-side vector arithmetic over encrypted values
@@ -793,7 +795,10 @@ direction, graph parameters, and a fingerprint of the stored ciphertext
 sidecars, so rename/recreate boundaries and payload/vector changes build a new
 graph instead of reusing stale links. The cache is an acceleration for the
 current serving process and is also persisted under the collection directory
-for restart reuse. Persisted graph cache files are treated as untrusted hints:
+for restart reuse. The graph/search primitive itself lives in `lib/segment`
+as a CKKS ciphertext vector index and can persist a segment index graph file
+for snapshot/segment lifecycle integration. Persisted graph cache files are
+treated as untrusted hints:
 the cache directory must be a private non-symlink directory owned by root or the
 Qdrant process user, cache files and stale temp files must be private regular
 files owned by root or the Qdrant process user, oversized files are rejected,

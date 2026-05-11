@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::{fs, io};
 
 use common::counter::hardware_counter::HardwareCounterCell;
 use common::types::{PointOffsetType, ScoredPointOffset, TelemetryDetail};
@@ -11,6 +12,9 @@ use crate::data_types::vectors::{QueryVector, VectorRef};
 use crate::index::VectorIndex;
 use crate::telemetry::VectorIndexSearchesTelemetry;
 use crate::types::{Filter, Order, SearchParams};
+
+const CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_VERSION: u8 = 1;
+const CKKS_CIPHERTEXT_HNSW_GRAPH_FILE: &str = "ckks_ciphertext_hnsw_graph.json";
 
 #[derive(Clone, Debug)]
 pub struct CkksCiphertextHnswGraph {
@@ -45,6 +49,15 @@ pub struct CkksCiphertextIndexedRecord {
 #[derive(Clone, Debug)]
 pub struct CkksCiphertextVectorIndex {
     index: CkksCiphertextHnswIndex<CkksCiphertextIndexedRecord>,
+    graph_file: Option<PathBuf>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct CkksCiphertextHnswGraphFile {
+    version: u8,
+    record_count: usize,
+    links: Vec<Vec<usize>>,
 }
 
 impl CkksCiphertextHnswGraph {
@@ -190,11 +203,18 @@ impl CkksCiphertextIndexedRecord {
 }
 
 impl CkksCiphertextVectorIndex {
+    pub fn graph_file_path(directory: impl AsRef<Path>) -> PathBuf {
+        directory.as_ref().join(CKKS_CIPHERTEXT_HNSW_GRAPH_FILE)
+    }
+
     pub fn from_graph(
         records: Vec<CkksCiphertextIndexedRecord>,
         graph: CkksCiphertextHnswGraph,
     ) -> Option<Self> {
-        CkksCiphertextHnswIndex::from_graph(records, graph).map(|index| Self { index })
+        CkksCiphertextHnswIndex::from_graph(records, graph).map(|index| Self {
+            index,
+            graph_file: None,
+        })
     }
 
     pub fn build<E>(
@@ -208,7 +228,93 @@ impl CkksCiphertextVectorIndex {
     ) -> Result<Self, E> {
         Ok(Self {
             index: CkksCiphertextHnswIndex::build(records, m, score_order, score_previous_records)?,
+            graph_file: None,
         })
+    }
+
+    pub fn open_graph_file(
+        records: Vec<CkksCiphertextIndexedRecord>,
+        path: impl AsRef<Path>,
+    ) -> OperationResult<Option<Self>> {
+        let path = path.as_ref();
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let bytes = fs::read(path).map_err(|err| {
+            OperationError::service_error(format!(
+                "failed to read CKKS ciphertext HNSW graph file {}: {err}",
+                path.display(),
+            ))
+        })?;
+        let graph_file: CkksCiphertextHnswGraphFile =
+            serde_json::from_slice(&bytes).map_err(|err| {
+                OperationError::service_error(format!(
+                    "failed to parse CKKS ciphertext HNSW graph file {}: {err}",
+                    path.display(),
+                ))
+            })?;
+
+        if graph_file.version != CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_VERSION {
+            return Err(OperationError::service_error(format!(
+                "unsupported CKKS ciphertext HNSW graph file version {} in {}",
+                graph_file.version,
+                path.display(),
+            )));
+        }
+        if graph_file.record_count != records.len() {
+            return Err(OperationError::service_error(format!(
+                "CKKS ciphertext HNSW graph file {} record count {} does not match {} indexed records",
+                path.display(),
+                graph_file.record_count,
+                records.len(),
+            )));
+        }
+        let Some(graph) = CkksCiphertextHnswGraph::from_validated_links(graph_file.links) else {
+            return Err(OperationError::service_error(format!(
+                "CKKS ciphertext HNSW graph file {} contains invalid links",
+                path.display(),
+            )));
+        };
+        let Some(mut index) = Self::from_graph(records, graph) else {
+            return Err(OperationError::service_error(format!(
+                "CKKS ciphertext HNSW graph file {} does not match indexed records",
+                path.display(),
+            )));
+        };
+        index.graph_file = Some(path.to_path_buf());
+        Ok(Some(index))
+    }
+
+    pub fn persist_graph_file(&mut self, path: impl AsRef<Path>) -> OperationResult<()> {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|err| {
+                OperationError::service_error(format!(
+                    "failed to create CKKS ciphertext HNSW graph directory {}: {err}",
+                    parent.display(),
+                ))
+            })?;
+        }
+        let graph_file = CkksCiphertextHnswGraphFile {
+            version: CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_VERSION,
+            record_count: self.index.records().len(),
+            links: self.index.graph().links().to_vec(),
+        };
+        let bytes = serde_json::to_vec(&graph_file).map_err(|err| {
+            OperationError::service_error(format!(
+                "failed to serialize CKKS ciphertext HNSW graph file {}: {err}",
+                path.display(),
+            ))
+        })?;
+        write_graph_file(path, &bytes).map_err(|err| {
+            OperationError::service_error(format!(
+                "failed to write CKKS ciphertext HNSW graph file {}: {err}",
+                path.display(),
+            ))
+        })?;
+        self.graph_file = Some(path.to_path_buf());
+        Ok(())
     }
 
     pub fn search_ciphertext<E>(
@@ -319,7 +425,7 @@ impl VectorIndex for CkksCiphertextVectorIndex {
     }
 
     fn files(&self) -> Vec<PathBuf> {
-        Vec::new()
+        self.graph_file.iter().cloned().collect()
     }
 
     fn indexed_vector_count(&self) -> usize {
@@ -390,6 +496,13 @@ fn add_connectivity_backbone(links: &mut [Vec<usize>]) {
     for idx in 1..links.len() {
         add_unbounded_undirected_link(links, idx - 1, idx);
     }
+}
+
+fn write_graph_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let temporary_path = path.with_extension("json.tmp");
+    fs::write(&temporary_path, bytes)?;
+    fs::rename(&temporary_path, path)?;
+    Ok(())
 }
 
 fn links_have_valid_neighbors(links: &[Vec<usize>]) -> bool {
@@ -734,5 +847,76 @@ mod tests {
 
         assert_eq!(results[0].idx, 1);
         assert_eq!(results[0].score, 3.0);
+    }
+
+    #[test]
+    fn ciphertext_vector_index_persists_graph_as_index_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let graph_file = CkksCiphertextVectorIndex::graph_file_path(directory.path());
+        let mut index = CkksCiphertextVectorIndex::build(
+            vec![
+                CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
+            ],
+            1,
+            Order::LargeBetter,
+            |record, candidates| -> Result<Vec<f32>, std::convert::Infallible> {
+                Ok(candidates
+                    .iter()
+                    .map(|candidate| {
+                        if record.ciphertext > candidate.ciphertext {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    })
+                    .collect())
+            },
+        )
+        .unwrap();
+
+        index.persist_graph_file(&graph_file).unwrap();
+
+        assert_eq!(index.files(), vec![graph_file.clone()]);
+        assert!(graph_file.exists());
+
+        let reopened = CkksCiphertextVectorIndex::open_graph_file(
+            vec![
+                CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
+            ],
+            &graph_file,
+        )
+        .unwrap()
+        .expect("persisted graph should reopen");
+
+        assert_eq!(reopened.files(), vec![graph_file]);
+        assert_eq!(reopened.graph().links(), index.graph().links());
+    }
+
+    #[test]
+    fn ciphertext_vector_index_rejects_graph_record_count_mismatch_on_open() {
+        let directory = tempfile::tempdir().unwrap();
+        let graph_file = CkksCiphertextVectorIndex::graph_file_path(directory.path());
+        let mut index = CkksCiphertextVectorIndex::from_graph(
+            vec![
+                CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
+            ],
+            CkksCiphertextHnswGraph::from_validated_links(vec![vec![1], vec![0]]).unwrap(),
+        )
+        .unwrap();
+        index.persist_graph_file(&graph_file).unwrap();
+
+        let err = CkksCiphertextVectorIndex::open_graph_file(
+            vec![CkksCiphertextIndexedRecord::new(
+                0,
+                b"ciphertext-a".to_vec(),
+            )],
+            &graph_file,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("record count"));
     }
 }
