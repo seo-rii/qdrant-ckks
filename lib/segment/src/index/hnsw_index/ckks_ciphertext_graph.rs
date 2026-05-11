@@ -486,6 +486,10 @@ impl VectorIndex for CkksCiphertextVectorIndex {
         self.graph_file.iter().cloned().collect()
     }
 
+    fn immutable_files(&self) -> Vec<PathBuf> {
+        self.files()
+    }
+
     fn indexed_vector_count(&self) -> usize {
         self.index.records().len()
     }
@@ -1059,6 +1063,7 @@ mod tests {
         index.persist_graph_file(&graph_file).unwrap();
 
         assert_eq!(index.files(), vec![graph_file.clone()]);
+        assert_eq!(index.immutable_files(), vec![graph_file.clone()]);
         assert!(graph_file.exists());
         #[cfg(unix)]
         {
@@ -1079,6 +1084,7 @@ mod tests {
         .expect("persisted graph should reopen");
 
         assert_eq!(reopened.files(), vec![graph_file]);
+        assert_eq!(reopened.immutable_files(), reopened.files());
         assert_eq!(reopened.graph().links(), index.graph().links());
     }
 
