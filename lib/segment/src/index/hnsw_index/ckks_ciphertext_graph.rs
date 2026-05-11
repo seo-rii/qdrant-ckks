@@ -190,6 +190,13 @@ impl CkksCiphertextIndexedRecord {
 }
 
 impl CkksCiphertextVectorIndex {
+    pub fn from_graph(
+        records: Vec<CkksCiphertextIndexedRecord>,
+        graph: CkksCiphertextHnswGraph,
+    ) -> Option<Self> {
+        CkksCiphertextHnswIndex::from_graph(records, graph).map(|index| Self { index })
+    }
+
     pub fn build<E>(
         records: Vec<CkksCiphertextIndexedRecord>,
         m: usize,
@@ -690,5 +697,42 @@ mod tests {
         );
         enum_index.populate().unwrap();
         enum_index.clear_cache().unwrap();
+    }
+
+    #[test]
+    fn ciphertext_vector_index_can_reopen_from_valid_graph() {
+        let records = vec![
+            CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
+            CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
+        ];
+        let graph = CkksCiphertextHnswGraph::from_validated_links(vec![vec![1], vec![0]])
+            .expect("valid reciprocal graph");
+
+        let index = CkksCiphertextVectorIndex::from_graph(records, graph)
+            .expect("record count matches graph nodes");
+
+        let results = index
+            .search_ciphertext(
+                2,
+                1,
+                Order::LargeBetter,
+                None,
+                |candidates| -> Result<Vec<f32>, std::convert::Infallible> {
+                    Ok(candidates
+                        .iter()
+                        .map(|candidate| {
+                            if candidate.point_offset == 1 {
+                                3.0
+                            } else {
+                                1.0
+                            }
+                        })
+                        .collect())
+                },
+            )
+            .unwrap();
+
+        assert_eq!(results[0].idx, 1);
+        assert_eq!(results[0].score, 3.0);
     }
 }

@@ -32,7 +32,7 @@ use segment::data_types::vectors::{
     DEFAULT_VECTOR_NAME, Named, NamedQuery, VectorInternal, VectorRef,
 };
 use segment::index::hnsw_index::ckks_ciphertext_graph::{
-    CkksCiphertextHnswGraph, CkksCiphertextHnswIndex,
+    CkksCiphertextHnswGraph, CkksCiphertextIndexedRecord, CkksCiphertextVectorIndex,
 };
 use segment::json_path::JsonPath;
 use segment::types::{
@@ -162,7 +162,6 @@ struct CkksSidecarHnswGraphCacheKey {
 }
 
 type CkksSidecarHnswGraph = CkksCiphertextHnswGraph;
-type CkksSidecarHnswIndex = CkksCiphertextHnswIndex<CkksSidecarSearchRecord>;
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -2292,6 +2291,26 @@ fn ckks_sidecar_score_hnsw_query_batch(
     })
 }
 
+fn ckks_sidecar_indexed_records(
+    records: &[CkksSidecarSearchRecord],
+) -> Result<Vec<CkksCiphertextIndexedRecord>, StorageError> {
+    records
+        .iter()
+        .enumerate()
+        .map(|(offset, record)| {
+            let point_offset = offset.try_into().map_err(|_| {
+                StorageError::service_error(
+                    "too many CKKS sidecar records to index in ciphertext HNSW",
+                )
+            })?;
+            Ok(CkksCiphertextIndexedRecord::new(
+                point_offset,
+                record.encrypted.envelope.ciphertext.as_bytes().to_vec(),
+            ))
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn ckks_sidecar_hnsw_search_points(
     collection_name: &str,
@@ -2405,14 +2424,17 @@ fn ckks_sidecar_hnsw_search_points(
                 cache.insert(cache_key, graph.clone());
                 graph
             } else {
-                let index = CkksSidecarHnswIndex::build(
-                    records.to_vec(),
+                let indexed_records = ckks_sidecar_indexed_records(records)?;
+                let index = CkksCiphertextVectorIndex::build(
+                    indexed_records,
                     m,
                     score_order,
-                    |record, candidates| {
+                    |indexed_record, candidates| {
+                        let record = &records[indexed_record.point_offset as usize];
                         let candidates = candidates
                             .iter()
                             .map(|candidate| {
+                                let candidate = &records[candidate.point_offset as usize];
                                 (candidate.point_id.clone(), candidate.encrypted.clone())
                             })
                             .collect::<Vec<_>>();
@@ -2447,16 +2469,21 @@ fn ckks_sidecar_hnsw_search_points(
         }
     };
 
-    let Some(index) = CkksSidecarHnswIndex::from_graph(records.to_vec(), graph.as_ref().clone())
+    let indexed_records = ckks_sidecar_indexed_records(records)?;
+    let Some(index) =
+        CkksCiphertextVectorIndex::from_graph(indexed_records, graph.as_ref().clone())
     else {
         return Err(StorageError::service_error(
             "CKKS ciphertext HNSW graph did not match indexed records",
         ));
     };
-    let hits = index.search(ef, top, score_order, score_threshold, |candidates| {
+    let hits = index.search_ciphertext(ef, top, score_order, score_threshold, |candidates| {
         let encrypted_items = candidates
             .iter()
-            .map(|candidate| (candidate.point_id.clone(), candidate.encrypted.clone()))
+            .map(|candidate| {
+                let candidate = &records[candidate.point_offset as usize];
+                (candidate.point_id.clone(), candidate.encrypted.clone())
+            })
             .collect::<Vec<_>>();
         ckks_sidecar_score_hnsw_query_batch(
             collection_name,
@@ -2469,14 +2496,17 @@ fn ckks_sidecar_hnsw_search_points(
 
     Ok(hits
         .into_iter()
-        .map(|hit| ScoredPoint {
-            id: hit.record.id,
-            version: 0,
-            score: hit.score,
-            payload: None,
-            vector: None,
-            shard_key: hit.record.shard_key.clone(),
-            order_value: None,
+        .map(|hit| {
+            let record = &records[hit.idx as usize];
+            ScoredPoint {
+                id: record.id,
+                version: 0,
+                score: hit.score,
+                payload: None,
+                vector: None,
+                shard_key: record.shard_key.clone(),
+                order_value: None,
+            }
         })
         .collect())
 }
