@@ -1373,6 +1373,10 @@ fn optional_config_value_digest(value: Option<&str>) -> Option<String> {
     })
 }
 
+#[allow(
+    dead_code,
+    reason = "used by encrypted cluster data movement preflight hooks"
+)]
 pub fn validate_crypto_runtime_capability_parity<'a>(
     settings: &Settings,
     peer_fingerprints: impl IntoIterator<Item = (&'a str, &'a str)>,
@@ -3967,12 +3971,9 @@ pub fn rewrap_runtime_resource_key_material(
     Ok(rewrapped_material)
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "reserved for the admin MK rotation operation that rewraps all active/retired resource keys for one wrapping key"
-    )
+#[allow(
+    dead_code,
+    reason = "reserved for the admin MK rotation operation that rewraps all active/retired resource keys for one wrapping key"
 )]
 pub fn rewrap_runtime_resource_key_materials_by_master_key(
     runtime_settings: &CryptoSettings,
