@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fs, io};
@@ -572,6 +573,12 @@ fn write_graph_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
 fn read_graph_file(path: &Path) -> io::Result<Vec<u8>> {
     validate_private_graph_parent(path)?;
     let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "graph file must be a regular non-symlink file",
+        ));
+    }
     if !metadata.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -589,7 +596,49 @@ fn read_graph_file(path: &Path) -> io::Result<Vec<u8>> {
         ));
     }
     validate_private_graph_file_metadata(path, &metadata)?;
-    fs::read(path)
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
+    }
+    let file = options.open(path)?;
+    let opened_metadata = file.metadata()?;
+    if !opened_metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "opened graph file must be a regular file",
+        ));
+    }
+    if opened_metadata.len() > CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_MAX_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "graph file is too large: {} bytes exceeds {} bytes",
+                opened_metadata.len(),
+                CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_MAX_BYTES
+            ),
+        ));
+    }
+    validate_private_graph_file_metadata(path, &opened_metadata)?;
+
+    let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
+    let mut limited_file = file.take(CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_MAX_BYTES + 1);
+    limited_file.read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_MAX_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "graph file is too large: {} bytes exceeds {} bytes",
+                bytes.len(),
+                CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_MAX_BYTES
+            ),
+        ));
+    }
+    Ok(bytes)
 }
 
 fn write_private_graph_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -1116,6 +1165,37 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("group/world accessible"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ciphertext_vector_index_rejects_graph_symlink_on_open() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let graph_file = CkksCiphertextVectorIndex::graph_file_path(directory.path());
+        let target_file = directory.path().join("graph-target");
+        let mut index = CkksCiphertextVectorIndex::from_graph(
+            vec![
+                CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
+            ],
+            CkksCiphertextHnswGraph::from_validated_links(vec![vec![1], vec![0]]).unwrap(),
+        )
+        .unwrap();
+        index.persist_graph_file(&target_file).unwrap();
+        symlink(&target_file, &graph_file).unwrap();
+
+        let err = CkksCiphertextVectorIndex::open_graph_file(
+            vec![
+                CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
+            ],
+            &graph_file,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("regular non-symlink file"));
     }
 
     #[cfg(unix)]
