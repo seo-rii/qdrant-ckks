@@ -772,3 +772,109 @@ pub(crate) fn validate_resource_key_id(rk_id: &str) -> Result<(), EncryptionErro
         Err(EncryptionError::InvalidResourceKeyId)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cipher(
+        key_byte: u8,
+        key_id: &str,
+        material_fingerprint: &str,
+        rk_id: &str,
+        rk_epoch: u64,
+    ) -> AeadCipher {
+        AeadCipher::new_with_material_fingerprint(
+            key_id,
+            SecretKey::from_bytes([key_byte; KEY_LEN]),
+            material_fingerprint,
+        )
+        .unwrap()
+        .with_resource_key_metadata(rk_id, rk_epoch)
+        .unwrap()
+    }
+
+    #[test]
+    fn keyring_uses_retired_key_only_when_envelope_metadata_matches() {
+        let active = cipher(
+            1,
+            "tenant-a:active",
+            "tenant-a/active@v1",
+            "tenant-a/active-rk",
+            2,
+        );
+        let retired = cipher(
+            2,
+            "tenant-a:retired",
+            "tenant-a/retired@v1",
+            "tenant-a/retired-rk",
+            1,
+        );
+        let context = EncryptionContext::payload_text("collection-1", "point-1", "body");
+        let retired_envelope = retired.encrypt(b"retired plaintext", context).unwrap();
+        let keyring = AeadKeyring::new(active).with_retired(retired);
+
+        assert_eq!(
+            keyring.decrypt(&retired_envelope, context).unwrap(),
+            b"retired plaintext"
+        );
+    }
+
+    #[test]
+    fn keyring_does_not_try_retired_keys_after_active_metadata_match_tamper() {
+        let active = cipher(
+            1,
+            "tenant-a:active",
+            "tenant-a/shared@v1",
+            "tenant-a/active-rk",
+            2,
+        );
+        let retired = cipher(
+            2,
+            "tenant-a:active",
+            "tenant-a/shared@v1",
+            "tenant-a/active-rk",
+            2,
+        );
+        let context = EncryptionContext::payload_text("collection-1", "point-1", "body");
+        let mut envelope = active.encrypt(b"active plaintext", context).unwrap();
+        let mut ciphertext = BASE64URL_NOPAD
+            .decode(envelope.ciphertext.as_bytes())
+            .unwrap();
+        ciphertext[0] ^= 0x01;
+        envelope.ciphertext = BASE64URL_NOPAD.encode(&ciphertext);
+        let keyring = AeadKeyring::new(active).with_retired(retired);
+
+        assert_eq!(
+            keyring.decrypt(&envelope, context),
+            Err(EncryptionError::OpenFailed)
+        );
+    }
+
+    #[test]
+    fn keyring_rejects_unknown_envelope_metadata_without_open_attempt() {
+        let active = cipher(
+            1,
+            "tenant-a:active",
+            "tenant-a/active@v1",
+            "tenant-a/active-rk",
+            2,
+        );
+        let retired = cipher(
+            2,
+            "tenant-a:retired",
+            "tenant-a/retired@v1",
+            "tenant-a/retired-rk",
+            1,
+        );
+        let context = EncryptionContext::payload_text("collection-1", "point-1", "body");
+        let mut envelope = active.encrypt(b"active plaintext", context).unwrap();
+        envelope.key_id = "tenant-a:unknown".to_string();
+        let keyring = AeadKeyring::new(active).with_retired(retired);
+
+        assert_eq!(
+            keyring.decrypt(&envelope, context),
+            Err(EncryptionError::KeyMismatch)
+        );
+    }
+}
