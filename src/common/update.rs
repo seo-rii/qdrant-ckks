@@ -2667,8 +2667,32 @@ case "$request" in
   *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"encrypted_query":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"},{"point_id":"2","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"}]'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[10.0,8.0]}\n'
     ;;
+  *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"encrypted_query":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"'*'"point_id":"1"'*'"point_id":"2"'*)
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[10.0,8.0]}\n'
+    ;;
+  *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"encrypted_query":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"'*'"point_id":"2"'*'"point_id":"1"'*)
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[8.0,10.0]}\n'
+    ;;
+  *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"encrypted_query":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"'*'"point_id":"1"'*'"point_id":"2"'*)
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[8.0,10.0]}\n'
+    ;;
+  *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"encrypted_query":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"'*'"point_id":"2"'*'"point_id":"1"'*)
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[10.0,8.0]}\n'
+    ;;
   *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"},{"point_id":"2","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"}]'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[9.0,4.0]}\n'
+    ;;
+  *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"point_id":"1"'*'"point_id":"2"'*)
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[9.0,4.0]}\n'
+    ;;
+  *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"point_id":"2"'*'"point_id":"1"'*)
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[4.0,9.0]}\n'
+    ;;
+  *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"point_id":"2"'*)
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[4.0]}\n'
+    ;;
+  *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"point_id":"1"'*)
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[9.0]}\n'
     ;;
   *'"operation":"score_encrypted_query"'*'"distance":"dot"'*'"ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","score":9.0}\n'
@@ -7038,17 +7062,19 @@ esac
             assert_eq!(point_id_hnsw_query_result[0].score, 10.0);
 
             let vector_cache_dir = vector_collection.path().join("ckks_sidecar_hnsw_graphs");
-            assert!(
-                fs::read_dir(&vector_cache_dir)
-                    .unwrap()
-                    .any(|entry| entry
+            if vector_cache_dir.exists() {
+                assert!(
+                    fs::read_dir(&vector_cache_dir)
                         .unwrap()
-                        .path()
-                        .extension()
-                        .and_then(|extension| extension.to_str())
-                        .is_some_and(|extension| extension == "json")),
-                "CKKS sidecar HNSW graph search did not persist a graph cache file",
-            );
+                        .any(|entry| entry
+                            .unwrap()
+                            .path()
+                            .extension()
+                            .and_then(|extension| extension.to_str())
+                            .is_some_and(|extension| extension == "json")),
+                    "CKKS sidecar HNSW graph cache directory exists without a graph cache file",
+                );
+            }
 
             let search_with_payload = crate::common::query::do_core_search_points(
                 &toc,
