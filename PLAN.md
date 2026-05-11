@@ -3,7 +3,7 @@
 이 문서는 `RISK_REGISTER.md`의 대형 작업을 구현 순서대로 정리한다. 작은 방어 패치는 이미 별도 커밋으로 일부 처리됐고, 여기서는 설계, migration, 테스트 인프라, 구조 변경이 필요한 작업만 다룬다.
 
 기준 브랜치: `sec`
-최종 갱신: 2026-05-11
+최종 갱신: 2026-05-12
 
 ## 작업 원칙
 
@@ -36,7 +36,7 @@
 - Background migration/re-encrypt job: plan/state primitive는 있지만 point scan, checkpoint resume, verification, rollback, old-key disable/destroy job은 아직 없다.
 - Cluster-wide client nonce replay ledger: request/process/collection-local/reload cache는 있지만 consensus-backed global ledger는 없다.
 - Metadata encryption: server-side metadata value AEAD와 client-generated exact-match blind-index token field provider/query integration은 들어갔다. Server-computed tokens, range/geo/full-text searchable encryption, and decrypt/RBAC read mode는 아직 없다.
-- Decrypt/RBAC read mode: 현재 retrieve/scroll/search/export는 raw envelope 반환이며 `decrypted`/`redacted` 권한 모델은 없다.
+- Encrypted payload read policy: raw envelope 반환은 기본값이며, REST `encrypted_payload=redacted`는 marker redaction으로 연결되어 있다. `encrypted_payload=decrypted`와 RBAC-protected decrypt response는 아직 fail-closed future work다.
 - KMS/Vault key providers: local/env/file/fd/`unix_socket`/`vault_kv2`/wrapped material 기반은 있지만 external KMS lifecycle은 future work다.
 - Broader distributed integration: current unit/integration coverage는 많지만 multi-node parity/restore/replay ledger e2e는 남아 있다.
 
