@@ -31,7 +31,9 @@ use segment::data_types::groups::GroupId;
 use segment::data_types::vectors::{
     DEFAULT_VECTOR_NAME, Named, NamedQuery, VectorInternal, VectorRef,
 };
-use segment::index::hnsw_index::ckks_ciphertext_graph::CkksCiphertextHnswGraph;
+use segment::index::hnsw_index::ckks_ciphertext_graph::{
+    CkksCiphertextHnswGraph, CkksCiphertextHnswIndex,
+};
 use segment::json_path::JsonPath;
 use segment::types::{
     Distance, Filter, Order, PayloadContainer, PointIdType, ScoredPoint, SearchParams, ShardKey,
@@ -160,6 +162,7 @@ struct CkksSidecarHnswGraphCacheKey {
 }
 
 type CkksSidecarHnswGraph = CkksCiphertextHnswGraph;
+type CkksSidecarHnswIndex = CkksCiphertextHnswIndex<CkksSidecarSearchRecord>;
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -2402,24 +2405,22 @@ fn ckks_sidecar_hnsw_search_points(
                 cache.insert(cache_key, graph.clone());
                 graph
             } else {
-                let graph = Arc::new(CkksSidecarHnswGraph::build(
-                    records.len(),
+                let index = CkksSidecarHnswIndex::build(
+                    records.to_vec(),
                     m,
                     score_order,
-                    |idx| {
-                        let candidates = (0..idx)
+                    |record, candidates| {
+                        let candidates = candidates
+                            .iter()
                             .map(|candidate| {
-                                (
-                                    records[candidate].point_id.clone(),
-                                    records[candidate].encrypted.clone(),
-                                )
+                                (candidate.point_id.clone(), candidate.encrypted.clone())
                             })
                             .collect::<Vec<_>>();
                         plan.score_stored_query_batch(
                             collection_name,
                             vector_name,
-                            &records[idx].point_id,
-                            &records[idx].encrypted,
+                            &record.point_id,
+                            &record.encrypted,
                             &candidates,
                         )?
                         .ok_or_else(|| {
@@ -2428,7 +2429,8 @@ fn ckks_sidecar_hnsw_search_points(
                             ))
                         })
                     },
-                )?);
+                )?;
+                let graph = Arc::new(index.graph().clone());
                 if let Err(err) =
                     ckks_sidecar_hnsw_persist_graph(collection_path, &cache_key, &graph)
                 {
@@ -2445,15 +2447,16 @@ fn ckks_sidecar_hnsw_search_points(
         }
     };
 
-    let hits = graph.search(ef, top, score_order, score_threshold, |candidates| {
+    let Some(index) = CkksSidecarHnswIndex::from_graph(records.to_vec(), graph.as_ref().clone())
+    else {
+        return Err(StorageError::service_error(
+            "CKKS ciphertext HNSW graph did not match indexed records",
+        ));
+    };
+    let hits = index.search(ef, top, score_order, score_threshold, |candidates| {
         let encrypted_items = candidates
             .iter()
-            .map(|candidate| {
-                (
-                    records[*candidate].point_id.clone(),
-                    records[*candidate].encrypted.clone(),
-                )
-            })
+            .map(|candidate| (candidate.point_id.clone(), candidate.encrypted.clone()))
             .collect::<Vec<_>>();
         ckks_sidecar_score_hnsw_query_batch(
             collection_name,
@@ -2467,12 +2470,12 @@ fn ckks_sidecar_hnsw_search_points(
     Ok(hits
         .into_iter()
         .map(|hit| ScoredPoint {
-            id: records[hit.point_index].id,
+            id: hit.record.id,
             version: 0,
             score: hit.score,
             payload: None,
             vector: None,
-            shard_key: records[hit.point_index].shard_key.clone(),
+            shard_key: hit.record.shard_key.clone(),
             order_value: None,
         })
         .collect())

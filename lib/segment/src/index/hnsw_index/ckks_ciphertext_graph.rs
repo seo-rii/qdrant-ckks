@@ -8,9 +8,22 @@ pub struct CkksCiphertextHnswGraph {
     links: Arc<Vec<Vec<usize>>>,
 }
 
+#[derive(Clone, Debug)]
+pub struct CkksCiphertextHnswIndex<C> {
+    records: Arc<Vec<C>>,
+    graph: CkksCiphertextHnswGraph,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CkksCiphertextHnswHit {
     pub point_index: usize,
+    pub score: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CkksCiphertextHnswRecordHit<'a, C> {
+    pub point_index: usize,
+    pub record: &'a C,
     pub score: f32,
 }
 
@@ -144,6 +157,68 @@ impl CkksCiphertextHnswGraph {
         sort_hits(score_order, &mut scored);
         scored.truncate(top);
         Ok(scored)
+    }
+}
+
+impl<C> CkksCiphertextHnswIndex<C> {
+    pub fn from_graph(records: Vec<C>, graph: CkksCiphertextHnswGraph) -> Option<Self> {
+        (records.len() == graph.links().len()).then(|| Self {
+            records: Arc::new(records),
+            graph,
+        })
+    }
+
+    pub fn build<E>(
+        records: Vec<C>,
+        m: usize,
+        score_order: Order,
+        mut score_previous_records: impl FnMut(&C, &[&C]) -> Result<Vec<f32>, E>,
+    ) -> Result<Self, E> {
+        let graph = CkksCiphertextHnswGraph::build(records.len(), m, score_order, |idx| {
+            let candidates = records[..idx].iter().collect::<Vec<_>>();
+            score_previous_records(&records[idx], &candidates)
+        })?;
+
+        Ok(Self {
+            records: Arc::new(records),
+            graph,
+        })
+    }
+
+    pub fn records(&self) -> &[C] {
+        self.records.as_ref()
+    }
+
+    pub fn graph(&self) -> &CkksCiphertextHnswGraph {
+        &self.graph
+    }
+
+    pub fn search<E>(
+        &self,
+        ef: usize,
+        top: usize,
+        score_order: Order,
+        score_threshold: Option<f32>,
+        mut score_records: impl FnMut(&[&C]) -> Result<Vec<f32>, E>,
+    ) -> Result<Vec<CkksCiphertextHnswRecordHit<'_, C>>, E> {
+        let hits = self
+            .graph
+            .search(ef, top, score_order, score_threshold, |candidates| {
+                let records = candidates
+                    .iter()
+                    .map(|candidate| &self.records[*candidate])
+                    .collect::<Vec<_>>();
+                score_records(&records)
+            })?;
+
+        Ok(hits
+            .into_iter()
+            .map(|hit| CkksCiphertextHnswRecordHit {
+                point_index: hit.point_index,
+                record: &self.records[hit.point_index],
+                score: hit.score,
+            })
+            .collect())
     }
 }
 
@@ -354,5 +429,83 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![2, 3],
         );
+    }
+
+    #[test]
+    fn index_rejects_graph_record_count_mismatch() {
+        let graph = CkksCiphertextHnswGraph::from_validated_links(vec![vec![1], vec![0]]).unwrap();
+
+        assert!(CkksCiphertextHnswIndex::from_graph(vec!["a"], graph).is_none());
+    }
+
+    #[test]
+    fn index_builds_and_searches_ciphertext_records() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct CiphertextRecord {
+            ciphertext: &'static str,
+            clear_fixture: f32,
+        }
+
+        let records = vec![
+            CiphertextRecord {
+                ciphertext: "ct-0",
+                clear_fixture: 0.0,
+            },
+            CiphertextRecord {
+                ciphertext: "ct-1",
+                clear_fixture: 0.2,
+            },
+            CiphertextRecord {
+                ciphertext: "ct-2",
+                clear_fixture: 0.8,
+            },
+            CiphertextRecord {
+                ciphertext: "ct-3",
+                clear_fixture: 1.0,
+            },
+        ];
+        let index = CkksCiphertextHnswIndex::build(
+            records,
+            1,
+            Order::SmallBetter,
+            |record, candidates| -> Result<Vec<f32>, std::convert::Infallible> {
+                assert!(record.ciphertext.starts_with("ct-"));
+                Ok(candidates
+                    .iter()
+                    .map(|candidate| (record.clear_fixture - candidate.clear_fixture).abs())
+                    .collect())
+            },
+        )
+        .unwrap();
+
+        let query = 0.9_f32;
+        let results = index
+            .search(
+                4,
+                2,
+                Order::SmallBetter,
+                None,
+                |candidates| -> Result<Vec<f32>, std::convert::Infallible> {
+                    Ok(candidates
+                        .iter()
+                        .map(|candidate| {
+                            assert!(candidate.ciphertext.starts_with("ct-"));
+                            (query - candidate.clear_fixture).abs()
+                        })
+                        .collect())
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            results
+                .iter()
+                .map(|hit| (hit.point_index, hit.record.ciphertext))
+                .collect::<Vec<_>>(),
+            vec![(2, "ct-2"), (3, "ct-3")],
+        );
+        assert!(CkksCiphertextHnswGraph::links_are_connected(
+            index.graph().links()
+        ));
     }
 }
