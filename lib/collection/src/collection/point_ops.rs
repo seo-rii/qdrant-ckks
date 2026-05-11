@@ -23,7 +23,7 @@ use segment::index::query_optimization::rescore_formula::parsed_formula::ParsedF
 use segment::json_path::JsonPath;
 use segment::types::{
     AnyVariants, Condition, EncryptedPayloadReadMode, ExtendedPointId, Filter, Match, Payload,
-    ShardKey, ValueVariants, WithPayload, WithPayloadInterface, WithVector,
+    ScoredPoint, ShardKey, ValueVariants, WithPayload, WithPayloadInterface, WithVector,
 };
 use shard::count::CountRequestInternal;
 use shard::retrieve::record_internal::RecordInternal;
@@ -2196,7 +2196,7 @@ impl Collection {
     }
 }
 
-fn ensure_encrypted_payload_read_mode_is_supported(
+pub(super) fn ensure_encrypted_payload_read_mode_is_supported(
     mode: EncryptedPayloadReadMode,
 ) -> CollectionResult<()> {
     match mode {
@@ -2204,6 +2204,21 @@ fn ensure_encrypted_payload_read_mode_is_supported(
         EncryptedPayloadReadMode::Decrypted => Err(CollectionError::bad_input(
             "encrypted payload read mode 'decrypted' requires an RBAC-protected decrypt path, which is not implemented; use 'raw' for SDK/client decryption or 'redacted'",
         )),
+    }
+}
+
+pub(super) fn apply_encrypted_payload_read_mode_to_scored_points(
+    points: &mut [ScoredPoint],
+    mode: EncryptedPayloadReadMode,
+) {
+    if mode != EncryptedPayloadReadMode::Redacted {
+        return;
+    }
+
+    for point in points {
+        if let Some(payload) = &mut point.payload {
+            redact_encrypted_payload_values(payload);
+        }
     }
 }
 

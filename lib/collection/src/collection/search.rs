@@ -7,13 +7,18 @@ use common::counter::hardware_accumulator::HwMeasurementAcc;
 use futures::{TryFutureExt, future};
 use itertools::{Either, Itertools};
 use segment::types::{
-    ExtendedPointId, Filter, Order, ScoredPoint, WithPayloadInterface, WithVector,
+    EncryptedPayloadReadMode, ExtendedPointId, Filter, Order, ScoredPoint, WithPayloadInterface,
+    WithVector,
 };
 use shard::retrieve::record_internal::RecordInternal;
 use shard::search::CoreSearchRequestBatch;
 use tokio::time::Instant;
 
 use super::Collection;
+use super::point_ops::{
+    apply_encrypted_payload_read_mode_to_scored_points,
+    ensure_encrypted_payload_read_mode_is_supported,
+};
 use crate::config::EncryptionSelector;
 use crate::events::SlowQueryEvent;
 use crate::operations::consistency_params::ReadConsistency;
@@ -67,6 +72,20 @@ impl Collection {
         for search in &request.searches {
             self.ensure_filter_does_not_touch_encrypted_payload(search.filter.as_ref())
                 .await?;
+        }
+        let encrypted_payload_read_modes = request
+            .searches
+            .iter()
+            .map(|search| {
+                search
+                    .with_payload
+                    .as_ref()
+                    .map(WithPayloadInterface::encrypted_payload_read_mode)
+                    .unwrap_or(EncryptedPayloadReadMode::Raw)
+            })
+            .collect_vec();
+        for mode in &encrypted_payload_read_modes {
+            ensure_encrypted_payload_read_mode_is_supported(*mode)?;
         }
         if let Some(encryption) = self
             .collection_config
@@ -158,7 +177,7 @@ impl Collection {
                 });
             future::try_join_all(filled_results).await
         } else {
-            let result = self
+            let mut result = self
                 .do_core_search_batch(
                     request,
                     read_consistency,
@@ -167,6 +186,9 @@ impl Collection {
                     hw_measurement_acc,
                 )
                 .await?;
+            for (points, mode) in result.iter_mut().zip(encrypted_payload_read_modes) {
+                apply_encrypted_payload_read_mode_to_scored_points(points, mode);
+            }
             Ok(result)
         }
     }

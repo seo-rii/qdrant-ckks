@@ -4219,7 +4219,7 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
                 offset: None,
                 limit: Some(10),
                 filter: None,
-                with_payload: redacted_payload_selector,
+                with_payload: redacted_payload_selector.clone(),
                 with_vector: false.into(),
                 order_by: None,
             },
@@ -4237,6 +4237,34 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
         .and_then(|document| document.get("body"))
         .unwrap();
     assert_eq!(redacted_scroll_body, redacted_body);
+
+    let redacted_search = collection
+        .search(
+            SearchRequestInternal {
+                vector: vec![1.0, 0.0, 0.0, 0.0].into(),
+                with_payload: redacted_payload_selector,
+                with_vector: None,
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: None,
+                score_threshold: None,
+            }
+            .into(),
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+    let redacted_search_body = redacted_search[0]
+        .payload
+        .as_ref()
+        .and_then(|payload| payload.0.get("document"))
+        .and_then(|document| document.get("body"))
+        .unwrap();
+    assert_eq!(redacted_search_body, redacted_body);
 
     let decrypt_err = collection
         .retrieve(
