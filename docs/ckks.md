@@ -326,14 +326,43 @@ params:
         binding: payload-field/v1
 ```
 
-Metadata value encryption is not implemented yet. The `metadata_keys` selector
-is currently limited to exact-match blind-index token fields using
-`metadata-exact-match-token/v1` with the `metadata/blind-index-hmac@v1`
-provider. Payload filtering over encrypted metadata, including range, geo, and
-full-text filtering, remains unsupported unless the client supplies and queries
-a separate blind-index token. Collection config must still set a non-empty
-`key_id` and non-zero `encryption_epoch` for these token fields so restore,
-rotation, and runtime parity checks have explicit key-lineage metadata.
+Metadata value encryption uses the `metadata_keys` selector with
+`metadata-value/v1` and `metadata/aes-256-gcm@v1`. It encrypts selected JSON
+string metadata fields through the same server-side AEAD envelope machinery as
+payload text, while keeping metadata value rules separate from payload and
+blind-index bindings. Plaintext indexes, filters, facets, order-by, group-by,
+and formula references over encrypted metadata value paths fail closed. Exact
+match over encrypted metadata still requires a separate client-generated token
+field using `metadata-exact-match-token/v1` with
+`metadata/blind-index-hmac@v1`. Collection config must set a non-empty `key_id`
+and non-zero `encryption_epoch` for both metadata value and token fields so
+restore, rotation, and runtime parity checks have explicit key-lineage
+metadata.
+
+```yaml
+crypto:
+  instances:
+    docs_metadata_value_v1:
+      provider: metadata/aes-256-gcm@v1
+      materials:
+        sym_key: tenant-a/metadata-v1
+      options:
+        key_id: tenant-a:docs
+        material_fingerprint_id: tenant-a/metadata@v1
+params:
+  encryption:
+    version: 1
+    key_id: tenant-a:docs
+    crypto_schema_version: 1
+    encryption_epoch: 3
+    migration_state: active
+    rules:
+      - id: tenant_metadata
+        selector:
+          metadata_keys: [tenant_id]
+        instance: docs_metadata_value_v1
+        binding: metadata-value/v1
+```
 
 ```yaml
 params:
