@@ -81,19 +81,25 @@ impl Collection {
             }
         }
 
-        let mut config = self.collection_config.write().await;
-        let Some(current_encryption) = config.params.encryption.as_ref() else {
-            return Err(CollectionError::bad_input(
-                "crypto migration requires generic collection encryption config",
-            ));
-        };
-        let next_encryption = plan.apply_to_config(current_encryption).map_err(|err| {
-            CollectionError::bad_input(format!("invalid crypto migration plan: {err:?}"))
-        })?;
+        {
+            let mut config = self.collection_config.write().await;
+            let Some(current_encryption) = config.params.encryption.as_ref() else {
+                return Err(CollectionError::bad_input(
+                    "crypto migration requires generic collection encryption config",
+                ));
+            };
+            let next_encryption = plan.apply_to_config(current_encryption).map_err(|err| {
+                CollectionError::bad_input(format!("invalid crypto migration plan: {err:?}"))
+            })?;
+
+            if !plan.dry_run {
+                config.params.encryption = Some(next_encryption);
+                config.save(&self.path)?;
+            }
+        }
 
         if !plan.dry_run {
-            config.params.encryption = Some(next_encryption);
-            config.save(&self.path)?;
+            self.recreate_optimizers_blocking().await?;
         }
 
         Ok(())
