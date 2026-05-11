@@ -1373,8 +1373,7 @@ fn optional_config_value_digest(value: Option<&str>) -> Option<String> {
     })
 }
 
-#[cfg(test)]
-fn validate_crypto_runtime_capability_parity<'a>(
+pub fn validate_crypto_runtime_capability_parity<'a>(
     settings: &Settings,
     peer_fingerprints: impl IntoIterator<Item = (&'a str, &'a str)>,
 ) -> Result<(), StorageError> {
