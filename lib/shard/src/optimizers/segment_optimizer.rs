@@ -229,6 +229,13 @@ pub trait SegmentOptimizer: Sync {
         // - The segment is indexed and configured on disk -> threshold_is_indexed=true && config_on_disk=Some(true)
         if threshold_is_on_disk || threshold_is_indexed {
             vector_data.iter_mut().for_each(|(vector_name, config)| {
+                if segment_optimizer_config
+                    .encrypted_vector_names
+                    .contains(vector_name)
+                {
+                    return;
+                }
+
                 // Check whether on_disk is explicitly configured, if not, set it to true
                 let config_on_disk = segment_optimizer_config
                     .dense_vector

@@ -348,7 +348,7 @@ mod tests {
                     distance: Distance::Dot,
                     hnsw_config: None,
                     quantization_config: None,
-                    on_disk: None,
+                    on_disk: Some(true),
                     datatype: None,
                     multivector_config: None,
                 },
@@ -387,5 +387,13 @@ mod tests {
                 .index,
             Indexes::Plain {}
         ));
+        assert!(
+            !optimizer_config
+                .plain_dense_vector_config
+                .get("embedding")
+                .unwrap()
+                .storage_type
+                .is_on_disk()
+        );
     }
 }

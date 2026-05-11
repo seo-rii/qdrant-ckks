@@ -26,6 +26,12 @@ pub fn validate_payload_index_paths_for_encrypted_paths<'a>(
         return Ok(());
     };
 
+    let action_label = if action == "create" {
+        "create payload index".to_string()
+    } else {
+        format!("{action} payload index schema")
+    };
+
     if encryption
         .rules
         .iter()
@@ -35,7 +41,7 @@ pub fn validate_payload_index_paths_for_encrypted_paths<'a>(
         for field_name in &field_names {
             if field_name.compatible(&sidecar_path) {
                 return Err(CollectionError::bad_input(format!(
-                    "cannot {action} payload index schema on encrypted vector sidecar field '{field_name}'; use encrypted vector search APIs instead",
+                    "cannot {action_label} on encrypted vector sidecar field '{field_name}'; use encrypted vector search APIs instead",
                 )));
             }
         }
@@ -56,7 +62,7 @@ pub fn validate_payload_index_paths_for_encrypted_paths<'a>(
             for field_name in &field_names {
                 if field_name.compatible(&encrypted_json_path) {
                     return Err(CollectionError::bad_input(format!(
-                        "cannot {action} payload index schema on encrypted payload field '{field_name}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                        "cannot {action_label} on encrypted payload field '{field_name}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
                     )));
                 }
             }
@@ -78,6 +84,12 @@ pub fn validate_payload_index_entry_for_encryption(
         return Ok(());
     };
 
+    let action_label = if action == "create" {
+        "create payload index".to_string()
+    } else {
+        format!("{action} payload index schema")
+    };
+
     for rule in &encryption.rules {
         let EncryptionSelector::MetadataKeys { keys } = &rule.selector else {
             continue;
@@ -92,12 +104,12 @@ pub fn validate_payload_index_entry_for_encryption(
             if field_name.compatible(&metadata_path) {
                 if field_name != &metadata_path {
                     return Err(CollectionError::bad_input(format!(
-                        "cannot {action} payload index schema on metadata blind-index field '{field_name}' because it overlaps token field '{metadata_key}'; blind-index token indexes must target the exact token field",
+                        "cannot {action_label} on metadata blind-index field '{field_name}' because it overlaps token field '{metadata_key}'; blind-index token indexes must target the exact token field",
                     )));
                 }
                 if field_schema.kind() != PayloadSchemaType::Keyword {
                     return Err(CollectionError::bad_input(format!(
-                        "cannot {action} payload index schema on metadata blind-index field '{field_name}' because it overlaps token field '{metadata_key}'; blind-index token indexes must use keyword schema",
+                        "cannot {action_label} on metadata blind-index field '{field_name}' because it overlaps token field '{metadata_key}'; blind-index token indexes must use keyword schema",
                     )));
                 }
             }

@@ -21,8 +21,8 @@ mod tests {
     use segment::payload_json;
     use segment::segment_constructor::simple_segment_constructor::{VECTOR1_NAME, VECTOR2_NAME};
     use segment::types::{
-        Distance, HnswConfig, HnswGlobalConfig, PayloadSchemaType, QuantizationConfig, SegmentType,
-        VectorNameBuf,
+        Distance, HnswConfig, HnswGlobalConfig, Indexes, PayloadSchemaType, QuantizationConfig,
+        SegmentType, VectorNameBuf,
     };
     use shard::operations::optimization::OptimizerThresholds;
     use shard::optimizers::segment_optimizer::SegmentOptimizer;
@@ -635,6 +635,86 @@ mod tests {
         assert!(
             suggested_to_optimize.is_empty(),
             "encrypted vectors must not be planned for plaintext config-mismatch rebuilds",
+        );
+    }
+
+    #[test]
+    fn encrypted_vector_forced_optimization_preserves_plain_storage_config() {
+        init();
+
+        let mut holder = SegmentHolder::default();
+        let dim = 256;
+
+        let segments_dir = Builder::new().prefix("segments_dir").tempdir().unwrap();
+        let segments_temp_dir = Builder::new()
+            .prefix("segments_temp_dir")
+            .tempdir()
+            .unwrap();
+
+        let segment = random_segment(segments_dir.path(), 101, 200, dim);
+        let segment_config = segment.segment_config.clone();
+        let segment_id = holder.add_new(segment);
+
+        let index_optimizer = new_indexing_optimizer(
+            2,
+            OptimizerThresholds {
+                max_segment_size_kb: 300,
+                memmap_threshold_kb: 1,
+                indexing_threshold_kb: 1,
+                deferred_internal_id: None,
+            },
+            segments_dir.path().to_owned(),
+            segments_temp_dir.path().to_owned(),
+            CollectionParams {
+                vectors: VectorsConfig::Single(
+                    VectorParamsBuilder::new(
+                        segment_config.vector_data[DEFAULT_VECTOR_NAME].size as u64,
+                        segment_config.vector_data[DEFAULT_VECTOR_NAME].distance,
+                    )
+                    .with_on_disk(true)
+                    .build(),
+                ),
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 3,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "default_vector_conf".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec![DEFAULT_VECTOR_NAME.to_string()],
+                        },
+                        instance: "docs_vector_v1".to_string(),
+                        binding: Some("vector-envelope/v1".to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            },
+            Default::default(),
+            HnswGlobalConfig::default(),
+            Default::default(),
+        );
+
+        let locked_holder = LockedSegmentHolder::new(holder);
+        index_optimizer.optimize_for_test(locked_holder.clone(), vec![segment_id]);
+
+        let configs = locked_holder
+            .read()
+            .iter_original()
+            .filter_map(|(_, segment)| {
+                let segment = segment.read();
+                (segment.total_point_count() > 0).then(|| segment.config().clone())
+            })
+            .collect_vec();
+
+        assert!(
+            configs.iter().any(|config| {
+                let vector_data = &config.vector_data[DEFAULT_VECTOR_NAME];
+                matches!(vector_data.index, Indexes::Plain {})
+                    && !vector_data.storage_type.is_on_disk()
+            }),
+            "forced optimization must not assign plaintext HNSW or mmap storage to encrypted vectors",
         );
     }
 

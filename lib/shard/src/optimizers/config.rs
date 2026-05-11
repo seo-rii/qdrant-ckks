@@ -77,16 +77,23 @@ impl SegmentOptimizerConfig {
                 multivector_config,
                 datatype,
             } = input;
+            let is_encrypted_vector = encrypted_vector_names.contains(&name);
             plain_dense_vector_config.insert(
                 name.clone(),
                 VectorDataConfig {
                     size,
                     distance,
                     index: Indexes::Plain {},
-                    storage_type: VectorStorageType::from_on_disk(on_disk.unwrap_or_default()),
-                    quantization_config: QuantizationConfig::for_appendable_segment(
-                        quantization_config.as_ref(),
-                    ),
+                    storage_type: if is_encrypted_vector {
+                        VectorStorageType::from_on_disk(false)
+                    } else {
+                        VectorStorageType::from_on_disk(on_disk.unwrap_or_default())
+                    },
+                    quantization_config: if is_encrypted_vector {
+                        None
+                    } else {
+                        QuantizationConfig::for_appendable_segment(quantization_config.as_ref())
+                    },
                     multivector_config,
                     datatype,
                 },
