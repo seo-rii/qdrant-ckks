@@ -369,9 +369,8 @@ impl CkksCiphertextVectorIndex {
         score_threshold: Option<f32>,
         score_records: impl FnMut(&[&CkksCiphertextIndexedRecord]) -> Result<Vec<f32>, E>,
     ) -> Result<Vec<ScoredPointOffset>, E> {
-        let hits = self
-            .index
-            .search(ef, top, score_order, score_threshold, score_records)?;
+        let hits =
+            self.search_ciphertext_records(ef, top, score_order, score_threshold, score_records)?;
 
         Ok(hits
             .into_iter()
@@ -380,6 +379,18 @@ impl CkksCiphertextVectorIndex {
                 score: hit.score,
             })
             .collect())
+    }
+
+    pub fn search_ciphertext_records<E>(
+        &self,
+        ef: usize,
+        top: usize,
+        score_order: Order,
+        score_threshold: Option<f32>,
+        score_records: impl FnMut(&[&CkksCiphertextIndexedRecord]) -> Result<Vec<f32>, E>,
+    ) -> Result<Vec<CkksCiphertextHnswRecordHit<'_, CkksCiphertextIndexedRecord>>, E> {
+        self.index
+            .search(ef, top, score_order, score_threshold, score_records)
     }
 
     pub fn graph(&self) -> &CkksCiphertextHnswGraph {
@@ -1149,6 +1160,50 @@ mod tests {
 
         assert_eq!(results[0].idx, 1);
         assert_eq!(results[0].score, 3.0);
+    }
+
+    #[test]
+    fn ciphertext_vector_index_exposes_segment_record_hits() {
+        let graph =
+            CkksCiphertextHnswGraph::from_validated_links(vec![vec![1], vec![0, 2], vec![1]])
+                .expect("valid reciprocal graph");
+        let index = CkksCiphertextVectorIndex::from_graph(
+            vec![
+                CkksCiphertextIndexedRecord::new(42, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(43, b"ciphertext-b".to_vec()),
+                CkksCiphertextIndexedRecord::new(44, b"ciphertext-c".to_vec()),
+            ],
+            graph,
+        )
+        .expect("record count matches graph nodes");
+
+        let hits = index
+            .search_ciphertext_records(
+                3,
+                2,
+                Order::LargeBetter,
+                None,
+                |candidates| -> Result<Vec<f32>, std::convert::Infallible> {
+                    Ok(candidates
+                        .iter()
+                        .map(|candidate| match candidate.point_offset {
+                            42 => 0.1,
+                            43 => 0.9,
+                            44 => 0.7,
+                            other => panic!("unexpected candidate offset {other}"),
+                        })
+                        .collect())
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            hits.iter()
+                .map(|hit| (hit.point_index, hit.record.point_offset, hit.score))
+                .collect::<Vec<_>>(),
+            vec![(1, 43, 0.9), (2, 44, 0.7)],
+        );
+        assert_eq!(hits[0].record.ciphertext, b"ciphertext-b");
     }
 
     #[test]
