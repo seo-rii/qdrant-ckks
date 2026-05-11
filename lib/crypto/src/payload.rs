@@ -635,6 +635,52 @@ impl PayloadTextEncryptor {
 
         Ok(decrypted)
     }
+
+    pub fn decrypt_selected_fields_if_encrypted(
+        &self,
+        point_id: &str,
+        payload: &mut Map<String, Value>,
+        policy: &PayloadEncryptionPolicy,
+    ) -> Result<usize, PayloadEncryptionError> {
+        let mut decrypted = 0;
+
+        for field in policy.fields() {
+            let Some(value) = locate_path_mut(payload, field)? else {
+                if policy.strict_missing_fields {
+                    return Err(PayloadEncryptionError::MissingField(field.clone()));
+                }
+                continue;
+            };
+
+            let Some(envelope) = extract_envelope(value, field)? else {
+                continue;
+            };
+            let context = EncryptionContext::payload_text(&self.collection, point_id, field);
+            let aad_suffix = payload_metadata_aad(
+                &envelope.kind,
+                envelope.schema_version,
+                envelope.encryption_epoch,
+            );
+            let plaintext =
+                self.keyring
+                    .decrypt_with_aad_suffix(&envelope.envelope, context, &aad_suffix)?;
+            if envelope.schema_version != self.crypto_schema_version {
+                return Err(PayloadEncryptionError::UnsupportedSchemaVersion(
+                    envelope.schema_version,
+                ));
+            }
+            if envelope.encryption_epoch != self.encryption_epoch {
+                return Err(PayloadEncryptionError::EncryptionEpochMismatch);
+            }
+            let plaintext = String::from_utf8(plaintext)
+                .map_err(|err| PayloadEncryptionError::InvalidUtf8(err.to_string()))?;
+
+            *value = Value::String(plaintext);
+            decrypted += 1;
+        }
+
+        Ok(decrypted)
+    }
 }
 
 pub fn is_encrypted_payload_value(value: &Value) -> bool {

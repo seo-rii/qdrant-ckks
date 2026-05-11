@@ -1570,6 +1570,69 @@ pub async fn do_reencrypt_stale_payloads_for_crypto_migration(
         .map_err(StorageError::from)
 }
 
+pub async fn do_decrypt_payloads_for_crypto_migration(
+    toc: &Arc<TableOfContent>,
+    collection_name: &str,
+    runtime_settings: &Settings,
+    auth: &Auth,
+) -> Result<Vec<CryptoMigrationCheckpoint>, StorageError> {
+    let collection_pass = auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new().manage(),
+        "decrypt_payloads_for_crypto_migration",
+    )?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let collection_config = collection.config_snapshot().await;
+    let Some(encryption) = collection_config.params.effective_encryption() else {
+        return Err(StorageError::bad_input(format!(
+            "payload crypto decryption migration for collection {collection_name} requires an encrypted collection",
+        )));
+    };
+    if encryption.migration_state != CryptoMigrationState::Decrypting {
+        return Err(StorageError::bad_input(format!(
+            "payload decryption migration for collection {collection_name} requires migration_state=decrypting; current state is {:?}",
+            encryption.migration_state,
+        )));
+    }
+
+    let collection_crypto_id = collection_config
+        .stable_crypto_id(collection_name)
+        .map_err(StorageError::from)?;
+    let Some(plan) = payload_write_plan_for_collection_with_crypto_id(
+        runtime_settings,
+        collection_name,
+        &collection_crypto_id,
+        &collection_config.params,
+    )
+    .map_err(|err| {
+        StorageError::service_error(format!(
+            "payload encryption runtime for collection {collection_name} is invalid: {err}"
+        ))
+    })?
+    else {
+        return Err(StorageError::bad_input(format!(
+            "payload crypto decryption migration for collection {collection_name} requires server-side payload encryption rules",
+        )));
+    };
+    if !plan.has_server_encrypt_rules() || plan.has_client_envelope_rules() {
+        return Err(StorageError::bad_input(format!(
+            "payload crypto decryption migration for collection {collection_name} requires only server-side payload encryption rules; client-side envelopes are store-only and cannot be decrypted by Qdrant",
+        )));
+    }
+
+    collection
+        .rewrite_payloads_for_crypto_migration(|point_id, payload| {
+            plan.decrypt_payload_for_crypto_migration(&point_id.to_string(), payload)
+                .map_err(|err| {
+                    CollectionError::bad_input(format!(
+                        "payload crypto migration decrypt failed for point {point_id}: {err}",
+                    ))
+                })
+        })
+        .await
+        .map_err(StorageError::from)
+}
+
 async fn maybe_encrypt_upsert_payloads(
     toc: &Arc<TableOfContent>,
     collection_name: &str,

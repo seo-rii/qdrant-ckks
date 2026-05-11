@@ -278,9 +278,15 @@ impl Collection {
                     processed_points += 1;
 
                     let Some(mut payload) = record.payload else {
+                        rewritten_points += 1;
                         continue;
                     };
                     let changed = rewrite_payload(&record.id, &mut payload)?;
+                    // Migration completion checkpoints represent verified
+                    // coverage, not only points that needed byte changes. A
+                    // rerun over already-current data must still be usable as
+                    // the completion proof.
+                    rewritten_points += 1;
                     if changed == 0 {
                         continue;
                     }
@@ -302,7 +308,6 @@ impl Collection {
                             false,
                         )
                         .await?;
-                    rewritten_points += 1;
                 }
 
                 if next_offset.is_none() {

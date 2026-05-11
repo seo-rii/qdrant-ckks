@@ -1454,6 +1454,23 @@ async fn crypto_migration_rewrites_stale_payload_envelopes_and_returns_checkpoin
         checkpoints[0].status,
         CryptoMigrationCheckpointStatus::Verified
     );
+    let checkpoints = collection
+        .rewrite_payloads_for_crypto_migration(|point_id, payload| {
+            rotating_encryptor
+                .encrypt_selected_fields_with_mode(
+                    &point_id.to_string(),
+                    &mut payload.0,
+                    &policy,
+                    ExistingPayloadMode::ReencryptIfStale,
+                )
+                .map_err(|err| CollectionError::bad_input(err.to_string()))
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        checkpoints[0].rewritten_points, 1,
+        "rerunning migration over already-current payloads must still produce a completion checkpoint",
+    );
 
     collection
         .apply_crypto_migration_plan(&CryptoMigrationPlan {
@@ -1512,6 +1529,130 @@ async fn crypto_migration_rewrites_stale_payload_envelopes_and_returns_checkpoin
             .and_then(|epoch| epoch.as_u64()),
         Some(1),
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn crypto_migration_decrypts_payload_envelopes_and_returns_checkpoints() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let mut encryption_config = payload_encryption_config();
+    encryption_config.encryption_epoch = 1;
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, encryption_config).await;
+    let collection_crypto_id = collection.config_snapshot().await.uuid.unwrap().to_string();
+    let policy = PayloadEncryptionPolicy::new(["document.body"]).unwrap();
+    let resource_key = SecretKey::from_bytes([43u8; 32]);
+
+    let encryptor = PayloadTextEncryptor::new_from_resource_key_with_metadata(
+        &collection_crypto_id,
+        "tenant-a:docs",
+        &resource_key,
+        "tenant-a/docs@v1",
+        "tenant-a/docs-rk-v1",
+        1,
+    )
+    .unwrap()
+    .with_encryption_epoch(1);
+    let mut encrypted_payload = Payload(
+        serde_json::json!({ "document": { "body": "decrypt me" } })
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    let (_, verified_server_envelope_keys) = encryptor
+        .encrypt_selected_fields_for_runtime(
+            "1",
+            &mut encrypted_payload.0,
+            &policy,
+            &collection_crypto_id,
+        )
+        .unwrap();
+
+    let upsert = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+        PointInsertOperationsInternal::from(vec![PointStructPersisted {
+            id: 1.into(),
+            vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+            payload: Some(encrypted_payload),
+        }]),
+    ));
+    collection
+        .update_from_client(
+            upsert,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::runtime_encrypted_payloads(verified_server_envelope_keys),
+        )
+        .await
+        .unwrap();
+
+    collection
+        .apply_crypto_migration_plan(&CryptoMigrationPlan {
+            from: CryptoMigrationState::Active,
+            to: CryptoMigrationState::Decrypting,
+            target_epoch: 1,
+            active_rk_id: Some("tenant-a/docs-rk-v1".to_string()),
+            retired_rk_id: None,
+            dry_run: false,
+            checkpoints: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    let checkpoints = collection
+        .rewrite_payloads_for_crypto_migration(|point_id, payload| {
+            encryptor
+                .decrypt_selected_fields_if_encrypted(
+                    &point_id.to_string(),
+                    &mut payload.0,
+                    &policy,
+                )
+                .map_err(|err| CollectionError::bad_input(err.to_string()))
+        })
+        .await
+        .unwrap();
+    assert_eq!(checkpoints.len(), 1);
+    assert_eq!(checkpoints[0].total_points, 1);
+    assert_eq!(checkpoints[0].processed_points, 1);
+    assert_eq!(checkpoints[0].rewritten_points, 1);
+
+    collection
+        .apply_crypto_migration_plan(&CryptoMigrationPlan {
+            from: CryptoMigrationState::Decrypting,
+            to: CryptoMigrationState::Disabled,
+            target_epoch: 1,
+            active_rk_id: Some("tenant-a/docs-rk-v1".to_string()),
+            retired_rk_id: None,
+            dry_run: false,
+            checkpoints,
+        })
+        .await
+        .unwrap();
+
+    let records = collection
+        .retrieve(
+            PointRequestInternal {
+                ids: vec![1.into()],
+                with_payload: Some(WithPayloadInterface::Bool(true)),
+                with_vector: false.into(),
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+    let body = records[0]
+        .payload
+        .as_ref()
+        .unwrap()
+        .0
+        .get("document")
+        .and_then(|document| document.get("body"))
+        .unwrap();
+    assert_eq!(body, &serde_json::json!("decrypt me"));
 }
 
 #[tokio::test(flavor = "multi_thread")]

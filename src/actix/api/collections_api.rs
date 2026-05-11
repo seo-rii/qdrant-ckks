@@ -24,7 +24,9 @@ use crate::actix::auth::ActixAuth;
 use crate::actix::helpers::{self, process_response};
 use crate::common::collections::*;
 use crate::common::crypto::validate_create_collection_crypto_runtime;
-use crate::common::update::do_reencrypt_stale_payloads_for_crypto_migration;
+use crate::common::update::{
+    do_decrypt_payloads_for_crypto_migration, do_reencrypt_stale_payloads_for_crypto_migration,
+};
 use crate::settings::Settings;
 
 #[derive(Debug, Deserialize, Validate)]
@@ -211,6 +213,25 @@ async fn rewrite_payloads_for_crypto_migration(
     process_response(response, timing, None)
 }
 
+#[post("/collections/{collection_name}/crypto/migration/decrypt-payloads")]
+async fn decrypt_payloads_for_crypto_migration(
+    dispatcher: web::Data<Dispatcher>,
+    collection: Path<CollectionPath>,
+    settings: web::Data<Settings>,
+    ActixAuth(auth): ActixAuth,
+) -> impl Responder {
+    let timing = Instant::now();
+    let pass = new_unchecked_verification_pass();
+    let response = do_decrypt_payloads_for_crypto_migration(
+        dispatcher.toc(&auth, &pass),
+        &collection.collection_name,
+        settings.get_ref(),
+        &auth,
+    )
+    .await;
+    process_response(response, timing, None)
+}
+
 #[delete("/collections/{collection_name}")]
 async fn delete_collection(
     dispatcher: web::Data<Dispatcher>,
@@ -363,6 +384,7 @@ pub fn config_collections_api(cfg: &mut web::ServiceConfig) {
         .service(update_collection)
         .service(apply_crypto_migration_plan)
         .service(rewrite_payloads_for_crypto_migration)
+        .service(decrypt_payloads_for_crypto_migration)
         .service(delete_collection)
         .service(get_aliases)
         .service(get_collection_aliases)

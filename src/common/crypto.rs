@@ -234,6 +234,10 @@ pub enum PayloadWriteSetupError {
         binding: String,
     },
     #[error(
+        "client-side payload envelopes cannot be decrypted by Qdrant; use client SDK/key material"
+    )]
+    ClientEnvelopeDecryptUnsupported,
+    #[error(
         "payload crypto instance {instance} uses client-side payload provider and must not configure server materials or backend_ref"
     )]
     ClientProviderMustBeServerBlind { instance: String },
@@ -606,6 +610,31 @@ impl PayloadWritePlan {
         }
 
         Ok(encrypted)
+    }
+
+    pub(crate) fn decrypt_payload_for_crypto_migration(
+        &self,
+        point_id: &str,
+        payload: &mut Payload,
+    ) -> Result<usize, PayloadWriteSetupError> {
+        let mut decrypted = 0;
+
+        for rule in &self.rules {
+            match rule {
+                PayloadWriteRule::ServerEncrypt { encryptor, policy } => {
+                    decrypted += encryptor.decrypt_selected_fields_if_encrypted(
+                        point_id,
+                        &mut payload.0,
+                        policy,
+                    )?;
+                }
+                PayloadWriteRule::ClientEnvelope { .. } => {
+                    return Err(PayloadWriteSetupError::ClientEnvelopeDecryptUnsupported);
+                }
+            }
+        }
+
+        Ok(decrypted)
     }
 
     pub(crate) fn touches_selected_fields(
