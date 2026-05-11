@@ -79,6 +79,7 @@ impl FromPyObject<'_, '_> for PyIndexes {
             match indexes {
                 Indexes::Plain {} => (),
                 Indexes::Hnsw(_) => (),
+                Indexes::CkksCiphertextHnsw { .. } => (),
             }
         }
 
@@ -100,6 +101,9 @@ impl<'py> IntoPyObject<'py> for PyIndexes {
         match self.0 {
             Indexes::Plain {} => PyPlainIndexConfig.into_bound_py_any(py),
             Indexes::Hnsw(hnsw) => PyHnswIndexConfig(hnsw).into_bound_py_any(py),
+            Indexes::CkksCiphertextHnsw { hnsw_config, .. } => {
+                PyHnswIndexConfig(hnsw_config).into_bound_py_any(py)
+            }
         }
     }
 }
@@ -109,6 +113,9 @@ impl Repr for PyIndexes {
         match &self.0 {
             Indexes::Plain {} => PyPlainIndexConfig.fmt(f),
             Indexes::Hnsw(hnsw) => PyHnswIndexConfig::wrap_ref(hnsw).fmt(f),
+            Indexes::CkksCiphertextHnsw { hnsw_config, .. } => {
+                PyHnswIndexConfig::wrap_ref(hnsw_config).fmt(f)
+            }
         }
     }
 }

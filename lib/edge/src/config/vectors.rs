@@ -109,6 +109,7 @@ impl EdgeVectorParams {
             hnsw_config: match index {
                 Indexes::Plain {} => None,
                 Indexes::Hnsw(hnsw_config) => Some(*hnsw_config),
+                Indexes::CkksCiphertextHnsw { hnsw_config, .. } => Some(*hnsw_config),
             },
         }
     }

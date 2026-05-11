@@ -90,6 +90,9 @@ impl EdgeConfig {
             .filter_map(|v| match &v.index {
                 segment::types::Indexes::Plain {} => None,
                 segment::types::Indexes::Hnsw(h) => Some(*h),
+                segment::types::Indexes::CkksCiphertextHnsw { hnsw_config, .. } => {
+                    Some(*hnsw_config)
+                }
             })
             .collect();
         let hnsw_config = hnsw_configs
