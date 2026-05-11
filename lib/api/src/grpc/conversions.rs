@@ -43,6 +43,7 @@ use super::{Expression, Formula, RecoQuery, SnowballParams, StemmingAlgorithm, U
 use crate::conversions::json::{self, json_to_proto};
 use crate::grpc::qdrant::condition::ConditionOneOf;
 use crate::grpc::qdrant::r#match::MatchValue;
+use crate::grpc::qdrant::payload_encrypted_selector::EncryptedPayloadReadMode as GrpcEncryptedPayloadReadMode;
 use crate::grpc::qdrant::payload_index_params::IndexParams;
 use crate::grpc::qdrant::point_id::PointIdOptions;
 use crate::grpc::qdrant::with_payload_selector::SelectorOptions;
@@ -51,14 +52,14 @@ use crate::grpc::qdrant::{
     FieldCondition, Filter, GeoBoundingBox, GeoPoint, GeoPolygon, GeoRadius, HasIdCondition,
     HealthCheckReply, HnswConfigDiff, IntegerIndexParams, IsEmptyCondition, IsNullCondition,
     ListCollectionsResponse, ListShardKeysResponse, Match, MinShould, NamedVectors,
-    NestedCondition, PayloadExcludeSelector, PayloadIncludeSelector, PayloadIndexParams,
-    PayloadSchemaInfo, PayloadSchemaType, PointId, PointStruct, PointsOperationResponse,
-    PointsOperationResponseInternal, ProductQuantization, QuantizationConfig,
-    QuantizationSearchParams, QuantizationType, RepeatedIntegers, RepeatedStrings,
-    ScalarQuantization, ScoredPoint, SearchParams, ShardKey, ShardKeyDescription, StopwordsSet,
-    StrictModeConfig, TextIndexParams, TokenizerType, UpdateResult, UpdateResultInternal,
-    ValuesCount, VectorsSelector, WithPayloadSelector, WithVectorsSelector, shard_key,
-    with_vectors_selector,
+    NestedCondition, PayloadEncryptedSelector, PayloadExcludeSelector, PayloadIncludeSelector,
+    PayloadIndexParams, PayloadSchemaInfo, PayloadSchemaType, PointId, PointStruct,
+    PointsOperationResponse, PointsOperationResponseInternal, ProductQuantization,
+    QuantizationConfig, QuantizationSearchParams, QuantizationType, RepeatedIntegers,
+    RepeatedStrings, ScalarQuantization, ScoredPoint, SearchParams, ShardKey, ShardKeyDescription,
+    StopwordsSet, StrictModeConfig, TextIndexParams, TokenizerType, UpdateResult,
+    UpdateResultInternal, ValuesCount, VectorsSelector, WithPayloadSelector, WithVectorsSelector,
+    shard_key, with_vectors_selector,
 };
 use crate::grpc::{
     self, BinaryQuantizationEncoding, BinaryQuantizationQueryEncoding, DecayParamsExpression,
@@ -821,6 +822,27 @@ impl TryFrom<WithPayloadSelector> for segment::types::WithPayloadInterface {
                         .collect::<Result<_, _>>()?,
                 )
                 .into(),
+                SelectorOptions::Encrypted(s) => segment::types::WithPayloadInterface::Encrypted(
+                    segment::types::PayloadEncryptedReadPolicy {
+                        encrypted_payload: match GrpcEncryptedPayloadReadMode::try_from(s.mode)
+                            .map_err(|_| {
+                                Status::invalid_argument(format!(
+                                    "invalid encrypted payload read mode {}",
+                                    s.mode
+                                ))
+                            })? {
+                            GrpcEncryptedPayloadReadMode::EncryptedPayloadRaw => {
+                                segment::types::EncryptedPayloadReadMode::Raw
+                            }
+                            GrpcEncryptedPayloadReadMode::EncryptedPayloadRedacted => {
+                                segment::types::EncryptedPayloadReadMode::Redacted
+                            }
+                            GrpcEncryptedPayloadReadMode::EncryptedPayloadDecrypted => {
+                                segment::types::EncryptedPayloadReadMode::Decrypted
+                            }
+                        },
+                    },
+                ),
             }),
             _ => Err(Status::invalid_argument("No PayloadSelector".to_string())),
         }
@@ -836,7 +858,20 @@ impl From<segment::types::WithPayloadInterface> for WithPayloadSelector {
                     fields: fields.iter().map(|f| f.to_string()).collect(),
                 })
             }
-            segment::types::WithPayloadInterface::Encrypted(_) => SelectorOptions::Enable(true),
+            segment::types::WithPayloadInterface::Encrypted(policy) => {
+                let mode = match policy.encrypted_payload {
+                    segment::types::EncryptedPayloadReadMode::Raw => {
+                        GrpcEncryptedPayloadReadMode::EncryptedPayloadRaw
+                    }
+                    segment::types::EncryptedPayloadReadMode::Redacted => {
+                        GrpcEncryptedPayloadReadMode::EncryptedPayloadRedacted
+                    }
+                    segment::types::EncryptedPayloadReadMode::Decrypted => {
+                        GrpcEncryptedPayloadReadMode::EncryptedPayloadDecrypted
+                    }
+                };
+                SelectorOptions::Encrypted(PayloadEncryptedSelector { mode: mode as i32 })
+            }
             segment::types::WithPayloadInterface::Selector(selector) => match selector {
                 segment::types::PayloadSelector::Include(s) => {
                     SelectorOptions::Include(PayloadIncludeSelector {
@@ -3574,7 +3609,7 @@ mod tests {
     }
 
     #[test]
-    fn grpc_payload_selector_falls_back_for_encrypted_read_policy() {
+    fn grpc_payload_selector_roundtrips_encrypted_read_policy() {
         let selector: WithPayloadSelector = segment::types::WithPayloadInterface::Encrypted(
             segment::types::PayloadEncryptedReadPolicy {
                 encrypted_payload: segment::types::EncryptedPayloadReadMode::Redacted,
@@ -3584,11 +3619,35 @@ mod tests {
 
         assert_eq!(
             selector.selector_options,
-            Some(SelectorOptions::Enable(true)),
+            Some(SelectorOptions::Encrypted(PayloadEncryptedSelector {
+                mode: GrpcEncryptedPayloadReadMode::EncryptedPayloadRedacted as i32,
+            })),
         );
 
         let roundtrip = segment::types::WithPayloadInterface::try_from(selector).unwrap();
-        assert_eq!(roundtrip, segment::types::WithPayloadInterface::Bool(true));
+        assert_eq!(
+            roundtrip,
+            segment::types::WithPayloadInterface::Encrypted(
+                segment::types::PayloadEncryptedReadPolicy {
+                    encrypted_payload: segment::types::EncryptedPayloadReadMode::Redacted,
+                },
+            ),
+        );
+    }
+
+    #[test]
+    fn grpc_payload_selector_rejects_invalid_encrypted_read_mode() {
+        let selector = WithPayloadSelector {
+            selector_options: Some(SelectorOptions::Encrypted(PayloadEncryptedSelector {
+                mode: 99,
+            })),
+        };
+
+        let err = segment::types::WithPayloadInterface::try_from(selector).unwrap_err();
+        assert!(
+            err.message()
+                .contains("invalid encrypted payload read mode")
+        );
     }
 
     #[test]

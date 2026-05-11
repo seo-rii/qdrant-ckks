@@ -372,12 +372,24 @@ message PayloadExcludeSelector {
   repeated string fields = 1;
 }
 
+message PayloadEncryptedSelector {
+  enum EncryptedPayloadReadMode {
+    ENCRYPTED_PAYLOAD_RAW = 0;
+    ENCRYPTED_PAYLOAD_REDACTED = 1;
+    ENCRYPTED_PAYLOAD_DECRYPTED = 2;
+  }
+
+  // How encrypted payload markers should be returned.
+  EncryptedPayloadReadMode mode = 1;
+}
+
 message WithPayloadSelector {
   oneof selector_options {
     // If `true` - return all payload, if `false` - none
     bool enable = 1;
     PayloadIncludeSelector include = 2;
     PayloadExcludeSelector exclude = 3;
+    PayloadEncryptedSelector encrypted = 4;
   }
 }
 

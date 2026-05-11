@@ -725,7 +725,7 @@ section remains as audit/migration metadata, but it is not treated as effective
 encryption for write/read guards. Re-enabling encryption must start a new admin
 migration transition rather than relying on ordinary params updates.
 Read paths return stored encrypted markers as raw payload values by default.
-REST clients can request `with_payload: {"encrypted_payload":"redacted"}` to
+REST and gRPC clients can request `with_payload: {"encrypted_payload":"redacted"}` to
 receive payloads with server-side, client-side, and CKKS vector sidecar marker
 values replaced by redaction sentinels. `encrypted_payload: "decrypted"` is a
 reserved mode and fails closed until a dedicated RBAC capability and response

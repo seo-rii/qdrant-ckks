@@ -5469,8 +5469,66 @@ pub struct PayloadExcludeSelector {
 #[derive(serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PayloadEncryptedSelector {
+    /// How encrypted payload markers should be returned.
+    #[prost(
+        enumeration = "payload_encrypted_selector::EncryptedPayloadReadMode",
+        tag = "1"
+    )]
+    pub mode: i32,
+}
+/// Nested message and enum types in `PayloadEncryptedSelector`.
+pub mod payload_encrypted_selector {
+    #[derive(serde::Serialize)]
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash,
+        PartialOrd,
+        Ord,
+        ::prost::Enumeration
+    )]
+    #[repr(i32)]
+    pub enum EncryptedPayloadReadMode {
+        EncryptedPayloadRaw = 0,
+        EncryptedPayloadRedacted = 1,
+        EncryptedPayloadDecrypted = 2,
+    }
+    impl EncryptedPayloadReadMode {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                EncryptedPayloadReadMode::EncryptedPayloadRaw => "ENCRYPTED_PAYLOAD_RAW",
+                EncryptedPayloadReadMode::EncryptedPayloadRedacted => {
+                    "ENCRYPTED_PAYLOAD_REDACTED"
+                }
+                EncryptedPayloadReadMode::EncryptedPayloadDecrypted => {
+                    "ENCRYPTED_PAYLOAD_DECRYPTED"
+                }
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "ENCRYPTED_PAYLOAD_RAW" => Some(Self::EncryptedPayloadRaw),
+                "ENCRYPTED_PAYLOAD_REDACTED" => Some(Self::EncryptedPayloadRedacted),
+                "ENCRYPTED_PAYLOAD_DECRYPTED" => Some(Self::EncryptedPayloadDecrypted),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WithPayloadSelector {
-    #[prost(oneof = "with_payload_selector::SelectorOptions", tags = "1, 2, 3")]
+    #[prost(oneof = "with_payload_selector::SelectorOptions", tags = "1, 2, 3, 4")]
     pub selector_options: ::core::option::Option<with_payload_selector::SelectorOptions>,
 }
 /// Nested message and enum types in `WithPayloadSelector`.
@@ -5486,6 +5544,8 @@ pub mod with_payload_selector {
         Include(super::PayloadIncludeSelector),
         #[prost(message, tag = "3")]
         Exclude(super::PayloadExcludeSelector),
+        #[prost(message, tag = "4")]
+        Encrypted(super::PayloadEncryptedSelector),
     }
 }
 #[derive(validator::Validate)]
