@@ -563,6 +563,81 @@ mod tests {
         );
     }
 
+    #[test]
+    fn encrypted_vector_does_not_trigger_plaintext_config_mismatch_optimizer() {
+        init();
+
+        let mut holder = SegmentHolder::default();
+        let dim = 256;
+
+        let segments_dir = Builder::new().prefix("segments_dir").tempdir().unwrap();
+        let segments_temp_dir = Builder::new()
+            .prefix("segments_temp_dir")
+            .tempdir()
+            .unwrap();
+
+        let segment = random_segment(segments_dir.path(), 101, 200, dim);
+        let segment_config = segment.segment_config.clone();
+        holder.add_new(segment);
+
+        let config_mismatch_optimizer = new_config_mismatch_optimizer(
+            OptimizerThresholds {
+                max_segment_size_kb: 300,
+                memmap_threshold_kb: 1,
+                indexing_threshold_kb: 1,
+                deferred_internal_id: None,
+            },
+            segments_dir.path().to_owned(),
+            segments_temp_dir.path().to_owned(),
+            CollectionParams {
+                vectors: VectorsConfig::Single(
+                    VectorParamsBuilder::new(
+                        segment_config.vector_data[DEFAULT_VECTOR_NAME].size as u64,
+                        segment_config.vector_data[DEFAULT_VECTOR_NAME].distance,
+                    )
+                    .with_on_disk(true)
+                    .build(),
+                ),
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 3,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "default_vector_conf".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec![DEFAULT_VECTOR_NAME.to_string()],
+                        },
+                        instance: "docs_vector_v1".to_string(),
+                        binding: Some("vector-envelope/v1".to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            },
+            HnswConfig {
+                m: 32,
+                ef_construct: 200,
+                full_scan_threshold: 1,
+                max_indexing_threads: 0,
+                on_disk: Some(true),
+                payload_m: None,
+                inline_storage: None,
+            },
+            HnswGlobalConfig::default(),
+            None,
+        );
+
+        let locked_holder = LockedSegmentHolder::new(holder);
+        let suggested_to_optimize =
+            config_mismatch_optimizer.plan_optimizations_for_test(&locked_holder);
+
+        assert!(
+            suggested_to_optimize.is_empty(),
+            "encrypted vectors must not be planned for plaintext config-mismatch rebuilds",
+        );
+    }
+
     /// Test that indexing optimizer maintain expected number of during the optimization duty
     #[test]
     fn test_indexing_optimizer_with_number_of_segments() {

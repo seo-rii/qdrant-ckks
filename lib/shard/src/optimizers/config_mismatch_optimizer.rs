@@ -83,6 +83,14 @@ impl ConfigMismatchOptimizer {
                 .vector_data
                 .iter()
                 .any(|(vector_name, vector_data)| {
+                    if self
+                        .segment_optimizer_config
+                        .encrypted_vector_names
+                        .contains(vector_name)
+                    {
+                        return false;
+                    }
+
                     // Check HNSW mismatch
                     match &vector_data.index {
                         Indexes::Plain {} => {}
