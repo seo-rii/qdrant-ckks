@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -6,6 +6,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime};
 
 use api::rest::{RecommendStrategy, SearchGroupsRequestInternal, SearchRequestInternal};
+use collection::collection::ckks_search::CkksCiphertextSegmentIndexSnapshot;
 use collection::collection::distance_matrix::*;
 use collection::common::batching::batch_requests;
 use collection::config::EncryptionSelector;
@@ -1365,20 +1366,45 @@ async fn ckks_vector_search_points_with_scoring(
                 "non-nearest or unsupported CKKS HNSW sidecar search was rejected before scrolling"
             ),
         };
-        for scored_point in ckks_sidecar_hnsw_search_points(
-            collection_name,
-            collection_crypto_id,
-            vector_name,
-            collection.path(),
-            plan,
-            &hnsw_records,
-            hnsw_query,
-            distance,
-            score_order,
-            score_threshold,
-            hnsw_ef,
-            offset.saturating_add(limit),
-        )? {
+        let hnsw_top = offset.saturating_add(limit);
+        let segment_snapshots = if filter.is_none() {
+            collection
+                .ckks_ciphertext_hnsw_index_snapshots(vector_name, shard_selection)
+                .await?
+        } else {
+            Vec::new()
+        };
+        let hnsw_points =
+            if ckks_sidecar_segment_snapshots_cover_records(&segment_snapshots, &hnsw_records) {
+                ckks_sidecar_hnsw_search_segment_snapshots(
+                    collection_name,
+                    vector_name,
+                    plan,
+                    &segment_snapshots,
+                    hnsw_query,
+                    score_order,
+                    score_threshold,
+                    hnsw_ef,
+                    hnsw_top,
+                )?
+            } else {
+                ckks_sidecar_hnsw_search_points(
+                    collection_name,
+                    collection_crypto_id,
+                    vector_name,
+                    collection.path(),
+                    plan,
+                    &hnsw_records,
+                    hnsw_query,
+                    distance,
+                    score_order,
+                    score_threshold,
+                    hnsw_ef,
+                    hnsw_top,
+                )?
+            };
+
+        for scored_point in hnsw_points {
             match scored_by_id.entry(scored_point.id) {
                 std::collections::hash_map::Entry::Occupied(mut entry) => {
                     if ckks_scored_point_is_better(score_order, &scored_point, entry.get()) {
@@ -2309,6 +2335,171 @@ fn ckks_sidecar_indexed_records(
             ))
         })
         .collect()
+}
+
+fn ckks_sidecar_segment_snapshots_cover_records(
+    snapshots: &[CkksCiphertextSegmentIndexSnapshot],
+    records: &[CkksSidecarSearchRecord],
+) -> bool {
+    let snapshot_records_len = snapshots
+        .iter()
+        .map(|snapshot| snapshot.records.len())
+        .sum::<usize>();
+    if snapshot_records_len != records.len() || snapshot_records_len == 0 {
+        return false;
+    }
+
+    let expected = records
+        .iter()
+        .map(ckks_sidecar_record_identity)
+        .collect::<HashSet<_>>();
+    if expected.len() != records.len() {
+        return false;
+    }
+
+    let actual = snapshots
+        .iter()
+        .flat_map(|snapshot| {
+            snapshot.records.iter().map(|record| {
+                (
+                    record.id,
+                    record.point_id.clone(),
+                    record.encrypted.envelope.key_id.clone(),
+                    record.encrypted.envelope.material_fingerprint.clone(),
+                    record.encrypted.envelope.rk_id.clone(),
+                    record.encrypted.envelope.rk_epoch,
+                    record.encrypted.envelope.ciphertext.clone(),
+                )
+            })
+        })
+        .collect::<HashSet<_>>();
+    expected == actual
+}
+
+fn ckks_sidecar_record_identity(
+    record: &CkksSidecarSearchRecord,
+) -> (
+    PointIdType,
+    String,
+    String,
+    String,
+    String,
+    Option<u64>,
+    String,
+) {
+    (
+        record.id,
+        record.point_id.clone(),
+        record.encrypted.envelope.key_id.clone(),
+        record.encrypted.envelope.material_fingerprint.clone(),
+        record.encrypted.envelope.rk_id.clone(),
+        record.encrypted.envelope.rk_epoch,
+        record.encrypted.envelope.ciphertext.clone(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ckks_sidecar_hnsw_search_segment_snapshots(
+    collection_name: &str,
+    vector_name: &str,
+    plan: &crate::common::crypto::VectorWritePlan,
+    snapshots: &[CkksCiphertextSegmentIndexSnapshot],
+    query: CkksSidecarHnswQuery<'_>,
+    score_order: Order,
+    score_threshold: Option<f32>,
+    hnsw_ef: usize,
+    top: usize,
+) -> Result<Vec<ScoredPoint>, StorageError> {
+    if snapshots.is_empty() || top == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut scored_by_id = HashMap::<PointIdType, ScoredPoint>::new();
+    for snapshot in snapshots {
+        if snapshot.records.is_empty() {
+            continue;
+        }
+        let ef = hnsw_ef.max(top).max(1).min(snapshot.records.len());
+        let indexed_records = snapshot
+            .records
+            .iter()
+            .map(|record| record.indexed_record.clone())
+            .collect::<Vec<_>>();
+        let Some(index) =
+            CkksCiphertextVectorIndex::from_graph(indexed_records, snapshot.graph.clone())
+        else {
+            return Err(StorageError::service_error(
+                "segment CKKS ciphertext HNSW graph did not match indexed records",
+            ));
+        };
+        let records_by_offset = snapshot
+            .records
+            .iter()
+            .map(|record| (record.indexed_record.point_offset, record))
+            .collect::<HashMap<_, _>>();
+        let hits = index.search_ciphertext_records(
+            ef,
+            top,
+            score_order,
+            score_threshold,
+            |candidates| {
+                let encrypted_items = candidates
+                    .iter()
+                    .map(|candidate| {
+                        let record = records_by_offset
+                            .get(&candidate.point_offset)
+                            .ok_or_else(|| {
+                                StorageError::service_error(format!(
+                                    "segment CKKS ciphertext HNSW candidate {} is missing from snapshot records",
+                                    candidate.point_offset,
+                                ))
+                            })?;
+                        Ok((record.point_id.clone(), record.encrypted.clone()))
+                    })
+                    .collect::<Result<Vec<_>, StorageError>>()?;
+                ckks_sidecar_score_hnsw_query_batch(
+                    collection_name,
+                    vector_name,
+                    plan,
+                    query,
+                    &encrypted_items,
+                )
+            },
+        )?;
+
+        for hit in hits {
+            let Some(record) = records_by_offset.get(&hit.record.point_offset) else {
+                return Err(StorageError::service_error(format!(
+                    "segment CKKS ciphertext HNSW hit {} is missing from snapshot records",
+                    hit.record.point_offset,
+                )));
+            };
+            let scored_point = ScoredPoint {
+                id: record.id,
+                version: 0,
+                score: hit.score,
+                payload: None,
+                vector: None,
+                shard_key: record.shard_key.clone(),
+                order_value: None,
+            };
+            match scored_by_id.entry(scored_point.id) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    if ckks_scored_point_is_better(score_order, &scored_point, entry.get()) {
+                        entry.insert(scored_point);
+                    }
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(scored_point);
+                }
+            }
+        }
+    }
+
+    let mut scored = scored_by_id.into_values().collect::<Vec<_>>();
+    sort_ckks_scored_points(score_order, &mut scored);
+    scored.truncate(top);
+    Ok(scored)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6472,6 +6663,7 @@ async fn ckks_vector_search_points_matrix(
 
 #[cfg(test)]
 mod tests {
+    use collection::collection::ckks_search::CkksCiphertextSegmentSearchRecord;
     use segment::types::Distance;
     use serde_json::json;
 
@@ -6644,6 +6836,63 @@ mod tests {
         let changed = ckks_sidecar_hnsw_records_fingerprint(&[rotated]);
 
         assert_ne!(first, changed);
+    }
+
+    #[test]
+    fn ckks_sidecar_segment_snapshots_must_cover_scroll_records() {
+        let first = ckks_sidecar_test_record(1, "ciphertext-a");
+        let second = ckks_sidecar_test_record(2, "ciphertext-b");
+        let snapshots = vec![ckks_sidecar_test_segment_snapshot(vec![
+            first.clone(),
+            second.clone(),
+        ])];
+
+        assert!(ckks_sidecar_segment_snapshots_cover_records(
+            &snapshots,
+            &[first.clone(), second.clone()],
+        ));
+        assert!(!ckks_sidecar_segment_snapshots_cover_records(
+            &snapshots,
+            &[first],
+        ));
+
+        let mut changed = second;
+        changed.encrypted.envelope.rk_epoch = Some(2);
+        assert!(!ckks_sidecar_segment_snapshots_cover_records(
+            &snapshots,
+            &[ckks_sidecar_test_record(1, "ciphertext-a"), changed],
+        ));
+    }
+
+    fn ckks_sidecar_test_segment_snapshot(
+        records: Vec<CkksSidecarSearchRecord>,
+    ) -> CkksCiphertextSegmentIndexSnapshot {
+        let indexed_records = records
+            .iter()
+            .enumerate()
+            .map(|(idx, record)| {
+                CkksCiphertextIndexedRecord::new(
+                    idx as _,
+                    record.encrypted.envelope.ciphertext.as_bytes().to_vec(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let graph = CkksCiphertextHnswGraph::build_optimizer_candidate_graph(records.len(), 2);
+        let records = records
+            .into_iter()
+            .zip(indexed_records)
+            .map(
+                |(record, indexed_record)| CkksCiphertextSegmentSearchRecord {
+                    id: record.id,
+                    shard_key: record.shard_key,
+                    point_id: record.point_id,
+                    indexed_record,
+                    encrypted: record.encrypted,
+                },
+            )
+            .collect();
+
+        CkksCiphertextSegmentIndexSnapshot { records, graph }
     }
 
     #[test]
