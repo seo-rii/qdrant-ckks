@@ -2477,27 +2477,28 @@ fn ckks_sidecar_hnsw_search_points(
             "CKKS ciphertext HNSW graph did not match indexed records",
         ));
     };
-    let hits = index.search_ciphertext(ef, top, score_order, score_threshold, |candidates| {
-        let encrypted_items = candidates
-            .iter()
-            .map(|candidate| {
-                let candidate = &records[candidate.point_offset as usize];
-                (candidate.point_id.clone(), candidate.encrypted.clone())
-            })
-            .collect::<Vec<_>>();
-        ckks_sidecar_score_hnsw_query_batch(
-            collection_name,
-            vector_name,
-            plan,
-            query,
-            &encrypted_items,
-        )
-    })?;
+    let hits =
+        index.search_ciphertext_records(ef, top, score_order, score_threshold, |candidates| {
+            let encrypted_items = candidates
+                .iter()
+                .map(|candidate| {
+                    let candidate = &records[candidate.point_offset as usize];
+                    (candidate.point_id.clone(), candidate.encrypted.clone())
+                })
+                .collect::<Vec<_>>();
+            ckks_sidecar_score_hnsw_query_batch(
+                collection_name,
+                vector_name,
+                plan,
+                query,
+                &encrypted_items,
+            )
+        })?;
 
     Ok(hits
         .into_iter()
         .map(|hit| {
-            let record = &records[hit.idx as usize];
+            let record = &records[hit.record.point_offset as usize];
             ScoredPoint {
                 id: record.id,
                 version: 0,
