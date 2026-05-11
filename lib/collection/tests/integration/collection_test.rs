@@ -1194,6 +1194,110 @@ async fn crypto_migration_plan_updates_collection_config_through_admin_path() {
                 && description.contains("regular writes")
     ));
 
+    let assert_migration_read_error = |err: CollectionError| {
+        assert!(matches!(
+            err,
+            CollectionError::BadInput { description }
+                if description.contains("encryption migration")
+                    && description.contains("regular reads")
+        ));
+    };
+
+    assert_migration_read_error(
+        collection
+            .scroll_by(
+                ScrollRequestInternal {
+                    offset: None,
+                    limit: Some(1),
+                    filter: None,
+                    with_payload: None,
+                    with_vector: false.into(),
+                    order_by: None,
+                },
+                None,
+                &ShardSelectorInternal::All,
+                None,
+                HwMeasurementAcc::new(),
+            )
+            .await
+            .unwrap_err(),
+    );
+    assert_migration_read_error(
+        collection
+            .count(
+                CountRequestInternal {
+                    filter: None,
+                    exact: true,
+                },
+                None,
+                &ShardSelectorInternal::All,
+                None,
+                HwMeasurementAcc::new(),
+            )
+            .await
+            .unwrap_err(),
+    );
+    assert_migration_read_error(
+        collection
+            .retrieve(
+                PointRequestInternal {
+                    ids: vec![0.into()],
+                    with_payload: None,
+                    with_vector: WithVector::Bool(false),
+                },
+                None,
+                &ShardSelectorInternal::All,
+                None,
+                HwMeasurementAcc::new(),
+            )
+            .await
+            .unwrap_err(),
+    );
+    assert_migration_read_error(
+        collection
+            .search(
+                SearchRequestInternal {
+                    vector: vec![1.0, 0.0, 0.0, 0.0].into(),
+                    with_payload: None,
+                    with_vector: None,
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    score_threshold: None,
+                }
+                .into(),
+                None,
+                &ShardSelectorInternal::All,
+                None,
+                HwMeasurementAcc::new(),
+            )
+            .await
+            .unwrap_err(),
+    );
+    assert_migration_read_error(
+        collection
+            .query(
+                ShardQueryRequest {
+                    prefetches: vec![],
+                    query: Some(ScoringQuery::Sample(SampleInternal::Random)),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                },
+                None,
+                ShardSelectorInternal::All,
+                None,
+                HwMeasurementAcc::new(),
+            )
+            .await
+            .unwrap_err(),
+    );
+
     let stale_start = CryptoMigrationPlan {
         from: CryptoMigrationState::Active,
         to: CryptoMigrationState::Rotating,

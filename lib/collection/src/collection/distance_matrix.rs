@@ -156,6 +156,8 @@ impl Collection {
         if limit_per_sample == 0 || sample_size == 0 {
             return Ok(Default::default());
         }
+        self.ensure_crypto_migration_allows_regular_operation("reads")
+            .await?;
 
         let config = self.collection_config.read().await;
         config.params.check_vector_exists(&using)?;

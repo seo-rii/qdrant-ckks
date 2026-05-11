@@ -27,6 +27,8 @@ impl Collection {
         if request.limit == 0 {
             return Ok(FacetResponse::default());
         }
+        self.ensure_crypto_migration_allows_regular_operation("reads")
+            .await?;
 
         if let Some(encryption) = self
             .collection_config

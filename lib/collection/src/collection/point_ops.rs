@@ -44,6 +44,15 @@ use crate::operations::{CollectionUpdateOperations, OperationWithClockTag};
 use crate::shards::shard::ShardId;
 use crate::shards::shard_trait::WaitUntil;
 
+fn crypto_migration_regular_operation_error(
+    migration_state: CryptoMigrationState,
+    operation_kind: &str,
+) -> CollectionError {
+    CollectionError::bad_input(format!(
+        "collection encryption migration is {migration_state:?}; regular {operation_kind} require migration_state=active and crypto migration jobs must use the dedicated migration path",
+    ))
+}
+
 impl Collection {
     pub(crate) async fn backfill_client_payload_nonce_replay_cache_from_storage(
         &self,
@@ -332,10 +341,10 @@ impl Collection {
         if let Some(encryption) = encryption.as_ref()
             && encryption.migration_state != CryptoMigrationState::Active
         {
-            return Err(CollectionError::bad_input(format!(
-                "collection encryption migration is {:?}; regular writes require migration_state=active and crypto migration jobs must use the dedicated migration path",
+            return Err(crypto_migration_regular_operation_error(
                 encryption.migration_state,
-            )));
+                "writes",
+            ));
         }
         if encryption.is_some() {
             match &operation {
@@ -1272,6 +1281,29 @@ impl Collection {
         .await
     }
 
+    pub(crate) async fn ensure_crypto_migration_allows_regular_operation(
+        &self,
+        operation_kind: &str,
+    ) -> CollectionResult<()> {
+        let Some(encryption) = self
+            .collection_config
+            .read()
+            .await
+            .params
+            .effective_encryption()
+        else {
+            return Ok(());
+        };
+        if encryption.migration_state != CryptoMigrationState::Active {
+            return Err(crypto_migration_regular_operation_error(
+                encryption.migration_state,
+                operation_kind,
+            ));
+        }
+
+        Ok(())
+    }
+
     pub async fn scroll_by(
         &self,
         mut request: ScrollRequestInternal,
@@ -1291,6 +1323,8 @@ impl Collection {
                 description: "Limit cannot be 0".to_string(),
             });
         }
+        self.ensure_crypto_migration_allows_regular_operation("reads")
+            .await?;
         self.ensure_filter_does_not_touch_encrypted_payload(request.filter.as_ref())
             .await?;
 
@@ -1386,6 +1420,8 @@ impl Collection {
         timeout: Option<Duration>,
         hw_measurement_acc: HwMeasurementAcc,
     ) -> CollectionResult<CountResult> {
+        self.ensure_crypto_migration_allows_regular_operation("reads")
+            .await?;
         self.ensure_filter_does_not_touch_encrypted_payload(request.filter.as_ref())
             .await?;
 
@@ -1473,6 +1509,8 @@ impl Collection {
         if request.ids.is_empty() {
             return Ok(Vec::new());
         }
+        self.ensure_crypto_migration_allows_regular_operation("reads")
+            .await?;
         self.ensure_with_vector_does_not_touch_encrypted_vector(&request.with_vector)
             .await?;
         let with_payload_interface = request

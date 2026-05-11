@@ -62,6 +62,8 @@ impl Collection {
         if request.searches.iter().all(|s| s.limit == 0) {
             return Ok(vec![]);
         }
+        self.ensure_crypto_migration_allows_regular_operation("reads")
+            .await?;
         for search in &request.searches {
             self.ensure_filter_does_not_touch_encrypted_payload(search.filter.as_ref())
                 .await?;

@@ -215,6 +215,8 @@ impl Collection {
         if requests_batch.iter().all(|s| s.limit == 0) {
             return Ok(vec![]);
         }
+        self.ensure_crypto_migration_allows_regular_operation("reads")
+            .await?;
 
         for request in &requests_batch {
             for filter in request.filter_refs() {
