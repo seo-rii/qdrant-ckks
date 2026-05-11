@@ -4265,6 +4265,97 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn encrypted_vector_segment_snapshot_reports_unindexed_sidecars_as_residual() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, vector_encryption_config()).await;
+    let collection_crypto_id = collection.config_snapshot().await.uuid.unwrap().to_string();
+
+    collection
+        .update_from_client_simple(
+            CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+                PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                    id: 1.into(),
+                    vector: VectorStructPersisted::Named(HashMap::new()),
+                    payload: None,
+                }]),
+            )),
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+
+    let encryptor = CkksVectorEncryptor::new_from_resource_key_with_metadata(
+        "tenant-a:docs",
+        DEFAULT_VECTOR_NAME,
+        CkksParameters::default(),
+        &SecretKey::from_bytes([31u8; 32]),
+        "tenant-a/vector@v1",
+        "tenant-a/vector-rk@v1",
+        1,
+        CollectionTestCkksBackend,
+    )
+    .unwrap()
+    .with_collection_identity(collection_crypto_id)
+    .unwrap();
+    let public_material =
+        CkksPublicMaterial::new(b"openfhe context".to_vec(), b"openfhe public key".to_vec())
+            .unwrap();
+    let (envelope, verified_sidecar_key) = encryptor
+        .encrypt_sidecar_payload_value("docs", "1", &public_material, &[1.0, 2.0])
+        .unwrap();
+    let expected_ciphertext = envelope
+        .as_object()
+        .and_then(|entry| entry.get(ENCRYPTED_CKKS_VECTOR_MARKER))
+        .and_then(|marker| marker.get("envelope"))
+        .and_then(|envelope| envelope.get("ciphertext"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap()
+        .as_bytes()
+        .to_vec();
+    let mut sidecar = Map::new();
+    sidecar.insert(DEFAULT_VECTOR_NAME.to_string(), envelope);
+    let mut payload = Map::new();
+    payload.insert(
+        ENCRYPTED_VECTOR_SIDECAR_FIELD.to_string(),
+        serde_json::Value::Object(sidecar),
+    );
+    collection
+        .update_from_client(
+            CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
+                payload: Payload(payload),
+                points: Some(vec![1.into()]),
+                filter: None,
+                key: None,
+            })),
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::runtime_encrypted_vectors(vec![verified_sidecar_key]),
+        )
+        .await
+        .unwrap();
+
+    let snapshot = collection
+        .ckks_ciphertext_segment_search_snapshot(DEFAULT_VECTOR_NAME, &ShardSelectorInternal::All)
+        .await
+        .unwrap();
+
+    assert!(snapshot.complete);
+    assert!(snapshot.indexed_segments.is_empty());
+    assert_eq!(snapshot.residual_records.len(), 1);
+    let residual = &snapshot.residual_records[0];
+    assert_eq!(residual.id, PointIdType::NumId(1));
+    assert_eq!(residual.point_id, "1");
+    assert_eq!(residual.indexed_record.ciphertext, expected_ciphertext);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn encrypted_vector_rejects_plaintext_vector_reads() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection =

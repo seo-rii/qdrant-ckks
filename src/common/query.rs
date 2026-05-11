@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -6,7 +6,9 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime};
 
 use api::rest::{RecommendStrategy, SearchGroupsRequestInternal, SearchRequestInternal};
-use collection::collection::ckks_search::CkksCiphertextSegmentIndexSnapshot;
+use collection::collection::ckks_search::{
+    CkksCiphertextSegmentIndexSnapshot, CkksCiphertextSegmentSearchRecord,
+};
 use collection::collection::distance_matrix::*;
 use collection::common::batching::batch_requests;
 use collection::config::EncryptionSelector;
@@ -817,6 +819,122 @@ async fn ckks_vector_search_points_with_scoring(
             "encrypted vector '{vector_name}' HNSW sidecar search currently supports only dense, client-encrypted, or point-id nearest-neighbor queries",
         )));
     }
+    if let Some(hnsw_ef) = hnsw_ef
+        && filter.is_none()
+        && read_consistency.is_none()
+    {
+        let segment_snapshot = collection
+            .ckks_ciphertext_segment_search_snapshot(vector_name, shard_selection)
+            .await?;
+        if segment_snapshot.complete {
+            let hnsw_query = match &scoring {
+                CkksSidecarScoring::Nearest { query_values } => {
+                    CkksSidecarHnswQuery::Dense(query_values)
+                }
+                CkksSidecarScoring::NearestResolved {
+                    query:
+                        CkksSidecarQuerySource::ClientEncrypted {
+                            context_digest,
+                            slots,
+                            ciphertext,
+                        },
+                } => CkksSidecarHnswQuery::ClientEncrypted {
+                    context_digest,
+                    slots: *slots,
+                    ciphertext,
+                },
+                CkksSidecarScoring::StoredNearest {
+                    query_point_id,
+                    query_encrypted,
+                } => CkksSidecarHnswQuery::Stored {
+                    query_point_id,
+                    query_encrypted,
+                },
+                _ => unreachable!(
+                    "non-nearest or unsupported CKKS HNSW sidecar search was rejected before segment search"
+                ),
+            };
+            let hnsw_top = offset.saturating_add(limit);
+            let mut segment_scored_by_id = HashMap::<_, ScoredPoint>::new();
+            let indexed_points = ckks_sidecar_hnsw_search_segment_snapshots(
+                collection_name,
+                vector_name,
+                plan,
+                &segment_snapshot.indexed_segments,
+                hnsw_query,
+                score_order,
+                score_threshold,
+                hnsw_ef,
+                hnsw_top,
+            )?;
+            let residual_records = segment_snapshot
+                .residual_records
+                .into_iter()
+                .map(
+                    |CkksCiphertextSegmentSearchRecord {
+                         id,
+                         shard_key,
+                         point_id,
+                         encrypted,
+                         ..
+                     }| CkksSidecarSearchRecord {
+                        id,
+                        shard_key,
+                        point_id,
+                        encrypted,
+                    },
+                )
+                .collect::<Vec<_>>();
+            let residual_points = ckks_sidecar_hnsw_search_points(
+                collection_name,
+                collection_crypto_id,
+                vector_name,
+                collection.path(),
+                plan,
+                &residual_records,
+                hnsw_query,
+                distance,
+                score_order,
+                score_threshold,
+                residual_records.len(),
+                hnsw_top,
+            )?;
+
+            for scored_point in indexed_points.into_iter().chain(residual_points) {
+                match segment_scored_by_id.entry(scored_point.id) {
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        if ckks_scored_point_is_better(score_order, &scored_point, entry.get()) {
+                            entry.insert(scored_point);
+                        }
+                    }
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(scored_point);
+                    }
+                }
+            }
+
+            let mut scored = segment_scored_by_id.into_values().collect::<Vec<_>>();
+            sort_ckks_scored_points(score_order, &mut scored);
+            let mut top = scored
+                .into_iter()
+                .skip(offset)
+                .take(limit)
+                .collect::<Vec<_>>();
+            ckks_fill_scored_points_payload_or_vectors(
+                collection,
+                &mut top,
+                with_payload.unwrap_or(WithPayloadInterface::Bool(false)),
+                with_vector,
+                read_consistency,
+                shard_selection,
+                timeout,
+                hw_measurement_acc,
+            )
+            .await?;
+
+            return Ok(top);
+        }
+    }
 
     let mut next_offset = None;
     let mut scored_by_id = std::collections::HashMap::<_, ScoredPoint>::new();
@@ -1367,42 +1485,20 @@ async fn ckks_vector_search_points_with_scoring(
             ),
         };
         let hnsw_top = offset.saturating_add(limit);
-        let segment_snapshots = if filter.is_none() {
-            collection
-                .ckks_ciphertext_hnsw_index_snapshots(vector_name, shard_selection)
-                .await?
-        } else {
-            Vec::new()
-        };
-        let hnsw_points =
-            if ckks_sidecar_segment_snapshots_cover_records(&segment_snapshots, &hnsw_records) {
-                ckks_sidecar_hnsw_search_segment_snapshots(
-                    collection_name,
-                    vector_name,
-                    plan,
-                    &segment_snapshots,
-                    hnsw_query,
-                    score_order,
-                    score_threshold,
-                    hnsw_ef,
-                    hnsw_top,
-                )?
-            } else {
-                ckks_sidecar_hnsw_search_points(
-                    collection_name,
-                    collection_crypto_id,
-                    vector_name,
-                    collection.path(),
-                    plan,
-                    &hnsw_records,
-                    hnsw_query,
-                    distance,
-                    score_order,
-                    score_threshold,
-                    hnsw_ef,
-                    hnsw_top,
-                )?
-            };
+        let hnsw_points = ckks_sidecar_hnsw_search_points(
+            collection_name,
+            collection_crypto_id,
+            vector_name,
+            collection.path(),
+            plan,
+            &hnsw_records,
+            hnsw_query,
+            distance,
+            score_order,
+            score_threshold,
+            hnsw_ef,
+            hnsw_top,
+        )?;
 
         for scored_point in hnsw_points {
             match scored_by_id.entry(scored_point.id) {
@@ -2337,6 +2433,7 @@ fn ckks_sidecar_indexed_records(
         .collect()
 }
 
+#[cfg(test)]
 fn ckks_sidecar_segment_snapshots_cover_records(
     snapshots: &[CkksCiphertextSegmentIndexSnapshot],
     records: &[CkksSidecarSearchRecord],
@@ -2352,7 +2449,7 @@ fn ckks_sidecar_segment_snapshots_cover_records(
     let expected = records
         .iter()
         .map(ckks_sidecar_record_identity)
-        .collect::<HashSet<_>>();
+        .collect::<std::collections::HashSet<_>>();
     if expected.len() != records.len() {
         return false;
     }
@@ -2372,10 +2469,11 @@ fn ckks_sidecar_segment_snapshots_cover_records(
                 )
             })
         })
-        .collect::<HashSet<_>>();
+        .collect::<std::collections::HashSet<_>>();
     expected == actual
 }
 
+#[cfg(test)]
 fn ckks_sidecar_record_identity(
     record: &CkksSidecarSearchRecord,
 ) -> (

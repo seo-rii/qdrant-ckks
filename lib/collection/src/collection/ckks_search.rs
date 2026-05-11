@@ -23,24 +23,40 @@ pub struct CkksCiphertextSegmentIndexSnapshot {
     pub graph: CkksCiphertextHnswGraph,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct CkksCiphertextSegmentSearchSnapshot {
+    pub indexed_segments: Vec<CkksCiphertextSegmentIndexSnapshot>,
+    pub residual_records: Vec<CkksCiphertextSegmentSearchRecord>,
+    pub complete: bool,
+}
+
 impl Collection {
-    pub async fn ckks_ciphertext_hnsw_index_snapshots(
+    pub async fn ckks_ciphertext_segment_search_snapshot(
         &self,
         vector_name: &str,
         shard_selection: &ShardSelectorInternal,
-    ) -> CollectionResult<Vec<CkksCiphertextSegmentIndexSnapshot>> {
+    ) -> CollectionResult<CkksCiphertextSegmentSearchSnapshot> {
         let shard_holder = self.shards_holder.read().await;
         let target_shards = shard_holder.select_shards(shard_selection)?;
-        let mut snapshots = Vec::new();
+        let mut snapshot = CkksCiphertextSegmentSearchSnapshot {
+            indexed_segments: Vec::new(),
+            residual_records: Vec::new(),
+            complete: true,
+        };
 
         for (replica_set, shard_key) in target_shards {
-            snapshots.extend(
-                replica_set
-                    .ckks_ciphertext_hnsw_index_snapshots(vector_name, shard_key.cloned())
-                    .await?,
-            );
+            let shard_snapshot = replica_set
+                .ckks_ciphertext_segment_search_snapshot(vector_name, shard_key.cloned())
+                .await?;
+            snapshot
+                .indexed_segments
+                .extend(shard_snapshot.indexed_segments);
+            snapshot
+                .residual_records
+                .extend(shard_snapshot.residual_records);
+            snapshot.complete &= shard_snapshot.complete;
         }
 
-        Ok(snapshots)
+        Ok(snapshot)
     }
 }

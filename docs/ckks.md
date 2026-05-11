@@ -793,10 +793,12 @@ point's stored ciphertext. Segment optimization counts CKKS vector sidecar
 ciphertext bytes for encrypted vector thresholds and builds an immutable
 `CkksCiphertextHnsw` vector index artifact instead of plaintext HNSW, plain
 mmap conversion, or quantization. For unfiltered nearest-neighbor requests,
-serving-time CKKS search first loads those segment-native artifacts and uses
-them when their record set exactly matches the encrypted sidecars observed
-through the read path. If no matching segment artifact is available, or if a
-filter narrows the candidate set, Qdrant falls back to the collection-level
+serving-time CKKS search first loads those segment-native artifacts for
+unfiltered requests without an explicit read-consistency override. Indexed
+segments are searched through their native CKKS graph, while sidecars that still
+live in non-indexed segments are brute-force scored and merged. If a target shard
+is not locally inspectable, a filter narrows the candidate set, or the request
+requires explicit read consistency, Qdrant falls back to the collection-level
 sidecar graph cache/brute-force path. Because segment optimization does not own
 the OpenFHE scoring runtime, optimizer-built segment artifacts use a
 deterministic connected candidate graph; serving-time CKKS search still scores
