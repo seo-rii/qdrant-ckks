@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
@@ -23,7 +24,7 @@ use crate::collection_manager::optimizers::config_mismatch_optimizer::ConfigMism
 use crate::collection_manager::optimizers::indexing_optimizer::IndexingOptimizer;
 use crate::collection_manager::optimizers::merge_optimizer::MergeOptimizer;
 use crate::collection_manager::optimizers::vacuum_optimizer::VacuumOptimizer;
-use crate::config::CollectionParams;
+use crate::config::{CollectionParams, EncryptionSelector};
 use crate::operations::config_diff::DiffConfig;
 use crate::operations::types::{SparseVectorParams, VectorParams};
 use crate::update_handler::Optimizer;
@@ -244,10 +245,27 @@ pub fn build_segment_optimizer_config(
         })
         .unwrap_or_default();
 
+    let encrypted_vector_names = collection_params
+        .effective_encryption()
+        .map(|encryption| {
+            encryption
+                .rules
+                .iter()
+                .filter_map(|rule| match &rule.selector {
+                    EncryptionSelector::VectorNames { names } => Some(names.as_slice()),
+                    _ => None,
+                })
+                .flatten()
+                .cloned()
+                .collect::<HashSet<_>>()
+        })
+        .unwrap_or_default();
+
     SegmentOptimizerConfig::new(
         collection_params.payload_storage_type(),
         dense_vectors,
         sparse_vectors,
+        encrypted_vector_names,
     )
 }
 
@@ -307,4 +325,67 @@ pub fn build_optimizers(
             hnsw_global_config.clone(),
         )),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::num::NonZeroU64;
+
+    use segment::types::{Distance, Indexes};
+
+    use super::*;
+    use crate::config::{CollectionEncryptionConfig, CryptoMigrationState, EncryptionRuleRef};
+    use crate::operations::types::VectorsConfig;
+
+    #[test]
+    fn segment_optimizer_config_tracks_encrypted_vector_names() {
+        let collection_params = CollectionParams {
+            vectors: VectorsConfig::Multi(BTreeMap::from([(
+                "embedding".to_string(),
+                VectorParams {
+                    size: NonZeroU64::new(4).unwrap(),
+                    distance: Distance::Dot,
+                    hnsw_config: None,
+                    quantization_config: None,
+                    on_disk: None,
+                    datatype: None,
+                    multivector_config: None,
+                },
+            )])),
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "embedding_conf".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["embedding".to_string()],
+                    },
+                    instance: "docs_vector_v1".to_string(),
+                    binding: Some("vector-envelope/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let optimizer_config =
+            build_segment_optimizer_config(&collection_params, &HnswConfig::default(), &None);
+
+        assert!(
+            optimizer_config
+                .encrypted_vector_names
+                .contains("embedding")
+        );
+        assert!(matches!(
+            optimizer_config
+                .plain_dense_vector_config
+                .get("embedding")
+                .unwrap()
+                .index,
+            Indexes::Plain {}
+        ));
+    }
 }

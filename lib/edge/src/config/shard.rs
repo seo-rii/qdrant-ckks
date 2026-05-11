@@ -189,6 +189,7 @@ impl EdgeConfig {
             plain_sparse_vector_config,
             dense_vector,
             sparse_vector,
+            encrypted_vector_names: Default::default(),
         }
     }
 

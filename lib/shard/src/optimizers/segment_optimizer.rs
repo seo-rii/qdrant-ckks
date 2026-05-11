@@ -209,6 +209,12 @@ pub trait SegmentOptimizer: Sync {
         // If indexing, change to HNSW index and quantization
         if threshold_is_indexed {
             vector_data.iter_mut().for_each(|(vector_name, config)| {
+                if segment_optimizer_config
+                    .encrypted_vector_names
+                    .contains(vector_name)
+                {
+                    return;
+                }
                 if let Some(vector_cfg) = segment_optimizer_config.dense_vector.get(vector_name) {
                     // Assign HNSW index
                     config.index = Indexes::Hnsw(vector_cfg.hnsw_config);

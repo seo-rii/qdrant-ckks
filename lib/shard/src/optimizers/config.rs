@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 
 use segment::common::BYTES_IN_KB;
@@ -44,6 +44,11 @@ pub struct SegmentOptimizerConfig {
     /// Extra configuration for sparse vectors, which _might_ be applied during optimization,
     /// depending on the segment state.
     pub sparse_vector: HashMap<VectorNameBuf, SparseVectorOptimizerConfig>,
+    /// Dense vector names whose stored representation is an encrypted sidecar payload.
+    ///
+    /// These vectors must not receive plaintext HNSW/quantization optimizer
+    /// settings until a CKKS ciphertext-aware optimizer owns graph construction.
+    pub encrypted_vector_names: HashSet<VectorNameBuf>,
 }
 
 impl SegmentOptimizerConfig {
@@ -59,6 +64,7 @@ impl SegmentOptimizerConfig {
         payload_storage_type: PayloadStorageType,
         dense_vectors: HashMap<VectorNameBuf, DenseVectorOptimizerInput>,
         sparse_vectors: HashMap<VectorNameBuf, SparseVectorOptimizerInput>,
+        encrypted_vector_names: HashSet<VectorNameBuf>,
     ) -> SegmentOptimizerConfig {
         let (mut plain_dense_vector_config, mut dense_vector) = (HashMap::new(), HashMap::new());
         for (name, input) in dense_vectors {
@@ -125,6 +131,7 @@ impl SegmentOptimizerConfig {
             plain_sparse_vector_config,
             dense_vector,
             sparse_vector,
+            encrypted_vector_names,
         }
     }
 }
