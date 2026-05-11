@@ -9,12 +9,16 @@ use common::types::{PointOffsetType, ScoredPointOffset, TelemetryDetail};
 use crate::common::operation_error::{OperationError, OperationResult};
 use crate::data_types::query_context::VectorQueryContext;
 use crate::data_types::vectors::{QueryVector, VectorRef};
-use crate::index::VectorIndex;
+use crate::id_tracker::IdTracker;
+use crate::index::struct_payload_index::StructPayloadIndex;
+use crate::index::{PayloadIndex, VectorIndex};
 use crate::telemetry::VectorIndexSearchesTelemetry;
-use crate::types::{Filter, Order, SearchParams};
+use crate::types::{Filter, Order, Payload, SearchParams};
 
 const CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_VERSION: u8 = 1;
 const CKKS_CIPHERTEXT_HNSW_GRAPH_FILE: &str = "ckks_ciphertext_hnsw_graph.json";
+pub const CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD: &str = "$qdrant_sec_vectors";
+pub const CKKS_VECTOR_SIDECAR_MARKER: &str = "$qdrant_sec_ckks_vector";
 
 #[derive(Clone, Debug)]
 pub struct CkksCiphertextHnswGraph {
@@ -341,6 +345,59 @@ impl CkksCiphertextVectorIndex {
     pub fn graph(&self) -> &CkksCiphertextHnswGraph {
         self.index.graph()
     }
+}
+
+pub fn ckks_ciphertext_records_from_payload_index(
+    id_tracker: &dyn IdTracker,
+    payload_index: &StructPayloadIndex,
+    vector_name: &str,
+    hw_counter: &HardwareCounterCell,
+) -> OperationResult<Vec<CkksCiphertextIndexedRecord>> {
+    let mut records = Vec::new();
+    for point_offset in id_tracker.point_mappings().iter_internal() {
+        let payload = payload_index.get_payload_sequential(point_offset, hw_counter)?;
+        if let Some(ciphertext) = ckks_ciphertext_from_payload(&payload, vector_name)? {
+            records.push(CkksCiphertextIndexedRecord::new(
+                point_offset,
+                ciphertext.as_bytes().to_vec(),
+            ));
+        }
+    }
+    Ok(records)
+}
+
+pub fn ckks_ciphertext_from_payload<'a>(
+    payload: &'a Payload,
+    vector_name: &str,
+) -> OperationResult<Option<&'a str>> {
+    let Some(sidecar) = payload
+        .0
+        .get(CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD)
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Ok(None);
+    };
+    let Some(value) = sidecar.get(vector_name) else {
+        return Ok(None);
+    };
+    let Some(marker) = value
+        .as_object()
+        .and_then(|object| object.get(CKKS_VECTOR_SIDECAR_MARKER))
+    else {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' is malformed",
+        )));
+    };
+    let Some(ciphertext) = marker
+        .get("envelope")
+        .and_then(|envelope| envelope.get("ciphertext"))
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' is missing ciphertext",
+        )));
+    };
+    Ok(Some(ciphertext))
 }
 
 impl<C> CkksCiphertextHnswIndex<C> {
@@ -918,5 +975,53 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("record count"));
+    }
+
+    #[test]
+    fn ciphertext_record_extractor_reads_sidecar_ciphertext() {
+        let payload = Payload(
+            serde_json::from_value(serde_json::json!({
+                CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD: {
+                    "embedding": {
+                        CKKS_VECTOR_SIDECAR_MARKER: {
+                            "version": 1,
+                            "scheme": "openfhe-ckks",
+                            "envelope": {
+                                "version": 1,
+                                "algorithm": "AES-256-GCM",
+                                "key_id": "tenant-a:vector",
+                                "nonce": "AAAAAAAAAAAAAAAA",
+                                "ciphertext": "stored-ciphertext"
+                            }
+                        }
+                    }
+                }
+            }))
+            .unwrap(),
+        );
+
+        assert_eq!(
+            ckks_ciphertext_from_payload(&payload, "embedding").unwrap(),
+            Some("stored-ciphertext"),
+        );
+        assert_eq!(
+            ckks_ciphertext_from_payload(&payload, "other").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn ciphertext_record_extractor_rejects_malformed_sidecar() {
+        let payload = Payload(
+            serde_json::from_value(serde_json::json!({
+                CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD: {
+                    "embedding": { "not_the_marker": {} }
+                }
+            }))
+            .unwrap(),
+        );
+
+        let err = ckks_ciphertext_from_payload(&payload, "embedding").unwrap_err();
+        assert!(err.to_string().contains("malformed"));
     }
 }
