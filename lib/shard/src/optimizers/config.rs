@@ -47,7 +47,8 @@ pub struct SegmentOptimizerConfig {
     /// Dense vector names whose stored representation is an encrypted sidecar payload.
     ///
     /// These vectors must not receive plaintext HNSW/quantization optimizer
-    /// settings until a CKKS ciphertext-aware optimizer owns graph construction.
+    /// settings. Optimized immutable segments use the CKKS ciphertext HNSW
+    /// artifact over sidecar payload records instead.
     pub encrypted_vector_names: HashSet<VectorNameBuf>,
 }
 

@@ -72,14 +72,21 @@ impl IndexingOptimizer {
                     .contains(vector_name);
                 let is_indexed = vector_data.index.is_indexed();
                 let is_on_disk = vector_data.storage_type.is_on_disk();
-                let storage_size_bytes = segment
-                    .available_vectors_size_in_bytes(vector_name)
-                    .unwrap_or_default();
+                let storage_size_bytes =
+                    self.vector_size_bytes_for_optimizer(segment, vector_name, is_encrypted_vector);
 
                 let is_big_for_index = storage_size_bytes >= indexing_threshold_bytes;
                 let is_big_for_mmap = storage_size_bytes >= mmap_threshold_bytes;
 
-                let optimize_for_index = !is_encrypted_vector && is_big_for_index && !is_indexed;
+                let optimize_for_index = is_big_for_index
+                    && if is_encrypted_vector {
+                        !matches!(
+                            vector_data.index,
+                            segment::types::Indexes::CkksCiphertextHnsw { .. }
+                        )
+                    } else {
+                        !is_indexed
+                    };
                 let optimize_for_mmap = if !is_encrypted_vector {
                     if let Some(on_disk_config) = vector_cfg.on_disk {
                         on_disk_config && !is_on_disk
@@ -119,6 +126,50 @@ impl IndexingOptimizer {
         }
 
         false
+    }
+
+    fn vector_size_bytes_for_optimizer(
+        &self,
+        segment: &Segment,
+        vector_name: &str,
+        is_encrypted_vector: bool,
+    ) -> usize {
+        if is_encrypted_vector {
+            segment
+                .ckks_ciphertext_vectors_size_in_bytes(vector_name)
+                .unwrap_or_default()
+        } else {
+            segment
+                .available_vectors_size_in_bytes(vector_name)
+                .unwrap_or_default()
+        }
+    }
+
+    fn max_vector_size_bytes_for_optimizer(&self, segment: &Segment) -> usize {
+        self.segment_optimizer_config
+            .dense_vector
+            .keys()
+            .map(|vector_name| {
+                self.vector_size_bytes_for_optimizer(
+                    segment,
+                    vector_name,
+                    self.segment_optimizer_config
+                        .encrypted_vector_names
+                        .contains(vector_name),
+                )
+            })
+            .chain(
+                self.segment_optimizer_config
+                    .sparse_vector
+                    .keys()
+                    .map(|vector_name| {
+                        segment
+                            .available_vectors_size_in_bytes(vector_name)
+                            .unwrap_or_default()
+                    }),
+            )
+            .max()
+            .unwrap_or_default()
     }
 
     #[cfg(any(test, feature = "testing"))]
@@ -162,9 +213,7 @@ impl SegmentOptimizer for IndexingOptimizer {
         let mut indexed = VecDeque::<(SegmentId, usize)>::new();
         for (&segment_id, segment) in planner.remaining().iter() {
             let segment = segment.read();
-            let vector_size_bytes = segment
-                .max_available_vectors_size_in_bytes()
-                .unwrap_or_default();
+            let vector_size_bytes = self.max_vector_size_bytes_for_optimizer(&segment);
             if self.is_optimization_required(&segment) {
                 unindexed.push_back((segment_id, vector_size_bytes));
             }

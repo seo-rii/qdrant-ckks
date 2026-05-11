@@ -139,6 +139,31 @@ impl CkksCiphertextHnswGraph {
         })
     }
 
+    pub fn build_optimizer_candidate_graph(points_len: usize, m: usize) -> Self {
+        let mut links = vec![Vec::<usize>::new(); points_len];
+        if points_len == 0 {
+            return Self {
+                links: Arc::new(links),
+            };
+        }
+
+        // Segment optimization does not own an OpenFHE scoring runtime. Build a
+        // deterministic connected candidate graph here; query-time CKKS search
+        // still scores visited ciphertext candidates through the runtime bridge.
+        let max_degree = m.saturating_mul(2).max(1);
+        for idx in 1..points_len {
+            let first_candidate = idx.saturating_sub(m.max(1));
+            for candidate in first_candidate..idx {
+                add_bounded_undirected_link(&mut links, idx, candidate, max_degree);
+            }
+        }
+
+        add_connectivity_backbone(&mut links);
+        Self {
+            links: Arc::new(links),
+        }
+    }
+
     pub fn search<E>(
         &self,
         ef: usize,
@@ -236,6 +261,19 @@ impl CkksCiphertextVectorIndex {
             index: CkksCiphertextHnswIndex::build(records, m, score_order, score_previous_records)?,
             graph_file: None,
         })
+    }
+
+    pub fn build_optimizer_candidate_graph(
+        records: Vec<CkksCiphertextIndexedRecord>,
+        m: usize,
+    ) -> Self {
+        let graph = CkksCiphertextHnswGraph::build_optimizer_candidate_graph(records.len(), m);
+        let index = CkksCiphertextHnswIndex::from_graph(records, graph)
+            .expect("candidate graph node count is derived from records");
+        Self {
+            index,
+            graph_file: None,
+        }
     }
 
     pub fn open_graph_file(
@@ -868,6 +906,16 @@ mod tests {
     }
 
     #[test]
+    fn builds_optimizer_candidate_graph_without_scoring_runtime() {
+        let graph = CkksCiphertextHnswGraph::build_optimizer_candidate_graph(5, 2);
+
+        assert!(CkksCiphertextHnswGraph::links_are_reciprocal(graph.links()));
+        assert!(CkksCiphertextHnswGraph::links_are_connected(graph.links()));
+        assert!(graph.links()[0].contains(&1));
+        assert!(graph.links()[4].contains(&3));
+    }
+
+    #[test]
     fn searches_graph_with_query_scorer() {
         let graph = CkksCiphertextHnswGraph::from_validated_links(vec![
             vec![1],
@@ -1044,6 +1092,26 @@ mod tests {
         );
         enum_index.populate().unwrap();
         enum_index.clear_cache().unwrap();
+    }
+
+    #[test]
+    fn vector_index_builds_optimizer_candidate_graph() {
+        let index = CkksCiphertextVectorIndex::build_optimizer_candidate_graph(
+            vec![
+                CkksCiphertextIndexedRecord::new(10, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(11, b"ciphertext-b".to_vec()),
+                CkksCiphertextIndexedRecord::new(12, b"ciphertext-c".to_vec()),
+            ],
+            2,
+        );
+
+        assert_eq!(index.indexed_vector_count(), 3);
+        assert!(CkksCiphertextHnswGraph::links_are_reciprocal(
+            index.graph().links()
+        ));
+        assert!(CkksCiphertextHnswGraph::links_are_connected(
+            index.graph().links()
+        ));
     }
 
     #[test]

@@ -168,6 +168,7 @@ pub trait SegmentOptimizer: Sync {
         //     image_vectors: 10100 * dim * VECTOR_ELEMENT_SIZE
         // }
         let mut bytes_count_by_vector_name = HashMap::new();
+        let encrypted_vector_names = &self.segment_optimizer_config().encrypted_vector_names;
 
         for segment in optimizing_segments {
             let segment = match segment {
@@ -181,7 +182,11 @@ pub trait SegmentOptimizer: Sync {
             let locked_segment = segment.read();
 
             for vector_name in locked_segment.vector_names() {
-                let vector_size = locked_segment.available_vectors_size_in_bytes(&vector_name)?;
+                let vector_size = if encrypted_vector_names.contains(&vector_name) {
+                    locked_segment.ckks_ciphertext_vectors_size_in_bytes(&vector_name)?
+                } else {
+                    locked_segment.available_vectors_size_in_bytes(&vector_name)?
+                };
                 let size = bytes_count_by_vector_name.entry(vector_name).or_insert(0);
                 *size += vector_size;
             }
@@ -213,6 +218,14 @@ pub trait SegmentOptimizer: Sync {
                     .encrypted_vector_names
                     .contains(vector_name)
                 {
+                    if let Some(vector_cfg) = segment_optimizer_config.dense_vector.get(vector_name)
+                    {
+                        config.index = Indexes::CkksCiphertextHnsw {
+                            hnsw_config: vector_cfg.hnsw_config,
+                            vector_name: vector_name.clone(),
+                        };
+                        config.quantization_config = None;
+                    }
                     return;
                 }
                 if let Some(vector_cfg) = segment_optimizer_config.dense_vector.get(vector_name) {

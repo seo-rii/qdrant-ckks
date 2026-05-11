@@ -28,6 +28,7 @@ use crate::entry::entry_point::{
 };
 use crate::id_tracker::{IdTracker, PointMappingsGuard};
 use crate::index::field_index::{CardinalityEstimation, FieldIndex};
+use crate::index::hnsw_index::ckks_ciphertext_graph::ckks_ciphertext_records_from_payload_index;
 use crate::index::query_estimator::adjust_for_deferred_points;
 use crate::index::{BuildIndexResult, PayloadIndex, VectorIndex};
 use crate::json_path::JsonPath;
@@ -39,6 +40,25 @@ use crate::types::{
     SegmentType, SeqNumberType, VectorDataInfo, VectorName, VectorNameBuf, WithPayload, WithVector,
 };
 use crate::vector_storage::VectorStorage;
+
+impl Segment {
+    pub fn ckks_ciphertext_vectors_size_in_bytes(
+        &self,
+        vector_name: &VectorName,
+    ) -> OperationResult<usize> {
+        check_vector_name(vector_name, &self.segment_config)?;
+        let records = ckks_ciphertext_records_from_payload_index(
+            &*self.id_tracker.borrow(),
+            &self.payload_index.borrow(),
+            vector_name,
+            &HardwareCounterCell::disposable(),
+        )?;
+        Ok(records
+            .into_iter()
+            .map(|record| record.ciphertext.len())
+            .sum())
+    }
+}
 
 /// This is a basic implementation of the trait, meaning that it implements the _actual_ operations with data and not
 /// any kind of proxy or wrapping.

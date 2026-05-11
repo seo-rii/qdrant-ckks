@@ -16,13 +16,20 @@ mod tests {
     use rand::rng;
     use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
     use segment::entry::ReadSegmentEntry;
+    use segment::entry::entry_point::SegmentEntry;
     use segment::fixtures::index_fixtures::random_vector;
+    use segment::id_tracker::IdTracker;
+    use segment::index::hnsw_index::ckks_ciphertext_graph::{
+        CKKS_VECTOR_SIDECAR_MARKER, CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD,
+    };
+    use segment::index::{VectorIndex, VectorIndexEnum};
     use segment::json_path::JsonPath;
     use segment::payload_json;
+    use segment::segment::Segment;
     use segment::segment_constructor::simple_segment_constructor::{VECTOR1_NAME, VECTOR2_NAME};
     use segment::types::{
-        Distance, HnswConfig, HnswGlobalConfig, Indexes, PayloadSchemaType, QuantizationConfig,
-        SegmentType, VectorNameBuf,
+        Distance, HnswConfig, HnswGlobalConfig, Indexes, Payload, PayloadSchemaType,
+        QuantizationConfig, SegmentType, VectorNameBuf,
     };
     use shard::operations::optimization::OptimizerThresholds;
     use shard::optimizers::segment_optimizer::SegmentOptimizer;
@@ -100,6 +107,41 @@ mod tests {
             .into_iter()
             .map(|group| group.into_iter().sorted().collect_vec())
             .collect()
+    }
+
+    fn attach_ckks_vector_sidecars(segment: &mut Segment, vector_name: &str, opnum: u64) {
+        let point_ids = segment
+            .id_tracker
+            .borrow()
+            .point_mappings()
+            .iter_external()
+            .collect_vec();
+        let hw_counter = HardwareCounterCell::new();
+        for (idx, point_id) in point_ids.into_iter().enumerate() {
+            let payload = Payload(
+                serde_json::from_value(serde_json::json!({
+                    CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD: {
+                        vector_name: {
+                            CKKS_VECTOR_SIDECAR_MARKER: {
+                                "version": 1,
+                                "scheme": "openfhe-ckks",
+                                "envelope": {
+                                    "version": 1,
+                                    "algorithm": "AES-256-GCM",
+                                    "key_id": "tenant-a:docs",
+                                    "nonce": "AAAAAAAAAAAAAAAA",
+                                    "ciphertext": format!("ciphertext-{idx:04}")
+                                }
+                            }
+                        }
+                    }
+                }))
+                .unwrap(),
+            );
+            segment
+                .set_payload(opnum, point_id, &payload, &None, &hw_counter)
+                .unwrap();
+        }
     }
 
     #[test]
@@ -498,7 +540,7 @@ mod tests {
     }
 
     #[test]
-    fn encrypted_vector_does_not_trigger_plaintext_indexing_optimizer() {
+    fn encrypted_vector_sidecar_triggers_ckks_indexing_optimizer() {
         init();
 
         let mut holder = SegmentHolder::default();
@@ -510,7 +552,8 @@ mod tests {
             .tempdir()
             .unwrap();
 
-        let segment = random_segment(segments_dir.path(), 101, 200, dim);
+        let mut segment = random_segment(segments_dir.path(), 101, 200, dim);
+        attach_ckks_vector_sidecars(&mut segment, DEFAULT_VECTOR_NAME, 102);
         let segment_config = segment.segment_config.clone();
         holder.add_new(segment);
 
@@ -557,10 +600,7 @@ mod tests {
         let locked_holder = LockedSegmentHolder::new(holder);
         let suggested_to_optimize = index_optimizer.plan_optimizations_for_test(&locked_holder);
 
-        assert!(
-            suggested_to_optimize.is_empty(),
-            "encrypted vectors must not be planned for plaintext HNSW or mmap optimization",
-        );
+        assert!(!suggested_to_optimize.is_empty());
     }
 
     #[test]
@@ -651,7 +691,8 @@ mod tests {
             .tempdir()
             .unwrap();
 
-        let segment = random_segment(segments_dir.path(), 101, 200, dim);
+        let mut segment = random_segment(segments_dir.path(), 101, 200, dim);
+        attach_ckks_vector_sidecars(&mut segment, DEFAULT_VECTOR_NAME, 102);
         let segment_config = segment.segment_config.clone();
         let segment_id = holder.add_new(segment);
 
@@ -711,10 +752,32 @@ mod tests {
         assert!(
             configs.iter().any(|config| {
                 let vector_data = &config.vector_data[DEFAULT_VECTOR_NAME];
-                matches!(vector_data.index, Indexes::Plain {})
-                    && !vector_data.storage_type.is_on_disk()
+                matches!(
+                    vector_data.index,
+                    Indexes::CkksCiphertextHnsw {
+                        ref vector_name,
+                        ..
+                    } if vector_name == DEFAULT_VECTOR_NAME
+                ) && !vector_data.storage_type.is_on_disk()
+                    && vector_data.quantization_config.is_none()
             }),
-            "forced optimization must not assign plaintext HNSW or mmap storage to encrypted vectors",
+            "forced optimization must assign CKKS ciphertext HNSW without plaintext mmap or quantization",
+        );
+
+        assert!(
+            locked_holder.read().iter_original().any(|(_, segment)| {
+                let segment = segment.read();
+                let Some(vector_data) = segment.vector_data.get(DEFAULT_VECTOR_NAME) else {
+                    return false;
+                };
+                let vector_index = vector_data.vector_index.borrow();
+                matches!(&*vector_index, VectorIndexEnum::CkksCiphertextHnsw(_))
+                    && vector_index.immutable_files().iter().any(|path| {
+                        path.file_name()
+                            .is_some_and(|file_name| file_name == "ckks_ciphertext_hnsw_graph.json")
+                    })
+            }),
+            "optimized encrypted vector segment must persist a CKKS ciphertext graph artifact",
         );
     }
 

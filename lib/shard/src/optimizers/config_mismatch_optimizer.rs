@@ -83,19 +83,34 @@ impl ConfigMismatchOptimizer {
                 .vector_data
                 .iter()
                 .any(|(vector_name, vector_data)| {
-                    if self
+                    let is_encrypted_vector = self
                         .segment_optimizer_config
                         .encrypted_vector_names
-                        .contains(vector_name)
-                    {
-                        return false;
-                    }
+                        .contains(vector_name);
 
                     // Check HNSW mismatch
                     match &vector_data.index {
-                        Indexes::Plain {} => {}
-                        Indexes::Hnsw(effective_hnsw)
-                        | Indexes::CkksCiphertextHnsw {
+                        Indexes::Plain {} => {
+                            if is_encrypted_vector {
+                                return false;
+                            }
+                        }
+                        Indexes::Hnsw(_) if is_encrypted_vector => {
+                            return true;
+                        }
+                        Indexes::Hnsw(effective_hnsw) => {
+                            // Select segment if we have an HNSW mismatch that requires rebuild
+                            let target_hnsw = self
+                                .segment_optimizer_config
+                                .dense_vector
+                                .get(vector_name)
+                                .map(|cfg| cfg.hnsw_config)
+                                .unwrap_or(self.global_hnsw_config);
+                            if effective_hnsw.mismatch_requires_rebuild(&target_hnsw) {
+                                return true;
+                            }
+                        }
+                        Indexes::CkksCiphertextHnsw {
                             hnsw_config: effective_hnsw,
                             ..
                         } => {
@@ -110,6 +125,10 @@ impl ConfigMismatchOptimizer {
                                 return true;
                             }
                         }
+                    }
+
+                    if is_encrypted_vector {
+                        return false;
                     }
 
                     if let Some(is_required_on_disk) = self.check_if_vectors_on_disk(vector_name)

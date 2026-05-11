@@ -398,14 +398,20 @@ pub(crate) fn build_vector_index<R: Rng + ?Sized>(
             build_args,
         )?),
         Indexes::CkksCiphertextHnsw {
-            hnsw_config: _,
+            hnsw_config,
             vector_name,
         } => {
+            let records = ckks_ciphertext_records_from_payload_index(
+                &*id_tracker.borrow(),
+                &payload_index.borrow(),
+                vector_name,
+                &HardwareCounterCell::disposable(),
+            )?;
+            let mut index =
+                CkksCiphertextVectorIndex::build_optimizer_candidate_graph(records, hnsw_config.m);
             let graph_path = CkksCiphertextVectorIndex::graph_file_path(path);
-            return Err(OperationError::service_error(format!(
-                "CKKS ciphertext HNSW index for vector '{vector_name}' cannot be built by the segment optimizer without an OpenFHE scoring runtime; expected prebuilt graph file at {}",
-                graph_path.display(),
-            )));
+            index.persist_graph_file(&graph_path)?;
+            VectorIndexEnum::CkksCiphertextHnsw(index)
         }
     })
 }
