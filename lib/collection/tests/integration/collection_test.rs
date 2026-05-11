@@ -4290,6 +4290,36 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
             if description.contains("RBAC-protected decrypt path")
     ));
 
+    let search_decrypt_err = collection
+        .search(
+            SearchRequestInternal {
+                vector: vec![1.0, 0.0, 0.0, 0.0].into(),
+                with_payload: Some(WithPayloadInterface::Encrypted(
+                    PayloadEncryptedReadPolicy {
+                        encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                    },
+                )),
+                with_vector: None,
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: None,
+                score_threshold: None,
+            }
+            .into(),
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        search_decrypt_err,
+        CollectionError::BadInput { description }
+            if description.contains("RBAC-protected decrypt path")
+    ));
+
     let telemetry = collection
         .get_telemetry_data(
             TelemetryDetail::new(DetailsLevel::Level4, true),
