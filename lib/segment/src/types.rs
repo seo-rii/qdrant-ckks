@@ -635,20 +635,32 @@ pub enum Indexes {
     /// Use filterable HNSW index for approximate search. Is very fast even on a very huge collections,
     /// but require additional space to store index and additional time to build it.
     Hnsw(HnswConfig),
+    /// Use a CKKS ciphertext HNSW graph over encrypted vector sidecar payloads.
+    ///
+    /// This index type is intentionally separate from the plaintext-vector HNSW
+    /// file format because graph construction needs an OpenFHE scoring runtime.
+    CkksCiphertextHnsw {
+        hnsw_config: HnswConfig,
+        vector_name: VectorNameBuf,
+    },
 }
 
 impl Indexes {
     pub fn is_indexed(&self) -> bool {
         match self {
             Indexes::Plain {} => false,
-            Indexes::Hnsw(_) => true,
+            Indexes::Hnsw(_) | Indexes::CkksCiphertextHnsw { .. } => true,
         }
     }
 
     pub fn is_on_disk(&self) -> bool {
         match self {
             Indexes::Plain {} => false,
-            Indexes::Hnsw(config) => config.on_disk.unwrap_or_default(),
+            Indexes::Hnsw(config)
+            | Indexes::CkksCiphertextHnsw {
+                hnsw_config: config,
+                ..
+            } => config.on_disk.unwrap_or_default(),
         }
     }
 }
@@ -1662,7 +1674,7 @@ impl VectorDataConfig {
     pub fn is_appendable(&self) -> bool {
         let is_index_appendable = match self.index {
             Indexes::Plain {} => true,
-            Indexes::Hnsw(_) => false,
+            Indexes::Hnsw(_) | Indexes::CkksCiphertextHnsw { .. } => false,
         };
         let is_storage_appendable = match self.storage_type {
             VectorStorageType::Memory => true,
@@ -4123,6 +4135,36 @@ mod tests {
         let de_record: Payload = serde_cbor::from_slice(&raw).unwrap();
         eprintln!("payload = {payload:#?}");
         eprintln!("de_record = {de_record:#?}");
+    }
+
+    #[test]
+    fn ckks_ciphertext_hnsw_index_config_is_non_appendable_and_serializable() {
+        let index = Indexes::CkksCiphertextHnsw {
+            hnsw_config: HnswConfig {
+                on_disk: Some(true),
+                ..Default::default()
+            },
+            vector_name: "secure-vector".into(),
+        };
+
+        assert!(index.is_indexed());
+        assert!(index.is_on_disk());
+
+        let config = VectorDataConfig {
+            size: 8,
+            distance: Distance::Cosine,
+            storage_type: VectorStorageType::Memory,
+            index: index.clone(),
+            quantization_config: None,
+            multivector_config: None,
+            datatype: None,
+        };
+
+        assert!(!config.is_appendable());
+        assert_eq!(
+            serde_json::from_str::<Indexes>(&serde_json::to_string(&index).unwrap()).unwrap(),
+            index,
+        );
     }
 
     #[rstest]

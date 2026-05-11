@@ -86,7 +86,11 @@ impl ConfigMismatchOptimizer {
                     // Check HNSW mismatch
                     match &vector_data.index {
                         Indexes::Plain {} => {}
-                        Indexes::Hnsw(effective_hnsw) => {
+                        Indexes::Hnsw(effective_hnsw)
+                        | Indexes::CkksCiphertextHnsw {
+                            hnsw_config: effective_hnsw,
+                            ..
+                        } => {
                             // Select segment if we have an HNSW mismatch that requires rebuild
                             let target_hnsw = self
                                 .segment_optimizer_config

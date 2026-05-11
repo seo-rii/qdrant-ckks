@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use atomic_refcell::AtomicRefCell;
 use common::budget::ResourcePermit;
+use common::counter::hardware_counter::HardwareCounterCell;
 use common::defaults::log_load_timing;
 use common::flags::FeatureFlags;
 use common::fs::{safe_delete_with_suffix, sync_parent_dir};
@@ -37,6 +38,9 @@ use crate::id_tracker::mutable_id_tracker::MutableIdTracker;
 use crate::id_tracker::simple_id_tracker::SimpleIdTracker;
 use crate::id_tracker::{IdTracker, IdTrackerEnum};
 use crate::index::VectorIndexEnum;
+use crate::index::hnsw_index::ckks_ciphertext_graph::{
+    CkksCiphertextVectorIndex, ckks_ciphertext_records_from_payload_index,
+};
 use crate::index::hnsw_index::gpu::gpu_devices_manager::LockedGpuDevice;
 use crate::index::hnsw_index::hnsw::{HNSWIndex, HnswIndexOpenArgs};
 use crate::index::plain_vector_index::PlainVectorIndex;
@@ -340,6 +344,26 @@ pub(crate) fn open_vector_index(
             payload_index,
             hnsw_config: *hnsw_config,
         })?),
+        Indexes::CkksCiphertextHnsw {
+            hnsw_config: _,
+            vector_name,
+        } => {
+            let records = ckks_ciphertext_records_from_payload_index(
+                &*id_tracker.borrow(),
+                &payload_index.borrow(),
+                vector_name,
+                &HardwareCounterCell::disposable(),
+            )?;
+            let graph_path = CkksCiphertextVectorIndex::graph_file_path(path);
+            let Some(index) = CkksCiphertextVectorIndex::open_graph_file(records, &graph_path)?
+            else {
+                return Err(OperationError::service_error(format!(
+                    "CKKS ciphertext HNSW index for vector '{vector_name}' requires a prebuilt graph file at {}",
+                    graph_path.display(),
+                )));
+            };
+            VectorIndexEnum::CkksCiphertextHnsw(index)
+        }
     })
 }
 
@@ -373,6 +397,16 @@ pub(crate) fn build_vector_index<R: Rng + ?Sized>(
             },
             build_args,
         )?),
+        Indexes::CkksCiphertextHnsw {
+            hnsw_config: _,
+            vector_name,
+        } => {
+            let graph_path = CkksCiphertextVectorIndex::graph_file_path(path);
+            return Err(OperationError::service_error(format!(
+                "CKKS ciphertext HNSW index for vector '{vector_name}' cannot be built by the segment optimizer without an OpenFHE scoring runtime; expected prebuilt graph file at {}",
+                graph_path.display(),
+            )));
+        }
     })
 }
 
