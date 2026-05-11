@@ -789,21 +789,26 @@ stored-ciphertext-to-stored-ciphertext bridge scoring for graph links and
 encrypted-query bridge scoring for traversal candidates. Stored point-id
 nearest `query`/`query/groups` requests also use the sidecar graph when
 `hnsw_ef` is provided, scoring traversal candidates against the referenced
-point's stored ciphertext. The sidecar graph is
-cached in process by stable collection crypto identity, vector name, score
-direction, graph parameters, and a fingerprint of the stored ciphertext
-sidecars, so rename/recreate boundaries and payload/vector changes build a new
-graph instead of reusing stale links. The cache is an acceleration for the
-current serving process and is also persisted under the collection directory
-for restart reuse. The graph/search primitive itself lives in `lib/segment`
-as a CKKS ciphertext vector index. Segment optimization now counts CKKS vector
-sidecar ciphertext bytes for encrypted vector thresholds and builds an
-immutable `CkksCiphertextHnsw` vector index artifact instead of plaintext HNSW,
-plain mmap conversion, or quantization. Because segment optimization does not
-own the OpenFHE scoring runtime, optimizer-built segment artifacts use a
+point's stored ciphertext. Segment optimization counts CKKS vector sidecar
+ciphertext bytes for encrypted vector thresholds and builds an immutable
+`CkksCiphertextHnsw` vector index artifact instead of plaintext HNSW, plain
+mmap conversion, or quantization. For unfiltered nearest-neighbor requests,
+serving-time CKKS search first loads those segment-native artifacts and uses
+them when their record set exactly matches the encrypted sidecars observed
+through the read path. If no matching segment artifact is available, or if a
+filter narrows the candidate set, Qdrant falls back to the collection-level
+sidecar graph cache/brute-force path. Because segment optimization does not own
+the OpenFHE scoring runtime, optimizer-built segment artifacts use a
 deterministic connected candidate graph; serving-time CKKS search still scores
-visited ciphertext candidates through the runtime bridge. Persisted graph cache
-files are treated as untrusted hints:
+visited ciphertext candidates through the runtime bridge.
+
+The collection-level sidecar graph cache is keyed by stable collection crypto
+identity, vector name, score direction, graph parameters, and a fingerprint of
+the stored ciphertext sidecars, so rename/recreate boundaries and
+payload/vector changes build a new graph instead of reusing stale links. The
+cache is an acceleration for the current serving process and is also persisted
+under the collection directory for restart reuse. Persisted graph cache files
+are treated as untrusted hints:
 the cache directory must be a private non-symlink directory owned by root or the
 Qdrant process user, cache files and stale temp files must be private regular
 files owned by root or the Qdrant process user, oversized files are rejected,
