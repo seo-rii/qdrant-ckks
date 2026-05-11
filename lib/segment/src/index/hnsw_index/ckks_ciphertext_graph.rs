@@ -396,6 +396,10 @@ impl CkksCiphertextVectorIndex {
     pub fn graph(&self) -> &CkksCiphertextHnswGraph {
         self.index.graph()
     }
+
+    pub fn records(&self) -> &[CkksCiphertextIndexedRecord] {
+        self.index.records()
+    }
 }
 
 pub fn ckks_ciphertext_records_from_payload_index(
@@ -1117,6 +1121,8 @@ mod tests {
         );
 
         assert_eq!(index.indexed_vector_count(), 3);
+        assert_eq!(index.records()[1].point_offset, 11);
+        assert_eq!(index.records()[1].ciphertext, b"ciphertext-b");
         assert!(CkksCiphertextHnswGraph::links_are_reciprocal(
             index.graph().links()
         ));
