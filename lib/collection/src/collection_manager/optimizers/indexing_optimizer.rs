@@ -779,6 +779,13 @@ mod tests {
             }),
             "optimized encrypted vector segment must persist a CKKS ciphertext graph artifact",
         );
+
+        assert!(
+            index_optimizer
+                .plan_optimizations_for_test(&locked_holder)
+                .is_empty(),
+            "CKKS ciphertext index optimization must not repeat once the segment has a ciphertext graph artifact",
+        );
     }
 
     /// Test that indexing optimizer maintain expected number of during the optimization duty
