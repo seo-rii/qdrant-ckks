@@ -625,13 +625,22 @@ fn write_private_graph_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
 fn validate_private_graph_file_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
         let mode = metadata.permissions().mode();
         if mode & 0o077 != 0 {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 format!("graph file {path:?} must not be group/world accessible"),
+            ));
+        }
+
+        let owner = metadata.uid();
+        let effective_uid = nix::unistd::Uid::effective().as_raw();
+        if owner != 0 && owner != effective_uid {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("graph file {path:?} must be owned by root or the Qdrant process user"),
             ));
         }
     }
@@ -642,7 +651,7 @@ fn validate_private_graph_file_metadata(path: &Path, metadata: &fs::Metadata) ->
 fn validate_private_graph_parent(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
         let Some(parent) = path.parent() else {
             return Ok(());
@@ -659,6 +668,17 @@ fn validate_private_graph_parent(path: &Path) -> io::Result<()> {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 format!("graph file parent {parent:?} must not be group/world writable"),
+            ));
+        }
+
+        let owner = metadata.uid();
+        let effective_uid = nix::unistd::Uid::effective().as_raw();
+        if owner != 0 && owner != effective_uid {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "graph file parent {parent:?} must be owned by root or the Qdrant process user"
+                ),
             ));
         }
     }

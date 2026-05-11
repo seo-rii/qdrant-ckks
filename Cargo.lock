@@ -7075,6 +7075,7 @@ dependencies = [
  "memmap2 0.9.10",
  "ndarray",
  "ndarray-npy",
+ "nix 0.31.2",
  "nom 8.0.0",
  "num-cmp",
  "num-derive",
