@@ -588,6 +588,15 @@ fn read_graph_file(path: &Path) -> io::Result<Vec<u8>> {
 }
 
 fn write_private_graph_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if let Ok(metadata) = fs::symlink_metadata(path)
+        && metadata.file_type().is_symlink()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("graph file {path:?} must not be a symlink"),
+        ));
+    }
+
     #[cfg(unix)]
     {
         use std::io::Write;
@@ -1052,6 +1061,33 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("group/world accessible"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ciphertext_vector_index_rejects_temp_graph_symlink_on_persist() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let graph_file = CkksCiphertextVectorIndex::graph_file_path(directory.path());
+        let temp_graph_file = graph_file.with_extension("json.tmp");
+        let external_file = directory.path().join("external-target");
+        std::fs::write(&external_file, b"do-not-overwrite").unwrap();
+        symlink(&external_file, &temp_graph_file).unwrap();
+
+        let mut index = CkksCiphertextVectorIndex::from_graph(
+            vec![
+                CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
+            ],
+            CkksCiphertextHnswGraph::from_validated_links(vec![vec![1], vec![0]]).unwrap(),
+        )
+        .unwrap();
+
+        let err = index.persist_graph_file(&graph_file).unwrap_err();
+
+        assert!(err.to_string().contains("must not be a symlink"));
+        assert_eq!(std::fs::read(&external_file).unwrap(), b"do-not-overwrite");
     }
 
     #[test]
