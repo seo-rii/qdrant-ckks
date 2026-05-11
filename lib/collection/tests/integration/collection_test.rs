@@ -63,9 +63,9 @@ use segment::data_types::facets::FacetParams;
 use segment::data_types::order_by::{Direction, OrderBy, OrderByInterface};
 use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, VectorInternal, VectorStructInternal};
 use segment::types::{
-    Condition, Distance, ExtendedPointId, FieldCondition, Filter, HasIdCondition,
-    HasVectorCondition, Payload, PayloadFieldSchema, PayloadSchemaType, PointIdType,
-    WithPayloadInterface, WithVector,
+    Condition, Distance, EncryptedPayloadReadMode, ExtendedPointId, FieldCondition, Filter,
+    HasIdCondition, HasVectorCondition, Payload, PayloadEncryptedReadPolicy, PayloadFieldSchema,
+    PayloadSchemaType, PointIdType, WithPayloadInterface, WithVector,
 };
 use serde_json::Map;
 use shard::files::PAYLOAD_INDEX_CONFIG_FILE;
@@ -4176,6 +4176,91 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
         .unwrap();
     assert_eq!(searched.len(), 1);
     assert_raw_encrypted_body(searched[0].payload.as_ref().unwrap());
+
+    let redacted_payload_selector = Some(WithPayloadInterface::Encrypted(
+        PayloadEncryptedReadPolicy {
+            encrypted_payload: EncryptedPayloadReadMode::Redacted,
+        },
+    ));
+    let redacted = collection
+        .retrieve(
+            PointRequestInternal {
+                ids: vec![1.into()],
+                with_payload: redacted_payload_selector.clone(),
+                with_vector: false.into(),
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+    let redacted_body = redacted[0]
+        .payload
+        .as_ref()
+        .and_then(|payload| payload.0.get("document"))
+        .and_then(|document| document.get("body"))
+        .unwrap();
+    assert_eq!(
+        redacted_body,
+        &serde_json::json!({
+            "$qdrant_sec_redacted": true,
+            "reason": "encrypted_payload",
+        })
+    );
+    let redacted_serialized = serde_json::to_string(&redacted[0].payload).unwrap();
+    assert!(!redacted_serialized.contains(&format!("\"{ENCRYPTED_PAYLOAD_MARKER}\"")));
+    assert!(!redacted_serialized.contains(sentinel));
+
+    let redacted_scroll = collection
+        .scroll_by(
+            ScrollRequestInternal {
+                offset: None,
+                limit: Some(10),
+                filter: None,
+                with_payload: redacted_payload_selector,
+                with_vector: false.into(),
+                order_by: None,
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+    let redacted_scroll_body = redacted_scroll.points[0]
+        .payload
+        .as_ref()
+        .and_then(|payload| payload.0.get("document"))
+        .and_then(|document| document.get("body"))
+        .unwrap();
+    assert_eq!(redacted_scroll_body, redacted_body);
+
+    let decrypt_err = collection
+        .retrieve(
+            PointRequestInternal {
+                ids: vec![1.into()],
+                with_payload: Some(WithPayloadInterface::Encrypted(
+                    PayloadEncryptedReadPolicy {
+                        encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                    },
+                )),
+                with_vector: false.into(),
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        decrypt_err,
+        CollectionError::BadInput { description }
+            if description.contains("RBAC-protected decrypt path")
+    ));
 
     let telemetry = collection
         .get_telemetry_data(

@@ -836,6 +836,7 @@ impl From<segment::types::WithPayloadInterface> for WithPayloadSelector {
                     fields: fields.iter().map(|f| f.to_string()).collect(),
                 })
             }
+            segment::types::WithPayloadInterface::Encrypted(_) => SelectorOptions::Enable(true),
             segment::types::WithPayloadInterface::Selector(selector) => match selector {
                 segment::types::PayloadSelector::Include(s) => {
                     SelectorOptions::Include(PayloadIncludeSelector {

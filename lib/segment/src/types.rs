@@ -3582,6 +3582,8 @@ pub enum WithPayloadInterface {
     Bool(bool),
     /// Specify which fields to return
     Fields(Vec<JsonPath>),
+    /// Specify how encrypted payload markers are returned.
+    Encrypted(PayloadEncryptedReadPolicy),
     /// Specify included or excluded fields
     Selector(PayloadSelector),
 }
@@ -3596,6 +3598,24 @@ impl Default for WithPayloadInterface {
     fn default() -> Self {
         WithPayloadInterface::Bool(false)
     }
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, JsonSchema, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum EncryptedPayloadReadMode {
+    /// Return stored server/client encrypted markers unchanged.
+    #[default]
+    Raw,
+    /// Return payloads, but replace encrypted marker values with redaction sentinels.
+    Redacted,
+    /// Reserved for a future RBAC-protected server decrypt mode.
+    Decrypted,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq, Eq, Hash)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub struct PayloadEncryptedReadPolicy {
+    pub encrypted_payload: EncryptedPayloadReadMode,
 }
 
 /// Options for specifying which vector to include
@@ -3665,6 +3685,13 @@ impl WithPayloadInterface {
             _ => true,
         }
     }
+
+    pub fn encrypted_payload_read_mode(&self) -> EncryptedPayloadReadMode {
+        match self {
+            WithPayloadInterface::Encrypted(policy) => policy.encrypted_payload,
+            _ => EncryptedPayloadReadMode::Raw,
+        }
+    }
 }
 
 impl From<bool> for WithPayload {
@@ -3686,6 +3713,10 @@ impl From<WithPayloadInterface> for WithPayload {
             WithPayloadInterface::Fields(fields) => WithPayload {
                 enable: true,
                 payload_selector: Some(PayloadSelector::new_include(fields)),
+            },
+            WithPayloadInterface::Encrypted(_) => WithPayload {
+                enable: true,
+                payload_selector: None,
             },
             WithPayloadInterface::Selector(selector) => WithPayload {
                 enable: true,

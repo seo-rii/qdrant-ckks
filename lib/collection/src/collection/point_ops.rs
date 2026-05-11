@@ -9,12 +9,12 @@ use futures::stream::FuturesUnordered;
 use futures::{StreamExt as _, TryFutureExt, TryStreamExt as _, future};
 use itertools::Itertools;
 use qdrant_sec::{
-    CKKS_SCHEME, CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadNonceReplayKey,
-    ClientPayloadValidationContext, ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD,
-    EncryptedCkksVector, ServerPayloadValidationContext, ckks_vector_sidecar_envelope_key,
-    client_payload_envelope_key, client_payload_nonce_replay_key,
-    is_client_encrypted_payload_value, is_encrypted_payload_value, server_payload_envelope_key,
-    validate_client_payload_value_after_runtime_verification,
+    CKKS_SCHEME, CLIENT_ENCRYPTED_PAYLOAD_MARKER, CLIENT_PAYLOAD_ENVELOPE_BINDING,
+    ClientPayloadNonceReplayKey, ClientPayloadValidationContext, ENCRYPTED_CKKS_VECTOR_MARKER,
+    ENCRYPTED_PAYLOAD_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD, EncryptedCkksVector,
+    ServerPayloadValidationContext, ckks_vector_sidecar_envelope_key, client_payload_envelope_key,
+    client_payload_nonce_replay_key, is_client_encrypted_payload_value, is_encrypted_payload_value,
+    server_payload_envelope_key, validate_client_payload_value_after_runtime_verification,
     validate_server_payload_value_after_runtime_encryption,
 };
 use segment::data_types::order_by::{Direction, OrderBy};
@@ -22,8 +22,8 @@ use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
 use segment::index::query_optimization::rescore_formula::parsed_formula::ParsedFormula;
 use segment::json_path::JsonPath;
 use segment::types::{
-    AnyVariants, Condition, ExtendedPointId, Filter, Match, Payload, ShardKey, ValueVariants,
-    WithPayload, WithPayloadInterface, WithVector,
+    AnyVariants, Condition, EncryptedPayloadReadMode, ExtendedPointId, Filter, Match, Payload,
+    ShardKey, ValueVariants, WithPayload, WithPayloadInterface, WithVector,
 };
 use shard::count::CountRequestInternal;
 use shard::retrieve::record_internal::RecordInternal;
@@ -1592,6 +1592,12 @@ impl Collection {
             .await?;
         self.ensure_with_vector_does_not_touch_encrypted_vector(&request.with_vector)
             .await?;
+        let encrypted_payload_read_mode = request
+            .with_payload
+            .as_ref()
+            .map(WithPayloadInterface::encrypted_payload_read_mode)
+            .unwrap_or(EncryptedPayloadReadMode::Raw);
+        ensure_encrypted_payload_read_mode_is_supported(encrypted_payload_read_mode)?;
 
         let local_only = shard_selection.is_shard_id();
 
@@ -1604,7 +1610,7 @@ impl Collection {
 
         let request = Arc::new(request);
 
-        let retrieved_points: Vec<_> = {
+        let mut retrieved_points: Vec<_> = {
             let shards_holder = self.shards_holder.read().await;
             let target_shards = shards_holder.select_shards(shard_selection)?;
 
@@ -1630,6 +1636,9 @@ impl Collection {
             });
             future::try_join_all(scroll_futures).await?
         };
+        for records in &mut retrieved_points {
+            apply_encrypted_payload_read_mode_to_records(records, encrypted_payload_read_mode);
+        }
 
         let retrieved_iter = retrieved_points.into_iter();
 
@@ -1776,6 +1785,8 @@ impl Collection {
             .with_payload
             .as_ref()
             .unwrap_or(&WithPayloadInterface::Bool(false));
+        let encrypted_payload_read_mode = with_payload_interface.encrypted_payload_read_mode();
+        ensure_encrypted_payload_read_mode_is_supported(encrypted_payload_read_mode)?;
         let with_payload = WithPayload::from(with_payload_interface);
         let ids_len = request.ids.len();
         let request = Arc::new(request);
@@ -1828,11 +1839,12 @@ impl Collection {
         }
 
         // Collect points in the same order as they were requested
-        let points = request
+        let mut points: Vec<RecordInternal> = request
             .ids
             .iter()
             .filter_map(|id| covered_point_ids.remove(id))
             .collect();
+        apply_encrypted_payload_read_mode_to_records(&mut points, encrypted_payload_read_mode);
 
         Ok(points)
     }
@@ -2182,6 +2194,73 @@ impl Collection {
 
         Ok(())
     }
+}
+
+fn ensure_encrypted_payload_read_mode_is_supported(
+    mode: EncryptedPayloadReadMode,
+) -> CollectionResult<()> {
+    match mode {
+        EncryptedPayloadReadMode::Raw | EncryptedPayloadReadMode::Redacted => Ok(()),
+        EncryptedPayloadReadMode::Decrypted => Err(CollectionError::bad_input(
+            "encrypted payload read mode 'decrypted' requires an RBAC-protected decrypt path, which is not implemented; use 'raw' for SDK/client decryption or 'redacted'",
+        )),
+    }
+}
+
+fn apply_encrypted_payload_read_mode_to_records(
+    records: &mut [RecordInternal],
+    mode: EncryptedPayloadReadMode,
+) {
+    if mode != EncryptedPayloadReadMode::Redacted {
+        return;
+    }
+
+    for record in records {
+        if let Some(payload) = &mut record.payload {
+            redact_encrypted_payload_values(payload);
+        }
+    }
+}
+
+fn redact_encrypted_payload_values(payload: &mut Payload) {
+    for value in payload.0.values_mut() {
+        redact_encrypted_json_value(value);
+    }
+}
+
+fn redact_encrypted_json_value(value: &mut serde_json::Value) {
+    if is_encrypted_payload_value(value) || is_client_encrypted_payload_value(value) {
+        *value = encrypted_payload_redaction_value();
+        return;
+    }
+
+    match value {
+        serde_json::Value::Object(object) => {
+            for (key, value) in object {
+                if key == ENCRYPTED_PAYLOAD_MARKER
+                    || key == CLIENT_ENCRYPTED_PAYLOAD_MARKER
+                    || key == ENCRYPTED_VECTOR_SIDECAR_FIELD
+                {
+                    *value = encrypted_payload_redaction_value();
+                } else {
+                    redact_encrypted_json_value(value);
+                }
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                redact_encrypted_json_value(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn encrypted_payload_redaction_value() -> serde_json::Value {
+    serde_json::json!({
+        "$qdrant_sec_redacted": true,
+        "reason": "encrypted_payload",
+    })
 }
 
 fn encrypted_vector_sidecar_path(
