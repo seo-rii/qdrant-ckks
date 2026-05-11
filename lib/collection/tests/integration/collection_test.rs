@@ -4320,6 +4320,33 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
             if description.contains("RBAC-protected decrypt path")
     ));
 
+    let scroll_decrypt_err = collection
+        .scroll_by(
+            ScrollRequestInternal {
+                offset: None,
+                limit: Some(10),
+                filter: None,
+                with_payload: Some(WithPayloadInterface::Encrypted(
+                    PayloadEncryptedReadPolicy {
+                        encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                    },
+                )),
+                with_vector: false.into(),
+                order_by: None,
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        scroll_decrypt_err,
+        CollectionError::BadInput { description }
+            if description.contains("RBAC-protected decrypt path")
+    ));
+
     let query_decrypt_err = collection
         .query(
             ShardQueryRequest {
