@@ -12,6 +12,7 @@ use sparse::index::inverted_index::inverted_index_immutable_ram::InvertedIndexIm
 use sparse::index::inverted_index::inverted_index_mmap::InvertedIndexMmap;
 use sparse::index::inverted_index::inverted_index_ram::InvertedIndexRam;
 
+use super::hnsw_index::ckks_ciphertext_graph::CkksCiphertextVectorIndex;
 use super::hnsw_index::hnsw::HNSWIndex;
 use super::plain_vector_index::PlainVectorIndex;
 use super::sparse_index::sparse_vector_index::SparseVectorIndex;
@@ -68,6 +69,7 @@ pub trait VectorIndex {
 pub enum VectorIndexEnum {
     Plain(PlainVectorIndex),
     Hnsw(HNSWIndex),
+    CkksCiphertextHnsw(CkksCiphertextVectorIndex),
     SparseRam(SparseVectorIndex<InvertedIndexRam>),
     SparseImmutableRam(SparseVectorIndex<InvertedIndexImmutableRam>),
     SparseMmap(SparseVectorIndex<InvertedIndexMmap>),
@@ -86,6 +88,7 @@ impl VectorIndexEnum {
         match self {
             Self::Plain(_) => false,
             Self::Hnsw(_) => true,
+            Self::CkksCiphertextHnsw(_) => true,
             Self::SparseRam(_) => true,
             Self::SparseImmutableRam(_) => true,
             Self::SparseMmap(_) => true,
@@ -104,6 +107,7 @@ impl VectorIndexEnum {
         match self {
             Self::Plain(_) => false,
             Self::Hnsw(index) => index.is_on_disk(),
+            Self::CkksCiphertextHnsw(_) => false,
             Self::SparseRam(index) => index.inverted_index().is_on_disk(),
             Self::SparseImmutableRam(index) => index.inverted_index().is_on_disk(),
             Self::SparseMmap(index) => index.inverted_index().is_on_disk(),
@@ -120,6 +124,7 @@ impl VectorIndexEnum {
         match self {
             Self::Plain(_) => {}
             Self::Hnsw(index) => index.populate()?,
+            Self::CkksCiphertextHnsw(_) => {}
             Self::SparseRam(_) => {}
             Self::SparseImmutableRam(_) => {}
             Self::SparseMmap(index) => index.inverted_index().populate()?,
@@ -137,6 +142,7 @@ impl VectorIndexEnum {
         match self {
             Self::Plain(_) => {}
             Self::Hnsw(index) => index.clear_cache()?,
+            Self::CkksCiphertextHnsw(_) => {}
             Self::SparseRam(_) => {}
             Self::SparseImmutableRam(_) => {}
             Self::SparseMmap(index) => index.inverted_index().clear_cache()?,
@@ -156,7 +162,7 @@ impl VectorIndexEnum {
         hw_counter: &HardwareCounterCell,
     ) {
         match self {
-            Self::Plain(_) | Self::Hnsw(_) => (),
+            Self::Plain(_) | Self::Hnsw(_) | Self::CkksCiphertextHnsw(_) => (),
             Self::SparseRam(index) => index.fill_idf_statistics(idf, hw_counter),
             Self::SparseImmutableRam(index) => index.fill_idf_statistics(idf, hw_counter),
             Self::SparseMmap(index) => index.fill_idf_statistics(idf, hw_counter),
@@ -179,6 +185,7 @@ impl VectorIndexEnum {
         match self {
             Self::Plain(index) => index.indexed_vector_count(),
             Self::Hnsw(index) => index.indexed_vector_count(),
+            Self::CkksCiphertextHnsw(index) => index.indexed_vector_count(),
             Self::SparseRam(index) => index.inverted_index().vector_count(),
             Self::SparseImmutableRam(index) => index.inverted_index().vector_count(),
             Self::SparseMmap(index) => index.inverted_index().vector_count(),
@@ -206,6 +213,9 @@ impl VectorIndex for VectorIndexEnum {
                 index.search(vectors, filter, top, params, query_context)
             }
             VectorIndexEnum::Hnsw(index) => {
+                index.search(vectors, filter, top, params, query_context)
+            }
+            VectorIndexEnum::CkksCiphertextHnsw(index) => {
                 index.search(vectors, filter, top, params, query_context)
             }
             VectorIndexEnum::SparseRam(index) => {
@@ -242,6 +252,7 @@ impl VectorIndex for VectorIndexEnum {
         match self {
             VectorIndexEnum::Plain(index) => index.get_telemetry_data(detail),
             VectorIndexEnum::Hnsw(index) => index.get_telemetry_data(detail),
+            VectorIndexEnum::CkksCiphertextHnsw(index) => index.get_telemetry_data(detail),
             VectorIndexEnum::SparseRam(index) => index.get_telemetry_data(detail),
             VectorIndexEnum::SparseImmutableRam(index) => index.get_telemetry_data(detail),
             VectorIndexEnum::SparseMmap(index) => index.get_telemetry_data(detail),
@@ -264,6 +275,7 @@ impl VectorIndex for VectorIndexEnum {
         match self {
             VectorIndexEnum::Plain(index) => index.files(),
             VectorIndexEnum::Hnsw(index) => index.files(),
+            VectorIndexEnum::CkksCiphertextHnsw(index) => index.files(),
             VectorIndexEnum::SparseRam(index) => index.files(),
             VectorIndexEnum::SparseImmutableRam(index) => index.files(),
             VectorIndexEnum::SparseMmap(index) => index.files(),
@@ -280,6 +292,7 @@ impl VectorIndex for VectorIndexEnum {
         match self {
             VectorIndexEnum::Plain(index) => index.immutable_files(),
             VectorIndexEnum::Hnsw(index) => index.immutable_files(),
+            VectorIndexEnum::CkksCiphertextHnsw(index) => index.immutable_files(),
             VectorIndexEnum::SparseRam(index) => index.immutable_files(),
             VectorIndexEnum::SparseImmutableRam(index) => index.immutable_files(),
             VectorIndexEnum::SparseMmap(index) => index.immutable_files(),
@@ -296,6 +309,7 @@ impl VectorIndex for VectorIndexEnum {
         match self {
             Self::Plain(index) => index.indexed_vector_count(),
             Self::Hnsw(index) => index.indexed_vector_count(),
+            Self::CkksCiphertextHnsw(index) => index.indexed_vector_count(),
             Self::SparseRam(index) => index.indexed_vector_count(),
             Self::SparseImmutableRam(index) => index.indexed_vector_count(),
             Self::SparseMmap(index) => index.indexed_vector_count(),
@@ -312,6 +326,7 @@ impl VectorIndex for VectorIndexEnum {
         match self {
             Self::Plain(index) => index.size_of_searchable_vectors_in_bytes(),
             Self::Hnsw(index) => index.size_of_searchable_vectors_in_bytes(),
+            Self::CkksCiphertextHnsw(index) => index.size_of_searchable_vectors_in_bytes(),
             Self::SparseRam(index) => index.size_of_searchable_vectors_in_bytes(),
             Self::SparseImmutableRam(index) => index.size_of_searchable_vectors_in_bytes(),
             Self::SparseMmap(index) => index.size_of_searchable_vectors_in_bytes(),
@@ -339,6 +354,7 @@ impl VectorIndex for VectorIndexEnum {
         match self {
             Self::Plain(index) => index.update_vector(id, vector, hw_counter),
             Self::Hnsw(index) => index.update_vector(id, vector, hw_counter),
+            Self::CkksCiphertextHnsw(index) => index.update_vector(id, vector, hw_counter),
             Self::SparseRam(index) => index.update_vector(id, vector, hw_counter),
             Self::SparseImmutableRam(index) => index.update_vector(id, vector, hw_counter),
             Self::SparseMmap(index) => index.update_vector(id, vector, hw_counter),

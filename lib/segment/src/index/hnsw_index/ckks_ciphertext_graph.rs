@@ -1,7 +1,16 @@
 use std::cmp::Ordering;
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::types::Order;
+use common::counter::hardware_counter::HardwareCounterCell;
+use common::types::{PointOffsetType, ScoredPointOffset, TelemetryDetail};
+
+use crate::common::operation_error::{OperationError, OperationResult};
+use crate::data_types::query_context::VectorQueryContext;
+use crate::data_types::vectors::{QueryVector, VectorRef};
+use crate::index::VectorIndex;
+use crate::telemetry::VectorIndexSearchesTelemetry;
+use crate::types::{Filter, Order, SearchParams};
 
 #[derive(Clone, Debug)]
 pub struct CkksCiphertextHnswGraph {
@@ -25,6 +34,17 @@ pub struct CkksCiphertextHnswRecordHit<'a, C> {
     pub point_index: usize,
     pub record: &'a C,
     pub score: f32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CkksCiphertextIndexedRecord {
+    pub point_offset: PointOffsetType,
+    pub ciphertext: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CkksCiphertextVectorIndex {
+    index: CkksCiphertextHnswIndex<CkksCiphertextIndexedRecord>,
 }
 
 impl CkksCiphertextHnswGraph {
@@ -160,6 +180,56 @@ impl CkksCiphertextHnswGraph {
     }
 }
 
+impl CkksCiphertextIndexedRecord {
+    pub fn new(point_offset: PointOffsetType, ciphertext: Vec<u8>) -> Self {
+        Self {
+            point_offset,
+            ciphertext,
+        }
+    }
+}
+
+impl CkksCiphertextVectorIndex {
+    pub fn build<E>(
+        records: Vec<CkksCiphertextIndexedRecord>,
+        m: usize,
+        score_order: Order,
+        score_previous_records: impl FnMut(
+            &CkksCiphertextIndexedRecord,
+            &[&CkksCiphertextIndexedRecord],
+        ) -> Result<Vec<f32>, E>,
+    ) -> Result<Self, E> {
+        Ok(Self {
+            index: CkksCiphertextHnswIndex::build(records, m, score_order, score_previous_records)?,
+        })
+    }
+
+    pub fn search_ciphertext<E>(
+        &self,
+        ef: usize,
+        top: usize,
+        score_order: Order,
+        score_threshold: Option<f32>,
+        score_records: impl FnMut(&[&CkksCiphertextIndexedRecord]) -> Result<Vec<f32>, E>,
+    ) -> Result<Vec<ScoredPointOffset>, E> {
+        let hits = self
+            .index
+            .search(ef, top, score_order, score_threshold, score_records)?;
+
+        Ok(hits
+            .into_iter()
+            .map(|hit| ScoredPointOffset {
+                idx: hit.record.point_offset,
+                score: hit.score,
+            })
+            .collect())
+    }
+
+    pub fn graph(&self) -> &CkksCiphertextHnswGraph {
+        self.index.graph()
+    }
+}
+
 impl<C> CkksCiphertextHnswIndex<C> {
     pub fn from_graph(records: Vec<C>, graph: CkksCiphertextHnswGraph) -> Option<Self> {
         (records.len() == graph.links().len()).then(|| Self {
@@ -219,6 +289,53 @@ impl<C> CkksCiphertextHnswIndex<C> {
                 score: hit.score,
             })
             .collect())
+    }
+}
+
+impl VectorIndex for CkksCiphertextVectorIndex {
+    fn search(
+        &self,
+        vectors: &[&QueryVector],
+        _filter: Option<&Filter>,
+        _top: usize,
+        _params: Option<&SearchParams>,
+        _query_context: &VectorQueryContext,
+    ) -> OperationResult<Vec<Vec<ScoredPointOffset>>> {
+        Err(OperationError::validation_error(format!(
+            "CKKS ciphertext HNSW index does not accept plaintext QueryVector search requests; received {} query vector(s)",
+            vectors.len(),
+        )))
+    }
+
+    fn get_telemetry_data(&self, _detail: TelemetryDetail) -> VectorIndexSearchesTelemetry {
+        VectorIndexSearchesTelemetry::default()
+    }
+
+    fn files(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
+    fn indexed_vector_count(&self) -> usize {
+        self.index.records().len()
+    }
+
+    fn size_of_searchable_vectors_in_bytes(&self) -> usize {
+        self.index
+            .records()
+            .iter()
+            .map(|record| record.ciphertext.len())
+            .sum()
+    }
+
+    fn update_vector(
+        &mut self,
+        _id: PointOffsetType,
+        _vector: Option<VectorRef>,
+        _hw_counter: &HardwareCounterCell,
+    ) -> OperationResult<()> {
+        Err(OperationError::validation_error(
+            "CKKS ciphertext HNSW index cannot be updated with plaintext vectors",
+        ))
     }
 }
 
@@ -336,6 +453,7 @@ fn compare_hits(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::vector_index_base::VectorIndexEnum;
 
     #[test]
     fn bounded_links_remain_reciprocal_when_pruned() {
@@ -507,5 +625,70 @@ mod tests {
         assert!(CkksCiphertextHnswGraph::links_are_connected(
             index.graph().links()
         ));
+    }
+
+    #[test]
+    fn vector_index_enum_exposes_ciphertext_hnsw_stats() {
+        let index = CkksCiphertextVectorIndex::build(
+            vec![
+                CkksCiphertextIndexedRecord::new(10, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(11, b"ciphertext-b".to_vec()),
+            ],
+            1,
+            Order::LargeBetter,
+            |record, candidates| -> Result<Vec<f32>, std::convert::Infallible> {
+                Ok(candidates
+                    .iter()
+                    .map(|candidate| {
+                        if record.ciphertext > candidate.ciphertext {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    })
+                    .collect())
+            },
+        )
+        .unwrap();
+
+        let results = index
+            .search_ciphertext(
+                2,
+                1,
+                Order::LargeBetter,
+                None,
+                |candidates| -> Result<Vec<f32>, std::convert::Infallible> {
+                    Ok(candidates
+                        .iter()
+                        .map(|candidate| {
+                            if candidate.ciphertext == b"ciphertext-b" {
+                                10.0
+                            } else {
+                                1.0
+                            }
+                        })
+                        .collect())
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            results,
+            vec![ScoredPointOffset {
+                idx: 11,
+                score: 10.0
+            }]
+        );
+
+        let enum_index = VectorIndexEnum::CkksCiphertextHnsw(index);
+        assert!(enum_index.is_index());
+        assert!(!enum_index.is_on_disk());
+        assert_eq!(enum_index.indexed_vectors(), 2);
+        assert_eq!(VectorIndex::indexed_vector_count(&enum_index), 2);
+        assert_eq!(
+            VectorIndex::size_of_searchable_vectors_in_bytes(&enum_index),
+            b"ciphertext-a".len() + b"ciphertext-b".len(),
+        );
+        enum_index.populate().unwrap();
+        enum_index.clear_cache().unwrap();
     }
 }
