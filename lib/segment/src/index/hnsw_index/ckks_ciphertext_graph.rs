@@ -566,6 +566,7 @@ fn write_graph_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 fn read_graph_file(path: &Path) -> io::Result<Vec<u8>> {
+    validate_private_graph_parent(path)?;
     let metadata = fs::symlink_metadata(path)?;
     if !metadata.is_file() {
         return Err(io::Error::new(
@@ -588,6 +589,7 @@ fn read_graph_file(path: &Path) -> io::Result<Vec<u8>> {
 }
 
 fn write_private_graph_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    validate_private_graph_parent(path)?;
     if let Ok(metadata) = fs::symlink_metadata(path)
         && metadata.file_type().is_symlink()
     {
@@ -630,6 +632,33 @@ fn validate_private_graph_file_metadata(path: &Path, metadata: &fs::Metadata) ->
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 format!("graph file {path:?} must not be group/world accessible"),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_private_graph_parent(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let Some(parent) = path.parent() else {
+            return Ok(());
+        };
+        let metadata = fs::symlink_metadata(parent)?;
+        if !metadata.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("graph file parent {parent:?} must be a directory"),
+            ));
+        }
+        let mode = metadata.permissions().mode();
+        if mode & 0o022 != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("graph file parent {parent:?} must not be group/world writable"),
             ));
         }
     }
@@ -1088,6 +1117,43 @@ mod tests {
 
         assert!(err.to_string().contains("must not be a symlink"));
         assert_eq!(std::fs::read(&external_file).unwrap(), b"do-not-overwrite");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ciphertext_vector_index_rejects_writable_graph_parent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let graph_file = CkksCiphertextVectorIndex::graph_file_path(directory.path());
+        let mut index = CkksCiphertextVectorIndex::from_graph(
+            vec![
+                CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
+            ],
+            CkksCiphertextHnswGraph::from_validated_links(vec![vec![1], vec![0]]).unwrap(),
+        )
+        .unwrap();
+
+        std::fs::set_permissions(directory.path(), PermissionsExt::from_mode(0o777)).unwrap();
+        let err = index.persist_graph_file(&graph_file).unwrap_err();
+        assert!(err.to_string().contains("must not be group/world writable"));
+
+        std::fs::set_permissions(directory.path(), PermissionsExt::from_mode(0o700)).unwrap();
+        index.persist_graph_file(&graph_file).unwrap();
+
+        std::fs::set_permissions(directory.path(), PermissionsExt::from_mode(0o777)).unwrap();
+        let err = CkksCiphertextVectorIndex::open_graph_file(
+            vec![
+                CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
+            ],
+            &graph_file,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("must not be group/world writable"));
+        std::fs::set_permissions(directory.path(), PermissionsExt::from_mode(0o700)).unwrap();
     }
 
     #[test]
