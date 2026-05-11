@@ -5636,6 +5636,39 @@ esac
     }
 
     #[test]
+    fn payload_write_plan_decrypts_server_envelopes_for_crypto_migration() {
+        let settings = payload_runtime_settings();
+        let plan = payload_write_plan_for_collection(&settings, "docs", &encrypted_params())
+            .unwrap()
+            .unwrap();
+        let mut payload = segment::types::Payload(
+            json!({ "body": "server-side secret" })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+
+        assert_eq!(plan.encrypt_payload("1", &mut payload).unwrap(), 1);
+        assert!(is_encrypted_payload_value(payload.0.get("body").unwrap()));
+        assert_eq!(
+            plan.decrypt_payload_for_crypto_migration("1", &mut payload)
+                .unwrap(),
+            1,
+        );
+        assert_eq!(
+            payload.0.get("body"),
+            Some(&json!("server-side secret")),
+            "decrypt migration must restore plaintext for server-side payload AEAD",
+        );
+        assert_eq!(
+            plan.decrypt_payload_for_crypto_migration("1", &mut payload)
+                .unwrap(),
+            0,
+            "decrypt migration must be idempotent over already-plaintext payloads",
+        );
+    }
+
+    #[test]
     fn payload_write_plan_detects_key_path_overlap_with_encrypted_fields() {
         let settings = payload_runtime_settings();
         let plan = payload_write_plan_for_collection(&settings, "docs", &encrypted_params())
