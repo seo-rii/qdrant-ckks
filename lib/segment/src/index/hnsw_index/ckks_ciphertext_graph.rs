@@ -17,6 +17,7 @@ use crate::types::{Filter, Order, Payload, SearchParams};
 
 const CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_VERSION: u8 = 1;
 const CKKS_CIPHERTEXT_HNSW_GRAPH_FILE: &str = "ckks_ciphertext_hnsw_graph.json";
+const CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 pub const CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD: &str = "$qdrant_sec_vectors";
 pub const CKKS_VECTOR_SIDECAR_MARKER: &str = "$qdrant_sec_ckks_vector";
 
@@ -245,7 +246,7 @@ impl CkksCiphertextVectorIndex {
             return Ok(None);
         }
 
-        let bytes = fs::read(path).map_err(|err| {
+        let bytes = read_graph_file(path).map_err(|err| {
             OperationError::service_error(format!(
                 "failed to read CKKS ciphertext HNSW graph file {}: {err}",
                 path.display(),
@@ -557,8 +558,73 @@ fn add_connectivity_backbone(links: &mut [Vec<usize>]) {
 
 fn write_graph_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let temporary_path = path.with_extension("json.tmp");
-    fs::write(&temporary_path, bytes)?;
+    write_private_graph_file(&temporary_path, bytes)?;
     fs::rename(&temporary_path, path)?;
+    #[cfg(unix)]
+    fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    Ok(())
+}
+
+fn read_graph_file(path: &Path) -> io::Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "graph file must be a regular non-symlink file",
+        ));
+    }
+    if metadata.len() > CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_MAX_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "graph file is too large: {} bytes exceeds {} bytes",
+                metadata.len(),
+                CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_MAX_BYTES
+            ),
+        ));
+    }
+    validate_private_graph_file_metadata(path, &metadata)?;
+    fs::read(path)
+}
+
+fn write_private_graph_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::set_permissions(path, PermissionsExt::from_mode(0o600))?;
+        return Ok(());
+    }
+
+    #[cfg(not(unix))]
+    {
+        fs::write(path, bytes)
+    }
+}
+
+fn validate_private_graph_file_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode = metadata.permissions().mode();
+        if mode & 0o077 != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("graph file {path:?} must not be group/world accessible"),
+            ));
+        }
+    }
+
     Ok(())
 }
 
@@ -936,6 +1002,13 @@ mod tests {
 
         assert_eq!(index.files(), vec![graph_file.clone()]);
         assert!(graph_file.exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mode = std::fs::metadata(&graph_file).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
 
         let reopened = CkksCiphertextVectorIndex::open_graph_file(
             vec![
@@ -949,6 +1022,36 @@ mod tests {
 
         assert_eq!(reopened.files(), vec![graph_file]);
         assert_eq!(reopened.graph().links(), index.graph().links());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ciphertext_vector_index_rejects_group_accessible_graph_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let graph_file = CkksCiphertextVectorIndex::graph_file_path(directory.path());
+        let mut index = CkksCiphertextVectorIndex::from_graph(
+            vec![
+                CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
+            ],
+            CkksCiphertextHnswGraph::from_validated_links(vec![vec![1], vec![0]]).unwrap(),
+        )
+        .unwrap();
+        index.persist_graph_file(&graph_file).unwrap();
+        std::fs::set_permissions(&graph_file, PermissionsExt::from_mode(0o640)).unwrap();
+
+        let err = CkksCiphertextVectorIndex::open_graph_file(
+            vec![
+                CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
+            ],
+            &graph_file,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("group/world accessible"));
     }
 
     #[test]
