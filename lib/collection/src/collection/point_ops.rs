@@ -247,6 +247,7 @@ impl Collection {
             let mut total_points = 0_u64;
             let mut processed_points = 0_u64;
             let mut rewritten_points = 0_u64;
+            let mut changed_points = 0_u64;
             let mut next_offset = Some(ExtendedPointId::NumId(0));
 
             while let Some(current_offset) = next_offset {
@@ -290,6 +291,7 @@ impl Collection {
                     if changed == 0 {
                         continue;
                     }
+                    changed_points += 1;
 
                     let operation = CollectionUpdateOperations::PayloadOperation(
                         PayloadOps::OverwritePayload(SetPayloadOp {
@@ -320,6 +322,7 @@ impl Collection {
                 total_points,
                 processed_points,
                 rewritten_points,
+                changed_points,
                 status: CryptoMigrationCheckpointStatus::Verified,
             });
         }

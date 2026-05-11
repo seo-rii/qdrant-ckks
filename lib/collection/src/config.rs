@@ -662,6 +662,7 @@ mod ckks_tests {
                 total_points: 10,
                 processed_points: 10,
                 rewritten_points: 10,
+                changed_points: 0,
                 status: CryptoMigrationCheckpointStatus::Verified,
             }],
             ..valid_start.clone()
@@ -680,6 +681,7 @@ mod ckks_tests {
                 total_points: 10,
                 processed_points: 9,
                 rewritten_points: 9,
+                changed_points: 0,
                 status: CryptoMigrationCheckpointStatus::Verified,
             }],
         };
@@ -697,6 +699,7 @@ mod ckks_tests {
                 total_points: 10,
                 processed_points: 10,
                 rewritten_points: 10,
+                changed_points: 0,
                 status: CryptoMigrationCheckpointStatus::Verified,
             }],
         };
@@ -718,6 +721,7 @@ mod ckks_tests {
                 total_points: 10,
                 processed_points: 10,
                 rewritten_points: 10,
+                changed_points: 0,
                 status: CryptoMigrationCheckpointStatus::Verified,
             }],
         };
@@ -735,6 +739,7 @@ mod ckks_tests {
                 total_points: 10,
                 processed_points: 10,
                 rewritten_points: 10,
+                changed_points: 0,
                 status: CryptoMigrationCheckpointStatus::Verified,
             }],
         };
@@ -778,6 +783,7 @@ mod ckks_tests {
                 total_points: 10,
                 processed_points: 10,
                 rewritten_points: 10,
+                changed_points: 0,
                 status: CryptoMigrationCheckpointStatus::Verified,
             }],
         };
@@ -811,6 +817,7 @@ mod ckks_tests {
                 total_points: 10,
                 processed_points: 9,
                 rewritten_points: 9,
+                changed_points: 0,
                 status: CryptoMigrationCheckpointStatus::Running,
             }],
         };
@@ -828,6 +835,7 @@ mod ckks_tests {
                 total_points: 10,
                 processed_points: 9,
                 rewritten_points: 9,
+                changed_points: 0,
                 status: CryptoMigrationCheckpointStatus::Verified,
             }],
         };
@@ -845,6 +853,7 @@ mod ckks_tests {
                 total_points: 10,
                 processed_points: 10,
                 rewritten_points: 9,
+                changed_points: 0,
                 status: CryptoMigrationCheckpointStatus::Verified,
             }],
         };
@@ -866,10 +875,29 @@ mod ckks_tests {
                 total_points: 10,
                 processed_points: 11,
                 rewritten_points: 11,
+                changed_points: 0,
                 status: CryptoMigrationCheckpointStatus::Verified,
             }],
         };
         assert!(invalid_counts.validate_admin_plan().is_err());
+
+        let invalid_changed_count = CryptoMigrationPlan {
+            from: Active,
+            to: Rotating,
+            target_epoch: 4,
+            active_rk_id: Some("rk/docs/4".to_string()),
+            retired_rk_id: Some("rk/docs/3".to_string()),
+            dry_run: false,
+            checkpoints: vec![CryptoMigrationCheckpoint {
+                shard_id: 0,
+                total_points: 10,
+                processed_points: 10,
+                rewritten_points: 5,
+                changed_points: 6,
+                status: CryptoMigrationCheckpointStatus::Verified,
+            }],
+        };
+        assert!(invalid_changed_count.validate_admin_plan().is_err());
 
         let duplicate_shard = CryptoMigrationPlan {
             from: Active,
@@ -884,6 +912,7 @@ mod ckks_tests {
                     total_points: 10,
                     processed_points: 10,
                     rewritten_points: 10,
+                    changed_points: 0,
                     status: CryptoMigrationCheckpointStatus::Verified,
                 },
                 CryptoMigrationCheckpoint {
@@ -891,6 +920,7 @@ mod ckks_tests {
                     total_points: 8,
                     processed_points: 8,
                     rewritten_points: 8,
+                    changed_points: 0,
                     status: CryptoMigrationCheckpointStatus::Verified,
                 },
             ],
@@ -909,6 +939,7 @@ mod ckks_tests {
                 total_points: 10,
                 processed_points: 10,
                 rewritten_points: 10,
+                changed_points: 0,
                 status: CryptoMigrationCheckpointStatus::Verified,
             }],
         };
@@ -926,6 +957,7 @@ mod ckks_tests {
                 total_points: 10,
                 processed_points: 9,
                 rewritten_points: 9,
+                changed_points: 0,
                 status: CryptoMigrationCheckpointStatus::Verified,
             }],
         };
@@ -943,6 +975,7 @@ mod ckks_tests {
                 total_points: 10,
                 processed_points: 10,
                 rewritten_points: 10,
+                changed_points: 0,
                 status: CryptoMigrationCheckpointStatus::Running,
             }],
         };
@@ -960,6 +993,7 @@ mod ckks_tests {
                 total_points: 10,
                 processed_points: 10,
                 rewritten_points: 10,
+                changed_points: 0,
                 status: CryptoMigrationCheckpointStatus::Verified,
             }],
         };
@@ -1093,6 +1127,7 @@ mod ckks_tests {
                 total_points: 10,
                 processed_points: 10,
                 rewritten_points: 10,
+                changed_points: 0,
                 status: CryptoMigrationCheckpointStatus::Verified,
             }],
         };
@@ -1119,6 +1154,7 @@ mod ckks_tests {
                 total_points: 10,
                 processed_points: 10,
                 rewritten_points: 10,
+                changed_points: 0,
                 status: CryptoMigrationCheckpointStatus::Verified,
             }],
         };
@@ -1140,6 +1176,7 @@ mod ckks_tests {
                 total_points: 10,
                 processed_points: 10,
                 rewritten_points: 10,
+                changed_points: 0,
                 status: CryptoMigrationCheckpointStatus::Verified,
             }],
         };
@@ -1593,6 +1630,7 @@ impl CryptoMigrationPlan {
         for checkpoint in &self.checkpoints {
             if checkpoint.processed_points > checkpoint.total_points
                 || checkpoint.rewritten_points > checkpoint.processed_points
+                || checkpoint.changed_points > checkpoint.rewritten_points
             {
                 return Err(ValidationError::new("invalid_crypto_migration_checkpoint"));
             }
@@ -1711,6 +1749,14 @@ pub struct CryptoMigrationCheckpoint {
     pub processed_points: u64,
     #[anonymize(false)]
     pub rewritten_points: u64,
+    /// Number of points whose payload bytes actually changed.
+    ///
+    /// `rewritten_points` is the verified coverage count used for completion
+    /// proofs and may equal `total_points` on idempotent reruns. This field
+    /// distinguishes already-current points from points that needed a rewrite.
+    #[serde(default)]
+    #[anonymize(false)]
+    pub changed_points: u64,
     #[serde(default)]
     #[anonymize(false)]
     pub status: CryptoMigrationCheckpointStatus,

@@ -712,11 +712,14 @@ client-side payload provider.
 Both rewrite endpoints return `CryptoMigrationCheckpoint` values. A verified
 checkpoint represents shard coverage, not only bytes changed: rerunning a
 migration over already-current payloads still returns `rewritten_points ==
-total_points` so the checkpoint can close the migration safely. Submit those
-checkpoints back to `plan` for `Encrypting -> Active`, `Rotating -> Active`, or
-`Decrypting -> Disabled` completion. If a rewrite request fails after nonce/key
-or payload validation, do not mark the plan complete; fix the runtime/material
-state and rerun the rewrite endpoint to produce fresh verified checkpoints.
+total_points` so the checkpoint can close the migration safely. The separate
+`changed_points` counter reports how many payload records actually changed on
+that run, so operators can distinguish first-pass rewrites from idempotent
+verification reruns. Submit those checkpoints back to `plan` for `Encrypting ->
+Active`, `Rotating -> Active`, or `Decrypting -> Disabled` completion. If a
+rewrite request fails after nonce/key or payload validation, do not mark the
+plan complete; fix the runtime/material state and rerun the rewrite endpoint to
+produce fresh verified checkpoints.
 After a verified `Decrypting -> Disabled` completion, the stored encryption
 section remains as audit/migration metadata, but it is not treated as effective
 encryption for write/read guards. Re-enabling encryption must start a new admin

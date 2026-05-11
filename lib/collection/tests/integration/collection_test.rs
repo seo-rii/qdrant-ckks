@@ -1329,6 +1329,7 @@ async fn crypto_migration_plan_updates_collection_config_through_admin_path() {
             total_points: 1,
             processed_points: 1,
             rewritten_points: 1,
+            changed_points: 0,
             status: CryptoMigrationCheckpointStatus::Verified,
         }],
     };
@@ -1450,6 +1451,7 @@ async fn crypto_migration_rewrites_stale_payload_envelopes_and_returns_checkpoin
     assert_eq!(checkpoints[0].total_points, 1);
     assert_eq!(checkpoints[0].processed_points, 1);
     assert_eq!(checkpoints[0].rewritten_points, 1);
+    assert_eq!(checkpoints[0].changed_points, 1);
     assert_eq!(
         checkpoints[0].status,
         CryptoMigrationCheckpointStatus::Verified
@@ -1470,6 +1472,10 @@ async fn crypto_migration_rewrites_stale_payload_envelopes_and_returns_checkpoin
     assert_eq!(
         checkpoints[0].rewritten_points, 1,
         "rerunning migration over already-current payloads must still produce a completion checkpoint",
+    );
+    assert_eq!(
+        checkpoints[0].changed_points, 0,
+        "rerunning migration over already-current payloads must report no byte changes",
     );
 
     collection
@@ -1616,6 +1622,7 @@ async fn crypto_migration_decrypts_payload_envelopes_and_returns_checkpoints() {
     assert_eq!(checkpoints[0].total_points, 1);
     assert_eq!(checkpoints[0].processed_points, 1);
     assert_eq!(checkpoints[0].rewritten_points, 1);
+    assert_eq!(checkpoints[0].changed_points, 1);
 
     collection
         .apply_crypto_migration_plan(&CryptoMigrationPlan {
@@ -1686,6 +1693,7 @@ async fn crypto_migration_decrypt_completion_disables_effective_encryption() {
                 total_points: 1,
                 processed_points: 1,
                 rewritten_points: 1,
+                changed_points: 0,
                 status: CryptoMigrationCheckpointStatus::Verified,
             }],
         })
@@ -1721,6 +1729,7 @@ async fn crypto_migration_decrypt_completion_disables_effective_encryption() {
                 total_points: 1,
                 processed_points: 1,
                 rewritten_points: 1,
+                changed_points: 0,
                 status: CryptoMigrationCheckpointStatus::Verified,
             }],
         })
@@ -1830,6 +1839,7 @@ async fn crypto_migration_completion_requires_all_collection_shards() {
             total_points: 1,
             processed_points: 1,
             rewritten_points: 1,
+            changed_points: 0,
             status: CryptoMigrationCheckpointStatus::Verified,
         }],
     };
@@ -1849,6 +1859,7 @@ async fn crypto_migration_completion_requires_all_collection_shards() {
         total_points: 1,
         processed_points: 1,
         rewritten_points: 1,
+        changed_points: 0,
         status: CryptoMigrationCheckpointStatus::Verified,
     });
     collection
