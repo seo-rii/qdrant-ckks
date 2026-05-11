@@ -14,6 +14,10 @@ use segment::utils::scored_point_ties::ScoredPointTies;
 use tokio::time::Instant;
 
 use super::Collection;
+use super::point_ops::{
+    apply_encrypted_payload_read_mode_to_scored_points,
+    ensure_encrypted_payload_read_mode_is_supported,
+};
 use crate::collection::mmr::mmr_from_points_with_vector;
 use crate::collection_manager::probabilistic_search_sampling::find_search_sampling_over_point_distribution;
 use crate::common::batching::batch_requests;
@@ -288,6 +292,13 @@ impl Collection {
         }
 
         let is_payload_required = requests_batch.iter().all(|s| s.with_payload.is_required());
+        let encrypted_payload_read_modes = requests_batch
+            .iter()
+            .map(|request| request.with_payload.encrypted_payload_read_mode())
+            .collect_vec();
+        for mode in &encrypted_payload_read_modes {
+            ensure_encrypted_payload_read_mode_is_supported(*mode)?;
+        }
         let with_vectors = requests_batch.iter().all(|s| s.with_vector.is_enabled());
 
         let metadata_required = is_payload_required || with_vectors;
@@ -352,14 +363,19 @@ impl Collection {
                 });
             future::try_join_all(filled_results).await
         } else {
-            self.do_query_batch_impl(
-                requests_batch,
-                read_consistency,
-                &shard_selection,
-                timeout,
-                hw_measurement_acc.clone(),
-            )
-            .await
+            let mut result = self
+                .do_query_batch_impl(
+                    requests_batch,
+                    read_consistency,
+                    &shard_selection,
+                    timeout,
+                    hw_measurement_acc.clone(),
+                )
+                .await?;
+            for (points, mode) in result.iter_mut().zip(encrypted_payload_read_modes) {
+                apply_encrypted_payload_read_mode_to_scored_points(points, mode);
+            }
+            Ok(result)
         }
     }
 

@@ -4266,6 +4266,36 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
         .unwrap();
     assert_eq!(redacted_search_body, redacted_body);
 
+    let redacted_query = collection
+        .query(
+            ShardQueryRequest {
+                prefetches: vec![],
+                query: Some(ScoringQuery::Sample(SampleInternal::Random)),
+                filter: None,
+                score_threshold: None,
+                limit: 1,
+                offset: 0,
+                params: None,
+                with_vector: WithVector::Bool(false),
+                with_payload: WithPayloadInterface::Encrypted(PayloadEncryptedReadPolicy {
+                    encrypted_payload: EncryptedPayloadReadMode::Redacted,
+                }),
+            },
+            None,
+            ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+    let redacted_query_body = redacted_query[0]
+        .payload
+        .as_ref()
+        .and_then(|payload| payload.0.get("document"))
+        .and_then(|document| document.get("body"))
+        .unwrap();
+    assert_eq!(redacted_query_body, redacted_body);
+
     let decrypt_err = collection
         .retrieve(
             PointRequestInternal {
@@ -4286,6 +4316,34 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
         .unwrap_err();
     assert!(matches!(
         decrypt_err,
+        CollectionError::BadInput { description }
+            if description.contains("RBAC-protected decrypt path")
+    ));
+
+    let query_decrypt_err = collection
+        .query(
+            ShardQueryRequest {
+                prefetches: vec![],
+                query: Some(ScoringQuery::Sample(SampleInternal::Random)),
+                filter: None,
+                score_threshold: None,
+                limit: 1,
+                offset: 0,
+                params: None,
+                with_vector: WithVector::Bool(false),
+                with_payload: WithPayloadInterface::Encrypted(PayloadEncryptedReadPolicy {
+                    encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                }),
+            },
+            None,
+            ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        query_decrypt_err,
         CollectionError::BadInput { description }
             if description.contains("RBAC-protected decrypt path")
     ));
