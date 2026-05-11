@@ -4198,6 +4198,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn encrypted_payload_read_policy_deserializes_to_payload_selector() {
+        let raw: WithPayloadInterface =
+            serde_json::from_value(serde_json::json!({ "encrypted_payload": "raw" })).unwrap();
+        assert!(raw.is_required());
+        assert_eq!(
+            raw.encrypted_payload_read_mode(),
+            EncryptedPayloadReadMode::Raw
+        );
+
+        let redacted: WithPayloadInterface =
+            serde_json::from_value(serde_json::json!({ "encrypted_payload": "redacted" })).unwrap();
+        assert!(redacted.is_required());
+        assert_eq!(
+            redacted.encrypted_payload_read_mode(),
+            EncryptedPayloadReadMode::Redacted
+        );
+
+        let with_payload = WithPayload::from(redacted);
+        assert!(with_payload.enable);
+        assert!(with_payload.payload_selector.is_none());
+    }
+
+    #[test]
+    fn encrypted_payload_read_policy_rejects_unknown_fields() {
+        let err = serde_json::from_value::<WithPayloadInterface>(serde_json::json!({
+            "encrypted_payload": "redacted",
+            "include": ["plaintext"]
+        }))
+        .unwrap_err();
+
+        assert!(err.to_string().contains("Expected a boolean"), "{err}");
+    }
+
     #[rstest]
     #[case::rfc_3339("2020-03-01T00:00:00Z")]
     #[case::rfc_3339_custom_tz("2020-03-01T00:00:00-09:00")]

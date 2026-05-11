@@ -3574,6 +3574,24 @@ mod tests {
     }
 
     #[test]
+    fn grpc_payload_selector_falls_back_for_encrypted_read_policy() {
+        let selector: WithPayloadSelector = segment::types::WithPayloadInterface::Encrypted(
+            segment::types::PayloadEncryptedReadPolicy {
+                encrypted_payload: segment::types::EncryptedPayloadReadMode::Redacted,
+            },
+        )
+        .into();
+
+        assert_eq!(
+            selector.selector_options,
+            Some(SelectorOptions::Enable(true)),
+        );
+
+        let roundtrip = segment::types::WithPayloadInterface::try_from(selector).unwrap();
+        assert_eq!(roundtrip, segment::types::WithPayloadInterface::Bool(true));
+    }
+
+    #[test]
     fn grpc_search_groups_ckks_query_preserves_hnsw_params() {
         let request = SearchPointGroups {
             collection_name: "docs".to_string(),
