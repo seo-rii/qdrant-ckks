@@ -166,7 +166,7 @@ impl Collection {
                 };
                 if names.iter().any(|name| name == &using) {
                     return Err(CollectionError::bad_input(format!(
-                        "cannot build search matrix for encrypted vector '{using}'; CKKS-native vector search is not implemented in this branch",
+                        "cannot build direct collection search matrix for encrypted vector '{using}'; use the runtime CKKS sidecar matrix entrypoint",
                     )));
                 }
             }

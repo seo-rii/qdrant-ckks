@@ -1434,7 +1434,7 @@ impl Collection {
                 WithVector::Bool(true) => {
                     if let Some(encrypted_name) = names.first() {
                         return Err(CollectionError::bad_input(format!(
-                            "cannot return encrypted vector '{encrypted_name}'; CKKS vector ciphertext read path is not implemented",
+                            "cannot return encrypted vector '{encrypted_name}'; CKKS vector ciphertext read path returns payload sidecar only",
                         )));
                     }
                 }
@@ -1442,7 +1442,7 @@ impl Collection {
                     for requested_name in vector_names {
                         if names.iter().any(|name| name == requested_name) {
                             return Err(CollectionError::bad_input(format!(
-                                "cannot return encrypted vector '{requested_name}'; CKKS vector ciphertext read path is not implemented",
+                                "cannot return encrypted vector '{requested_name}'; CKKS vector ciphertext read path returns payload sidecar only",
                             )));
                         }
                     }
@@ -1582,7 +1582,7 @@ impl Collection {
                             filter_touches_encrypted_vector(filter, encrypted_name)
                         {
                             return Err(CollectionError::bad_input(format!(
-                                "cannot filter on encrypted vector '{filter_vector}' because CKKS-native vector search is not implemented",
+                                "cannot filter on encrypted vector '{filter_vector}'; use CKKS sidecar vector search APIs instead",
                             )));
                         }
                     }

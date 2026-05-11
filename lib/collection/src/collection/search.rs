@@ -81,7 +81,7 @@ impl Collection {
                     let vector_name = search.query.get_vector_name();
                     if names.iter().any(|name| name == vector_name) {
                         return Err(CollectionError::bad_input(format!(
-                            "cannot search encrypted vector '{vector_name}'; CKKS-native vector search is not implemented in this branch",
+                            "cannot search encrypted vector '{vector_name}' through direct collection search; use the runtime CKKS sidecar search entrypoint",
                         )));
                     }
                 }

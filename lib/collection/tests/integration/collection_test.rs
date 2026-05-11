@@ -3948,7 +3948,7 @@ async fn encrypted_vector_rejects_plaintext_vector_writes() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot filter on encrypted vector")
-                && description.contains("CKKS-native vector search is not implemented")
+                && description.contains("use CKKS sidecar vector search APIs")
     ));
 
     collection.stop_gracefully().await;
@@ -4289,7 +4289,7 @@ async fn encrypted_vector_rejects_plaintext_vector_reads() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot return encrypted vector")
-                && description.contains("ciphertext read path is not implemented")
+                && description.contains("ciphertext read path returns payload sidecar only")
     ));
 
     let err = collection
@@ -4311,7 +4311,7 @@ async fn encrypted_vector_rejects_plaintext_vector_reads() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot return encrypted vector")
-                && description.contains("ciphertext read path is not implemented")
+                && description.contains("ciphertext read path returns payload sidecar only")
     ));
 }
 
@@ -4346,7 +4346,7 @@ async fn encrypted_vector_rejects_search_path() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot search encrypted vector")
-                && description.contains("CKKS-native vector search is not implemented")
+                && description.contains("runtime CKKS sidecar search entrypoint")
     ));
 
     let err = collection
@@ -4381,7 +4381,7 @@ async fn encrypted_vector_rejects_search_path() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot query encrypted vector")
-                && description.contains("CKKS-native vector search is not implemented")
+                && description.contains("runtime CKKS sidecar query entrypoint")
     ));
 
     let err = collection
@@ -4436,7 +4436,7 @@ async fn encrypted_vector_rejects_search_path() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot query encrypted vector")
-                && description.contains("CKKS-native vector search is not implemented")
+                && description.contains("runtime CKKS sidecar query entrypoint")
     ));
 
     let err = GroupBy::new(
@@ -4468,7 +4468,8 @@ async fn encrypted_vector_rejects_search_path() {
         err,
         CollectionError::BadInput { description }
             if description.contains("encrypted vector")
-                && description.contains("CKKS-native vector search is not implemented")
+                && (description.contains("runtime CKKS sidecar search entrypoint")
+                    || description.contains("runtime CKKS sidecar query entrypoint"))
     ));
 
     let err = GroupBy::new(
@@ -4505,7 +4506,8 @@ async fn encrypted_vector_rejects_search_path() {
         err,
         CollectionError::BadInput { description }
             if description.contains("encrypted vector")
-                && description.contains("CKKS-native vector search is not implemented")
+                && (description.contains("runtime CKKS sidecar search entrypoint")
+                    || description.contains("runtime CKKS sidecar query entrypoint"))
     ));
 
     let err = recommend_by(
@@ -4528,7 +4530,7 @@ async fn encrypted_vector_rejects_search_path() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot search encrypted vector")
-                && description.contains("CKKS-native vector search is not implemented")
+                && description.contains("runtime CKKS sidecar search entrypoint")
     ));
 
     let err = discover(
@@ -4558,7 +4560,7 @@ async fn encrypted_vector_rejects_search_path() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot search encrypted vector")
-                && description.contains("CKKS-native vector search is not implemented")
+                && description.contains("runtime CKKS sidecar search entrypoint")
     ));
 
     let err = collection
@@ -4580,8 +4582,9 @@ async fn encrypted_vector_rejects_search_path() {
     assert!(matches!(
         err,
         CollectionError::BadInput { description }
-            if description.contains("cannot build search matrix for encrypted vector")
-                && description.contains("CKKS-native vector search is not implemented")
+            if description.contains("encrypted vector")
+                && (description.contains("runtime CKKS sidecar matrix entrypoint")
+                    || description.contains("use CKKS sidecar vector search APIs"))
     ));
 }
 

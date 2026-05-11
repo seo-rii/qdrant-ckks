@@ -263,7 +263,7 @@ impl Collection {
                         && names.iter().any(|name| name == vector_name)
                     {
                         return Err(CollectionError::bad_input(format!(
-                            "cannot query encrypted vector '{vector_name}'; CKKS-native vector search is not implemented in this branch",
+                            "cannot query encrypted vector '{vector_name}' through direct collection query; use the runtime CKKS sidecar query entrypoint",
                         )));
                     }
 
@@ -276,7 +276,7 @@ impl Collection {
                             && names.iter().any(|name| name == vector_name)
                         {
                             return Err(CollectionError::bad_input(format!(
-                                "cannot query encrypted vector '{vector_name}'; CKKS-native vector search is not implemented in this branch",
+                                "cannot query encrypted vector '{vector_name}' through direct collection query; use the runtime CKKS sidecar query entrypoint",
                             )));
                         }
                         prefetches.extend(prefetch.prefetches.iter());
