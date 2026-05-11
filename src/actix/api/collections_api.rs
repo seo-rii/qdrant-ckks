@@ -3,14 +3,16 @@ use std::time::Duration;
 use actix_web::rt::time::Instant;
 use actix_web::{HttpResponse, Responder, delete, get, patch, post, put, web};
 use actix_web_validator::{Json, Path, Query};
+use collection::config::CryptoMigrationPlan;
 use collection::operations::cluster_ops::ClusterOperations;
 use collection::operations::types::CollectionError;
 use collection::operations::verification::new_unchecked_verification_pass;
 use serde::Deserialize;
 use shard::operations::optimization::OptimizationsRequestOptions;
 use storage::content_manager::collection_meta_ops::{
-    ChangeAliasesOperation, CollectionMetaOperations, CreateCollection, CreateCollectionOperation,
-    DeleteCollectionOperation, UpdateCollection, UpdateCollectionOperation,
+    ApplyCryptoMigrationPlan, ChangeAliasesOperation, CollectionMetaOperations, CreateCollection,
+    CreateCollectionOperation, DeleteCollectionOperation, UpdateCollection,
+    UpdateCollectionOperation,
 };
 use storage::dispatcher::Dispatcher;
 use storage::rbac::AccessRequirements;
@@ -22,6 +24,7 @@ use crate::actix::auth::ActixAuth;
 use crate::actix::helpers::{self, process_response};
 use crate::common::collections::*;
 use crate::common::crypto::validate_create_collection_crypto_runtime;
+use crate::common::update::do_reencrypt_stale_payloads_for_crypto_migration;
 use crate::settings::Settings;
 
 #[derive(Debug, Deserialize, Validate)]
@@ -164,6 +167,47 @@ async fn update_collection(
             query.timeout(),
         )
         .await;
+    process_response(response, timing, None)
+}
+
+#[post("/collections/{collection_name}/crypto/migration/plan")]
+async fn apply_crypto_migration_plan(
+    dispatcher: web::Data<Dispatcher>,
+    collection: Path<CollectionPath>,
+    operation: Json<CryptoMigrationPlan>,
+    Query(query): Query<WaitTimeout>,
+    ActixAuth(auth): ActixAuth,
+) -> impl Responder {
+    let timing = Instant::now();
+    let response = dispatcher
+        .submit_collection_meta_op(
+            CollectionMetaOperations::ApplyCryptoMigration(ApplyCryptoMigrationPlan {
+                collection_name: collection.collection_name.clone(),
+                plan: operation.into_inner(),
+            }),
+            auth,
+            query.timeout(),
+        )
+        .await;
+    process_response(response, timing, None)
+}
+
+#[post("/collections/{collection_name}/crypto/migration/rewrite-payloads")]
+async fn rewrite_payloads_for_crypto_migration(
+    dispatcher: web::Data<Dispatcher>,
+    collection: Path<CollectionPath>,
+    settings: web::Data<Settings>,
+    ActixAuth(auth): ActixAuth,
+) -> impl Responder {
+    let timing = Instant::now();
+    let pass = new_unchecked_verification_pass();
+    let response = do_reencrypt_stale_payloads_for_crypto_migration(
+        dispatcher.toc(&auth, &pass),
+        &collection.collection_name,
+        settings.get_ref(),
+        &auth,
+    )
+    .await;
     process_response(response, timing, None)
 }
 
@@ -317,6 +361,8 @@ pub fn config_collections_api(cfg: &mut web::ServiceConfig) {
         .service(get_collection_existence)
         .service(create_collection)
         .service(update_collection)
+        .service(apply_crypto_migration_plan)
+        .service(rewrite_payloads_for_crypto_migration)
         .service(delete_collection)
         .service(get_aliases)
         .service(get_collection_aliases)

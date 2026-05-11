@@ -549,13 +549,6 @@ impl PayloadWritePlan {
         })
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "reserved for the admin crypto migration path that re-encrypts stale payload envelopes"
-        )
-    )]
     pub(crate) fn reencrypt_payload_if_stale(
         &self,
         point_id: &str,

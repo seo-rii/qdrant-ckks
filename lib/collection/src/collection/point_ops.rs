@@ -30,9 +30,12 @@ use shard::retrieve::record_internal::RecordInternal;
 use shard::scroll::ScrollRequestInternal;
 
 use super::Collection;
-use crate::config::{CryptoMigrationState, EncryptionSelector};
+use crate::config::{
+    CryptoMigrationCheckpoint, CryptoMigrationCheckpointStatus, CryptoMigrationState,
+    EncryptionSelector,
+};
 use crate::operations::consistency_params::ReadConsistency;
-use crate::operations::payload_ops::PayloadOps;
+use crate::operations::payload_ops::{PayloadOps, SetPayloadOp};
 use crate::operations::point_ops::{
     BatchVectorStructPersisted, PointInsertOperationsInternal, PointOperations,
     VectorStructPersisted, WriteOrdering,
@@ -202,6 +205,121 @@ impl Collection {
         }
 
         Ok(())
+    }
+
+    pub async fn rewrite_payloads_for_crypto_migration<F>(
+        &self,
+        mut rewrite_payload: F,
+    ) -> CollectionResult<Vec<CryptoMigrationCheckpoint>>
+    where
+        F: FnMut(&ExtendedPointId, &mut Payload) -> CollectionResult<usize>,
+    {
+        let migration_state = self
+            .collection_config
+            .read()
+            .await
+            .params
+            .effective_encryption()
+            .map(|encryption| encryption.migration_state)
+            .ok_or_else(|| {
+                CollectionError::bad_input(
+                    "crypto payload migration requires an encrypted collection",
+                )
+            })?;
+        if !matches!(
+            migration_state,
+            CryptoMigrationState::Encrypting
+                | CryptoMigrationState::Rotating
+                | CryptoMigrationState::Decrypting
+        ) {
+            return Err(CollectionError::bad_input(format!(
+                "crypto payload migration requires migration_state=encrypting, rotating, or decrypting; current state is {migration_state:?}",
+            )));
+        }
+
+        const BATCH_SIZE: usize = 1024;
+        let with_payload = WithPayloadInterface::Bool(true);
+        let with_vector = WithVector::Bool(false);
+        let shard_holder = self.shards_holder.read().await;
+        let mut checkpoints = Vec::new();
+
+        for (shard_id, shard) in shard_holder.get_shards() {
+            let mut total_points = 0_u64;
+            let mut processed_points = 0_u64;
+            let mut rewritten_points = 0_u64;
+            let mut next_offset = Some(ExtendedPointId::NumId(0));
+
+            while let Some(current_offset) = next_offset {
+                let mut records = shard
+                    .local_scroll_by_id(
+                        Some(current_offset),
+                        BATCH_SIZE + 1,
+                        &with_payload,
+                        &with_vector,
+                        None,
+                        None,
+                        None,
+                        HwMeasurementAcc::disposable(),
+                        DeferredBehavior::IncludeAll,
+                    )
+                    .await?;
+                if records.is_empty() {
+                    break;
+                }
+
+                next_offset = if records.len() > BATCH_SIZE {
+                    records.pop().map(|record| record.id)
+                } else {
+                    None
+                };
+
+                for record in records {
+                    total_points += 1;
+                    processed_points += 1;
+
+                    let Some(mut payload) = record.payload else {
+                        continue;
+                    };
+                    let changed = rewrite_payload(&record.id, &mut payload)?;
+                    if changed == 0 {
+                        continue;
+                    }
+
+                    let operation = CollectionUpdateOperations::PayloadOperation(
+                        PayloadOps::OverwritePayload(SetPayloadOp {
+                            payload,
+                            points: Some(vec![record.id]),
+                            filter: None,
+                            key: None,
+                        }),
+                    );
+                    shard
+                        .update_local(
+                            OperationWithClockTag::from(operation),
+                            WaitUntil::Visible,
+                            None,
+                            HwMeasurementAcc::disposable(),
+                            false,
+                        )
+                        .await?;
+                    rewritten_points += 1;
+                }
+
+                if next_offset.is_none() {
+                    break;
+                }
+            }
+
+            checkpoints.push(CryptoMigrationCheckpoint {
+                shard_id,
+                total_points,
+                processed_points,
+                rewritten_points,
+                status: CryptoMigrationCheckpointStatus::Verified,
+            });
+        }
+
+        Ok(checkpoints)
     }
 
     /// Apply collection update operation to all local shards.

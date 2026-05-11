@@ -6,7 +6,7 @@ use api::rest::models::InferenceUsage;
 use api::rest::*;
 use collection::collection::Collection;
 use collection::collection::payload_index_schema::validate_payload_index_entry_for_encryption;
-use collection::config::CollectionParams;
+use collection::config::{CollectionParams, CryptoMigrationCheckpoint, CryptoMigrationState};
 use collection::operations::conversions::write_ordering_from_proto;
 use collection::operations::point_ops::*;
 use collection::operations::shard_selector_internal::ShardSelectorInternal;
@@ -1502,6 +1502,72 @@ fn get_shard_selector_for_update(
         (None, Some(shard_key)) => ShardSelectorInternal::from(shard_key),
         (None, None) => ShardSelectorInternal::Empty,
     }
+}
+
+pub async fn do_reencrypt_stale_payloads_for_crypto_migration(
+    toc: &Arc<TableOfContent>,
+    collection_name: &str,
+    runtime_settings: &Settings,
+    auth: &Auth,
+) -> Result<Vec<CryptoMigrationCheckpoint>, StorageError> {
+    let collection_pass = auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new().manage(),
+        "reencrypt_stale_payloads_for_crypto_migration",
+    )?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let collection_config = collection.config_snapshot().await;
+    let Some(encryption) = collection_config.params.effective_encryption() else {
+        return Err(StorageError::bad_input(format!(
+            "payload crypto migration for collection {collection_name} requires an encrypted collection",
+        )));
+    };
+    if !matches!(
+        encryption.migration_state,
+        CryptoMigrationState::Encrypting | CryptoMigrationState::Rotating
+    ) {
+        return Err(StorageError::bad_input(format!(
+            "payload re-encrypt migration for collection {collection_name} requires migration_state=encrypting or rotating; current state is {:?}",
+            encryption.migration_state,
+        )));
+    }
+
+    let collection_crypto_id = collection_config
+        .stable_crypto_id(collection_name)
+        .map_err(StorageError::from)?;
+    let Some(plan) = payload_write_plan_for_collection_with_crypto_id(
+        runtime_settings,
+        collection_name,
+        &collection_crypto_id,
+        &collection_config.params,
+    )
+    .map_err(|err| {
+        StorageError::service_error(format!(
+            "payload encryption runtime for collection {collection_name} is invalid: {err}"
+        ))
+    })?
+    else {
+        return Err(StorageError::bad_input(format!(
+            "payload crypto migration for collection {collection_name} requires a server-side payload encryption rule",
+        )));
+    };
+    if !plan.has_server_encrypt_rules() {
+        return Err(StorageError::bad_input(format!(
+            "payload crypto migration for collection {collection_name} requires server-side payload encryption rules; client-side envelopes are store-only and cannot be re-encrypted by Qdrant",
+        )));
+    }
+
+    collection
+        .rewrite_payloads_for_crypto_migration(|point_id, payload| {
+            plan.reencrypt_payload_if_stale(&point_id.to_string(), payload)
+                .map_err(|err| {
+                    CollectionError::bad_input(format!(
+                        "payload crypto migration rewrite failed for point {point_id}: {err}",
+                    ))
+                })
+        })
+        .await
+        .map_err(StorageError::from)
 }
 
 async fn maybe_encrypt_upsert_payloads(

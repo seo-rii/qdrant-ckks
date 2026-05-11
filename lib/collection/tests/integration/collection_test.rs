@@ -51,11 +51,11 @@ use qdrant_sec::{
     CkksEncryptionInput, CkksError, CkksParameters, CkksPublicMaterial, CkksVectorBackend,
     CkksVectorEncryptor, CkksVectorVerifiedSidecarKey, ClientPayloadSignatureVerification,
     ClientPayloadValidationContext, ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_PAYLOAD_MARKER,
-    ENCRYPTED_VECTOR_SIDECAR_FIELD, METADATA_EXACT_MATCH_TOKEN_BINDING, PAYLOAD_TEXT_KEY_DOMAIN,
-    PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey, ServerPayloadValidationContext,
-    client_payload_signature_message, is_client_encrypted_payload_value,
-    is_encrypted_payload_value, validate_client_payload_value_for_runtime,
-    validate_server_payload_value_metadata,
+    ENCRYPTED_VECTOR_SIDECAR_FIELD, ExistingPayloadMode, METADATA_EXACT_MATCH_TOKEN_BINDING,
+    PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
+    ServerPayloadValidationContext, client_payload_signature_message,
+    is_client_encrypted_payload_value, is_encrypted_payload_value,
+    validate_client_payload_value_for_runtime, validate_server_payload_value_metadata,
 };
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -1343,6 +1343,175 @@ async fn crypto_migration_plan_updates_collection_config_through_admin_path() {
         CryptoMigrationState::Active
     );
     assert_eq!(active_encryption.encryption_epoch, 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn crypto_migration_rewrites_stale_payload_envelopes_and_returns_checkpoints() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
+    let collection_crypto_id = collection.config_snapshot().await.uuid.unwrap().to_string();
+    let policy = PayloadEncryptionPolicy::new(["document.body"]).unwrap();
+    let old_resource_key = SecretKey::from_bytes([41u8; 32]);
+    let new_resource_key = SecretKey::from_bytes([42u8; 32]);
+
+    let old_encryptor = PayloadTextEncryptor::new_from_resource_key_with_metadata(
+        &collection_crypto_id,
+        "tenant-a:docs",
+        &old_resource_key,
+        "tenant-a/docs@v0",
+        "tenant-a/docs-rk-v0",
+        0,
+    )
+    .unwrap()
+    .with_encryption_epoch(0);
+    let mut stale_payload = Payload(
+        serde_json::json!({ "document": { "body": "rotate me" } })
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    let (changed, verified_server_envelope_keys) = old_encryptor
+        .encrypt_selected_fields_for_runtime(
+            "1",
+            &mut stale_payload.0,
+            &policy,
+            &collection_crypto_id,
+        )
+        .unwrap();
+    assert_eq!(changed, 1);
+
+    let stale_upsert = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+        PointInsertOperationsInternal::from(vec![PointStructPersisted {
+            id: 1.into(),
+            vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+            payload: Some(stale_payload),
+        }]),
+    ));
+    collection
+        .update_from_client(
+            stale_upsert,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::runtime_encrypted_payloads(verified_server_envelope_keys),
+        )
+        .await
+        .unwrap();
+
+    collection
+        .apply_crypto_migration_plan(&CryptoMigrationPlan {
+            from: CryptoMigrationState::Active,
+            to: CryptoMigrationState::Rotating,
+            target_epoch: 1,
+            active_rk_id: Some("tenant-a/docs-rk-v1".to_string()),
+            retired_rk_id: Some("tenant-a/docs-rk-v0".to_string()),
+            dry_run: false,
+            checkpoints: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    let rotating_encryptor = PayloadTextEncryptor::new_from_resource_key_with_metadata(
+        &collection_crypto_id,
+        "tenant-a:docs",
+        &new_resource_key,
+        "tenant-a/docs@v1",
+        "tenant-a/docs-rk-v1",
+        1,
+    )
+    .unwrap()
+    .with_encryption_epoch(1)
+    .with_retired_resource_key_metadata(
+        "tenant-a:docs",
+        &old_resource_key,
+        "tenant-a/docs@v0",
+        "tenant-a/docs-rk-v0",
+        0,
+    )
+    .unwrap();
+
+    let checkpoints = collection
+        .rewrite_payloads_for_crypto_migration(|point_id, payload| {
+            rotating_encryptor
+                .encrypt_selected_fields_with_mode(
+                    &point_id.to_string(),
+                    &mut payload.0,
+                    &policy,
+                    ExistingPayloadMode::ReencryptIfStale,
+                )
+                .map_err(|err| CollectionError::bad_input(err.to_string()))
+        })
+        .await
+        .unwrap();
+    assert_eq!(checkpoints.len(), 1);
+    assert_eq!(checkpoints[0].total_points, 1);
+    assert_eq!(checkpoints[0].processed_points, 1);
+    assert_eq!(checkpoints[0].rewritten_points, 1);
+    assert_eq!(
+        checkpoints[0].status,
+        CryptoMigrationCheckpointStatus::Verified
+    );
+
+    collection
+        .apply_crypto_migration_plan(&CryptoMigrationPlan {
+            from: CryptoMigrationState::Rotating,
+            to: CryptoMigrationState::Active,
+            target_epoch: 1,
+            active_rk_id: Some("tenant-a/docs-rk-v1".to_string()),
+            retired_rk_id: Some("tenant-a/docs-rk-v0".to_string()),
+            dry_run: false,
+            checkpoints,
+        })
+        .await
+        .unwrap();
+
+    let records = collection
+        .retrieve(
+            PointRequestInternal {
+                ids: vec![1.into()],
+                with_payload: Some(WithPayloadInterface::Bool(true)),
+                with_vector: false.into(),
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+    let body = records[0]
+        .payload
+        .as_ref()
+        .unwrap()
+        .0
+        .get("document")
+        .and_then(|document| document.get("body"))
+        .unwrap();
+    assert!(is_encrypted_payload_value(body));
+    assert_ne!(body, &serde_json::json!("rotate me"));
+    assert_eq!(
+        body.get(ENCRYPTED_PAYLOAD_MARKER)
+            .and_then(|marker| marker.get("encryption_epoch"))
+            .and_then(|epoch| epoch.as_u64()),
+        Some(1),
+    );
+    assert_eq!(
+        body.get(ENCRYPTED_PAYLOAD_MARKER)
+            .and_then(|marker| marker.get("envelope"))
+            .and_then(|envelope| envelope.get("material_fingerprint"))
+            .and_then(|fingerprint| fingerprint.as_str()),
+        Some("tenant-a/docs@v1"),
+    );
+    assert_eq!(
+        body.get(ENCRYPTED_PAYLOAD_MARKER)
+            .and_then(|marker| marker.get("envelope"))
+            .and_then(|envelope| envelope.get("rk_epoch"))
+            .and_then(|epoch| epoch.as_u64()),
+        Some(1),
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
