@@ -10,10 +10,12 @@ pub const GENERIC_CIPHERTEXT_MARKER: &str = "$qdrant_ciphertext";
 pub const PAYLOAD_AES_GCM_PROVIDER: &str = "payload/aes-256-gcm@v1";
 pub const PAYLOAD_CLIENT_AEAD_PROVIDER: &str = "payload/client-aead@v1";
 pub const VECTOR_OPENFHE_CKKS_PROVIDER: &str = "vector/openfhe-ckks@v1";
+pub const METADATA_AES_GCM_PROVIDER: &str = "metadata/aes-256-gcm@v1";
 pub const METADATA_BLIND_INDEX_PROVIDER: &str = "metadata/blind-index-hmac@v1";
 pub const PAYLOAD_FIELD_BINDING: &str = "payload-field/v1";
 pub const CLIENT_PAYLOAD_ENVELOPE_BINDING: &str = "client-payload-envelope/v1";
 pub const VECTOR_ENVELOPE_BINDING: &str = "vector-envelope/v1";
+pub const METADATA_VALUE_BINDING: &str = "metadata-value/v1";
 pub const METADATA_EXACT_MATCH_TOKEN_BINDING: &str = "metadata-exact-match-token/v1";
 
 #[derive(Error, Debug, PartialEq, Eq)]
@@ -33,6 +35,7 @@ pub enum ControlPlaneError {
 pub enum CryptoCapability {
     PayloadValue,
     VectorCiphertext,
+    MetadataValue,
     MetadataExactMatchToken,
 }
 
@@ -41,6 +44,7 @@ impl CryptoCapability {
         match self {
             Self::PayloadValue => "payload_value",
             Self::VectorCiphertext => "vector_ciphertext",
+            Self::MetadataValue => "metadata_value",
             Self::MetadataExactMatchToken => "metadata_exact_match_token",
         }
     }
@@ -291,6 +295,7 @@ mod tests {
             registry.register_payload_provider(PAYLOAD_AES_GCM_PROVIDER);
             registry.register_payload_provider(PAYLOAD_CLIENT_AEAD_PROVIDER);
             registry.register_vector_provider(VECTOR_OPENFHE_CKKS_PROVIDER);
+            registry.register_metadata_provider(METADATA_AES_GCM_PROVIDER);
             registry.register_metadata_provider(METADATA_BLIND_INDEX_PROVIDER);
         }
     }
@@ -454,7 +459,7 @@ mod tests {
         );
         assert_eq!(
             registry.metadata_provider_ids().collect::<Vec<_>>(),
-            vec![METADATA_BLIND_INDEX_PROVIDER],
+            vec![METADATA_AES_GCM_PROVIDER, METADATA_BLIND_INDEX_PROVIDER],
         );
 
         let mut plan = CompiledCollectionCryptoPlan::default();
@@ -472,6 +477,13 @@ mod tests {
             binding: Some(VECTOR_ENVELOPE_BINDING.to_string()),
         });
         plan.add_metadata_rule(CompiledMetadataRule {
+            rule_id: "tenant_conf".to_string(),
+            key: "tenant_id".to_string(),
+            instance: "docs_metadata_v1".to_string(),
+            provider: METADATA_AES_GCM_PROVIDER.to_string(),
+            binding: Some(METADATA_VALUE_BINDING.to_string()),
+        });
+        plan.add_metadata_rule(CompiledMetadataRule {
             rule_id: "body_blind_eq".to_string(),
             key: "body__blind_eq".to_string(),
             instance: "docs_body_blind_v1".to_string(),
@@ -485,6 +497,6 @@ mod tests {
                 .map(|rule| rule.provider.as_str()),
             Some(VECTOR_OPENFHE_CKKS_PROVIDER),
         );
-        assert_eq!(plan.metadata_rules().len(), 1);
+        assert_eq!(plan.metadata_rules().len(), 2);
     }
 }

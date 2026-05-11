@@ -1342,8 +1342,14 @@ async fn ensure_payload_index_allowed_by_encryption(
     }
 
     for rule in &encryption.rules {
-        let collection::config::EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
-            continue;
+        let paths = match &rule.selector {
+            collection::config::EncryptionSelector::PayloadPaths { paths } => paths.as_slice(),
+            collection::config::EncryptionSelector::MetadataKeys { keys }
+                if rule.binding.as_deref() == Some("metadata-value/v1") =>
+            {
+                keys.as_slice()
+            }
+            _ => continue,
         };
         for encrypted_path in paths {
             let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
@@ -1354,6 +1360,27 @@ async fn ensure_payload_index_allowed_by_encryption(
             if field_name.compatible(&encrypted_json_path) {
                 return Err(StorageError::bad_input(format!(
                     "cannot create payload index on encrypted payload field '{field_name}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                )));
+            }
+        }
+    }
+
+    for rule in &encryption.rules {
+        let collection::config::EncryptionSelector::MetadataKeys { keys } = &rule.selector else {
+            continue;
+        };
+        if rule.binding.as_deref() != Some("metadata-value/v1") {
+            continue;
+        }
+        for metadata_key in keys {
+            let metadata_path = metadata_key.parse::<JsonPath>().map_err(|err| {
+                StorageError::bad_input(format!(
+                    "encrypted metadata field path '{metadata_key}' is invalid: {err:?}",
+                ))
+            })?;
+            if field_name.compatible(&metadata_path) {
+                return Err(StorageError::bad_input(format!(
+                    "cannot create payload index on encrypted metadata value field '{field_name}' because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
                 )));
             }
         }
@@ -1373,6 +1400,9 @@ async fn ensure_payload_index_allowed_by_encryption(
             else {
                 continue;
             };
+            if rule.binding.as_deref() != Some("metadata-exact-match-token/v1") {
+                continue;
+            }
             for metadata_key in keys {
                 let metadata_path = metadata_key.parse::<JsonPath>().map_err(|err| {
                     StorageError::bad_input(format!(

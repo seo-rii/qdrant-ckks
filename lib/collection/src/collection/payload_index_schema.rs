@@ -69,6 +69,31 @@ pub fn validate_payload_index_paths_for_encrypted_paths<'a>(
         }
     }
 
+    for rule in &encryption.rules {
+        let EncryptionSelector::MetadataKeys { keys } = &rule.selector else {
+            continue;
+        };
+        if rule.binding.as_deref() != Some("metadata-value/v1") {
+            continue;
+        }
+
+        for metadata_key in keys {
+            let metadata_path = metadata_key.parse::<JsonPath>().map_err(|err| {
+                CollectionError::bad_input(format!(
+                    "encrypted metadata field path '{metadata_key}' is invalid: {err:?}",
+                ))
+            })?;
+
+            for field_name in &field_names {
+                if field_name.compatible(&metadata_path) {
+                    return Err(CollectionError::bad_input(format!(
+                        "cannot {action_label} on encrypted metadata value field '{field_name}' because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
+                    )));
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -94,6 +119,9 @@ pub fn validate_payload_index_entry_for_encryption(
         let EncryptionSelector::MetadataKeys { keys } = &rule.selector else {
             continue;
         };
+        if rule.binding.as_deref() != Some("metadata-exact-match-token/v1") {
+            continue;
+        }
 
         for metadata_key in keys {
             let metadata_path = metadata_key.parse::<JsonPath>().map_err(|err| {
@@ -339,6 +367,27 @@ mod tests {
         }
     }
 
+    fn params_with_metadata_value_key(key: &str) -> CollectionParams {
+        CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:payload".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "tenant_conf".to_string(),
+                    selector: EncryptionSelector::MetadataKeys {
+                        keys: vec![key.to_string()],
+                    },
+                    instance: "docs_metadata_v1".to_string(),
+                    binding: Some("metadata-value/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        }
+    }
+
     #[test]
     fn recovered_payload_index_schema_requires_keyword_for_metadata_blind_index() {
         let collection_params = params_with_metadata_blind_index_key("document_body__blind_eq");
@@ -387,6 +436,48 @@ mod tests {
                 if description.contains("recover payload index schema")
                     && description.contains("metadata blind-index field")
                     && description.contains("exact token field")
+        ));
+    }
+
+    #[test]
+    fn recovered_payload_index_schema_rejects_metadata_value_encrypted_paths() {
+        let collection_params = params_with_metadata_value_key("tenant_id");
+        let mut schema = HashMap::new();
+        schema.insert(
+            "tenant_id".parse().unwrap(),
+            PayloadFieldSchema::FieldType(PayloadSchemaType::Keyword),
+        );
+
+        let err = validate_payload_index_schema_for_encryption(
+            schema.iter(),
+            &collection_params,
+            "recover",
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            CollectionError::BadInput { description }
+                if description.contains("recover payload index schema")
+                    && description.contains("encrypted metadata value field")
+        ));
+
+        schema.clear();
+        schema.insert(
+            "tenant_id.keyword".parse().unwrap(),
+            PayloadFieldSchema::FieldType(PayloadSchemaType::Keyword),
+        );
+        let err = validate_payload_index_schema_for_encryption(
+            schema.iter(),
+            &collection_params,
+            "recover",
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            CollectionError::BadInput { description }
+                if description.contains("encrypted metadata value field")
+                    && description.contains("tenant_id.keyword")
         ));
     }
 }

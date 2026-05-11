@@ -33,6 +33,7 @@ pub const COLLECTION_CONFIG_FILE: &str = "config.json";
 const PAYLOAD_FIELD_BINDING: &str = "payload-field/v1";
 const CLIENT_PAYLOAD_ENVELOPE_BINDING: &str = "client-payload-envelope/v1";
 const VECTOR_ENVELOPE_BINDING: &str = "vector-envelope/v1";
+const METADATA_VALUE_BINDING: &str = "metadata-value/v1";
 const METADATA_EXACT_MATCH_TOKEN_BINDING: &str = "metadata-exact-match-token/v1";
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Validate, Anonymize, Clone, PartialEq, Eq)]
@@ -1291,13 +1292,13 @@ mod ckks_tests {
     }
 
     #[test]
-    fn encryption_config_rejects_metadata_value_binding_and_encrypted_path_overlap() {
+    fn encryption_config_allows_metadata_value_binding_and_rejects_overlap() {
         let metadata_value_params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
                 key_id: Some("tenant-a:docs".to_string()),
                 crypto_schema_version: 1,
-                encryption_epoch: 0,
+                encryption_epoch: 3,
                 migration_state: CryptoMigrationState::Active,
                 rules: vec![EncryptionRuleRef {
                     id: "tenant_index".to_string(),
@@ -1311,7 +1312,21 @@ mod ckks_tests {
             ..CollectionParams::empty()
         };
 
-        assert!(metadata_value_params.validate().is_err());
+        metadata_value_params.validate().unwrap();
+
+        let mut missing_key_id = metadata_value_params.clone();
+        missing_key_id.encryption.as_mut().unwrap().key_id = None;
+        let err = missing_key_id
+            .validate()
+            .expect_err("metadata value encryption must require collection key id");
+        assert!(err.to_string().contains("metadata_value_requires_key_id"));
+
+        let mut missing_epoch = metadata_value_params;
+        missing_epoch.encryption.as_mut().unwrap().encryption_epoch = 0;
+        let err = missing_epoch
+            .validate()
+            .expect_err("metadata value encryption must require RK epoch");
+        assert!(err.to_string().contains("metadata_value_requires_rk_epoch"));
 
         let overlapping_params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
@@ -1770,9 +1785,10 @@ fn validate_encryption_key_id(key_id: &str) -> Result<(), validator::ValidationE
 
 /// Capability-oriented collection encryption rules.
 ///
-/// Secret key material is never stored here. Metadata selectors are restricted
-/// to client-generated exact-match blind-index token fields; metadata value
-/// encryption, range, geo, and full-text filtering remain unsupported.
+/// Secret key material is never stored here. Metadata selectors support
+/// server-side metadata value AEAD and client-generated exact-match
+/// blind-index token fields; range, geo, and full-text filtering remain
+/// unsupported over encrypted metadata values.
 #[derive(
     Debug, Deserialize, Serialize, JsonSchema, Validate, Anonymize, Clone, PartialEq, Eq, Hash,
 )]
@@ -1830,6 +1846,23 @@ fn validate_collection_encryption_config(
     }) {
         return Err(validator::ValidationError::new(
             "client_payload_envelope_requires_rk_epoch",
+        ));
+    }
+
+    if config.rules.iter().any(|rule| {
+        rule.binding.as_deref() == Some(METADATA_VALUE_BINDING)
+            && config.key_id.as_deref().is_none_or(str::is_empty)
+    }) {
+        return Err(validator::ValidationError::new(
+            "metadata_value_requires_key_id",
+        ));
+    }
+
+    if config.rules.iter().any(|rule| {
+        rule.binding.as_deref() == Some(METADATA_VALUE_BINDING) && config.encryption_epoch == 0
+    }) {
+        return Err(validator::ValidationError::new(
+            "metadata_value_requires_rk_epoch",
         ));
     }
 
@@ -2118,7 +2151,10 @@ fn validate_encryption_rules(
                 }
             }
             EncryptionSelector::MetadataKeys { keys } => {
-                if rule.binding.as_deref() != Some(METADATA_EXACT_MATCH_TOKEN_BINDING) {
+                if !matches!(
+                    rule.binding.as_deref(),
+                    Some(METADATA_VALUE_BINDING | METADATA_EXACT_MATCH_TOKEN_BINDING)
+                ) {
                     return Err(validator::ValidationError::new(
                         "unsupported_metadata_encryption_binding",
                     ));

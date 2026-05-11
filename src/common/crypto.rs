@@ -15,10 +15,10 @@ use qdrant_sec::{
     CLIENT_PAYLOAD_ENVELOPE_BINDING, CkksParameters, CkksPublicMaterial, CkksVectorEncryptor,
     CkksVectorVerifiedSidecarKey, ClientPayloadNonceReplayKey, ClientPayloadSignatureVerification,
     ClientPayloadValidationContext, ClientPayloadVerifiedEnvelopeKey, CommandOpenFheBackend,
-    EncryptedCkksVector, ExistingPayloadMode, LocalMasterKeyProvider,
-    METADATA_BLIND_INDEX_PROVIDER, METADATA_EXACT_MATCH_TOKEN_BINDING, MasterKeyProvider,
-    PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER, PAYLOAD_FIELD_BINDING,
-    PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
+    EncryptedCkksVector, ExistingPayloadMode, LocalMasterKeyProvider, METADATA_AES_GCM_PROVIDER,
+    METADATA_BLIND_INDEX_PROVIDER, METADATA_EXACT_MATCH_TOKEN_BINDING, METADATA_VALUE_BINDING,
+    MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER,
+    PAYLOAD_FIELD_BINDING, PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
     RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, ServerPayloadVerifiedEnvelopeKey,
     VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER, WrappedKeyBlob,
     client_payload_nonce_replay_key, client_payload_signature_key_id, rewrap_resource_key,
@@ -1500,6 +1500,7 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
             PAYLOAD_AES_GCM_PROVIDER
                 | PAYLOAD_CLIENT_AEAD_PROVIDER
                 | VECTOR_OPENFHE_CKKS_PROVIDER
+                | METADATA_AES_GCM_PROVIDER
                 | METADATA_BLIND_INDEX_PROVIDER
         ) {
             return Err(CryptoSetupError::InvalidInstanceOption {
@@ -1742,24 +1743,33 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                 });
             }
         }
-        if instance.provider == PAYLOAD_AES_GCM_PROVIDER
-            && let Some(option) =
-                unsupported_instance_option(&instance.options, PAYLOAD_AES_GCM_ALLOWED_OPTIONS)
+        if matches!(
+            instance.provider.as_str(),
+            PAYLOAD_AES_GCM_PROVIDER | METADATA_AES_GCM_PROVIDER
+        ) && let Some(option) =
+            unsupported_instance_option(&instance.options, PAYLOAD_AES_GCM_ALLOWED_OPTIONS)
         {
             return Err(CryptoSetupError::InvalidInstanceOption {
                 instance: instance_name.clone(),
                 option,
-                reason: "unsupported option for payload/aes-256-gcm@v1".to_string(),
+                reason: format!("unsupported option for {}", instance.provider),
             });
         }
-        if instance.provider == PAYLOAD_AES_GCM_PROVIDER {
-            validate_optional_instance_key_id(instance_name, instance, PAYLOAD_AES_GCM_PROVIDER)?;
+        if matches!(
+            instance.provider.as_str(),
+            PAYLOAD_AES_GCM_PROVIDER | METADATA_AES_GCM_PROVIDER
+        ) {
+            validate_optional_instance_key_id(instance_name, instance, &instance.provider)?;
         }
-        if instance.provider == PAYLOAD_AES_GCM_PROVIDER && instance.backend_ref.is_some() {
+        if matches!(
+            instance.provider.as_str(),
+            PAYLOAD_AES_GCM_PROVIDER | METADATA_AES_GCM_PROVIDER
+        ) && instance.backend_ref.is_some()
+        {
             return Err(CryptoSetupError::InvalidInstanceOption {
                 instance: instance_name.clone(),
                 option: "backend_ref".to_string(),
-                reason: "payload/aes-256-gcm@v1 must not configure backend_ref".to_string(),
+                reason: format!("{} must not configure backend_ref", instance.provider),
             });
         }
         for (role, material_ref) in &instance.materials {
@@ -1778,16 +1788,16 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                 });
             }
         }
-        if instance.provider == PAYLOAD_AES_GCM_PROVIDER
-            && let Some(role) = unsupported_material_role(
-                &instance.materials,
-                PAYLOAD_AES_GCM_ALLOWED_MATERIAL_ROLES,
-            )
+        if matches!(
+            instance.provider.as_str(),
+            PAYLOAD_AES_GCM_PROVIDER | METADATA_AES_GCM_PROVIDER
+        ) && let Some(role) =
+            unsupported_material_role(&instance.materials, PAYLOAD_AES_GCM_ALLOWED_MATERIAL_ROLES)
         {
             return Err(CryptoSetupError::InvalidInstanceOption {
                 instance: instance_name.clone(),
                 option: format!("materials.{role}"),
-                reason: "unsupported material role for payload/aes-256-gcm@v1".to_string(),
+                reason: format!("unsupported material role for {}", instance.provider),
             });
         }
         if instance.provider == VECTOR_OPENFHE_CKKS_PROVIDER
@@ -1804,7 +1814,7 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
         }
         if matches!(
             instance.provider.as_str(),
-            PAYLOAD_AES_GCM_PROVIDER | VECTOR_OPENFHE_CKKS_PROVIDER
+            PAYLOAD_AES_GCM_PROVIDER | METADATA_AES_GCM_PROVIDER | VECTOR_OPENFHE_CKKS_PROVIDER
         ) && !instance.materials.contains_key(PAYLOAD_SYM_KEY_ROLE)
         {
             return Err(CryptoSetupError::InvalidInstanceOption {
@@ -1815,7 +1825,7 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
         }
         if matches!(
             instance.provider.as_str(),
-            PAYLOAD_AES_GCM_PROVIDER | VECTOR_OPENFHE_CKKS_PROVIDER
+            PAYLOAD_AES_GCM_PROVIDER | METADATA_AES_GCM_PROVIDER | VECTOR_OPENFHE_CKKS_PROVIDER
         ) && let Some(active_material_ref) = instance.materials.get(PAYLOAD_SYM_KEY_ROLE)
             && let Some(active_material) = settings.materials.get(active_material_ref)
             && active_material.kind == WRAPPED_SYMMETRIC_KEY_32_KIND
@@ -2853,8 +2863,24 @@ fn generic_payload_write_plan(
     let mut rules = Vec::new();
 
     for rule in &encryption.rules {
-        let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
-            continue;
+        let (paths, expected_binding, expected_provider, rule_kind) = match &rule.selector {
+            EncryptionSelector::PayloadPaths { paths } => (
+                paths.as_slice(),
+                PAYLOAD_FIELD_BINDING,
+                PAYLOAD_AES_GCM_PROVIDER,
+                "server payload",
+            ),
+            EncryptionSelector::MetadataKeys { keys }
+                if rule.binding.as_deref() == Some(METADATA_VALUE_BINDING) =>
+            {
+                (
+                    keys.as_slice(),
+                    METADATA_VALUE_BINDING,
+                    METADATA_AES_GCM_PROVIDER,
+                    "metadata value",
+                )
+            }
+            _ => continue,
         };
         let instance = runtime_settings
             .instances
@@ -2863,18 +2889,25 @@ fn generic_payload_write_plan(
                 collection: collection_name.to_string(),
                 instance: rule.instance.clone(),
             })?;
-        let policy = PayloadEncryptionPolicy::new(paths.clone())?;
+        let policy = PayloadEncryptionPolicy::new(paths.iter().cloned())?;
         match instance.provider.as_str() {
-            PAYLOAD_AES_GCM_PROVIDER => {
+            PAYLOAD_AES_GCM_PROVIDER | METADATA_AES_GCM_PROVIDER => {
+                if instance.provider != expected_provider {
+                    return Err(PayloadWriteSetupError::UnsupportedProvider {
+                        collection: collection_name.to_string(),
+                        rule_id: rule.id.clone(),
+                        provider: instance.provider.clone(),
+                    });
+                }
                 if rule
                     .binding
                     .as_deref()
-                    .is_some_and(|binding| binding != PAYLOAD_FIELD_BINDING)
+                    .is_some_and(|binding| binding != expected_binding)
                 {
                     return Err(PayloadWriteSetupError::InvalidPayloadBinding {
                         collection: collection_name.to_string(),
                         rule_id: rule.id.clone(),
-                        binding: PAYLOAD_FIELD_BINDING.to_string(),
+                        binding: expected_binding.to_string(),
                     });
                 }
                 if let Some(option) =
@@ -3016,6 +3049,13 @@ fn generic_payload_write_plan(
                 rules.push(PayloadWriteRule::ServerEncrypt { encryptor, policy });
             }
             PAYLOAD_CLIENT_AEAD_PROVIDER => {
+                if rule_kind != "server payload" {
+                    return Err(PayloadWriteSetupError::UnsupportedProvider {
+                        collection: collection_name.to_string(),
+                        rule_id: rule.id.clone(),
+                        provider: instance.provider.clone(),
+                    });
+                }
                 if !instance.materials.is_empty() || instance.backend_ref.is_some() {
                     return Err(PayloadWriteSetupError::ClientProviderMustBeServerBlind {
                         instance: rule.instance.clone(),
@@ -3307,7 +3347,11 @@ fn validate_generic_collection_crypto_runtime(
     let payload_rules: Vec<_> = encryption
         .rules
         .iter()
-        .filter(|rule| matches!(rule.selector, EncryptionSelector::PayloadPaths { .. }))
+        .filter(|rule| {
+            matches!(rule.selector, EncryptionSelector::PayloadPaths { .. })
+                || matches!(rule.selector, EncryptionSelector::MetadataKeys { .. })
+                    && rule.binding.as_deref() == Some(METADATA_VALUE_BINDING)
+        })
         .cloned()
         .collect();
     if !payload_rules.is_empty() {
@@ -3336,6 +3380,10 @@ fn validate_generic_collection_crypto_runtime(
         let EncryptionSelector::MetadataKeys { keys } = &rule.selector else {
             continue;
         };
+
+        if rule.binding.as_deref() == Some(METADATA_VALUE_BINDING) {
+            continue;
+        }
 
         if rule.binding.as_deref() != Some(METADATA_EXACT_MATCH_TOKEN_BINDING) {
             return Err(StorageError::bad_input(format!(
@@ -4735,7 +4783,7 @@ mod tests {
                 source: Some("inline".to_string()),
                 env: None,
                 path: None,
-                value_b64: Some("AQID".to_string()),
+                value_b64: Some(BASE64URL_NOPAD.encode(&[1_u8; 32])),
                 ..CryptoMaterialConfig::default()
             },
         );
@@ -9975,7 +10023,7 @@ mod tests {
                         keys: vec!["embedding".to_string()],
                     },
                     instance: "docs_metadata_v1".to_string(),
-                    binding: Some("metadata-value/v1".to_string()),
+                    binding: Some("metadata-range/v1".to_string()),
                 }],
             }),
             ..CollectionParams::empty()
@@ -9986,7 +10034,7 @@ mod tests {
             "docs",
             &create_collection_with_params(params),
         )
-        .expect_err("create-time metadata value selector must fail schema validation");
+        .expect_err("create-time unsupported metadata selector must fail schema validation");
         assert!(
             matches!(err, StorageError::BadInput { ref description }
                 if description.contains("collection docs crypto config is invalid")
@@ -10072,6 +10120,79 @@ mod tests {
     }
 
     #[test]
+    fn metadata_value_aead_rule_encrypts_selected_metadata_field() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_metadata_value_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: METADATA_AES_GCM_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            "tenant-a/metadata-v1".to_string(),
+                        )]),
+                        options: json!({
+                            "key_id": "tenant-a:docs",
+                            "material_fingerprint_id": "tenant-a/metadata@v1",
+                        }),
+                        ..CryptoInstanceConfig::default()
+                    },
+                )]),
+                materials: HashMap::from([(
+                    "tenant-a/metadata-v1".to_string(),
+                    CryptoMaterialConfig {
+                        kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[9_u8; 32])),
+                        ..CryptoMaterialConfig::default()
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "tenant_conf".to_string(),
+                    selector: EncryptionSelector::MetadataKeys {
+                        keys: vec!["tenant_id".to_string()],
+                    },
+                    instance: "docs_metadata_value_v1".to_string(),
+                    binding: Some(METADATA_VALUE_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        validate_collection_crypto_runtime(&settings, "docs", &params).unwrap();
+        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
+            .unwrap()
+            .unwrap();
+        let mut payload = Payload(
+            json!({
+                "tenant_id": "acme",
+                "body": "public",
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+
+        assert_eq!(plan.encrypt_payload("1", &mut payload).unwrap(), 1);
+        assert!(is_encrypted_payload_value(
+            payload.0.get("tenant_id").unwrap()
+        ));
+        assert_eq!(payload.0.get("body").unwrap(), &json!("public"));
+    }
+
+    #[test]
     fn validate_recovered_collection_crypto_runtime_rejects_invalid_crypto_selectors() {
         let settings = Settings::new(None).unwrap();
         let params = CollectionParams {
@@ -10087,14 +10208,14 @@ mod tests {
                         keys: vec!["embedding".to_string()],
                     },
                     instance: "docs_metadata_v1".to_string(),
-                    binding: Some("metadata-value/v1".to_string()),
+                    binding: Some("metadata-range/v1".to_string()),
                 }],
             }),
             ..CollectionParams::empty()
         };
 
         let err = validate_recovered_collection_crypto_runtime(&settings, "docs", &params)
-            .expect_err("recovered metadata value selector must fail schema validation");
+            .expect_err("recovered unsupported metadata selector must fail schema validation");
         assert!(
             matches!(err, StorageError::BadInput { ref description }
                 if description.contains("recovered collection docs encryption config is invalid")

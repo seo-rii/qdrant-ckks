@@ -84,6 +84,12 @@ impl Collection {
                                     ))
                                 })?;
                             if request.key.compatible(&metadata_path) {
+                                if rule.binding.as_deref() == Some("metadata-value/v1") {
+                                    return Err(CollectionError::bad_input(format!(
+                                        "cannot facet on encrypted metadata value field '{}' because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
+                                        request.key,
+                                    )));
+                                }
                                 return Err(CollectionError::bad_input(format!(
                                     "cannot facet on metadata blind-index field '{}' because it overlaps token field '{metadata_key}'; blind-index token fields support exact-match filters only",
                                     request.key,

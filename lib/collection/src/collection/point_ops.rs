@@ -1159,6 +1159,139 @@ impl Collection {
                                 ))
                             })?;
 
+                            if rule.binding.as_deref() == Some("metadata-value/v1") {
+                                let touches_encrypted_metadata = match &operation {
+                                    CollectionUpdateOperations::PointOperation(point_operation) => {
+                                        match point_operation {
+                                            PointOperations::UpsertPoints(insert_operation)
+                                            | PointOperations::UpsertPointsConditional(
+                                                shard::operations::point_ops::ConditionalInsertOperationInternal {
+                                                    points_op: insert_operation,
+                                                    condition: _,
+                                                    update_mode: _,
+                                                },
+                                            ) => match insert_operation {
+                                                PointInsertOperationsInternal::PointsBatch(batch) => {
+                                                    let mut touches = false;
+                                                    if let Some(payloads) = batch.payloads.as_ref()
+                                                    {
+                                                        for (id, payload) in batch
+                                                            .ids
+                                                            .iter()
+                                                            .zip(payloads)
+                                                            .filter_map(|(id, payload)| {
+                                                                payload.as_ref().map(|payload| {
+                                                                    (id.to_string(), payload)
+                                                                })
+                                                            })
+                                                        {
+                                                            if payload_write_touches_encrypted_path(
+                                                                payload,
+                                                                None,
+                                                                Some(id.as_str()),
+                                                                &metadata_path,
+                                                                metadata_key,
+                                                                false,
+                                                            )? {
+                                                                touches = true;
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                    touches
+                                                }
+                                                PointInsertOperationsInternal::PointsList(
+                                                    points,
+                                                ) => {
+                                                    let mut touches = false;
+                                                    for (id, payload) in
+                                                        points.iter().filter_map(|point| {
+                                                            point.payload.as_ref().map(|payload| {
+                                                                (point.id.to_string(), payload)
+                                                            })
+                                                        })
+                                                    {
+                                                        if payload_write_touches_encrypted_path(
+                                                            payload,
+                                                            None,
+                                                            Some(id.as_str()),
+                                                            &metadata_path,
+                                                            metadata_key,
+                                                            false,
+                                                        )? {
+                                                            touches = true;
+                                                            break;
+                                                        }
+                                                    }
+                                                    touches
+                                                }
+                                            },
+                                            PointOperations::SyncPoints(sync_operation) => {
+                                                let mut touches = false;
+                                                for (id, payload) in sync_operation
+                                                    .points
+                                                    .iter()
+                                                    .filter_map(|point| {
+                                                        point.payload.as_ref().map(|payload| {
+                                                            (point.id.to_string(), payload)
+                                                        })
+                                                    })
+                                                {
+                                                    if payload_write_touches_encrypted_path(
+                                                        payload,
+                                                        None,
+                                                        Some(id.as_str()),
+                                                        &metadata_path,
+                                                        metadata_key,
+                                                        false,
+                                                    )? {
+                                                        touches = true;
+                                                        break;
+                                                    }
+                                                }
+                                                touches
+                                            }
+                                            PointOperations::DeletePoints { .. }
+                                            | PointOperations::DeletePointsByFilter(_) => false,
+                                        }
+                                    }
+                                    CollectionUpdateOperations::PayloadOperation(
+                                        PayloadOps::SetPayload(operation)
+                                        | PayloadOps::OverwritePayload(operation),
+                                    ) => {
+                                        let point_id =
+                                            operation.points.as_ref().and_then(|points| {
+                                                (points.len() == 1)
+                                                    .then(|| points[0].to_string())
+                                            });
+                                        payload_write_touches_encrypted_path(
+                                            &operation.payload,
+                                            operation.key.as_ref(),
+                                            point_id.as_deref(),
+                                            &metadata_path,
+                                            metadata_key,
+                                            false,
+                                        )?
+                                    }
+                                    CollectionUpdateOperations::VectorOperation(_)
+                                    | CollectionUpdateOperations::PayloadOperation(
+                                        PayloadOps::DeletePayload(_)
+                                        | PayloadOps::ClearPayload { .. }
+                                        | PayloadOps::ClearPayloadByFilter(_),
+                                    )
+                                    | CollectionUpdateOperations::FieldIndexOperation(_) => false,
+                                    #[cfg(feature = "staging")]
+                                    CollectionUpdateOperations::StagingOperation(_) => false,
+                                };
+
+                                if touches_encrypted_metadata {
+                                    return Err(CollectionError::bad_input(format!(
+                                        "cannot write plaintext metadata value for encrypted field '{metadata_key}'; configure runtime metadata value encryption before writing this field",
+                                    )));
+                                }
+                                continue;
+                            }
+
                             match &operation {
                                 CollectionUpdateOperations::PointOperation(point_operation) => {
                                     match point_operation {
@@ -1763,6 +1896,16 @@ impl Collection {
                                 "metadata blind-index field path '{metadata_key}' is invalid: {err:?}",
                             ))
                         })?;
+                        if rule.binding.as_deref() == Some("metadata-value/v1") {
+                            if let Some(filter_path) =
+                                filter_touches_encrypted_payload(filter, &metadata_path)
+                            {
+                                return Err(CollectionError::bad_input(format!(
+                                    "cannot filter on encrypted metadata value field '{filter_path}' because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
+                                )));
+                            }
+                            continue;
+                        }
                         validate_filter_metadata_blind_index_tokens(
                             filter,
                             &metadata_path,
@@ -1823,6 +1966,15 @@ impl Collection {
                 EncryptionSelector::MetadataKeys { keys } => {
                     for metadata_key in keys {
                         let metadata_path = parse_metadata_blind_index_path(metadata_key)?;
+                        if rule.binding.as_deref() == Some("metadata-value/v1") {
+                            if order_by.key.compatible(&metadata_path) {
+                                return Err(CollectionError::bad_input(format!(
+                                    "cannot order by encrypted metadata value field '{}' because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
+                                    order_by.key,
+                                )));
+                            }
+                            continue;
+                        }
                         if order_by.key.compatible(&metadata_path) {
                             return Err(CollectionError::bad_input(format!(
                                 "cannot order by metadata blind-index field '{}' because it overlaps token field '{metadata_key}'; blind-index token fields support exact-match filters only",
@@ -1880,6 +2032,14 @@ impl Collection {
                 EncryptionSelector::MetadataKeys { keys } => {
                     for metadata_key in keys {
                         let metadata_path = parse_metadata_blind_index_path(metadata_key)?;
+                        if rule.binding.as_deref() == Some("metadata-value/v1") {
+                            if group_by.compatible(&metadata_path) {
+                                return Err(CollectionError::bad_input(format!(
+                                    "cannot group by encrypted metadata value field '{group_by}' because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
+                                )));
+                            }
+                            continue;
+                        }
                         if group_by.compatible(&metadata_path) {
                             return Err(CollectionError::bad_input(format!(
                                 "cannot group by metadata blind-index field '{group_by}' because it overlaps token field '{metadata_key}'; blind-index token fields support exact-match filters only",
@@ -1968,6 +2128,29 @@ impl Collection {
                 EncryptionSelector::MetadataKeys { keys } => {
                     for metadata_key in keys {
                         let metadata_path = parse_metadata_blind_index_path(metadata_key)?;
+
+                        if rule.binding.as_deref() == Some("metadata-value/v1") {
+                            if let Some(formula_path) = formula
+                                .payload_vars
+                                .iter()
+                                .find(|payload_var| payload_var.compatible(&metadata_path))
+                            {
+                                return Err(CollectionError::bad_input(format!(
+                                    "cannot use encrypted metadata value field '{formula_path}' in formula because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
+                                )));
+                            }
+
+                            if let Some(condition_path) =
+                                formula.conditions.iter().find_map(|condition| {
+                                    condition_touches_encrypted_payload(condition, &metadata_path)
+                                })
+                            {
+                                return Err(CollectionError::bad_input(format!(
+                                    "cannot use formula condition on encrypted metadata value field '{condition_path}' because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
+                                )));
+                            }
+                            continue;
+                        }
 
                         if let Some(formula_path) = formula
                             .payload_vars
