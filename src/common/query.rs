@@ -31,6 +31,7 @@ use segment::data_types::groups::GroupId;
 use segment::data_types::vectors::{
     DEFAULT_VECTOR_NAME, Named, NamedQuery, VectorInternal, VectorRef,
 };
+use segment::index::hnsw_index::ckks_ciphertext_graph::CkksCiphertextHnswGraph;
 use segment::json_path::JsonPath;
 use segment::types::{
     Distance, Filter, Order, PayloadContainer, PointIdType, ScoredPoint, SearchParams, ShardKey,
@@ -158,10 +159,7 @@ struct CkksSidecarHnswGraphCacheKey {
     records_fingerprint: String,
 }
 
-#[derive(Clone, Debug)]
-struct CkksSidecarHnswGraph {
-    links: Arc<Vec<Vec<usize>>>,
-}
+type CkksSidecarHnswGraph = CkksCiphertextHnswGraph;
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -1567,94 +1565,6 @@ fn sort_ckks_scored_points(order: Order, scored: &mut [ScoredPoint]) {
     });
 }
 
-fn ckks_sidecar_hnsw_add_bounded_undirected_link(
-    links: &mut [Vec<usize>],
-    first: usize,
-    second: usize,
-    max_degree: usize,
-) {
-    if first == second {
-        return;
-    }
-    ckks_sidecar_hnsw_add_bounded_directed_link(links, first, second, max_degree);
-    ckks_sidecar_hnsw_add_bounded_directed_link(links, second, first, max_degree);
-}
-
-fn ckks_sidecar_hnsw_add_bounded_directed_link(
-    links: &mut [Vec<usize>],
-    from: usize,
-    to: usize,
-    max_degree: usize,
-) {
-    let removed = {
-        let neighbors = &mut links[from];
-        if neighbors.contains(&to) {
-            return;
-        }
-        neighbors.push(to);
-        if neighbors.len() <= max_degree {
-            return;
-        }
-        neighbors.remove(0)
-    };
-    links[removed].retain(|neighbor| *neighbor != from);
-}
-
-fn ckks_sidecar_hnsw_add_unbounded_undirected_link(
-    links: &mut [Vec<usize>],
-    first: usize,
-    second: usize,
-) {
-    if first == second {
-        return;
-    }
-    if !links[first].contains(&second) {
-        links[first].push(second);
-    }
-    if !links[second].contains(&first) {
-        links[second].push(first);
-    }
-}
-
-fn ckks_sidecar_hnsw_add_connectivity_backbone(links: &mut [Vec<usize>]) {
-    for idx in 1..links.len() {
-        ckks_sidecar_hnsw_add_unbounded_undirected_link(links, idx - 1, idx);
-    }
-}
-
-fn ckks_sidecar_hnsw_links_are_reciprocal(links: &[Vec<usize>]) -> bool {
-    links.iter().enumerate().all(|(from, neighbors)| {
-        let mut unique_neighbors = std::collections::HashSet::with_capacity(neighbors.len());
-        neighbors.iter().all(|neighbor| {
-            *neighbor < links.len()
-                && unique_neighbors.insert(*neighbor)
-                && links[*neighbor].iter().any(|candidate| *candidate == from)
-        })
-    })
-}
-
-fn ckks_sidecar_hnsw_links_are_connected(links: &[Vec<usize>]) -> bool {
-    if links.is_empty() {
-        return true;
-    }
-
-    let mut visited = vec![false; links.len()];
-    let mut stack = vec![0usize];
-    while let Some(idx) = stack.pop() {
-        if visited[idx] {
-            continue;
-        }
-        visited[idx] = true;
-        for neighbor in &links[idx] {
-            if !visited[*neighbor] {
-                stack.push(*neighbor);
-            }
-        }
-    }
-
-    visited.into_iter().all(|seen| seen)
-}
-
 fn query_vectors_as_dense_slices<'a>(
     vectors: &'a [VectorInternal],
     vector_name: &str,
@@ -2083,25 +1993,14 @@ fn ckks_sidecar_hnsw_load_persisted_graph(
     {
         return Ok(None);
     }
-    if disk.links.len() != records_len
-        || disk
-            .links
-            .iter()
-            .any(|neighbors| neighbors.iter().any(|neighbor| *neighbor >= records_len))
-        || disk
-            .links
-            .iter()
-            .enumerate()
-            .any(|(idx, neighbors)| neighbors.iter().any(|neighbor| *neighbor == idx))
-        || !ckks_sidecar_hnsw_links_are_reciprocal(&disk.links)
-        || !ckks_sidecar_hnsw_links_are_connected(&disk.links)
-    {
+    if disk.links.len() != records_len {
         return Ok(None);
     }
 
-    Ok(Some(Arc::new(CkksSidecarHnswGraph {
-        links: Arc::new(disk.links),
-    })))
+    let Some(graph) = CkksSidecarHnswGraph::from_validated_links(disk.links) else {
+        return Ok(None);
+    };
+    Ok(Some(Arc::new(graph)))
 }
 
 fn ckks_sidecar_hnsw_persist_graph(
@@ -2147,7 +2046,7 @@ fn ckks_sidecar_hnsw_persist_graph(
         score_order: key.score_order.to_string(),
         m: key.m,
         records_fingerprint: key.records_fingerprint.clone(),
-        links: graph.links.as_ref().clone(),
+        links: graph.links().to_vec(),
     };
     let content = serde_json::to_vec(&disk).map_err(|err| {
         StorageError::service_error(format!(
@@ -2503,18 +2402,20 @@ fn ckks_sidecar_hnsw_search_points(
                 cache.insert(cache_key, graph.clone());
                 graph
             } else {
-                let mut links = vec![Vec::<usize>::new(); records.len()];
-                for idx in 1..records.len() {
-                    let candidates = (0..idx)
-                        .map(|candidate| {
-                            (
-                                records[candidate].point_id.clone(),
-                                records[candidate].encrypted.clone(),
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    let scores = plan
-                        .score_stored_query_batch(
+                let graph = Arc::new(CkksSidecarHnswGraph::build(
+                    records.len(),
+                    m,
+                    score_order,
+                    |idx| {
+                        let candidates = (0..idx)
+                            .map(|candidate| {
+                                (
+                                    records[candidate].point_id.clone(),
+                                    records[candidate].encrypted.clone(),
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        plan.score_stored_query_batch(
                             collection_name,
                             vector_name,
                             &records[idx].point_id,
@@ -2525,39 +2426,9 @@ fn ckks_sidecar_hnsw_search_points(
                             StorageError::service_error(format!(
                                 "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
                             ))
-                        })?;
-                    let mut neighbors = scores
-                        .into_iter()
-                        .enumerate()
-                        .map(|(candidate, score)| ScoredPoint {
-                            id: PointIdType::NumId(candidate as u64),
-                            version: 0,
-                            score,
-                            payload: None,
-                            vector: None,
-                            shard_key: None,
-                            order_value: None,
                         })
-                        .collect::<Vec<_>>();
-                    sort_ckks_scored_points(score_order, &mut neighbors);
-                    for neighbor in neighbors.into_iter().take(m) {
-                        let candidate = match neighbor.id {
-                            PointIdType::NumId(candidate) => candidate as usize,
-                            PointIdType::Uuid(_) => unreachable!("candidate indexes are numeric"),
-                        };
-                        ckks_sidecar_hnsw_add_bounded_undirected_link(
-                            &mut links,
-                            idx,
-                            candidate,
-                            m * 2,
-                        );
-                    }
-                }
-                ckks_sidecar_hnsw_add_connectivity_backbone(&mut links);
-
-                let graph = Arc::new(CkksSidecarHnswGraph {
-                    links: Arc::new(links),
-                });
+                    },
+                )?);
                 if let Err(err) =
                     ckks_sidecar_hnsw_persist_graph(collection_path, &cache_key, &graph)
                 {
@@ -2574,23 +2445,8 @@ fn ckks_sidecar_hnsw_search_points(
         }
     };
 
-    let mut visited = vec![false; records.len()];
-    let mut frontier = vec![0usize];
-    let mut scored = Vec::<ScoredPoint>::new();
-
-    while !frontier.is_empty() && scored.len() < ef {
-        frontier.sort_unstable();
-        frontier.dedup();
-        frontier.retain(|candidate| {
-            let fresh = !visited[*candidate];
-            visited[*candidate] = true;
-            fresh
-        });
-        if frontier.is_empty() {
-            break;
-        }
-
-        let encrypted_items = frontier
+    let hits = graph.search(ef, top, score_order, score_threshold, |candidates| {
+        let encrypted_items = candidates
             .iter()
             .map(|candidate| {
                 (
@@ -2599,59 +2455,27 @@ fn ckks_sidecar_hnsw_search_points(
                 )
             })
             .collect::<Vec<_>>();
-        let scores = ckks_sidecar_score_hnsw_query_batch(
+        ckks_sidecar_score_hnsw_query_batch(
             collection_name,
             vector_name,
             plan,
             query,
             &encrypted_items,
-        )?;
+        )
+    })?;
 
-        let mut batch = frontier
-            .into_iter()
-            .zip(scores)
-            .map(|(candidate, score)| ScoredPoint {
-                id: PointIdType::NumId(candidate as u64),
-                version: 0,
-                score,
-                payload: None,
-                vector: None,
-                shard_key: None,
-                order_value: None,
-            })
-            .collect::<Vec<_>>();
-        sort_ckks_scored_points(score_order, &mut batch);
-        frontier = Vec::new();
-        for point in batch {
-            let candidate = match point.id {
-                PointIdType::NumId(candidate) => candidate as usize,
-                PointIdType::Uuid(_) => unreachable!("candidate indexes are numeric"),
-            };
-            if ckks_score_passes_threshold(score_order, point.score, score_threshold) {
-                scored.push(ScoredPoint {
-                    id: records[candidate].id,
-                    version: 0,
-                    score: point.score,
-                    payload: None,
-                    vector: None,
-                    shard_key: records[candidate].shard_key.clone(),
-                    order_value: None,
-                });
-            }
-            for neighbor in &graph.links[candidate] {
-                if !visited[*neighbor] {
-                    frontier.push(*neighbor);
-                }
-            }
-            if scored.len() >= ef {
-                break;
-            }
-        }
-    }
-
-    sort_ckks_scored_points(score_order, &mut scored);
-    scored.truncate(top);
-    Ok(scored)
+    Ok(hits
+        .into_iter()
+        .map(|hit| ScoredPoint {
+            id: records[hit.point_index].id,
+            version: 0,
+            score: hit.score,
+            payload: None,
+            vector: None,
+            shard_key: records[hit.point_index].shard_key.clone(),
+            order_value: None,
+        })
+        .collect())
 }
 
 fn encrypted_vector_from_payload(
@@ -6724,34 +6548,6 @@ mod tests {
         assert!(!ckks_search_params_supported(&acorn_params));
     }
 
-    #[test]
-    fn ckks_sidecar_hnsw_links_remain_reciprocal_when_pruned() {
-        let mut links = vec![Vec::<usize>::new(); 4];
-        ckks_sidecar_hnsw_add_bounded_undirected_link(&mut links, 1, 0, 2);
-        ckks_sidecar_hnsw_add_bounded_undirected_link(&mut links, 2, 0, 2);
-        ckks_sidecar_hnsw_add_bounded_undirected_link(&mut links, 3, 0, 2);
-
-        assert_eq!(links[0], vec![2, 3]);
-        assert!(!links[1].contains(&0));
-        assert!(!links[0].contains(&1));
-        assert!(links[2].contains(&0));
-        assert!(links[3].contains(&0));
-    }
-
-    #[test]
-    fn ckks_sidecar_hnsw_connectivity_backbone_restores_pruned_graph() {
-        let mut links = vec![Vec::<usize>::new(); 4];
-        ckks_sidecar_hnsw_add_bounded_undirected_link(&mut links, 1, 0, 2);
-        ckks_sidecar_hnsw_add_bounded_undirected_link(&mut links, 2, 0, 2);
-        ckks_sidecar_hnsw_add_bounded_undirected_link(&mut links, 3, 0, 2);
-
-        assert!(!ckks_sidecar_hnsw_links_are_connected(&links));
-        ckks_sidecar_hnsw_add_connectivity_backbone(&mut links);
-
-        assert!(ckks_sidecar_hnsw_links_are_reciprocal(&links));
-        assert!(ckks_sidecar_hnsw_links_are_connected(&links));
-    }
-
     fn ckks_sidecar_test_record(point_id: u64, ciphertext: &str) -> CkksSidecarSearchRecord {
         CkksSidecarSearchRecord {
             id: point_id.into(),
@@ -6946,9 +6742,7 @@ mod tests {
     fn ckks_sidecar_hnsw_graph_cache_evicts_old_entries() {
         let mut cache = CkksSidecarHnswGraphCache::default();
         let original_key = ckks_sidecar_test_graph_cache_key("original");
-        let original_graph = Arc::new(CkksSidecarHnswGraph {
-            links: Arc::new(vec![vec![1], vec![0]]),
-        });
+        let original_graph = Arc::new(ckks_sidecar_test_graph(vec![vec![1], vec![0]]));
         cache.insert(original_key.clone(), original_graph.clone());
         assert!(Arc::ptr_eq(
             &cache.get(&original_key).unwrap(),
@@ -6958,9 +6752,7 @@ mod tests {
         for idx in 0..CKKS_SIDECAR_HNSW_GRAPH_CACHE_CAPACITY {
             cache.insert(
                 ckks_sidecar_test_graph_cache_key(format!("fresh-{idx}")),
-                Arc::new(CkksSidecarHnswGraph {
-                    links: Arc::new(Vec::new()),
-                }),
+                Arc::new(ckks_sidecar_test_graph(Vec::new())),
             );
         }
 
@@ -6978,6 +6770,10 @@ mod tests {
             m: 16,
             records_fingerprint: records_fingerprint.into(),
         }
+    }
+
+    fn ckks_sidecar_test_graph(links: Vec<Vec<usize>>) -> CkksSidecarHnswGraph {
+        CkksSidecarHnswGraph::from_validated_links(links).unwrap()
     }
 
     fn ckks_sidecar_test_graph_disk(
@@ -7031,9 +6827,7 @@ mod tests {
     fn ckks_sidecar_hnsw_persisted_graph_roundtrips_by_cache_key() {
         let dir = tempfile::tempdir().unwrap();
         let key = ckks_sidecar_test_graph_cache_key("fingerprint-a");
-        let graph = CkksSidecarHnswGraph {
-            links: Arc::new(vec![vec![1], vec![0, 2], vec![1]]),
-        };
+        let graph = ckks_sidecar_test_graph(vec![vec![1], vec![0, 2], vec![1]]);
 
         ckks_sidecar_hnsw_persist_graph(dir.path(), &key, &graph).unwrap();
         #[cfg(unix)]
@@ -7047,7 +6841,7 @@ mod tests {
         let loaded = ckks_sidecar_hnsw_load_persisted_graph(dir.path(), &key, 3)
             .unwrap()
             .unwrap();
-        assert_eq!(*loaded.links, *graph.links);
+        assert_eq!(loaded.links(), graph.links());
 
         let stale_key = CkksSidecarHnswGraphCacheKey {
             records_fingerprint: "fingerprint-b".to_string(),
@@ -7272,9 +7066,7 @@ mod tests {
         assert!(format!("{err}").contains("cache directory"));
         assert!(format!("{err}").contains("must not be a symlink"));
 
-        let graph = CkksSidecarHnswGraph {
-            links: Arc::new(vec![Vec::new()]),
-        };
+        let graph = ckks_sidecar_test_graph(vec![Vec::new()]);
         let err = ckks_sidecar_hnsw_persist_graph(dir.path(), &key, &graph).unwrap_err();
         assert!(format!("{err}").contains("cache directory"));
         assert!(format!("{err}").contains("must not be a symlink"));
@@ -7295,9 +7087,7 @@ mod tests {
         assert!(format!("{err}").contains("cache directory"));
         assert!(format!("{err}").contains("must not be group/world accessible"));
 
-        let graph = CkksSidecarHnswGraph {
-            links: Arc::new(vec![Vec::new()]),
-        };
+        let graph = ckks_sidecar_test_graph(vec![Vec::new()]);
         let err = ckks_sidecar_hnsw_persist_graph(dir.path(), &key, &graph).unwrap_err();
         assert!(format!("{err}").contains("cache directory"));
         assert!(format!("{err}").contains("must not be group/world accessible"));
@@ -7310,9 +7100,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let key = ckks_sidecar_test_graph_cache_key("fingerprint-a");
-        let graph = CkksSidecarHnswGraph {
-            links: Arc::new(vec![Vec::new()]),
-        };
+        let graph = ckks_sidecar_test_graph(vec![Vec::new()]);
         ckks_sidecar_hnsw_persist_graph(dir.path(), &key, &graph).unwrap();
         let cache_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &key);
         std::fs::set_permissions(&cache_path, std::fs::Permissions::from_mode(0o640)).unwrap();
@@ -7348,9 +7136,7 @@ mod tests {
     #[test]
     fn ckks_sidecar_hnsw_persisted_graph_prunes_old_cache_files() {
         let dir = tempfile::tempdir().unwrap();
-        let graph = CkksSidecarHnswGraph {
-            links: Arc::new(vec![Vec::new()]),
-        };
+        let graph = ckks_sidecar_test_graph(vec![Vec::new()]);
         let mut newest_key = None;
         for idx in 0..(CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_FILES + 5) {
             let key = ckks_sidecar_test_graph_cache_key(format!("fingerprint-{idx}"));
@@ -7407,9 +7193,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let key = ckks_sidecar_test_graph_cache_key("keep-permissions");
-        let graph = CkksSidecarHnswGraph {
-            links: Arc::new(vec![Vec::new()]),
-        };
+        let graph = ckks_sidecar_test_graph(vec![Vec::new()]);
         ckks_sidecar_hnsw_persist_graph(dir.path(), &key, &graph).unwrap();
         let keep_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &key);
         let cache_dir = keep_path.parent().unwrap();
@@ -7441,9 +7225,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let keep_key = ckks_sidecar_test_graph_cache_key("keep");
-        let graph = CkksSidecarHnswGraph {
-            links: Arc::new(vec![Vec::new()]),
-        };
+        let graph = ckks_sidecar_test_graph(vec![Vec::new()]);
         ckks_sidecar_hnsw_persist_graph(dir.path(), &keep_key, &graph).unwrap();
         let keep_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &keep_key);
         let cache_dir = keep_path.parent().unwrap();
@@ -7475,9 +7257,7 @@ mod tests {
         std::fs::write(&target_path, "{}").unwrap();
         symlink(&target_path, &temp_path).unwrap();
 
-        let graph = CkksSidecarHnswGraph {
-            links: Arc::new(vec![Vec::new()]),
-        };
+        let graph = ckks_sidecar_test_graph(vec![Vec::new()]);
         let err = ckks_sidecar_hnsw_persist_graph(dir.path(), &key, &graph).unwrap_err();
         assert!(format!("{err}").contains("temp file"));
         assert!(format!("{err}").contains("must not be a symlink"));
@@ -7499,9 +7279,7 @@ mod tests {
         std::fs::write(&temp_path, "{}").unwrap();
         std::fs::set_permissions(&temp_path, std::fs::Permissions::from_mode(0o640)).unwrap();
 
-        let graph = CkksSidecarHnswGraph {
-            links: Arc::new(vec![Vec::new()]),
-        };
+        let graph = ckks_sidecar_test_graph(vec![Vec::new()]);
         let err = ckks_sidecar_hnsw_persist_graph(dir.path(), &key, &graph).unwrap_err();
         assert!(format!("{err}").contains("temp file"));
         assert!(format!("{err}").contains("must not be group/world accessible"));
@@ -7512,9 +7290,7 @@ mod tests {
     fn ckks_sidecar_hnsw_persisted_graph_prunes_by_total_size() {
         let dir = tempfile::tempdir().unwrap();
         let keep_key = ckks_sidecar_test_graph_cache_key("keep");
-        let keep_graph = CkksSidecarHnswGraph {
-            links: Arc::new(vec![Vec::new()]),
-        };
+        let keep_graph = ckks_sidecar_test_graph(vec![Vec::new()]);
         ckks_sidecar_hnsw_persist_graph(dir.path(), &keep_key, &keep_graph).unwrap();
         let cache_dir = dir.path().join(CKKS_SIDECAR_HNSW_GRAPH_CACHE_DIR);
         let keep_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &keep_key);

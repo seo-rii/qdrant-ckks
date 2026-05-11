@@ -1,0 +1,358 @@
+use std::cmp::Ordering;
+use std::sync::Arc;
+
+use crate::types::Order;
+
+#[derive(Clone, Debug)]
+pub struct CkksCiphertextHnswGraph {
+    links: Arc<Vec<Vec<usize>>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CkksCiphertextHnswHit {
+    pub point_index: usize,
+    pub score: f32,
+}
+
+impl CkksCiphertextHnswGraph {
+    pub fn from_validated_links(links: Vec<Vec<usize>>) -> Option<Self> {
+        if links_have_valid_neighbors(&links)
+            && links_are_reciprocal(&links)
+            && links_are_connected(&links)
+        {
+            Some(Self {
+                links: Arc::new(links),
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn links(&self) -> &[Vec<usize>] {
+        self.links.as_ref()
+    }
+
+    pub fn links_are_reciprocal(links: &[Vec<usize>]) -> bool {
+        links_are_reciprocal(links)
+    }
+
+    pub fn links_are_connected(links: &[Vec<usize>]) -> bool {
+        links_are_connected(links)
+    }
+
+    pub fn add_bounded_undirected_link(
+        links: &mut [Vec<usize>],
+        first: usize,
+        second: usize,
+        max_degree: usize,
+    ) {
+        add_bounded_undirected_link(links, first, second, max_degree);
+    }
+
+    pub fn add_connectivity_backbone(links: &mut [Vec<usize>]) {
+        add_connectivity_backbone(links);
+    }
+
+    pub fn build<E>(
+        points_len: usize,
+        m: usize,
+        score_order: Order,
+        mut score_previous_points: impl FnMut(usize) -> Result<Vec<f32>, E>,
+    ) -> Result<Self, E> {
+        let mut links = vec![Vec::<usize>::new(); points_len];
+        if points_len == 0 {
+            return Ok(Self {
+                links: Arc::new(links),
+            });
+        }
+
+        let max_degree = m.saturating_mul(2).max(1);
+        for idx in 1..points_len {
+            let scores = score_previous_points(idx)?;
+            debug_assert_eq!(scores.len(), idx);
+            let mut neighbors = scores
+                .into_iter()
+                .enumerate()
+                .map(|(point_index, score)| CkksCiphertextHnswHit { point_index, score })
+                .collect::<Vec<_>>();
+            sort_hits(score_order, &mut neighbors);
+            for neighbor in neighbors.into_iter().take(m) {
+                add_bounded_undirected_link(&mut links, idx, neighbor.point_index, max_degree);
+            }
+        }
+
+        add_connectivity_backbone(&mut links);
+        Ok(Self {
+            links: Arc::new(links),
+        })
+    }
+
+    pub fn search<E>(
+        &self,
+        ef: usize,
+        top: usize,
+        score_order: Order,
+        score_threshold: Option<f32>,
+        mut score_candidates: impl FnMut(&[usize]) -> Result<Vec<f32>, E>,
+    ) -> Result<Vec<CkksCiphertextHnswHit>, E> {
+        let links = self.links();
+        if links.is_empty() || top == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut visited = vec![false; links.len()];
+        let mut frontier = vec![0usize];
+        let mut scored = Vec::<CkksCiphertextHnswHit>::new();
+
+        while !frontier.is_empty() && scored.len() < ef {
+            frontier.sort_unstable();
+            frontier.dedup();
+            frontier.retain(|candidate| {
+                let fresh = !visited[*candidate];
+                visited[*candidate] = true;
+                fresh
+            });
+            if frontier.is_empty() {
+                break;
+            }
+
+            let scores = score_candidates(&frontier)?;
+            debug_assert_eq!(scores.len(), frontier.len());
+            let mut batch = frontier
+                .into_iter()
+                .zip(scores)
+                .map(|(point_index, score)| CkksCiphertextHnswHit { point_index, score })
+                .collect::<Vec<_>>();
+            sort_hits(score_order, &mut batch);
+
+            frontier = Vec::new();
+            for hit in batch {
+                if score_passes_threshold(score_order, hit.score, score_threshold) {
+                    scored.push(hit);
+                }
+                for neighbor in &links[hit.point_index] {
+                    if !visited[*neighbor] {
+                        frontier.push(*neighbor);
+                    }
+                }
+                if scored.len() >= ef {
+                    break;
+                }
+            }
+        }
+
+        sort_hits(score_order, &mut scored);
+        scored.truncate(top);
+        Ok(scored)
+    }
+}
+
+fn add_bounded_undirected_link(
+    links: &mut [Vec<usize>],
+    first: usize,
+    second: usize,
+    max_degree: usize,
+) {
+    if first == second {
+        return;
+    }
+    add_bounded_directed_link(links, first, second, max_degree);
+    add_bounded_directed_link(links, second, first, max_degree);
+}
+
+fn add_bounded_directed_link(links: &mut [Vec<usize>], from: usize, to: usize, max_degree: usize) {
+    let removed = {
+        let neighbors = &mut links[from];
+        if neighbors.contains(&to) {
+            return;
+        }
+        neighbors.push(to);
+        if neighbors.len() <= max_degree {
+            return;
+        }
+        neighbors.remove(0)
+    };
+    links[removed].retain(|neighbor| *neighbor != from);
+}
+
+fn add_unbounded_undirected_link(links: &mut [Vec<usize>], first: usize, second: usize) {
+    if first == second {
+        return;
+    }
+    if !links[first].contains(&second) {
+        links[first].push(second);
+    }
+    if !links[second].contains(&first) {
+        links[second].push(first);
+    }
+}
+
+fn add_connectivity_backbone(links: &mut [Vec<usize>]) {
+    for idx in 1..links.len() {
+        add_unbounded_undirected_link(links, idx - 1, idx);
+    }
+}
+
+fn links_have_valid_neighbors(links: &[Vec<usize>]) -> bool {
+    links.iter().enumerate().all(|(from, neighbors)| {
+        let mut unique_neighbors = std::collections::HashSet::with_capacity(neighbors.len());
+        neighbors.iter().all(|neighbor| {
+            *neighbor < links.len() && *neighbor != from && unique_neighbors.insert(*neighbor)
+        })
+    })
+}
+
+fn links_are_reciprocal(links: &[Vec<usize>]) -> bool {
+    links.iter().enumerate().all(|(from, neighbors)| {
+        neighbors
+            .iter()
+            .all(|neighbor| links[*neighbor].iter().any(|candidate| *candidate == from))
+    })
+}
+
+fn links_are_connected(links: &[Vec<usize>]) -> bool {
+    if links.is_empty() {
+        return true;
+    }
+
+    let mut visited = vec![false; links.len()];
+    let mut stack = vec![0usize];
+    while let Some(idx) = stack.pop() {
+        if visited[idx] {
+            continue;
+        }
+        visited[idx] = true;
+        for neighbor in &links[idx] {
+            if !visited[*neighbor] {
+                stack.push(*neighbor);
+            }
+        }
+    }
+
+    visited.into_iter().all(|seen| seen)
+}
+
+fn score_passes_threshold(order: Order, score: f32, score_threshold: Option<f32>) -> bool {
+    score_threshold.is_none_or(|threshold| match order {
+        Order::LargeBetter => score > threshold,
+        Order::SmallBetter => score < threshold,
+    })
+}
+
+fn sort_hits(order: Order, hits: &mut [CkksCiphertextHnswHit]) {
+    hits.sort_unstable_by(|first, second| compare_hits(order, first, second));
+}
+
+fn compare_hits(
+    order: Order,
+    first: &CkksCiphertextHnswHit,
+    second: &CkksCiphertextHnswHit,
+) -> Ordering {
+    let score_order = first
+        .score
+        .total_cmp(&second.score)
+        .then_with(|| first.point_index.cmp(&second.point_index));
+    match order {
+        Order::LargeBetter => score_order.reverse(),
+        Order::SmallBetter => score_order,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounded_links_remain_reciprocal_when_pruned() {
+        let mut links = vec![Vec::<usize>::new(); 4];
+        CkksCiphertextHnswGraph::add_bounded_undirected_link(&mut links, 1, 0, 2);
+        CkksCiphertextHnswGraph::add_bounded_undirected_link(&mut links, 2, 0, 2);
+        CkksCiphertextHnswGraph::add_bounded_undirected_link(&mut links, 3, 0, 2);
+
+        assert_eq!(links[0], vec![2, 3]);
+        assert!(!links[1].contains(&0));
+        assert!(!links[0].contains(&1));
+        assert!(links[2].contains(&0));
+        assert!(links[3].contains(&0));
+        assert!(CkksCiphertextHnswGraph::links_are_reciprocal(&links));
+    }
+
+    #[test]
+    fn connectivity_backbone_restores_pruned_graph() {
+        let mut links = vec![Vec::<usize>::new(); 4];
+        CkksCiphertextHnswGraph::add_bounded_undirected_link(&mut links, 1, 0, 2);
+        CkksCiphertextHnswGraph::add_bounded_undirected_link(&mut links, 2, 0, 2);
+        CkksCiphertextHnswGraph::add_bounded_undirected_link(&mut links, 3, 0, 2);
+
+        assert!(!CkksCiphertextHnswGraph::links_are_connected(&links));
+        CkksCiphertextHnswGraph::add_connectivity_backbone(&mut links);
+
+        assert!(CkksCiphertextHnswGraph::links_are_reciprocal(&links));
+        assert!(CkksCiphertextHnswGraph::links_are_connected(&links));
+    }
+
+    #[test]
+    fn rejects_invalid_cached_links() {
+        assert!(CkksCiphertextHnswGraph::from_validated_links(vec![vec![1], Vec::new()]).is_none());
+        assert!(CkksCiphertextHnswGraph::from_validated_links(vec![vec![2], vec![0]]).is_none());
+        assert!(CkksCiphertextHnswGraph::from_validated_links(vec![vec![0], Vec::new()]).is_none());
+    }
+
+    #[test]
+    fn builds_graph_from_ciphertext_pairwise_scores() {
+        let values = [0.0_f32, 0.2, 0.8, 1.0];
+        let graph = CkksCiphertextHnswGraph::build(
+            values.len(),
+            1,
+            Order::SmallBetter,
+            |idx| -> Result<Vec<f32>, std::convert::Infallible> {
+                Ok((0..idx)
+                    .map(|candidate| (values[idx] - values[candidate]).abs())
+                    .collect())
+            },
+        )
+        .unwrap();
+
+        assert!(CkksCiphertextHnswGraph::links_are_reciprocal(graph.links()));
+        assert!(CkksCiphertextHnswGraph::links_are_connected(graph.links()));
+        assert!(graph.links()[1].contains(&0));
+        assert!(graph.links()[2].contains(&1));
+        assert!(graph.links()[3].contains(&2));
+    }
+
+    #[test]
+    fn searches_graph_with_query_scorer() {
+        let graph = CkksCiphertextHnswGraph::from_validated_links(vec![
+            vec![1],
+            vec![0, 2],
+            vec![1, 3],
+            vec![2],
+        ])
+        .unwrap();
+        let values = [0.0_f32, 0.2, 0.8, 1.0];
+        let query = 0.9_f32;
+
+        let results = graph
+            .search(
+                4,
+                2,
+                Order::SmallBetter,
+                None,
+                |candidates| -> Result<Vec<f32>, std::convert::Infallible> {
+                    Ok(candidates
+                        .iter()
+                        .map(|candidate| (query - values[*candidate]).abs())
+                        .collect())
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            results
+                .iter()
+                .map(|hit| hit.point_index)
+                .collect::<Vec<_>>(),
+            vec![2, 3],
+        );
+    }
+}
