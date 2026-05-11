@@ -2523,8 +2523,14 @@ fn payload_touches_encrypted_config(
     key: Option<&JsonPath>,
 ) -> Result<bool, StorageError> {
     for rule in &encryption.rules {
-        let collection::config::EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
-            continue;
+        let paths = match &rule.selector {
+            collection::config::EncryptionSelector::PayloadPaths { paths } => paths.as_slice(),
+            collection::config::EncryptionSelector::MetadataKeys { keys }
+                if rule.binding.as_deref() == Some("metadata-value/v1") =>
+            {
+                keys.as_slice()
+            }
+            _ => continue,
         };
         for encrypted_path in paths {
             let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
@@ -5566,6 +5572,56 @@ esac
             }),
             ..CollectionParams::empty()
         }
+    }
+
+    fn metadata_value_params() -> CollectionParams {
+        CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "tenant_conf".to_string(),
+                    selector: EncryptionSelector::MetadataKeys {
+                        keys: vec!["tenant_id".to_string()],
+                    },
+                    instance: "docs_metadata_v1".to_string(),
+                    binding: Some("metadata-value/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        }
+    }
+
+    #[test]
+    fn metadata_value_rules_require_runtime_for_plaintext_writes() {
+        let params = metadata_value_params();
+        let encryption = params.encryption.as_ref().unwrap();
+        let payload = segment::types::Payload(
+            json!({
+                "tenant_id": "acme",
+                "body": "public",
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+
+        assert!(payload_touches_encrypted_config(encryption, &payload, None).unwrap());
+        assert!(
+            payload_touches_encrypted_config(
+                encryption,
+                &payload,
+                Some(&"tenant_id.child".parse().unwrap()),
+            )
+            .unwrap()
+        );
+        assert!(
+            !payload_touches_encrypted_config(encryption, &payload, Some(&"body".parse().unwrap()))
+                .unwrap()
+        );
     }
 
     #[test]
