@@ -9,6 +9,7 @@ pub use shard::optimizers::indexing_optimizer::IndexingOptimizer;
 mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
+    use std::sync::atomic::AtomicBool;
 
     use common::counter::hardware_counter::HardwareCounterCell;
     use fs_err as fs;
@@ -26,6 +27,7 @@ mod tests {
     use segment::json_path::JsonPath;
     use segment::payload_json;
     use segment::segment::Segment;
+    use segment::segment_constructor::load_segment;
     use segment::segment_constructor::simple_segment_constructor::{VECTOR1_NAME, VECTOR2_NAME};
     use segment::types::{
         Distance, HnswConfig, HnswGlobalConfig, Indexes, Payload, PayloadSchemaType,
@@ -780,11 +782,48 @@ mod tests {
             "optimized encrypted vector segment must persist a CKKS ciphertext graph artifact",
         );
 
+        let (optimized_segment_id, optimized_path, optimized_uuid) = {
+            let holder = locked_holder.read();
+            holder
+                .iter_original()
+                .find_map(|(segment_id, segment)| {
+                    let segment = segment.read();
+                    let vector_data = segment.vector_data.get(DEFAULT_VECTOR_NAME)?;
+                    let vector_index = vector_data.vector_index.borrow();
+                    matches!(&*vector_index, VectorIndexEnum::CkksCiphertextHnsw(_))
+                        .then(|| (segment_id, segment.segment_path.clone(), segment.uuid))
+                })
+                .expect("optimized CKKS ciphertext segment must exist")
+        };
+
         assert!(
             index_optimizer
                 .plan_optimizations_for_test(&locked_holder)
                 .is_empty(),
             "CKKS ciphertext index optimization must not repeat once the segment has a ciphertext graph artifact",
+        );
+
+        let removed_segments = locked_holder.write().remove(&[optimized_segment_id]);
+        drop(removed_segments);
+
+        let stopped = AtomicBool::new(false);
+        let reopened_segment =
+            load_segment(&optimized_path, optimized_uuid, None, &stopped).unwrap();
+        let reopened_vector_index = reopened_segment.vector_data[DEFAULT_VECTOR_NAME]
+            .vector_index
+            .borrow();
+        assert!(
+            matches!(
+                &*reopened_vector_index,
+                VectorIndexEnum::CkksCiphertextHnsw(index)
+                    if index.indexed_vector_count() > 0
+                        && index.immutable_files().iter().any(|path| {
+                            path.file_name().is_some_and(|file_name| {
+                                file_name == "ckks_ciphertext_hnsw_graph.json"
+                            })
+                        })
+            ),
+            "reloaded optimized segment must reopen the persisted CKKS ciphertext graph artifact",
         );
     }
 
