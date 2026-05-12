@@ -891,4 +891,54 @@ mod tests {
             .expect_err("mismatched peer metadata must fail closed");
         assert!(err.to_string().contains("crypto runtime parity mismatch"));
     }
+
+    #[test]
+    fn encrypted_transfer_requires_complete_crypto_runtime_peer_metadata() {
+        let mut metadata = HashMap::<PeerId, PeerMetadata>::new();
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-a".to_string(),
+            )),
+        );
+        metadata.insert(
+            3,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-a".to_string(),
+            )),
+        );
+
+        let err = validate_encrypted_transfer_crypto_runtime_parity("docs", 1, 2, 3, &metadata)
+            .expect_err("missing local crypto metadata must fail closed");
+        assert!(
+            err.to_string()
+                .contains("requires local peer 1 crypto runtime capability metadata")
+        );
+
+        metadata.insert(
+            1,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-a".to_string(),
+            )),
+        );
+        metadata.remove(&2);
+
+        let err = validate_encrypted_transfer_crypto_runtime_parity("docs", 1, 2, 3, &metadata)
+            .expect_err("missing transfer participant crypto metadata must fail closed");
+        assert!(
+            err.to_string()
+                .contains("requires peer 2 crypto runtime capability metadata")
+        );
+
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(None),
+        );
+        let err = validate_encrypted_transfer_crypto_runtime_parity("docs", 1, 2, 3, &metadata)
+            .expect_err("empty transfer participant crypto metadata must fail closed");
+        assert!(
+            err.to_string()
+                .contains("requires peer 2 crypto runtime capability metadata")
+        );
+    }
 }
