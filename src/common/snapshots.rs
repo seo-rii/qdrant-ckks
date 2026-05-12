@@ -3,6 +3,7 @@ use std::sync::Arc;
 use collection::collection::Collection;
 use collection::common::sha_256;
 use collection::common::snapshot_stream::SnapshotStream;
+use collection::config::CollectionConfigInternal;
 use collection::operations::snapshot_ops::{
     ShardSnapshotLocation, SnapshotDescription, SnapshotPriority,
 };
@@ -322,10 +323,8 @@ pub async fn recover_shard_snapshot_impl(
         .running_snapshot_recovery
         .measure_scope();
 
-    if let Some(settings) = runtime_settings {
-        let config = collection.config_snapshot().await;
-        validate_recovered_collection_crypto_config(settings, collection.name(), &config)?;
-    }
+    let config = collection.config_snapshot().await;
+    validate_shard_snapshot_recovery_crypto_runtime(runtime_settings, collection.name(), &config)?;
 
     // `Collection::restore_shard_snapshot` and `activate_shard` calls *have to* be executed as a
     // single transaction
@@ -412,6 +411,26 @@ pub async fn recover_shard_snapshot_impl(
     Ok(())
 }
 
+fn validate_shard_snapshot_recovery_crypto_runtime(
+    runtime_settings: Option<&Settings>,
+    collection_name: &str,
+    config: &CollectionConfigInternal,
+) -> Result<(), StorageError> {
+    if config.params.effective_encryption().is_none() && config.params.ckks.is_none() {
+        return Ok(());
+    }
+
+    let Some(settings) = runtime_settings else {
+        return Err(StorageError::bad_input(format!(
+            "encrypted shard snapshot recovery for collection {collection_name} requires runtime \
+             crypto settings so key, context, and provider availability are validated before \
+             restore",
+        )));
+    };
+
+    validate_recovered_collection_crypto_config(settings, collection_name, config)
+}
+
 pub async fn try_take_partial_snapshot_recovery_lock(
     dispatcher: &Dispatcher,
     collection_name: &str,
@@ -434,4 +453,94 @@ pub async fn try_take_partial_snapshot_recovery_lock(
         .await?;
 
     Ok(recovery_lock)
+}
+
+#[cfg(test)]
+mod tests {
+    use collection::config::{
+        CollectionEncryptionConfig, CollectionParams, CryptoMigrationState, EncryptionRuleRef,
+        EncryptionSelector, WalConfig,
+    };
+    use collection::optimizers_builder::OptimizersConfig;
+    use segment::types::HnswConfig;
+    use uuid::Uuid;
+
+    use super::*;
+
+    fn config_with_params(params: CollectionParams) -> CollectionConfigInternal {
+        CollectionConfigInternal {
+            params,
+            hnsw_config: HnswConfig::default(),
+            optimizer_config: OptimizersConfig {
+                deleted_threshold: 0.1,
+                vacuum_min_vector_number: 1000,
+                default_segment_number: 0,
+                max_segment_size: None,
+                #[expect(deprecated)]
+                memmap_threshold: None,
+                indexing_threshold: Some(100_000),
+                flush_interval_sec: 60,
+                max_optimization_threads: Some(0),
+                prevent_unoptimized: None,
+            },
+            wal_config: WalConfig::default(),
+            quantization_config: None,
+            strict_mode_config: None,
+            uuid: Some(Uuid::from_u128(42)),
+            metadata: None,
+        }
+    }
+
+    fn encrypted_config() -> CollectionConfigInternal {
+        config_with_params(CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        })
+    }
+
+    #[test]
+    fn shard_snapshot_recovery_allows_missing_runtime_for_plaintext_collection() {
+        validate_shard_snapshot_recovery_crypto_runtime(
+            None,
+            "docs",
+            &config_with_params(CollectionParams::empty()),
+        )
+        .expect("plaintext recovery should not require crypto runtime settings");
+    }
+
+    #[test]
+    fn shard_snapshot_recovery_requires_runtime_for_encrypted_collection() {
+        let err =
+            validate_shard_snapshot_recovery_crypto_runtime(None, "docs", &encrypted_config())
+                .expect_err("encrypted recovery without runtime settings must fail closed");
+
+        assert!(err.to_string().contains("requires runtime crypto settings"));
+    }
+
+    #[test]
+    fn shard_snapshot_recovery_validates_encrypted_runtime_when_present() {
+        let settings = Settings::new(None).unwrap();
+        let err = validate_shard_snapshot_recovery_crypto_runtime(
+            Some(&settings),
+            "docs",
+            &encrypted_config(),
+        )
+        .expect_err("missing runtime instance must fail encrypted recovery preflight");
+
+        assert!(err.to_string().contains("unknown payload crypto instance"));
+    }
 }
