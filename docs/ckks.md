@@ -992,10 +992,12 @@ execution under the Qdrant service account. On Linux, the checked bridge spawn p
 sets `no_new_privs`, parent-death `SIGKILL`, and `RLIMIT_CORE=0` so the
 plaintext-bearing bridge cannot gain extra privileges through
 setuid/file-capability execution, is killed if Qdrant exits, and does not
-produce normal core dumps. The bridge child also drops inherited environment
-variables named `QDRANT` or whose names start with `QDRANT_`, so env-backed
-Qdrant settings and crypto material are not handed to the bridge process by
-default.
+produce normal core dumps. Checked bridge workers start with an empty inherited
+environment plus a fixed `/usr/sbin:/usr/bin:/sbin:/bin` `PATH` for
+`/usr/bin/env` shebang compatibility, so env-backed Qdrant settings, crypto
+material, `LD_PRELOAD`, `PYTHONPATH`, and other service environment values are
+not handed to the bridge process by default. Test-only unchecked bridge workers
+still remove `QDRANT`/`QDRANT_*` and explicitly configured sensitive env names.
 
 Request fields:
 

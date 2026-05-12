@@ -1196,10 +1196,18 @@ impl CommandOpenFheBackend {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        for (name, _) in std::env::vars_os() {
-            let name_string = name.to_string_lossy();
-            if name_string == "QDRANT" || name_string.starts_with("QDRANT_") {
-                command.env_remove(name);
+        if self.checked_program {
+            command.env_clear();
+            // Preserve only a fixed search path for shebangs that use
+            // `/usr/bin/env`. Production bridge binaries should not depend on
+            // ambient service environment.
+            command.env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
+        } else {
+            for (name, _) in std::env::vars_os() {
+                let name_string = name.to_string_lossy();
+                if name_string == "QDRANT" || name_string.starts_with("QDRANT_") {
+                    command.env_remove(name);
+                }
             }
         }
         for name in &self.sensitive_env_names {

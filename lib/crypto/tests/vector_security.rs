@@ -926,6 +926,7 @@ for name in (
     "QDRANT__CKKS__BRIDGE_ENV_SECRET_FOR_TEST",
     "QDRANT_CKKS_BRIDGE_ENV_SECRET_FOR_TEST",
     "TENANT_PAYLOAD_KEY_FOR_TEST",
+    "OPENFHE_BRIDGE_UNTRUSTED_ENV_FOR_TEST",
 ):
     if os.environ.get(name):
         print(f"secret env leaked to bridge: {name}", file=sys.stderr)
@@ -949,6 +950,7 @@ print('{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext"
         "QDRANT__CKKS__BRIDGE_ENV_SECRET_FOR_TEST",
         "QDRANT_CKKS_BRIDGE_ENV_SECRET_FOR_TEST",
         "TENANT_PAYLOAD_KEY_FOR_TEST",
+        "OPENFHE_BRIDGE_UNTRUSTED_ENV_FOR_TEST",
     ] {
         unsafe {
             std::env::set_var(name, "must-not-reach-bridge");
@@ -976,6 +978,7 @@ print('{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext"
         "QDRANT__CKKS__BRIDGE_ENV_SECRET_FOR_TEST",
         "QDRANT_CKKS_BRIDGE_ENV_SECRET_FOR_TEST",
         "TENANT_PAYLOAD_KEY_FOR_TEST",
+        "OPENFHE_BRIDGE_UNTRUSTED_ENV_FOR_TEST",
     ] {
         unsafe {
             std::env::remove_var(name);
