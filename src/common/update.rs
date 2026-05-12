@@ -3730,6 +3730,47 @@ esac
                 Some("lookup-b")
             );
 
+            let encrypted_lookup_vector_err = crate::common::query::do_search_point_groups(
+                &toc,
+                "vector_groups",
+                SearchGroupsRequestInternal {
+                    vector: vec![0.0, 0.0].into(),
+                    filter: None,
+                    params: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                    group_request: BaseGroupRequest {
+                        group_by: "group_id".parse().unwrap(),
+                        group_size: 1,
+                        limit: 2,
+                        with_lookup: Some(api::rest::WithLookupInterface::WithLookup(
+                            api::rest::WithLookup {
+                                collection_name: "vector_groups".to_string(),
+                                with_payload: Some(WithPayloadInterface::Bool(true)),
+                                with_vectors: Some(WithVector::Selector(vec![
+                                    DEFAULT_VECTOR_NAME.to_string(),
+                                ])),
+                            },
+                        )),
+                    },
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                encrypted_lookup_vector_err,
+                StorageError::BadInput { description }
+                    if description.contains("cannot group lookup encrypted vector")
+                        && description.contains("payload sidecar only")
+            ));
+
             let query_groups_with_lookup = crate::common::query::do_query_point_groups(
                 &toc,
                 "vector_groups",
