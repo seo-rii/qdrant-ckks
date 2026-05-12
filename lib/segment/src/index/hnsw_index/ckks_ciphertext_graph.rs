@@ -715,6 +715,7 @@ fn write_private_graph_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
             .truncate(true)
             .write(true)
             .mode(0o600)
+            .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
             .open(path)?;
         file.write_all(bytes)?;
         file.sync_all()?;
