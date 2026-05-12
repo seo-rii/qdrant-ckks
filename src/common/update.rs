@@ -6094,7 +6094,7 @@ esac
                 None,
                 None,
                 ShardSelectorInternal::All,
-                auth,
+                auth.clone(),
                 HwMeasurementAcc::disposable(),
                 Some(&settings),
             )
@@ -6102,6 +6102,79 @@ esac
             .unwrap();
             assert_eq!(
                 decrypted_scroll.points[0]
+                    .payload
+                    .as_ref()
+                    .and_then(|payload| payload.0.get("body"))
+                    .and_then(Value::as_str),
+                Some("server secret"),
+            );
+
+            let decrypted_search = crate::common::query::do_search_points(
+                &toc,
+                "docs",
+                SearchRequestInternal {
+                    vector: vec![0.1, 0.2].into(),
+                    with_payload: Some(WithPayloadInterface::Encrypted(
+                        PayloadEncryptedReadPolicy {
+                            encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                        },
+                    )),
+                    with_vector: Some(WithVector::Bool(false)),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    score_threshold: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                decrypted_search[0]
+                    .payload
+                    .as_ref()
+                    .and_then(|payload| payload.0.get("body"))
+                    .and_then(Value::as_str),
+                Some("server secret"),
+            );
+
+            let decrypted_query = crate::common::query::do_query_points(
+                &toc,
+                "docs",
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::Vector(VectorInternal::Dense(vec![0.1, 0.2])),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Encrypted(PayloadEncryptedReadPolicy {
+                        encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                    }),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth,
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                decrypted_query[0]
                     .payload
                     .as_ref()
                     .and_then(|payload| payload.0.get("body"))

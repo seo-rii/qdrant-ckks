@@ -409,7 +409,7 @@ fn ckks_legacy_search_as_query_request(
 pub async fn do_core_search_batch_points(
     toc: &TableOfContent,
     collection_name: &str,
-    request: CoreSearchRequestBatch,
+    mut request: CoreSearchRequestBatch,
     read_consistency: Option<ReadConsistency>,
     shard_selection: ShardSelectorInternal,
     auth: Auth,
@@ -417,8 +417,18 @@ pub async fn do_core_search_batch_points(
     hw_measurement_acc: HwMeasurementAcc,
     runtime_settings: Option<&Settings>,
 ) -> Result<Vec<Vec<ScoredPoint>>, StorageError> {
+    let encrypted_payload_read_modes = request
+        .searches
+        .iter_mut()
+        .map(|search| {
+            let mode = encrypted_payload_read_mode(search.with_payload.as_ref());
+            request_raw_encrypted_payload_for_collection_read(&mut search.with_payload, mode);
+            mode
+        })
+        .collect::<Vec<_>>();
+
     if let Some(settings) = runtime_settings
-        && let Some(results) = try_ckks_vector_search_batch_points(
+        && let Some(mut results) = try_ckks_vector_search_batch_points(
             toc,
             collection_name,
             &request,
@@ -431,6 +441,15 @@ pub async fn do_core_search_batch_points(
         )
         .await?
     {
+        decrypt_scored_point_batches_for_read(
+            toc,
+            collection_name,
+            &encrypted_payload_read_modes,
+            &mut results,
+            runtime_settings,
+            &auth,
+        )
+        .await?;
         return Ok(results);
     }
 
@@ -446,16 +465,27 @@ pub async fn do_core_search_batch_points(
         .await?;
     }
 
-    toc.core_search_batch(
+    let mut results = toc
+        .core_search_batch(
+            collection_name,
+            request,
+            read_consistency,
+            shard_selection,
+            auth.clone(),
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+    decrypt_scored_point_batches_for_read(
+        toc,
         collection_name,
-        request,
-        read_consistency,
-        shard_selection,
-        auth,
-        timeout,
-        hw_measurement_acc.clone(),
+        &encrypted_payload_read_modes,
+        &mut results,
+        runtime_settings,
+        &auth,
     )
-    .await
+    .await?;
+    Ok(results)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4545,6 +4575,19 @@ fn request_raw_encrypted_payload_for_collection_read(
     ));
 }
 
+fn request_raw_encrypted_payload_for_required_collection_read(
+    with_payload: &mut WithPayloadInterface,
+    mode: EncryptedPayloadReadMode,
+) {
+    if mode != EncryptedPayloadReadMode::Decrypted {
+        return;
+    }
+
+    *with_payload = WithPayloadInterface::Encrypted(PayloadEncryptedReadPolicy {
+        encrypted_payload: EncryptedPayloadReadMode::Raw,
+    });
+}
+
 async fn payload_decrypt_plan_for_read(
     toc: &TableOfContent,
     collection_name: &str,
@@ -4634,6 +4677,53 @@ fn decrypt_rest_record_payloads_for_read(
             record.payload.as_mut().map(|payload| (point_id, payload))
         }),
     )
+}
+
+fn decrypt_scored_point_payloads_for_read(
+    collection_name: &str,
+    plan: &PayloadWritePlan,
+    points: &mut [ScoredPoint],
+) -> Result<(), StorageError> {
+    decrypt_payloads_for_read(
+        collection_name,
+        plan,
+        points.iter_mut().filter_map(|point| {
+            let point_id = point.id;
+            point.payload.as_mut().map(|payload| (point_id, payload))
+        }),
+    )
+}
+
+async fn decrypt_scored_point_batches_for_read(
+    toc: &TableOfContent,
+    collection_name: &str,
+    modes: &[EncryptedPayloadReadMode],
+    batches: &mut [Vec<ScoredPoint>],
+    runtime_settings: Option<&Settings>,
+    auth: &Auth,
+) -> Result<(), StorageError> {
+    if !modes.contains(&EncryptedPayloadReadMode::Decrypted) {
+        return Ok(());
+    }
+    let Some(plan) = payload_decrypt_plan_for_read(
+        toc,
+        collection_name,
+        EncryptedPayloadReadMode::Decrypted,
+        runtime_settings,
+        auth,
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    for (mode, points) in modes.iter().zip(batches.iter_mut()) {
+        if *mode == EncryptedPayloadReadMode::Decrypted {
+            decrypt_scored_point_payloads_for_read(collection_name, &plan, points)?;
+        }
+    }
+
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5177,13 +5267,25 @@ fn ckks_prefetch_candidate_filter(sources: &[Vec<ScoredPoint>]) -> Option<Filter
 pub async fn do_query_batch_points(
     toc: &TableOfContent,
     collection_name: &str,
-    requests: Vec<(CollectionQueryRequest, ShardSelectorInternal)>,
+    mut requests: Vec<(CollectionQueryRequest, ShardSelectorInternal)>,
     read_consistency: Option<ReadConsistency>,
     auth: Auth,
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
     runtime_settings: Option<&Settings>,
 ) -> Result<Vec<Vec<ScoredPoint>>, StorageError> {
+    let encrypted_payload_read_modes = requests
+        .iter_mut()
+        .map(|(request, _)| {
+            let mode = request.with_payload.encrypted_payload_read_mode();
+            request_raw_encrypted_payload_for_required_collection_read(
+                &mut request.with_payload,
+                mode,
+            );
+            mode
+        })
+        .collect::<Vec<_>>();
+
     if let Some(settings) = runtime_settings {
         let collection_pass = auth.check_collection_access(
             collection_name,
@@ -5727,6 +5829,15 @@ pub async fn do_query_batch_points(
                     };
                     results.push(result);
                 }
+                decrypt_scored_point_batches_for_read(
+                    toc,
+                    collection_name,
+                    &encrypted_payload_read_modes,
+                    &mut results,
+                    runtime_settings,
+                    &auth,
+                )
+                .await?;
                 return Ok(results);
             }
         }
@@ -5743,15 +5854,26 @@ pub async fn do_query_batch_points(
         .await?;
     }
 
-    toc.query_batch(
+    let mut results = toc
+        .query_batch(
+            collection_name,
+            requests,
+            read_consistency,
+            auth.clone(),
+            timeout,
+            hw_measurement_acc,
+        )
+        .await?;
+    decrypt_scored_point_batches_for_read(
+        toc,
         collection_name,
-        requests,
-        read_consistency,
-        auth,
-        timeout,
-        hw_measurement_acc,
+        &encrypted_payload_read_modes,
+        &mut results,
+        runtime_settings,
+        &auth,
     )
-    .await
+    .await?;
+    Ok(results)
 }
 
 #[allow(clippy::too_many_arguments)]
