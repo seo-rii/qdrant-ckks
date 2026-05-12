@@ -5374,6 +5374,61 @@ mod tests {
                 if option == "materials.client_key"
         ));
 
+        let metadata_with_client_option = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::from([(
+                "docs_metadata_value_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: METADATA_AES_GCM_PROVIDER.to_string(),
+                    materials: HashMap::from([(
+                        PAYLOAD_SYM_KEY_ROLE.to_string(),
+                        "tenant-a/metadata-v1".to_string(),
+                    )]),
+                    backend_ref: None,
+                    options: json!({
+                        "material_fingerprint_id": "tenant-a/metadata@v1",
+                        "expected_rk_id": "tenant-a/client-rk-v1",
+                    }),
+                },
+            )]),
+            materials: HashMap::from([(
+                "tenant-a/metadata-v1".to_string(),
+                CryptoMaterialConfig {
+                    kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                    source: Some("inline".to_string()),
+                    value_b64: Some(BASE64URL_NOPAD.encode(&[3_u8; 32])),
+                    ..CryptoMaterialConfig::default()
+                },
+            )]),
+            backends: HashMap::new(),
+        };
+        assert!(matches!(
+            validate_crypto_settings(&metadata_with_client_option),
+            Err(CryptoSetupError::InvalidInstanceOption { option, .. })
+                if option == EXPECTED_RK_ID_OPTION
+        ));
+
+        let mut metadata_with_extra_material_role = metadata_with_client_option.clone();
+        metadata_with_extra_material_role
+            .instances
+            .get_mut("docs_metadata_value_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .remove(EXPECTED_RK_ID_OPTION);
+        metadata_with_extra_material_role
+            .instances
+            .get_mut("docs_metadata_value_v1")
+            .unwrap()
+            .materials
+            .insert("client_key".to_string(), "tenant-a/metadata-v1".to_string());
+        assert!(matches!(
+            validate_crypto_settings(&metadata_with_extra_material_role),
+            Err(CryptoSetupError::InvalidInstanceOption { option, .. })
+                if option == "materials.client_key"
+        ));
+
         let bridge_program = std::env::current_exe().unwrap().display().to_string();
         let vector_with_payload_option = CryptoSettings {
             allow_inline_key_material: true,
