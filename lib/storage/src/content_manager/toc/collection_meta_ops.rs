@@ -371,7 +371,14 @@ impl TableOfContent {
                     &collection_config.params,
                 ) {
                     let peer_metadata_by_id = self.channel_service.id_to_metadata.read();
-                    let mut peer_ids = peer_metadata_by_id.keys().copied().collect::<Vec<_>>();
+                    let mut peer_ids = self
+                        .channel_service
+                        .id_to_address
+                        .read()
+                        .keys()
+                        .copied()
+                        .collect::<Vec<_>>();
+                    peer_ids.extend(peer_metadata_by_id.keys().copied());
                     peer_ids.push(self.this_peer_id);
                     peer_ids.push(key.peer_id);
                     validate_encrypted_resharding_crypto_runtime_parity(
