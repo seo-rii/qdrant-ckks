@@ -6086,21 +6086,18 @@ mod tests {
             .get_mut("tenant-a/docs-rk")
             .unwrap()
             .wrapped_key_b64 = Some(BASE64URL_NOPAD.encode(&[8_u8; 48]));
+        // Capability parity is non-secret metadata only. Wrong wrapped
+        // material is caught by unwrap/preflight, not by peer metadata.
         let peer_wrapped_resource_key_fingerprint =
             crypto_runtime_capability_fingerprint(&peer_with_different_wrapped_resource_key);
-        let err = validate_crypto_runtime_capability_parity(
+        validate_crypto_runtime_capability_parity(
             &settings,
             [(
                 "peer-wrapped-rk",
                 peer_wrapped_resource_key_fingerprint.as_str(),
             )],
         )
-        .expect_err("wrapped RK blob mismatch must fail closed");
-        assert!(
-            err.to_string()
-                .contains("crypto runtime capability mismatch")
-        );
-        assert!(err.to_string().contains("peer-wrapped-rk"));
+        .unwrap();
 
         let mut peer_with_different_epoch = settings.clone();
         peer_with_different_epoch
