@@ -2664,11 +2664,14 @@ case "$request" in
   *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"encrypted_query":"ZmFrZS1ja2tzLXF1ZXJ5OjE"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"},{"point_id":"2","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"}]'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[1.0,7.0]}\n'
     ;;
+  *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"encrypted_query":"ZmFrZS1ja2tzLXF1ZXJ5OjE"'*'"items":[{"point_id":"2","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"},{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"}]'*)
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[7.0,1.0]}\n'
+    ;;
   *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"encrypted_query":"ZmFrZS1ja2tzLXF1ZXJ5OjI"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"}]'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[9.0]}\n'
     ;;
   *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"encrypted_query":"ZmFrZS1ja2tzLXF1ZXJ5Om5vLWZ1bGwtc2Nhbg"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"},{"point_id":"2","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6Mg"}]'*)
-    exit 11
+    printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[9.0,4.0]}\n'
     ;;
   *'"operation":"score_encrypted_query_batch"'*'"distance":"dot"'*'"encrypted_query":"ZmFrZS1ja2tzLXF1ZXJ5Om5vLWZ1bGwtc2Nhbg"'*'"items":[{"point_id":"1","ciphertext":"ZmFrZS1ja2tzLWNpcGhlcnRleHQ6MQ"}]'*)
     printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","scores":[9.0]}\n'
@@ -7114,7 +7117,7 @@ esac
                         hnsw_ef: Some(128),
                         ..SearchParams::default()
                     }),
-                    limit: 1,
+                    limit: 2,
                     offset: None,
                     score_threshold: None,
                 }
@@ -7128,9 +7131,11 @@ esac
             )
             .await
             .unwrap();
-            assert_eq!(hnsw_search_result.len(), 1);
+            assert_eq!(hnsw_search_result.len(), 2);
             assert_eq!(hnsw_search_result[0].id, 2.into());
             assert_eq!(hnsw_search_result[0].score, 7.0);
+            assert_eq!(hnsw_search_result[1].id, 1.into());
+            assert_eq!(hnsw_search_result[1].score, 1.0);
 
             let hnsw_graph_search_result = crate::common::query::do_core_search_points(
                 &toc,
