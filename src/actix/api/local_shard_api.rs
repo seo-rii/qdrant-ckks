@@ -62,6 +62,7 @@ async fn get_points(
         ShardSelectorInternal::ShardId(path.shard),
         auth,
         request_hw_counter.get_counter(),
+        None,
     )
     .await
     .map(|records| {
@@ -140,6 +141,7 @@ async fn scroll_points(
             ShardSelectorInternal::ShardId(path.shard),
             auth,
             request_hw_counter.get_counter(),
+            None,
         )
     });
 

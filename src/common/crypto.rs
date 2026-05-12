@@ -637,6 +637,29 @@ impl PayloadWritePlan {
         Ok(decrypted)
     }
 
+    pub(crate) fn decrypt_server_payload_for_read(
+        &self,
+        point_id: &str,
+        payload: &mut Payload,
+    ) -> Result<usize, PayloadWriteSetupError> {
+        let mut decrypted = 0;
+
+        for rule in &self.rules {
+            match rule {
+                PayloadWriteRule::ServerEncrypt { encryptor, policy } => {
+                    decrypted += encryptor.decrypt_selected_fields_if_encrypted(
+                        point_id,
+                        &mut payload.0,
+                        policy,
+                    )?;
+                }
+                PayloadWriteRule::ClientEnvelope { .. } => {}
+            }
+        }
+
+        Ok(decrypted)
+    }
+
     pub(crate) fn touches_selected_fields(
         &self,
         payload: &Payload,

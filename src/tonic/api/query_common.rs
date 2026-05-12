@@ -560,6 +560,7 @@ pub async fn scroll(
     shard_selection: Option<ShardId>,
     auth: Auth,
     request_hw_counter: RequestHwCounter,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Response<ScrollResponse>, Status> {
     let ScrollPoints {
         collection_name,
@@ -612,6 +613,7 @@ pub async fn scroll(
         shard_selector,
         auth,
         request_hw_counter.get_counter(),
+        runtime_settings,
     )
     .await?;
 
@@ -697,6 +699,7 @@ pub async fn get(
     shard_selection: Option<ShardId>,
     auth: Auth,
     request_hw_counter: RequestHwCounter,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Response<GetResponse>, Status> {
     let GetPoints {
         collection_name,
@@ -744,6 +747,7 @@ pub async fn get(
         shard_selector,
         auth,
         request_hw_counter.get_counter(),
+        runtime_settings,
     )
     .await?;
 

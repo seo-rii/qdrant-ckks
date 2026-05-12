@@ -39,7 +39,8 @@ use segment::index::hnsw_index::ckks_ciphertext_graph::{
 };
 use segment::json_path::JsonPath;
 use segment::types::{
-    Distance, Filter, Order, PayloadContainer, PointIdType, ScoredPoint, SearchParams, ShardKey,
+    Distance, EncryptedPayloadReadMode, Filter, Order, Payload, PayloadContainer,
+    PayloadEncryptedReadPolicy, PointIdType, ScoredPoint, SearchParams, ShardKey,
     WithPayloadInterface, WithVector,
 };
 use segment::utils::scored_point_ties::ScoredPointTies;
@@ -54,7 +55,10 @@ use storage::content_manager::errors::StorageError;
 use storage::content_manager::toc::TableOfContent;
 use storage::rbac::{AccessRequirements, Auth};
 
-use crate::common::crypto::vector_write_plan_for_collection_with_crypto_id;
+use crate::common::crypto::{
+    PayloadWritePlan, payload_write_plan_for_collection_with_crypto_id,
+    vector_write_plan_for_collection_with_crypto_id,
+};
 use crate::settings::Settings;
 
 #[derive(Clone)]
@@ -4518,16 +4522,131 @@ pub async fn do_count_points(
     .await
 }
 
+fn encrypted_payload_read_mode(
+    with_payload: Option<&WithPayloadInterface>,
+) -> EncryptedPayloadReadMode {
+    with_payload
+        .map(WithPayloadInterface::encrypted_payload_read_mode)
+        .unwrap_or(EncryptedPayloadReadMode::Raw)
+}
+
+fn request_raw_encrypted_payload_for_collection_read(
+    with_payload: &mut Option<WithPayloadInterface>,
+    mode: EncryptedPayloadReadMode,
+) {
+    if mode != EncryptedPayloadReadMode::Decrypted {
+        return;
+    }
+
+    *with_payload = Some(WithPayloadInterface::Encrypted(
+        PayloadEncryptedReadPolicy {
+            encrypted_payload: EncryptedPayloadReadMode::Raw,
+        },
+    ));
+}
+
+async fn payload_decrypt_plan_for_read(
+    toc: &TableOfContent,
+    collection_name: &str,
+    mode: EncryptedPayloadReadMode,
+    runtime_settings: Option<&Settings>,
+    auth: &Auth,
+) -> Result<Option<PayloadWritePlan>, StorageError> {
+    if mode != EncryptedPayloadReadMode::Decrypted {
+        return Ok(None);
+    }
+
+    let collection_pass = auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new(),
+        "decrypt_payload_read",
+    )?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let collection_config = collection.config_snapshot().await;
+    if collection_config.params.effective_encryption().is_none() {
+        return Ok(None);
+    }
+    let Some(settings) = runtime_settings else {
+        return Err(StorageError::bad_input(format!(
+            "encrypted payload read mode 'decrypted' for collection {collection_name} requires \
+             runtime crypto settings; use 'raw' for SDK/client decryption or 'redacted'",
+        )));
+    };
+    let collection_crypto_id = collection_config
+        .stable_crypto_id(collection_name)
+        .map_err(StorageError::from)?;
+    payload_write_plan_for_collection_with_crypto_id(
+        settings,
+        collection_name,
+        &collection_crypto_id,
+        &collection_config.params,
+    )
+    .map_err(|err| {
+        StorageError::service_error(format!(
+            "payload decrypt runtime for collection {collection_name} is invalid: {err}",
+        ))
+    })
+}
+
+fn decrypt_payloads_for_read<'a>(
+    collection_name: &str,
+    plan: &PayloadWritePlan,
+    payloads: impl IntoIterator<Item = (PointIdType, &'a mut Payload)>,
+) -> Result<(), StorageError> {
+    for (point_id, payload) in payloads {
+        plan.decrypt_server_payload_for_read(&point_id.to_string(), payload)
+            .map_err(|err| {
+                StorageError::bad_input(format!(
+                    "payload decrypt read failed for point {} in collection {collection_name}: {err}",
+                    point_id,
+                ))
+            })?;
+    }
+
+    Ok(())
+}
+
+fn decrypt_record_internal_payloads_for_read(
+    collection_name: &str,
+    plan: &PayloadWritePlan,
+    records: &mut [RecordInternal],
+) -> Result<(), StorageError> {
+    decrypt_payloads_for_read(
+        collection_name,
+        plan,
+        records.iter_mut().filter_map(|record| {
+            let point_id = record.id;
+            record.payload.as_mut().map(|payload| (point_id, payload))
+        }),
+    )
+}
+
+fn decrypt_rest_record_payloads_for_read(
+    collection_name: &str,
+    plan: &PayloadWritePlan,
+    records: &mut [api::rest::Record],
+) -> Result<(), StorageError> {
+    decrypt_payloads_for_read(
+        collection_name,
+        plan,
+        records.iter_mut().filter_map(|record| {
+            let point_id = record.id;
+            record.payload.as_mut().map(|payload| (point_id, payload))
+        }),
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn do_get_points(
     toc: &TableOfContent,
     collection_name: &str,
-    request: PointRequestInternal,
+    mut request: PointRequestInternal,
     read_consistency: Option<ReadConsistency>,
     timeout: Option<Duration>,
     shard_selection: ShardSelectorInternal,
     auth: Auth,
     hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Vec<RecordInternal>, StorageError> {
     ensure_with_vector_does_not_request_encrypted_vectors(
         toc,
@@ -4538,28 +4657,49 @@ pub async fn do_get_points(
     )
     .await?;
 
-    toc.retrieve(
+    let encrypted_payload_read_mode = encrypted_payload_read_mode(request.with_payload.as_ref());
+    request_raw_encrypted_payload_for_collection_read(
+        &mut request.with_payload,
+        encrypted_payload_read_mode,
+    );
+
+    let mut records = toc
+        .retrieve(
+            collection_name,
+            request,
+            read_consistency,
+            timeout,
+            shard_selection,
+            auth.clone(),
+            hw_measurement_acc,
+        )
+        .await?;
+    if let Some(plan) = payload_decrypt_plan_for_read(
+        toc,
         collection_name,
-        request,
-        read_consistency,
-        timeout,
-        shard_selection,
-        auth,
-        hw_measurement_acc,
+        encrypted_payload_read_mode,
+        runtime_settings,
+        &auth,
     )
-    .await
+    .await?
+    {
+        decrypt_record_internal_payloads_for_read(collection_name, &plan, &mut records)?;
+    }
+
+    Ok(records)
 }
 
 #[allow(clippy::too_many_arguments)]
 pub async fn do_scroll_points(
     toc: &TableOfContent,
     collection_name: &str,
-    request: ScrollRequestInternal,
+    mut request: ScrollRequestInternal,
     read_consistency: Option<ReadConsistency>,
     timeout: Option<Duration>,
     shard_selection: ShardSelectorInternal,
     auth: Auth,
     hw_measurement_acc: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
 ) -> Result<ScrollResult, StorageError> {
     ensure_with_vector_does_not_request_encrypted_vectors(
         toc,
@@ -4570,16 +4710,36 @@ pub async fn do_scroll_points(
     )
     .await?;
 
-    toc.scroll(
+    let encrypted_payload_read_mode = encrypted_payload_read_mode(request.with_payload.as_ref());
+    request_raw_encrypted_payload_for_collection_read(
+        &mut request.with_payload,
+        encrypted_payload_read_mode,
+    );
+
+    let mut scroll_result = toc
+        .scroll(
+            collection_name,
+            request,
+            read_consistency,
+            timeout,
+            shard_selection,
+            auth.clone(),
+            hw_measurement_acc,
+        )
+        .await?;
+    if let Some(plan) = payload_decrypt_plan_for_read(
+        toc,
         collection_name,
-        request,
-        read_consistency,
-        timeout,
-        shard_selection,
-        auth,
-        hw_measurement_acc,
+        encrypted_payload_read_mode,
+        runtime_settings,
+        &auth,
     )
-    .await
+    .await?
+    {
+        decrypt_rest_record_payloads_for_read(collection_name, &plan, &mut scroll_result.points)?;
+    }
+
+    Ok(scroll_result)
 }
 
 async fn ensure_with_vector_does_not_request_encrypted_vectors(

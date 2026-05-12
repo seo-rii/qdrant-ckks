@@ -790,6 +790,7 @@ impl PointsInternal for PointsInternalService {
             shard_id,
             full_internal_auth(),
             hw_data,
+            None,
         )
         .await
     }
@@ -820,6 +821,7 @@ impl PointsInternal for PointsInternalService {
             shard_id,
             full_internal_auth(),
             hw_data,
+            None,
         )
         .await
     }

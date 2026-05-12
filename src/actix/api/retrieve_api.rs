@@ -30,7 +30,7 @@ use crate::actix::helpers::{
     get_request_hardware_counter, process_response, process_response_error,
 };
 use crate::common::query::{do_get_points, do_scroll_points};
-use crate::settings::ServiceConfig;
+use crate::settings::{ServiceConfig, Settings};
 
 #[derive(Deserialize, Validate)]
 struct PointPath {
@@ -79,6 +79,7 @@ async fn do_get_point(
     timeout: Option<Duration>,
     auth: Auth,
     hw_counter: HwMeasurementAcc,
+    runtime_settings: Option<&Settings>,
 ) -> Result<Option<RecordInternal>, StorageError> {
     let request = PointRequestInternal {
         ids: vec![point_id],
@@ -97,6 +98,7 @@ async fn do_get_point(
         shard_selection,
         auth,
         hw_counter,
+        runtime_settings,
     )
     .await
     .map(|points| points.into_iter().next())
@@ -109,6 +111,7 @@ async fn get_point(
     point: Path<PointPath>,
     params: Query<PointReadParams>,
     service_config: web::Data<ServiceConfig>,
+    settings: web::Data<Settings>,
     ActixAuth(auth): ActixAuth,
 ) -> impl Responder {
     let pass = match check_strict_mode_timeout(
@@ -147,6 +150,7 @@ async fn get_point(
         params.timeout(),
         auth,
         request_hw_counter.get_counter(),
+        Some(settings.get_ref()),
     )
     .await
     .and_then(|i| {
@@ -166,6 +170,7 @@ async fn get_points(
     request: Json<PointRequest>,
     params: Query<ReadParams>,
     service_config: web::Data<ServiceConfig>,
+    settings: web::Data<Settings>,
     ActixAuth(auth): ActixAuth,
 ) -> impl Responder {
     let pass = match check_strict_mode_timeout(
@@ -207,6 +212,7 @@ async fn get_points(
         shard_selection,
         auth,
         request_hw_counter.get_counter(),
+        Some(settings.get_ref()),
     )
     .map_ok(|response| {
         response
@@ -226,6 +232,7 @@ async fn scroll_points(
     request: Json<ScrollRequest>,
     params: Query<ReadParams>,
     service_config: web::Data<ServiceConfig>,
+    settings: web::Data<Settings>,
     ActixAuth(auth): ActixAuth,
 ) -> impl Responder {
     let ScrollRequest {
@@ -268,6 +275,7 @@ async fn scroll_points(
         shard_selection,
         auth,
         request_hw_counter.get_counter(),
+        Some(settings.get_ref()),
     )
     .await;
 

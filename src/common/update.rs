@@ -2589,7 +2589,8 @@ mod tests {
     use segment::data_types::groups::GroupId;
     use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, NamedQuery, VectorInternal};
     use segment::types::{
-        Condition, Distance, FieldCondition, SearchParams, WithPayloadInterface, WithVector,
+        Condition, Distance, EncryptedPayloadReadMode, FieldCondition, PayloadEncryptedReadPolicy,
+        SearchParams, WithPayloadInterface, WithVector,
     };
     use serde_json::json;
     use sha2::{Digest, Sha256};
@@ -5850,6 +5851,267 @@ esac
     }
 
     #[test]
+    fn server_side_encrypted_payload_read_mode_decrypts_get_and_scroll() {
+        let runtime = Runtime::new().unwrap();
+        let storage_dir = Builder::new()
+            .prefix("payload-decrypted-read")
+            .tempdir()
+            .unwrap();
+        let temp_dir = Builder::new()
+            .prefix("payload-decrypted-read-temp")
+            .tempdir()
+            .unwrap();
+        let storage_config = StorageConfig {
+            storage_path: storage_dir.path().to_path_buf(),
+            snapshots_path: storage_dir.path().join("snapshots"),
+            snapshots_config: Default::default(),
+            temp_path: Some(temp_dir.path().to_path_buf()),
+            on_disk_payload: false,
+            optimizers: OptimizersConfig {
+                deleted_threshold: 0.5,
+                vacuum_min_vector_number: 100,
+                default_segment_number: 1,
+                max_segment_size: None,
+                #[expect(deprecated)]
+                memmap_threshold: Some(100),
+                indexing_threshold: Some(100),
+                flush_interval_sec: 2,
+                max_optimization_threads: Some(1),
+                prevent_unoptimized: None,
+            },
+            optimizers_overwrite: None,
+            wal: Default::default(),
+            performance: PerformanceConfig {
+                max_search_threads: 1,
+                max_optimization_runtime_threads: 1,
+                optimizer_cpu_budget: 0,
+                optimizer_io_budget: 0,
+                update_rate_limit: None,
+                search_timeout_sec: None,
+                incoming_shard_transfers_limit: Some(1),
+                outgoing_shard_transfers_limit: Some(1),
+                async_scorer: None,
+                load_concurrency: LoadConcurrencyConfig::default(),
+            },
+            hnsw_index: Default::default(),
+            hnsw_global_config: Default::default(),
+            mmap_advice: mmap::Advice::Random,
+            node_type: Default::default(),
+            update_queue_size: Default::default(),
+            handle_collection_load_errors: false,
+            recovery_mode: None,
+            update_concurrency: Some(NonZeroUsize::new(1).unwrap()),
+            shard_transfer_method: None,
+            collection: None,
+            max_collections: None,
+        };
+        let toc = Arc::new(TableOfContent::new(
+            &storage_config,
+            Runtime::new().unwrap(),
+            Runtime::new().unwrap(),
+            Runtime::new().unwrap(),
+            ResourceBudget::default(),
+            ChannelService::new(6333, false, None, None),
+            0,
+            None,
+        ));
+        let dispatcher = Dispatcher::new(toc.clone());
+        let auth = Auth::new_internal(Access::full("For test"));
+        let settings = payload_runtime_settings();
+
+        runtime.block_on(async {
+            dispatcher
+                .submit_collection_meta_op(
+                    CollectionMetaOperations::CreateCollection(
+                        CreateCollectionOperation::new(
+                            "docs".to_string(),
+                            CreateCollection {
+                                vectors: VectorParamsBuilder::new(2, Distance::Dot).build().into(),
+                                sparse_vectors: None,
+                                hnsw_config: None,
+                                wal_config: None,
+                                optimizers_config: None,
+                                shard_number: Some(1),
+                                on_disk_payload: None,
+                                replication_factor: None,
+                                write_consistency_factor: None,
+                                quantization_config: None,
+                                sharding_method: None,
+                                encryption: encrypted_params().encryption,
+                                ckks: None,
+                                strict_mode_config: None,
+                                uuid: None,
+                                metadata: None,
+                            },
+                        )
+                        .unwrap(),
+                    ),
+                    auth.clone(),
+                    None,
+                )
+                .await
+                .unwrap();
+
+            do_upsert_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "docs".to_string(),
+                PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                    points: vec![api::rest::PointStruct {
+                        id: 1.into(),
+                        vector: api::rest::VectorStruct::Single(vec![0.1, 0.2]),
+                        payload: Some(segment::types::Payload(
+                            json!({ "body": "server secret", "title": "public" })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        )),
+                    }],
+                    shard_key: None,
+                    update_filter: None,
+                    update_mode: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap();
+
+            let raw_records = crate::common::query::do_get_points(
+                &toc,
+                "docs",
+                PointRequestInternal {
+                    ids: vec![1.into()],
+                    with_payload: Some(WithPayloadInterface::Bool(true)),
+                    with_vector: WithVector::Bool(false),
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap();
+            assert!(is_encrypted_payload_value(
+                raw_records[0]
+                    .payload
+                    .as_ref()
+                    .unwrap()
+                    .0
+                    .get("body")
+                    .unwrap()
+            ));
+
+            let decrypted_records = crate::common::query::do_get_points(
+                &toc,
+                "docs",
+                PointRequestInternal {
+                    ids: vec![1.into()],
+                    with_payload: Some(WithPayloadInterface::Encrypted(
+                        PayloadEncryptedReadPolicy {
+                            encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                        },
+                    )),
+                    with_vector: WithVector::Bool(false),
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                decrypted_records[0]
+                    .payload
+                    .as_ref()
+                    .and_then(|payload| payload.0.get("body"))
+                    .and_then(Value::as_str),
+                Some("server secret"),
+            );
+            assert_eq!(
+                decrypted_records[0]
+                    .payload
+                    .as_ref()
+                    .and_then(|payload| payload.0.get("title"))
+                    .and_then(Value::as_str),
+                Some("public"),
+            );
+
+            let err = crate::common::query::do_get_points(
+                &toc,
+                "docs",
+                PointRequestInternal {
+                    ids: vec![1.into()],
+                    with_payload: Some(WithPayloadInterface::Encrypted(
+                        PayloadEncryptedReadPolicy {
+                            encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                        },
+                    )),
+                    with_vector: WithVector::Bool(false),
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("requires runtime crypto settings")
+            ));
+
+            let decrypted_scroll = crate::common::query::do_scroll_points(
+                &toc,
+                "docs",
+                shard::scroll::ScrollRequestInternal {
+                    offset: None,
+                    limit: Some(1),
+                    filter: None,
+                    with_payload: Some(WithPayloadInterface::Encrypted(
+                        PayloadEncryptedReadPolicy {
+                            encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                        },
+                    )),
+                    with_vector: WithVector::Bool(false),
+                    order_by: None,
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                auth,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                decrypted_scroll.points[0]
+                    .payload
+                    .as_ref()
+                    .and_then(|payload| payload.0.get("body"))
+                    .and_then(Value::as_str),
+                Some("server secret"),
+            );
+        });
+    }
+
+    #[test]
     fn payload_write_plan_detects_key_path_overlap_with_encrypted_fields() {
         let settings = payload_runtime_settings();
         let plan = payload_write_plan_for_collection(&settings, "docs", &encrypted_params())
@@ -6210,6 +6472,7 @@ esac
                 ShardSelectorInternal::All,
                 auth.clone(),
                 HwMeasurementAcc::disposable(),
+                None,
             )
             .await
             .unwrap_err();
@@ -6245,6 +6508,7 @@ esac
                     HwMeasurementAcc::disposable(),
                     false,
                 ),
+                None,
             )
             .await
             .unwrap_err();
@@ -6269,6 +6533,7 @@ esac
                 ShardSelectorInternal::All,
                 auth.clone(),
                 HwMeasurementAcc::disposable(),
+                None,
             )
             .await
             .unwrap_err();
@@ -6307,6 +6572,7 @@ esac
                     HwMeasurementAcc::disposable(),
                     false,
                 ),
+                None,
             )
             .await
             .unwrap_err();
@@ -8957,6 +9223,7 @@ esac
             assert!(is_encrypted_payload_value(body));
             assert_ne!(body, &json!("public ingress secret"));
             let upsert_body = body.clone();
+
             let scroll_with_payload = crate::common::query::do_scroll_points(
                 &toc,
                 "docs",
@@ -8973,6 +9240,7 @@ esac
                 ShardSelectorInternal::All,
                 auth.clone(),
                 HwMeasurementAcc::disposable(),
+                None,
             )
             .await
             .unwrap()
@@ -9006,6 +9274,7 @@ esac
                 ShardSelectorInternal::All,
                 auth.clone(),
                 HwMeasurementAcc::disposable(),
+                None,
             )
             .await
             .unwrap()
