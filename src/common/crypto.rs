@@ -1349,9 +1349,7 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
                 "wrapped_by": material.wrapped_by,
                 "wrap_algorithm": material.wrap_algorithm,
                 "has_nonce": material.nonce.is_some(),
-                "nonce_sha256_b64": optional_config_value_digest(material.nonce.as_deref()),
                 "has_wrapped_key_b64": material.wrapped_key_b64.is_some(),
-                "wrapped_key_b64_sha256_b64": optional_config_value_digest(material.wrapped_key_b64.as_deref()),
                 "rk_epoch": material.rk_epoch,
                 "state": material.state,
                 "scope": material.scope,
@@ -1386,13 +1384,6 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
         .expect("serializing sanitized crypto runtime capability fingerprint cannot fail");
     let digest = Sha256::digest(&canonical);
     BASE64URL_NOPAD.encode(&digest)
-}
-
-fn optional_config_value_digest(value: Option<&str>) -> Option<String> {
-    value.map(|value| {
-        let digest = Sha256::digest(value.as_bytes());
-        BASE64URL_NOPAD.encode(digest.as_ref())
-    })
 }
 
 #[allow(
