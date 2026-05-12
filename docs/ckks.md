@@ -727,10 +727,11 @@ migration transition rather than relying on ordinary params updates.
 Read paths return stored encrypted markers as raw payload values by default.
 REST and gRPC clients can request `with_payload: {"encrypted_payload":"redacted"}` to
 receive payloads with server-side, client-side, and CKKS vector sidecar marker
-values replaced by redaction sentinels. `encrypted_payload: "decrypted"` is a
-reserved mode and fails closed until a dedicated RBAC capability and response
-decryption policy exists across retrieve, scroll, search, export, logs, and
-telemetry.
+values replaced by redaction sentinels. The same read policy is applied to
+grouped result hits and grouped lookup payloads. `encrypted_payload:
+"decrypted"` is a reserved mode and fails closed until a dedicated RBAC
+capability and response decryption policy exists across retrieve, scroll,
+search, grouped reads, export, logs, and telemetry.
 The REST single-point `GET /collections/{collection}/points/{id}` endpoint has
 no request body, so it accepts the same read policy through the
 `encrypted_payload=raw|redacted|decrypted` query parameter.
@@ -889,8 +890,9 @@ coverage is broader.
 `search/groups`, `recommend/groups`, and root direct `query/groups` are
 supported when the group field is plaintext payload and runtime OpenFHE settings
 are available. `with_lookup` is supported for lookup payloads and plaintext
-vectors; lookup requests that ask for encrypted vectors fail closed. Grouped
-paths still use brute-force sidecar scoring.
+vectors; lookup payloads use their own `with_payload` encrypted read policy,
+and lookup requests that ask for encrypted vectors fail closed. Grouped paths
+still use brute-force sidecar scoring.
 REST and gRPC search matrix requests over an encrypted vector name sample stored
 sidecar envelopes and use stored-ciphertext-to-stored-ciphertext bridge scoring
 for pairwise nearests inside the sample; encrypted matrix sampling is
