@@ -654,7 +654,12 @@ On Linux, Qdrant sets `no_new_privs` and a parent-death `SIGKILL` immediately
 before spawning the configured bridge process. This is not a complete sandbox,
 but it prevents privilege gain through setuid binaries or file capabilities and
 reduces orphaned plaintext-bearing bridge exposure after bridge path, ownership,
-mode, parent directory, and optional SHA-256 pin checks have passed.
+mode, parent directory, and optional SHA-256 pin checks have passed. Treat these
+settings as pre-exec process hardening, not as a post-exec confinement boundary:
+kernel attributes such as dumpability can be reset by `exec`, and production
+deployments that need a strict bridge sandbox should still run the bridge under
+an external confinement layer such as seccomp, AppArmor, Landlock, or a
+dedicated container profile.
 
 Collection encryption rules and runtime instances must use the same explicit
 provider instance and `key_id`; runtime validation rejects missing instances,
