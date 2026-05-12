@@ -12,7 +12,7 @@ use collection::config::{
     CryptoMigrationState, EncryptionRuleRef, EncryptionSelector, RedactedLegacyCkksValue,
     WalConfig,
 };
-use collection::discovery::discover;
+use collection::discovery::{discover, discover_batch};
 use collection::grouping::GroupBy;
 use collection::grouping::group_by::{GroupRequest, SourceRequest};
 use collection::operations::CollectionUpdateOperations;
@@ -40,7 +40,7 @@ use collection::operations::vector_ops::{
     PointVectorsPersisted, UpdateVectorsOp, VectorOperations,
 };
 use collection::operations::vector_params_builder::VectorParamsBuilder;
-use collection::recommendations::recommend_by;
+use collection::recommendations::{recommend_batch_by, recommend_by};
 use collection::shards::replica_set::replica_set_state::{ReplicaSetState, ReplicaState};
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use common::types::{DetailsLevel, TelemetryDetail};
@@ -4341,6 +4341,44 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
         .unwrap();
     assert_eq!(redacted_recommend_body, redacted_body);
 
+    let redacted_recommend_batch = recommend_batch_by(
+        vec![(
+            RecommendRequestInternal {
+                positive: vec![RecommendExample::Dense(vec![1.0, 0.0, 0.0, 0.0])],
+                negative: vec![],
+                strategy: None,
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: None,
+                with_payload: Some(WithPayloadInterface::Encrypted(
+                    PayloadEncryptedReadPolicy {
+                        encrypted_payload: EncryptedPayloadReadMode::Redacted,
+                    },
+                )),
+                with_vector: Some(WithVector::Bool(false)),
+                score_threshold: None,
+                using: None,
+                lookup_from: None,
+            },
+            ShardSelectorInternal::All,
+        )],
+        &collection,
+        |_name| async { None },
+        None,
+        None,
+        HwMeasurementAcc::new(),
+    )
+    .await
+    .unwrap();
+    let redacted_recommend_batch_body = redacted_recommend_batch[0][0]
+        .payload
+        .as_ref()
+        .and_then(|payload| payload.0.get("document"))
+        .and_then(|document| document.get("body"))
+        .unwrap();
+    assert_eq!(redacted_recommend_batch_body, redacted_body);
+
     let redacted_discover = discover(
         DiscoverRequestInternal {
             target: Some(RecommendExample::Dense(vec![1.0, 0.0, 0.0, 0.0])),
@@ -4374,6 +4412,42 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
         .and_then(|document| document.get("body"))
         .unwrap();
     assert_eq!(redacted_discover_body, redacted_body);
+
+    let redacted_discover_batch = discover_batch(
+        vec![(
+            DiscoverRequestInternal {
+                target: Some(RecommendExample::Dense(vec![1.0, 0.0, 0.0, 0.0])),
+                context: None,
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: None,
+                with_payload: Some(WithPayloadInterface::Encrypted(
+                    PayloadEncryptedReadPolicy {
+                        encrypted_payload: EncryptedPayloadReadMode::Redacted,
+                    },
+                )),
+                with_vector: Some(WithVector::Bool(false)),
+                using: None,
+                lookup_from: None,
+            },
+            ShardSelectorInternal::All,
+        )],
+        &collection,
+        |_name| async { None },
+        None,
+        None,
+        HwMeasurementAcc::new(),
+    )
+    .await
+    .unwrap();
+    let redacted_discover_batch_body = redacted_discover_batch[0][0]
+        .payload
+        .as_ref()
+        .and_then(|payload| payload.0.get("document"))
+        .and_then(|document| document.get("body"))
+        .unwrap();
+    assert_eq!(redacted_discover_batch_body, redacted_body);
 
     let grouped = GroupBy::new(
         GroupRequest {
@@ -4727,6 +4801,42 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
             if description.contains("RBAC-protected decrypt path")
     ));
 
+    let recommend_batch_decrypt_err = recommend_batch_by(
+        vec![(
+            RecommendRequestInternal {
+                positive: vec![RecommendExample::Dense(vec![1.0, 0.0, 0.0, 0.0])],
+                negative: vec![],
+                strategy: None,
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: None,
+                with_payload: Some(WithPayloadInterface::Encrypted(
+                    PayloadEncryptedReadPolicy {
+                        encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                    },
+                )),
+                with_vector: Some(WithVector::Bool(false)),
+                score_threshold: None,
+                using: None,
+                lookup_from: None,
+            },
+            ShardSelectorInternal::All,
+        )],
+        &collection,
+        |_name| async { None },
+        None,
+        None,
+        HwMeasurementAcc::new(),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        recommend_batch_decrypt_err,
+        CollectionError::BadInput { description }
+            if description.contains("RBAC-protected decrypt path")
+    ));
+
     let discover_decrypt_err = discover(
         DiscoverRequestInternal {
             target: Some(RecommendExample::Dense(vec![1.0, 0.0, 0.0, 0.0])),
@@ -4755,6 +4865,40 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     .unwrap_err();
     assert!(matches!(
         discover_decrypt_err,
+        CollectionError::BadInput { description }
+            if description.contains("RBAC-protected decrypt path")
+    ));
+
+    let discover_batch_decrypt_err = discover_batch(
+        vec![(
+            DiscoverRequestInternal {
+                target: Some(RecommendExample::Dense(vec![1.0, 0.0, 0.0, 0.0])),
+                context: None,
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: None,
+                with_payload: Some(WithPayloadInterface::Encrypted(
+                    PayloadEncryptedReadPolicy {
+                        encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                    },
+                )),
+                with_vector: Some(WithVector::Bool(false)),
+                using: None,
+                lookup_from: None,
+            },
+            ShardSelectorInternal::All,
+        )],
+        &collection,
+        |_name| async { None },
+        None,
+        None,
+        HwMeasurementAcc::new(),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        discover_batch_decrypt_err,
         CollectionError::BadInput { description }
             if description.contains("RBAC-protected decrypt path")
     ));
