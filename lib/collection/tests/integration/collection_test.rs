@@ -4054,7 +4054,7 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     let collection_crypto_id = collection.config_snapshot().await.uuid.unwrap().to_string();
     let sentinel = "qdrant-sec-plaintext-sentinel-9f74dcb5";
     let mut encrypted_payload = Payload(
-        serde_json::json!({ "document": { "body": sentinel } })
+        serde_json::json!({ "document": { "body": sentinel }, "group": "a" })
             .as_object()
             .unwrap()
             .clone(),
@@ -4266,6 +4266,69 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
         .unwrap();
     assert_eq!(redacted_search_body, redacted_body);
 
+    let grouped = GroupBy::new(
+        GroupRequest {
+            source: SourceRequest::Search(SearchRequestInternal {
+                vector: vec![1.0, 0.0, 0.0, 0.0].into(),
+                with_payload: Some(WithPayloadInterface::Bool(true)),
+                with_vector: Some(WithVector::Bool(false)),
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: Some(0),
+                score_threshold: None,
+            }),
+            group_by: "group".parse().unwrap(),
+            group_size: 1,
+            limit: 1,
+            with_lookup: None,
+        },
+        &collection,
+        |_name| async { None },
+        HwMeasurementAcc::new(),
+    )
+    .execute()
+    .await
+    .unwrap();
+    assert_eq!(grouped.len(), 1);
+    assert_raw_encrypted_body(grouped[0].hits[0].payload.as_ref().unwrap());
+
+    let redacted_grouped = GroupBy::new(
+        GroupRequest {
+            source: SourceRequest::Search(SearchRequestInternal {
+                vector: vec![1.0, 0.0, 0.0, 0.0].into(),
+                with_payload: Some(WithPayloadInterface::Encrypted(
+                    PayloadEncryptedReadPolicy {
+                        encrypted_payload: EncryptedPayloadReadMode::Redacted,
+                    },
+                )),
+                with_vector: Some(WithVector::Bool(false)),
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: Some(0),
+                score_threshold: None,
+            }),
+            group_by: "group".parse().unwrap(),
+            group_size: 1,
+            limit: 1,
+            with_lookup: None,
+        },
+        &collection,
+        |_name| async { None },
+        HwMeasurementAcc::new(),
+    )
+    .execute()
+    .await
+    .unwrap();
+    let redacted_grouped_body = redacted_grouped[0].hits[0]
+        .payload
+        .as_ref()
+        .and_then(|payload| payload.0.get("document"))
+        .and_then(|document| document.get("body"))
+        .unwrap();
+    assert_eq!(redacted_grouped_body, redacted_body);
+
     let redacted_query = collection
         .query(
             ShardQueryRequest {
@@ -4401,6 +4464,40 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
         .unwrap_err();
     assert!(matches!(
         search_decrypt_err,
+        CollectionError::BadInput { description }
+            if description.contains("RBAC-protected decrypt path")
+    ));
+
+    let group_decrypt_err = GroupBy::new(
+        GroupRequest {
+            source: SourceRequest::Search(SearchRequestInternal {
+                vector: vec![1.0, 0.0, 0.0, 0.0].into(),
+                with_payload: Some(WithPayloadInterface::Encrypted(
+                    PayloadEncryptedReadPolicy {
+                        encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                    },
+                )),
+                with_vector: Some(WithVector::Bool(false)),
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: Some(0),
+                score_threshold: None,
+            }),
+            group_by: "group".parse().unwrap(),
+            group_size: 1,
+            limit: 1,
+            with_lookup: None,
+        },
+        &collection,
+        |_name| async { None },
+        HwMeasurementAcc::new(),
+    )
+    .execute()
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        group_decrypt_err,
         CollectionError::BadInput { description }
             if description.contains("RBAC-protected decrypt path")
     ));
