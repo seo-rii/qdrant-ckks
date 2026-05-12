@@ -480,4 +480,31 @@ mod tests {
                     && description.contains("tenant_id.keyword")
         ));
     }
+
+    #[test]
+    fn create_payload_index_rejects_metadata_value_parent_and_child_paths() {
+        let collection_params = params_with_metadata_value_key("metadata.tenant_id");
+
+        for field_name in [
+            "metadata",
+            "metadata.tenant_id",
+            "metadata.tenant_id.keyword",
+        ] {
+            let err = validate_payload_index_paths_for_encrypted_paths(
+                [&field_name.parse().unwrap()],
+                &collection_params,
+                "create",
+            )
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                CollectionError::BadInput { description }
+                    if description.contains("create payload index")
+                        && description.contains("encrypted metadata value field")
+                        && description.contains("metadata.tenant_id")
+                        && description.contains("blind index")
+            ));
+        }
+    }
 }

@@ -5,7 +5,9 @@ use std::time::Duration;
 use api::rest::models::InferenceUsage;
 use api::rest::*;
 use collection::collection::Collection;
-use collection::collection::payload_index_schema::validate_payload_index_entry_for_encryption;
+use collection::collection::payload_index_schema::{
+    validate_payload_index_entry_for_encryption, validate_payload_index_paths_for_encrypted_paths,
+};
 use collection::config::{CollectionParams, CryptoMigrationCheckpoint, CryptoMigrationState};
 use collection::operations::conversions::write_ordering_from_proto;
 use collection::operations::point_ops::*;
@@ -1335,35 +1337,12 @@ async fn ensure_payload_index_allowed_by_encryption(
         return Ok(());
     };
 
-    if field_name.first_key == ENCRYPTED_VECTOR_SIDECAR_FIELD {
-        return Err(StorageError::bad_input(format!(
-            "cannot create payload index on encrypted vector sidecar field '{field_name}'",
-        )));
-    }
-
-    for rule in &encryption.rules {
-        let paths = match &rule.selector {
-            collection::config::EncryptionSelector::PayloadPaths { paths } => paths.as_slice(),
-            collection::config::EncryptionSelector::MetadataKeys { keys }
-                if rule.binding.as_deref() == Some("metadata-value/v1") =>
-            {
-                keys.as_slice()
-            }
-            _ => continue,
-        };
-        for encrypted_path in paths {
-            let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
-                StorageError::bad_input(format!(
-                    "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                ))
-            })?;
-            if field_name.compatible(&encrypted_json_path) {
-                return Err(StorageError::bad_input(format!(
-                    "cannot create payload index on encrypted payload field '{field_name}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
-                )));
-            }
-        }
-    }
+    validate_payload_index_paths_for_encrypted_paths(
+        [field_name],
+        &collection_config.params,
+        "create",
+    )
+    .map_err(collection_error_to_storage_error)?;
 
     for rule in &encryption.rules {
         let collection::config::EncryptionSelector::MetadataKeys { keys } = &rule.selector else {
