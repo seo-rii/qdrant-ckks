@@ -4726,7 +4726,7 @@ async fn payload_decrypt_plan_for_read(
     let collection_crypto_id = collection_config
         .stable_crypto_id(collection_name)
         .map_err(StorageError::from)?;
-    payload_write_plan_for_collection_with_crypto_id(
+    let plan = payload_write_plan_for_collection_with_crypto_id(
         settings,
         collection_name,
         &collection_crypto_id,
@@ -4736,7 +4736,19 @@ async fn payload_decrypt_plan_for_read(
         StorageError::service_error(format!(
             "payload decrypt runtime for collection {collection_name} is invalid: {err}",
         ))
-    })
+    })?;
+
+    if let Some(plan) = &plan
+        && !plan.has_server_encrypt_rules()
+    {
+        return Err(StorageError::bad_input(format!(
+            "encrypted payload read mode 'decrypted' for collection {collection_name} requires \
+             server-side payload encryption rules; client-side envelopes are opaque and must be \
+             decrypted by the client SDK",
+        )));
+    }
+
+    Ok(plan)
 }
 
 fn decrypt_payloads_for_read<'a>(

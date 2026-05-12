@@ -741,6 +741,8 @@ client-side `$qdrant_client_aead` envelopes opaque, and fails closed if runtime
 settings are unavailable or invalid. Group lookup payloads are not decrypted
 because lookups may target another collection. Decrypted payload responses for
 export, logs, and telemetry remain future work.
+Client-side-only envelope collections must use `raw` or `redacted`; requesting
+`decrypted` fails closed because Qdrant has no client data key.
 The REST single-point `GET /collections/{collection}/points/{id}` endpoint has
 no request body, so it accepts the same read policy through the
 `encrypted_payload=raw|redacted|decrypted` query parameter.

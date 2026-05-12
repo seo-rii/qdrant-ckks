@@ -10286,6 +10286,33 @@ esac
                 .unwrap();
             assert!(is_client_encrypted_payload_value(body));
 
+            let err = crate::common::query::do_get_points(
+                &toc,
+                "client_docs",
+                PointRequestInternal {
+                    ids: vec![10.into()],
+                    with_payload: Some(WithPayloadInterface::Encrypted(
+                        PayloadEncryptedReadPolicy {
+                            encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                        },
+                    )),
+                    with_vector: WithVector::Bool(false),
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+                Some(&client_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("client-side envelopes are opaque")
+            ));
+
             let err = do_upsert_points(
                 UncheckedTocProvider::new_unchecked(&toc),
                 "client_docs".to_string(),
