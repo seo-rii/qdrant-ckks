@@ -620,6 +620,7 @@ fn write_graph_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     fs::rename(&temporary_path, path)?;
     #[cfg(unix)]
     fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    sync_graph_parent_directory(path)?;
     Ok(())
 }
 
@@ -788,6 +789,24 @@ fn validate_private_graph_parent(path: &Path) -> io::Result<()> {
                 ),
             ));
         }
+    }
+
+    Ok(())
+}
+
+fn sync_graph_parent_directory(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let Some(parent) = path.parent() else {
+            return Ok(());
+        };
+        let directory = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_DIRECTORY)
+            .open(parent)?;
+        directory.sync_all()?;
     }
 
     Ok(())
