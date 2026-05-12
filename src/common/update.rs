@@ -6242,7 +6242,7 @@ esac
                 },
                 None,
                 ShardSelectorInternal::All,
-                auth,
+                auth.clone(),
                 None,
                 HwMeasurementAcc::disposable(),
                 Some(&settings),
@@ -6251,6 +6251,85 @@ esac
             .unwrap();
             assert_eq!(
                 decrypted_discover[0]
+                    .payload
+                    .as_ref()
+                    .and_then(|payload| payload.0.get("body"))
+                    .and_then(Value::as_str),
+                Some("server secret"),
+            );
+
+            let decrypted_search_groups = crate::common::query::do_search_point_groups(
+                &toc,
+                "docs",
+                SearchGroupsRequestInternal {
+                    vector: vec![0.1, 0.2].into(),
+                    filter: None,
+                    params: None,
+                    with_payload: Some(WithPayloadInterface::Encrypted(
+                        PayloadEncryptedReadPolicy {
+                            encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                        },
+                    )),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                    group_request: BaseGroupRequest {
+                        group_by: "title".parse().unwrap(),
+                        group_size: 1,
+                        limit: 1,
+                        with_lookup: None,
+                    },
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                decrypted_search_groups.groups[0].hits[0]
+                    .payload
+                    .as_ref()
+                    .and_then(|payload| payload.0.get("body"))
+                    .and_then(Value::as_str),
+                Some("server secret"),
+            );
+
+            let decrypted_query_groups = crate::common::query::do_query_point_groups(
+                &toc,
+                "docs",
+                CollectionQueryGroupsRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::Vector(VectorInternal::Dense(vec![0.1, 0.2])),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    params: None,
+                    score_threshold: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Encrypted(PayloadEncryptedReadPolicy {
+                        encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                    }),
+                    lookup_from: None,
+                    group_by: "title".parse().unwrap(),
+                    group_size: 1,
+                    limit: 1,
+                    with_lookup: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth,
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                decrypted_query_groups.groups[0].hits[0]
                     .payload
                     .as_ref()
                     .and_then(|payload| payload.0.get("body"))

@@ -2870,7 +2870,7 @@ fn encrypted_vector_from_payload(
 pub async fn do_search_point_groups(
     toc: &TableOfContent,
     collection_name: &str,
-    request: SearchGroupsRequestInternal,
+    mut request: SearchGroupsRequestInternal,
     read_consistency: Option<ReadConsistency>,
     shard_selection: ShardSelectorInternal,
     auth: Auth,
@@ -2878,8 +2878,14 @@ pub async fn do_search_point_groups(
     hw_measurement_acc: HwMeasurementAcc,
     runtime_settings: Option<&Settings>,
 ) -> Result<GroupsResult, StorageError> {
+    let encrypted_payload_read_mode = encrypted_payload_read_mode(request.with_payload.as_ref());
+    request_raw_encrypted_payload_for_collection_read(
+        &mut request.with_payload,
+        encrypted_payload_read_mode,
+    );
+
     if let Some(settings) = runtime_settings
-        && let Some(result) = try_ckks_vector_search_groups(
+        && let Some(mut result) = try_ckks_vector_search_groups(
             toc,
             collection_name,
             &request,
@@ -2892,6 +2898,15 @@ pub async fn do_search_point_groups(
         )
         .await?
     {
+        decrypt_group_hits_for_read(
+            toc,
+            collection_name,
+            encrypted_payload_read_mode,
+            &mut result,
+            runtime_settings,
+            &auth,
+        )
+        .await?;
         return Ok(result);
     }
 
@@ -2912,16 +2927,27 @@ pub async fn do_search_point_groups(
     )
     .await?;
 
-    toc.group(
+    let mut result = toc
+        .group(
+            collection_name,
+            GroupRequest::from(request),
+            read_consistency,
+            shard_selection,
+            auth.clone(),
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
+    decrypt_group_hits_for_read(
+        toc,
         collection_name,
-        GroupRequest::from(request),
-        read_consistency,
-        shard_selection,
-        auth,
-        timeout,
-        hw_measurement_acc.clone(),
+        encrypted_payload_read_mode,
+        &mut result,
+        runtime_settings,
+        &auth,
     )
-    .await
+    .await?;
+    Ok(result)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3870,7 +3896,7 @@ fn recommend_vector_name(request: &RecommendRequestInternal) -> String {
 pub async fn do_recommend_point_groups(
     toc: &TableOfContent,
     collection_name: &str,
-    request: RecommendGroupsRequestInternal,
+    mut request: RecommendGroupsRequestInternal,
     read_consistency: Option<ReadConsistency>,
     shard_selection: ShardSelectorInternal,
     auth: Auth,
@@ -3878,8 +3904,14 @@ pub async fn do_recommend_point_groups(
     hw_measurement_acc: HwMeasurementAcc,
     runtime_settings: Option<&Settings>,
 ) -> Result<GroupsResult, StorageError> {
+    let encrypted_payload_read_mode = encrypted_payload_read_mode(request.with_payload.as_ref());
+    request_raw_encrypted_payload_for_collection_read(
+        &mut request.with_payload,
+        encrypted_payload_read_mode,
+    );
+
     if let Some(settings) = runtime_settings
-        && let Some(result) = try_ckks_vector_recommend_groups(
+        && let Some(mut result) = try_ckks_vector_recommend_groups(
             toc,
             collection_name,
             &request,
@@ -3892,6 +3924,15 @@ pub async fn do_recommend_point_groups(
         )
         .await?
     {
+        decrypt_group_hits_for_read(
+            toc,
+            collection_name,
+            encrypted_payload_read_mode,
+            &mut result,
+            runtime_settings,
+            &auth,
+        )
+        .await?;
         return Ok(result);
     }
 
@@ -3912,16 +3953,27 @@ pub async fn do_recommend_point_groups(
     ensure_encrypted_vector_group_request_is_unsupported(toc, collection_name, &vector_name, &auth)
         .await?;
 
-    toc.group(
+    let mut result = toc
+        .group(
+            collection_name,
+            GroupRequest::from(request),
+            read_consistency,
+            shard_selection,
+            auth.clone(),
+            timeout,
+            hw_measurement_acc,
+        )
+        .await?;
+    decrypt_group_hits_for_read(
+        toc,
         collection_name,
-        GroupRequest::from(request),
-        read_consistency,
-        shard_selection,
-        auth,
-        timeout,
-        hw_measurement_acc,
+        encrypted_payload_read_mode,
+        &mut result,
+        runtime_settings,
+        &auth,
     )
-    .await
+    .await?;
+    Ok(result)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4752,6 +4804,21 @@ fn decrypt_scored_point_payloads_for_read(
     )
 }
 
+fn decrypt_rest_scored_point_payloads_for_read(
+    collection_name: &str,
+    plan: &PayloadWritePlan,
+    points: &mut [api::rest::ScoredPoint],
+) -> Result<(), StorageError> {
+    decrypt_payloads_for_read(
+        collection_name,
+        plan,
+        points.iter_mut().filter_map(|point| {
+            let point_id = point.id;
+            point.payload.as_mut().map(|payload| (point_id, payload))
+        }),
+    )
+}
+
 async fn decrypt_scored_point_batches_for_read(
     toc: &TableOfContent,
     collection_name: &str,
@@ -4779,6 +4846,27 @@ async fn decrypt_scored_point_batches_for_read(
         if *mode == EncryptedPayloadReadMode::Decrypted {
             decrypt_scored_point_payloads_for_read(collection_name, &plan, points)?;
         }
+    }
+
+    Ok(())
+}
+
+async fn decrypt_group_hits_for_read(
+    toc: &TableOfContent,
+    collection_name: &str,
+    mode: EncryptedPayloadReadMode,
+    result: &mut GroupsResult,
+    runtime_settings: Option<&Settings>,
+    auth: &Auth,
+) -> Result<(), StorageError> {
+    let Some(plan) =
+        payload_decrypt_plan_for_read(toc, collection_name, mode, runtime_settings, auth).await?
+    else {
+        return Ok(());
+    };
+
+    for group in &mut result.groups {
+        decrypt_rest_scored_point_payloads_for_read(collection_name, &plan, &mut group.hits)?;
     }
 
     Ok(())
@@ -5938,7 +6026,7 @@ pub async fn do_query_batch_points(
 pub async fn do_query_point_groups(
     toc: &TableOfContent,
     collection_name: &str,
-    request: CollectionQueryGroupsRequest,
+    mut request: CollectionQueryGroupsRequest,
     read_consistency: Option<ReadConsistency>,
     shard_selection: ShardSelectorInternal,
     auth: Auth,
@@ -5946,8 +6034,14 @@ pub async fn do_query_point_groups(
     hw_measurement_acc: HwMeasurementAcc,
     runtime_settings: Option<&Settings>,
 ) -> Result<GroupsResult, StorageError> {
+    let encrypted_payload_read_mode = request.with_payload.encrypted_payload_read_mode();
+    request_raw_encrypted_payload_for_required_collection_read(
+        &mut request.with_payload,
+        encrypted_payload_read_mode,
+    );
+
     if let Some(settings) = runtime_settings
-        && let Some(result) = try_ckks_vector_query_groups(
+        && let Some(mut result) = try_ckks_vector_query_groups(
             toc,
             collection_name,
             &request,
@@ -5960,6 +6054,15 @@ pub async fn do_query_point_groups(
         )
         .await?
     {
+        decrypt_group_hits_for_read(
+            toc,
+            collection_name,
+            encrypted_payload_read_mode,
+            &mut result,
+            runtime_settings,
+            &auth,
+        )
+        .await?;
         return Ok(result);
     }
 
@@ -5990,16 +6093,27 @@ pub async fn do_query_point_groups(
         prefetches.extend(prefetch.prefetch.iter());
     }
 
-    toc.group(
+    let mut result = toc
+        .group(
+            collection_name,
+            GroupRequest::from(request),
+            read_consistency,
+            shard_selection,
+            auth.clone(),
+            timeout,
+            hw_measurement_acc,
+        )
+        .await?;
+    decrypt_group_hits_for_read(
+        toc,
         collection_name,
-        GroupRequest::from(request),
-        read_consistency,
-        shard_selection,
-        auth,
-        timeout,
-        hw_measurement_acc,
+        encrypted_payload_read_mode,
+        &mut result,
+        runtime_settings,
+        &auth,
     )
-    .await
+    .await?;
+    Ok(result)
 }
 
 #[allow(clippy::too_many_arguments)]
