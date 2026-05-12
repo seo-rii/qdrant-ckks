@@ -6011,6 +6011,34 @@ esac
                     .unwrap()
             ));
 
+            let read_only_auth = Auth::new_internal(Access::full_ro("For test"));
+            let err = crate::common::query::do_get_points(
+                &toc,
+                "docs",
+                PointRequestInternal {
+                    ids: vec![1.into()],
+                    with_payload: Some(WithPayloadInterface::Encrypted(
+                        PayloadEncryptedReadPolicy {
+                            encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                        },
+                    )),
+                    with_vector: WithVector::Bool(false),
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                read_only_auth,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::Forbidden { description }
+                    if description.contains("Global manage access is required")
+            ));
+
             let decrypted_records = crate::common::query::do_get_points(
                 &toc,
                 "docs",

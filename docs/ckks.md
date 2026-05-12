@@ -734,7 +734,8 @@ lookup payloads.
 legacy search, batch search, universal query, batch query, recommend, batch
 recommend, discover, batch discover, and grouped result hits over server-side
 `$qdrant_sec` payload fields when the Qdrant node has matching runtime crypto
-settings. That mode requests raw encrypted markers from the collection layer,
+settings and the caller has global manage access. That mode requests raw
+encrypted markers from the collection layer,
 decrypts only server-side payload AEAD fields in the API runtime layer, leaves
 client-side `$qdrant_client_aead` envelopes opaque, and fails closed if runtime
 settings are unavailable or invalid. Group lookup payloads are not decrypted
