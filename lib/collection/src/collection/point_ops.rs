@@ -2202,7 +2202,7 @@ pub(super) fn ensure_encrypted_payload_read_mode_is_supported(
     match mode {
         EncryptedPayloadReadMode::Raw | EncryptedPayloadReadMode::Redacted => Ok(()),
         EncryptedPayloadReadMode::Decrypted => Err(CollectionError::bad_input(
-            "encrypted payload read mode 'decrypted' requires an RBAC-protected decrypt path, which is not implemented; use 'raw' for SDK/client decryption or 'redacted'",
+            "encrypted payload read mode 'decrypted' is only supported in the API runtime layer with runtime crypto settings and privileged access; collection-internal reads must use 'raw' or 'redacted'",
         )),
     }
 }

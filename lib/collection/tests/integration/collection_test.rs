@@ -4645,7 +4645,7 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     assert!(matches!(
         decrypt_err,
         CollectionError::BadInput { description }
-            if description.contains("RBAC-protected decrypt path")
+            if description.contains("API runtime layer")
     ));
 
     let scroll_decrypt_err = collection
@@ -4672,7 +4672,7 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     assert!(matches!(
         scroll_decrypt_err,
         CollectionError::BadInput { description }
-            if description.contains("RBAC-protected decrypt path")
+            if description.contains("API runtime layer")
     ));
 
     let query_decrypt_err = collection
@@ -4700,7 +4700,7 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     assert!(matches!(
         query_decrypt_err,
         CollectionError::BadInput { description }
-            if description.contains("RBAC-protected decrypt path")
+            if description.contains("API runtime layer")
     ));
 
     let search_decrypt_err = collection
@@ -4730,7 +4730,7 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     assert!(matches!(
         search_decrypt_err,
         CollectionError::BadInput { description }
-            if description.contains("RBAC-protected decrypt path")
+            if description.contains("API runtime layer")
     ));
 
     let search_batch_decrypt_err = collection
@@ -4764,7 +4764,7 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     assert!(matches!(
         search_batch_decrypt_err,
         CollectionError::BadInput { description }
-            if description.contains("RBAC-protected decrypt path")
+            if description.contains("API runtime layer")
     ));
 
     let recommend_decrypt_err = recommend_by(
@@ -4798,7 +4798,7 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     assert!(matches!(
         recommend_decrypt_err,
         CollectionError::BadInput { description }
-            if description.contains("RBAC-protected decrypt path")
+            if description.contains("API runtime layer")
     ));
 
     let recommend_batch_decrypt_err = recommend_batch_by(
@@ -4834,7 +4834,7 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     assert!(matches!(
         recommend_batch_decrypt_err,
         CollectionError::BadInput { description }
-            if description.contains("RBAC-protected decrypt path")
+            if description.contains("API runtime layer")
     ));
 
     let discover_decrypt_err = discover(
@@ -4866,7 +4866,7 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     assert!(matches!(
         discover_decrypt_err,
         CollectionError::BadInput { description }
-            if description.contains("RBAC-protected decrypt path")
+            if description.contains("API runtime layer")
     ));
 
     let discover_batch_decrypt_err = discover_batch(
@@ -4900,7 +4900,7 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     assert!(matches!(
         discover_batch_decrypt_err,
         CollectionError::BadInput { description }
-            if description.contains("RBAC-protected decrypt path")
+            if description.contains("API runtime layer")
     ));
 
     let query_batch_decrypt_err = collection
@@ -4935,7 +4935,7 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     assert!(matches!(
         query_batch_decrypt_err,
         CollectionError::BadInput { description }
-            if description.contains("RBAC-protected decrypt path")
+            if description.contains("API runtime layer")
     ));
 
     let group_decrypt_err = GroupBy::new(
@@ -4969,7 +4969,7 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     assert!(matches!(
         group_decrypt_err,
         CollectionError::BadInput { description }
-            if description.contains("RBAC-protected decrypt path")
+            if description.contains("API runtime layer")
     ));
 
     let lookup_collection = Arc::clone(&collection);
@@ -5011,7 +5011,7 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     assert!(matches!(
         lookup_decrypt_err,
         CollectionError::BadInput { description }
-            if description.contains("RBAC-protected decrypt path")
+            if description.contains("API runtime layer")
     ));
 
     let telemetry = collection
