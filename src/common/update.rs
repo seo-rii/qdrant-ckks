@@ -6166,7 +6166,7 @@ esac
                 },
                 None,
                 ShardSelectorInternal::All,
-                auth,
+                auth.clone(),
                 None,
                 HwMeasurementAcc::disposable(),
                 Some(&settings),
@@ -6175,6 +6175,82 @@ esac
             .unwrap();
             assert_eq!(
                 decrypted_query[0]
+                    .payload
+                    .as_ref()
+                    .and_then(|payload| payload.0.get("body"))
+                    .and_then(Value::as_str),
+                Some("server secret"),
+            );
+
+            let decrypted_recommend = crate::common::query::do_recommend_points(
+                &toc,
+                "docs",
+                RecommendRequestInternal {
+                    positive: vec![RecommendExample::Dense(vec![0.1, 0.2])],
+                    negative: Vec::new(),
+                    strategy: Some(api::rest::RecommendStrategy::AverageVector),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    with_payload: Some(WithPayloadInterface::Encrypted(
+                        PayloadEncryptedReadPolicy {
+                            encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                        },
+                    )),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                    using: None,
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                decrypted_recommend[0]
+                    .payload
+                    .as_ref()
+                    .and_then(|payload| payload.0.get("body"))
+                    .and_then(Value::as_str),
+                Some("server secret"),
+            );
+
+            let decrypted_discover = crate::common::query::do_discover_points(
+                &toc,
+                "docs",
+                DiscoverRequestInternal {
+                    target: Some(RecommendExample::Dense(vec![0.1, 0.2])),
+                    context: None,
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    with_payload: Some(WithPayloadInterface::Encrypted(
+                        PayloadEncryptedReadPolicy {
+                            encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                        },
+                    )),
+                    with_vector: Some(WithVector::Bool(false)),
+                    using: None,
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth,
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                decrypted_discover[0]
                     .payload
                     .as_ref()
                     .and_then(|payload| payload.0.get("body"))

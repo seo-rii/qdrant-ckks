@@ -3350,15 +3350,24 @@ pub async fn do_recommend_points(
 pub async fn do_recommend_batch_points(
     toc: &TableOfContent,
     collection_name: &str,
-    requests: Vec<(RecommendRequestInternal, ShardSelectorInternal)>,
+    mut requests: Vec<(RecommendRequestInternal, ShardSelectorInternal)>,
     read_consistency: Option<ReadConsistency>,
     auth: Auth,
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
     runtime_settings: Option<&Settings>,
 ) -> Result<Vec<Vec<ScoredPoint>>, StorageError> {
+    let encrypted_payload_read_modes = requests
+        .iter_mut()
+        .map(|(request, _)| {
+            let mode = encrypted_payload_read_mode(request.with_payload.as_ref());
+            request_raw_encrypted_payload_for_collection_read(&mut request.with_payload, mode);
+            mode
+        })
+        .collect::<Vec<_>>();
+
     if let Some(settings) = runtime_settings
-        && let Some(results) = try_ckks_vector_recommend_batch_points(
+        && let Some(mut results) = try_ckks_vector_recommend_batch_points(
             toc,
             collection_name,
             &requests,
@@ -3370,6 +3379,15 @@ pub async fn do_recommend_batch_points(
         )
         .await?
     {
+        decrypt_scored_point_batches_for_read(
+            toc,
+            collection_name,
+            &encrypted_payload_read_modes,
+            &mut results,
+            runtime_settings,
+            &auth,
+        )
+        .await?;
         return Ok(results);
     }
 
@@ -3385,15 +3403,26 @@ pub async fn do_recommend_batch_points(
         .await?;
     }
 
-    toc.recommend_batch(
+    let mut results = toc
+        .recommend_batch(
+            collection_name,
+            requests,
+            read_consistency,
+            auth.clone(),
+            timeout,
+            hw_measurement_acc,
+        )
+        .await?;
+    decrypt_scored_point_batches_for_read(
+        toc,
         collection_name,
-        requests,
-        read_consistency,
-        auth,
-        timeout,
-        hw_measurement_acc,
+        &encrypted_payload_read_modes,
+        &mut results,
+        runtime_settings,
+        &auth,
     )
-    .await
+    .await?;
+    Ok(results)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4119,15 +4148,24 @@ pub async fn do_discover_points(
 pub async fn do_discover_batch_points(
     toc: &TableOfContent,
     collection_name: &str,
-    requests: Vec<(DiscoverRequestInternal, ShardSelectorInternal)>,
+    mut requests: Vec<(DiscoverRequestInternal, ShardSelectorInternal)>,
     read_consistency: Option<ReadConsistency>,
     auth: Auth,
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
     runtime_settings: Option<&Settings>,
 ) -> Result<Vec<Vec<ScoredPoint>>, StorageError> {
+    let encrypted_payload_read_modes = requests
+        .iter_mut()
+        .map(|(request, _)| {
+            let mode = encrypted_payload_read_mode(request.with_payload.as_ref());
+            request_raw_encrypted_payload_for_collection_read(&mut request.with_payload, mode);
+            mode
+        })
+        .collect::<Vec<_>>();
+
     if let Some(settings) = runtime_settings
-        && let Some(results) = try_ckks_vector_discover_batch_points(
+        && let Some(mut results) = try_ckks_vector_discover_batch_points(
             toc,
             collection_name,
             &requests,
@@ -4139,6 +4177,15 @@ pub async fn do_discover_batch_points(
         )
         .await?
     {
+        decrypt_scored_point_batches_for_read(
+            toc,
+            collection_name,
+            &encrypted_payload_read_modes,
+            &mut results,
+            runtime_settings,
+            &auth,
+        )
+        .await?;
         return Ok(results);
     }
 
@@ -4154,15 +4201,26 @@ pub async fn do_discover_batch_points(
         .await?;
     }
 
-    toc.discover_batch(
+    let mut results = toc
+        .discover_batch(
+            collection_name,
+            requests,
+            read_consistency,
+            auth.clone(),
+            timeout,
+            hw_measurement_acc,
+        )
+        .await?;
+    decrypt_scored_point_batches_for_read(
+        toc,
         collection_name,
-        requests,
-        read_consistency,
-        auth,
-        timeout,
-        hw_measurement_acc,
+        &encrypted_payload_read_modes,
+        &mut results,
+        runtime_settings,
+        &auth,
     )
-    .await
+    .await?;
+    Ok(results)
 }
 
 #[allow(clippy::too_many_arguments)]
