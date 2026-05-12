@@ -480,6 +480,68 @@ mod tests {
         assert!(err.contains("key id does not match"));
     }
 
+    #[test]
+    fn cli_snapshot_crypto_preflight_rejects_missing_vector_backend() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_vector_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: "vector/openfhe-ckks@v1".to_string(),
+                        materials: HashMap::from([(
+                            "sym_key".to_string(),
+                            "tenant-a/vector-rk-v1".to_string(),
+                        )]),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a:docs",
+                            "material_fingerprint_id": "tenant-a/vector@v1",
+                            "profile": "ckks-128-n16384-d4-scale50",
+                            "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                            "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([(
+                    "tenant-a/vector-rk-v1".to_string(),
+                    CryptoMaterialConfig {
+                        kind: "symmetric_key_32".to_string(),
+                        source: Some("inline".to_string()),
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[7u8; 32])),
+                        ..CryptoMaterialConfig::default()
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "vector_conf".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["text".to_string()],
+                    },
+                    instance: "docs_vector_v1".to_string(),
+                    binding: Some("vector-envelope/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = validate_restored_collection_crypto_params(&settings, "docs", &params)
+            .expect_err("missing vector backend must fail CLI snapshot preflight");
+
+        assert!(err.contains("recovered snapshot docs"));
+        assert!(err.contains("missing backend_ref"));
+    }
+
     fn resource_key_wrap_test_aad(
         material_name: &str,
         epoch: u64,
