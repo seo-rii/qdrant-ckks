@@ -366,6 +366,22 @@ impl TableOfContent {
 
         match operation {
             ReshardingOperation::Start(key) => {
+                let collection_config = collection.config_snapshot().await;
+                if collection_params_require_crypto_runtime_transfer_parity(
+                    &collection_config.params,
+                ) {
+                    let peer_metadata_by_id = self.channel_service.id_to_metadata.read();
+                    let mut peer_ids = peer_metadata_by_id.keys().copied().collect::<Vec<_>>();
+                    peer_ids.push(self.this_peer_id);
+                    peer_ids.push(key.peer_id);
+                    validate_encrypted_resharding_crypto_runtime_parity(
+                        &collection_id,
+                        self.this_peer_id,
+                        peer_ids,
+                        &peer_metadata_by_id,
+                    )?;
+                }
+
                 let consensus = match self.toc_dispatcher.lock().as_ref() {
                     Some(consensus) => Box::new(consensus.clone()),
                     None => {
@@ -763,30 +779,65 @@ fn validate_encrypted_transfer_crypto_runtime_parity(
     to_peer_id: PeerId,
     peer_metadata_by_id: &HashMap<PeerId, PeerMetadata>,
 ) -> Result<(), StorageError> {
+    validate_encrypted_operation_crypto_runtime_parity(
+        "shard transfer",
+        collection_id,
+        local_peer_id,
+        [from_peer_id, to_peer_id, local_peer_id],
+        peer_metadata_by_id,
+    )
+}
+
+fn validate_encrypted_resharding_crypto_runtime_parity(
+    collection_id: &str,
+    local_peer_id: PeerId,
+    peer_ids: impl IntoIterator<Item = PeerId>,
+    peer_metadata_by_id: &HashMap<PeerId, PeerMetadata>,
+) -> Result<(), StorageError> {
+    validate_encrypted_operation_crypto_runtime_parity(
+        "resharding",
+        collection_id,
+        local_peer_id,
+        peer_ids,
+        peer_metadata_by_id,
+    )
+}
+
+fn validate_encrypted_operation_crypto_runtime_parity(
+    operation: &str,
+    collection_id: &str,
+    local_peer_id: PeerId,
+    peer_ids: impl IntoIterator<Item = PeerId>,
+    peer_metadata_by_id: &HashMap<PeerId, PeerMetadata>,
+) -> Result<(), StorageError> {
     let Some(local_fingerprint) = peer_metadata_by_id
         .get(&local_peer_id)
         .and_then(PeerMetadata::crypto_runtime_capability_fingerprint)
     else {
         return Err(StorageError::bad_input(format!(
-            "encrypted collection shard transfer for {collection_id} requires local peer \
+            "encrypted collection {operation} for {collection_id} requires local peer \
              {local_peer_id} crypto runtime capability metadata",
         )));
     };
 
-    for peer_id in [from_peer_id, to_peer_id, local_peer_id] {
+    let mut checked_peer_ids = HashSet::new();
+    for peer_id in peer_ids {
+        if !checked_peer_ids.insert(peer_id) {
+            continue;
+        }
         let Some(peer_fingerprint) = peer_metadata_by_id
             .get(&peer_id)
             .and_then(PeerMetadata::crypto_runtime_capability_fingerprint)
         else {
             return Err(StorageError::bad_input(format!(
-                "encrypted collection shard transfer for {collection_id} requires peer \
+                "encrypted collection {operation} for {collection_id} requires peer \
                  {peer_id} crypto runtime capability metadata",
             )));
         };
 
         if peer_fingerprint != local_fingerprint {
             return Err(StorageError::bad_input(format!(
-                "encrypted collection shard transfer for {collection_id} detected crypto \
+                "encrypted collection {operation} for {collection_id} detected crypto \
                  runtime parity mismatch for peer {peer_id}",
             )));
         }
@@ -808,6 +859,7 @@ mod tests {
 
     use super::{
         collection_params_require_crypto_runtime_transfer_parity,
+        validate_encrypted_resharding_crypto_runtime_parity,
         validate_encrypted_transfer_crypto_runtime_parity,
     };
 
@@ -936,6 +988,52 @@ mod tests {
         );
         let err = validate_encrypted_transfer_crypto_runtime_parity("docs", 1, 2, 3, &metadata)
             .expect_err("empty transfer participant crypto metadata must fail closed");
+        assert!(
+            err.to_string()
+                .contains("requires peer 2 crypto runtime capability metadata")
+        );
+    }
+
+    #[test]
+    fn encrypted_resharding_requires_all_peer_crypto_runtime_parity() {
+        let mut metadata = HashMap::<PeerId, PeerMetadata>::new();
+        metadata.insert(
+            1,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-a".to_string(),
+            )),
+        );
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-a".to_string(),
+            )),
+        );
+        metadata.insert(
+            3,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-a".to_string(),
+            )),
+        );
+
+        validate_encrypted_resharding_crypto_runtime_parity("docs", 1, [1, 2, 3], &metadata)
+            .expect("matching peer metadata should allow encrypted resharding");
+
+        metadata.insert(
+            3,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-b".to_string(),
+            )),
+        );
+        let err =
+            validate_encrypted_resharding_crypto_runtime_parity("docs", 1, [1, 2, 3], &metadata)
+                .expect_err("mismatched peer metadata must fail closed");
+        assert!(err.to_string().contains("crypto runtime parity mismatch"));
+
+        metadata.remove(&2);
+        let err =
+            validate_encrypted_resharding_crypto_runtime_parity("docs", 1, [1, 2, 3], &metadata)
+                .expect_err("missing peer metadata must fail closed");
         assert!(
             err.to_string()
                 .contains("requires peer 2 crypto runtime capability metadata")
