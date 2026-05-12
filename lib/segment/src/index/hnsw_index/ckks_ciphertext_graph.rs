@@ -1438,6 +1438,30 @@ mod tests {
     }
 
     #[test]
+    fn ciphertext_vector_index_rejects_invalid_graph_links_on_open() {
+        let directory = tempfile::tempdir().unwrap();
+        let graph_file = CkksCiphertextVectorIndex::graph_file_path(directory.path());
+        let invalid_graph = CkksCiphertextHnswGraphFile {
+            version: CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_VERSION,
+            record_count: 3,
+            links: vec![vec![1], vec![], vec![]],
+        };
+        write_graph_file(&graph_file, &serde_json::to_vec(&invalid_graph).unwrap()).unwrap();
+
+        let err = CkksCiphertextVectorIndex::open_graph_file(
+            vec![
+                CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
+                CkksCiphertextIndexedRecord::new(2, b"ciphertext-c".to_vec()),
+            ],
+            &graph_file,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("invalid links"));
+    }
+
+    #[test]
     fn ciphertext_record_extractor_reads_sidecar_ciphertext() {
         let payload = Payload(
             serde_json::from_value(serde_json::json!({
