@@ -728,11 +728,12 @@ Read paths return stored encrypted markers as raw payload values by default.
 REST and gRPC clients can request `with_payload: {"encrypted_payload":"redacted"}` to
 receive payloads with server-side, client-side, and CKKS vector sidecar marker
 values replaced by redaction sentinels. The same read policy is applied to
-recommend/discover results, grouped result hits, and grouped lookup payloads.
+batch search/query results, recommend/discover results, grouped result hits,
+and grouped lookup payloads.
 `encrypted_payload: "decrypted"` is a reserved mode and fails closed until a
 dedicated RBAC capability and response decryption policy exists across
-retrieve, scroll, search, recommend, discover, grouped reads, export, logs, and
-telemetry.
+retrieve, scroll, search, batch search/query, recommend, discover, grouped
+reads, export, logs, and telemetry.
 The REST single-point `GET /collections/{collection}/points/{id}` endpoint has
 no request body, so it accepts the same read policy through the
 `encrypted_payload=raw|redacted|decrypted` query parameter.
