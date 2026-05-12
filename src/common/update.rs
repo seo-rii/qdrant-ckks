@@ -6506,6 +6506,37 @@ esac
                         && description.contains("runtime OpenFHE settings are required")
             ));
 
+            let sidecar_filter = Filter::new_must(Condition::Field(FieldCondition::new_match(
+                format!("\"{ENCRYPTED_VECTOR_SIDECAR_FIELD}\"")
+                    .parse()
+                    .unwrap(),
+                serde_json::from_str(r#"{ "value": "client-controlled sidecar" }"#).unwrap(),
+            )));
+            let err = crate::common::query::do_search_points_matrix(
+                &toc,
+                "vector_docs",
+                collection::collection::distance_matrix::CollectionSearchMatrixRequest {
+                    filter: Some(sidecar_filter),
+                    sample_size: 2,
+                    limit_per_sample: 1,
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cannot filter on encrypted vector sidecar field")
+                        && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+            ));
+
             let matrix = crate::common::query::do_search_points_matrix(
                 &toc,
                 "vector_docs",
