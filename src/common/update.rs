@@ -3730,6 +3730,54 @@ esac
                 Some("lookup-b")
             );
 
+            let groups_with_plain_lookup_vector = crate::common::query::do_search_point_groups(
+                &toc,
+                "vector_groups",
+                SearchGroupsRequestInternal {
+                    vector: vec![0.0, 0.0].into(),
+                    filter: None,
+                    params: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                    group_request: BaseGroupRequest {
+                        group_by: "group_id".parse().unwrap(),
+                        group_size: 1,
+                        limit: 2,
+                        with_lookup: Some(api::rest::WithLookupInterface::WithLookup(
+                            api::rest::WithLookup {
+                                collection_name: "vector_group_lookup".to_string(),
+                                with_payload: Some(WithPayloadInterface::Bool(false)),
+                                with_vectors: Some(WithVector::Bool(true)),
+                            },
+                        )),
+                    },
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&vector_settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(groups_with_plain_lookup_vector.groups.len(), 2);
+            assert!(
+                groups_with_plain_lookup_vector.groups[0]
+                    .lookup
+                    .as_ref()
+                    .and_then(|lookup| lookup.vector.as_ref())
+                    .is_some()
+            );
+            assert!(
+                groups_with_plain_lookup_vector.groups[1]
+                    .lookup
+                    .as_ref()
+                    .and_then(|lookup| lookup.vector.as_ref())
+                    .is_some()
+            );
+
             let encrypted_lookup_vector_err = crate::common::query::do_search_point_groups(
                 &toc,
                 "vector_groups",
