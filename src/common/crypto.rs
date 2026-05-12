@@ -1925,7 +1925,7 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
 
         if matches!(
             instance.provider.as_str(),
-            PAYLOAD_AES_GCM_PROVIDER | VECTOR_OPENFHE_CKKS_PROVIDER
+            PAYLOAD_AES_GCM_PROVIDER | METADATA_AES_GCM_PROVIDER | VECTOR_OPENFHE_CKKS_PROVIDER
         ) {
             let Some(material_fingerprint_id) =
                 instance.options.get(MATERIAL_FINGERPRINT_ID_OPTION)
@@ -5040,6 +5040,36 @@ mod tests {
         };
         assert!(matches!(
             validate_crypto_settings(&payload_without_fingerprint),
+            Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
+
+        let metadata_without_fingerprint = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::from([(
+                "docs_metadata_value_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: METADATA_AES_GCM_PROVIDER.to_string(),
+                    materials: HashMap::from([(
+                        PAYLOAD_SYM_KEY_ROLE.to_string(),
+                        "tenant-a/metadata-v1".to_string(),
+                    )]),
+                    backend_ref: None,
+                    options: json!({}),
+                },
+            )]),
+            materials: HashMap::from([(
+                "tenant-a/metadata-v1".to_string(),
+                CryptoMaterialConfig {
+                    kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                    source: Some("inline".to_string()),
+                    value_b64: Some(BASE64URL_NOPAD.encode(&[2_u8; 32])),
+                    ..CryptoMaterialConfig::default()
+                },
+            )]),
+            backends: HashMap::new(),
+        };
+        assert!(matches!(
+            validate_crypto_settings(&metadata_without_fingerprint),
             Err(CryptoSetupError::InvalidInstanceOption { .. })
         ));
 
