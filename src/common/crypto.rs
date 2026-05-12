@@ -694,7 +694,7 @@ impl PayloadWriteRule {
 }
 
 #[cfg(test)]
-pub(crate) fn payload_write_plan_for_collection(
+pub(crate) fn payload_write_plan_for_collection_for_test(
     settings: &Settings,
     collection_name: &str,
     params: &CollectionParams,
@@ -7701,7 +7701,7 @@ mod tests {
                 json!("tenant-a/client-rk-v1"),
             );
         assert!(matches!(
-            payload_write_plan_for_collection(&settings_with_unsupported_option, "docs", &params),
+            payload_write_plan_for_collection_for_test(&settings_with_unsupported_option, "docs", &params),
             Err(PayloadWriteSetupError::UnsupportedInstanceOption { instance, option })
                 if instance == "docs_payload_v1" && option == EXPECTED_RK_ID_OPTION
         ));
@@ -7715,7 +7715,7 @@ mod tests {
             .materials
             .insert("client_key".to_string(), "tenant-a/payload-v1".to_string());
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &settings_with_unsupported_material_role,
                 "docs",
                 &params
@@ -7741,7 +7741,7 @@ mod tests {
             .unwrap()
             .remove("key_id");
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &settings_without_instance_key_id,
                 "docs",
                 &params_with_resource_key_id
@@ -7750,7 +7750,7 @@ mod tests {
                 if collection == "docs"
         ));
 
-        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
+        let plan = payload_write_plan_for_collection_for_test(&settings, "docs", &params)
             .unwrap()
             .unwrap();
         let mut payload = segment::types::Payload(
@@ -7831,7 +7831,7 @@ mod tests {
             }),
             ..CollectionParams::empty()
         };
-        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
+        let plan = payload_write_plan_for_collection_for_test(&settings, "docs", &params)
             .unwrap()
             .unwrap();
         let mut payload = segment::types::Payload(
@@ -7894,13 +7894,18 @@ mod tests {
                 }]),
             );
         assert!(matches!(
-            payload_write_plan_for_collection(&active_as_retired_settings, "docs", &params),
+            payload_write_plan_for_collection_for_test(
+                &active_as_retired_settings,
+                "docs",
+                &params
+            ),
             Err(PayloadWriteSetupError::InvalidRetiredMaterials { .. })
         ));
 
-        let rotated_plan = payload_write_plan_for_collection(&rotated_settings, "docs", &params)
-            .unwrap()
-            .unwrap();
+        let rotated_plan =
+            payload_write_plan_for_collection_for_test(&rotated_settings, "docs", &params)
+                .unwrap()
+                .unwrap();
         assert!(matches!(
             rotated_plan.encrypt_payload("point-1", &mut payload),
             Err(PayloadWriteSetupError::Payload(
@@ -7993,7 +7998,7 @@ mod tests {
         };
 
         assert!(matches!(
-            payload_write_plan_for_collection(&settings, "docs", &params),
+            payload_write_plan_for_collection_for_test(&settings, "docs", &params),
             Err(PayloadWriteSetupError::MissingMaterialFingerprintId { instance })
                 if instance == "docs_payload_v1"
         ));
@@ -8007,7 +8012,7 @@ mod tests {
             "key_id": "tenant-a:docs",
             "material_fingerprint_id": "tenant-a/payload@v5",
         });
-        assert!(payload_write_plan_for_collection(&settings, "docs", &params).is_ok());
+        assert!(payload_write_plan_for_collection_for_test(&settings, "docs", &params).is_ok());
     }
 
     #[test]
@@ -8059,7 +8064,7 @@ mod tests {
                 .clone(),
         );
 
-        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
+        let plan = payload_write_plan_for_collection_for_test(&settings, "docs", &params)
             .unwrap()
             .unwrap();
         assert_eq!(plan.encrypt_payload("point-1", &mut payload).unwrap(), 1);
@@ -8163,7 +8168,7 @@ mod tests {
             }),
             ..CollectionParams::empty()
         };
-        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
+        let plan = payload_write_plan_for_collection_for_test(&settings, "docs", &params)
             .unwrap()
             .unwrap();
 
@@ -8323,7 +8328,7 @@ mod tests {
             .unwrap()
             .clone(),
         );
-        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
+        let plan = payload_write_plan_for_collection_for_test(&settings, "docs", &params)
             .unwrap()
             .unwrap();
 
@@ -8379,7 +8384,7 @@ mod tests {
             }),
             ..CollectionParams::empty()
         };
-        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
+        let plan = payload_write_plan_for_collection_for_test(&settings, "docs", &params)
             .unwrap()
             .unwrap();
         let payload_from_envelope =
@@ -8473,7 +8478,7 @@ mod tests {
             }),
             ..CollectionParams::empty()
         };
-        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
+        let plan = payload_write_plan_for_collection_for_test(&settings, "docs", &params)
             .unwrap()
             .unwrap();
         let mut seen_client_nonces = HashSet::new();
@@ -8548,7 +8553,7 @@ mod tests {
         };
 
         assert!(matches!(
-            payload_write_plan_for_collection(&settings, "docs", &params),
+            payload_write_plan_for_collection_for_test(&settings, "docs", &params),
             Err(PayloadWriteSetupError::InvalidClientEnvelopeBinding {
                 collection,
                 rule_id,
@@ -8596,7 +8601,7 @@ mod tests {
         };
 
         assert!(matches!(
-            payload_write_plan_for_collection(&settings, "docs", &params),
+            payload_write_plan_for_collection_for_test(&settings, "docs", &params),
             Err(PayloadWriteSetupError::InvalidPayloadBinding {
                 collection,
                 rule_id,
@@ -8647,7 +8652,7 @@ mod tests {
         };
 
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "signature_key_id": "tenant-a/client-signing-v1",
@@ -8662,7 +8667,7 @@ mod tests {
         ));
 
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &raw_settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "signature_key_id": "tenant-a/client-signing-v1",
@@ -8677,7 +8682,7 @@ mod tests {
                 if instance == "docs_payload_client_v1"
         ));
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &raw_settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "expected_rk_id": "tenant-a/client-rk-2026-04",
@@ -8692,7 +8697,7 @@ mod tests {
                 if instance == "docs_payload_client_v1" && option == MIN_RK_EPOCH_OPTION
         ));
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &raw_settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "expected_rk_id": "tenant-a/client-rk-2026-04",
@@ -8707,7 +8712,7 @@ mod tests {
                 if instance == "docs_payload_client_v1" && option == MAX_RK_EPOCH_OPTION
         ));
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &raw_settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "expected_rk_id": "tenant-a/other-client-rk",
@@ -8723,7 +8728,7 @@ mod tests {
                 if instance == "docs_payload_client_v1"
         ));
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &raw_settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "expected_rk_id": "tenant-a/client-rk-2026-04",
@@ -8739,7 +8744,7 @@ mod tests {
                 if instance == "docs_payload_client_v1"
         ));
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &raw_settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "expected_rk_id": "tenant-a/client-rk-2026-04",
@@ -8755,7 +8760,7 @@ mod tests {
                 if instance == "docs_payload_client_v1"
         ));
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &settings_with_options(json!({
                     "key_id": "not valid",
                     "signature_key_id": "tenant-a/client-signing-v1",
@@ -8768,7 +8773,7 @@ mod tests {
                 if instance == "docs_payload_client_v1"
         ));
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &raw_settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "expected_rk_id": "not valid",
@@ -8785,7 +8790,7 @@ mod tests {
         ));
 
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "key_id_required": false,
@@ -8799,7 +8804,7 @@ mod tests {
                 if instance == "docs_payload_client_v1"
         ));
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                 })),
@@ -8810,7 +8815,7 @@ mod tests {
                 if instance == "docs_payload_client_v1"
         ));
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "signature_key_id": "not valid",
@@ -8823,7 +8828,7 @@ mod tests {
                 if instance == "docs_payload_client_v1"
         ));
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "signature_key_id": "tenant-a/client-signing-v1",
@@ -8835,7 +8840,7 @@ mod tests {
                 if instance == "docs_payload_client_v1"
         ));
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
@@ -8847,7 +8852,7 @@ mod tests {
                 if instance == "docs_payload_client_v1"
         ));
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "signature_key_id": "tenant-a/client-signing-v1",
@@ -8860,7 +8865,7 @@ mod tests {
                 if instance == "docs_payload_client_v1"
         ));
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "signature_public_keys": "not-an-object",
@@ -8872,7 +8877,7 @@ mod tests {
                 if instance == "docs_payload_client_v1"
         ));
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "signature_key_id": "tenant-a/client-signing-v1",
@@ -8888,7 +8893,7 @@ mod tests {
                 if instance == "docs_payload_client_v1"
         ));
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "signature_public_keys": {},
@@ -8900,7 +8905,7 @@ mod tests {
                 if instance == "docs_payload_client_v1"
         ));
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "signature_public_keys": {
@@ -8914,7 +8919,7 @@ mod tests {
                 if instance == "docs_payload_client_v1"
         ));
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "signature_public_keys": {
@@ -8928,7 +8933,7 @@ mod tests {
                 if instance == "docs_payload_client_v1"
         ));
         assert!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "signature_key_id": "tenant-a/client-signing-v1",
@@ -8940,7 +8945,7 @@ mod tests {
             .is_ok()
         );
         assert!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "signature_public_keys": {
@@ -9021,7 +9026,7 @@ mod tests {
             "tenant-a/server-rk".to_string(),
         )]);
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &settings_with_instance(material_bound),
                 "docs",
                 &params
@@ -9033,7 +9038,7 @@ mod tests {
         let mut backend_bound = base_instance;
         backend_bound.backend_ref = Some("openfhe_local".to_string());
         assert!(matches!(
-            payload_write_plan_for_collection(
+            payload_write_plan_for_collection_for_test(
                 &settings_with_instance(backend_bound),
                 "docs",
                 &params
@@ -9132,7 +9137,7 @@ mod tests {
             }),
             ..CollectionParams::empty()
         };
-        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
+        let plan = payload_write_plan_for_collection_for_test(&settings, "docs", &params)
             .unwrap()
             .unwrap();
         let payload_from_envelope =
@@ -9258,7 +9263,7 @@ mod tests {
             }),
             ..CollectionParams::empty()
         };
-        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
+        let plan = payload_write_plan_for_collection_for_test(&settings, "docs", &params)
             .unwrap()
             .unwrap();
         let payload_from_envelope =
@@ -9391,7 +9396,7 @@ mod tests {
             .unwrap()
             .remove(MATERIAL_FINGERPRINT_ID_OPTION);
         assert!(matches!(
-            payload_write_plan_for_collection(&missing_fingerprint_settings, "docs", &params),
+            payload_write_plan_for_collection_for_test(&missing_fingerprint_settings, "docs", &params),
             Err(PayloadWriteSetupError::MissingMaterialFingerprintId { instance })
                 if instance == "docs_payload_v1"
         ));
@@ -9418,13 +9423,13 @@ mod tests {
                 .unwrap()
                 .state = Some(state.to_string());
             assert!(matches!(
-                payload_write_plan_for_collection(&state_settings, "docs", &params),
+                payload_write_plan_for_collection_for_test(&state_settings, "docs", &params),
                 Err(PayloadWriteSetupError::InvalidWrappedMaterial { material, reason })
                     if material == rk_material && reason == expected_error
             ));
         }
 
-        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
+        let plan = payload_write_plan_for_collection_for_test(&settings, "docs", &params)
             .unwrap()
             .unwrap();
         assert_eq!(plan.encrypt_payload("point-1", &mut payload).unwrap(), 1);
@@ -9902,7 +9907,7 @@ mod tests {
         };
 
         assert!(matches!(
-            payload_write_plan_for_collection(&settings, "docs", &params),
+            payload_write_plan_for_collection_for_test(&settings, "docs", &params),
             Err(PayloadWriteSetupError::LegacyCkksUnsupported)
         ));
     }
@@ -9968,7 +9973,7 @@ mod tests {
             ..CollectionParams::empty()
         };
 
-        let err = match payload_write_plan_for_collection(&settings, "docs", &params) {
+        let err = match payload_write_plan_for_collection_for_test(&settings, "docs", &params) {
             Err(err) => err,
             Ok(_) => panic!("missing payload instance must fail"),
         };
@@ -10316,7 +10321,7 @@ mod tests {
         };
 
         validate_collection_crypto_runtime(&settings, "docs", &params).unwrap();
-        let plan = payload_write_plan_for_collection(&settings, "docs", &params)
+        let plan = payload_write_plan_for_collection_for_test(&settings, "docs", &params)
             .unwrap()
             .unwrap();
         let mut payload = Payload(

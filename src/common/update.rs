@@ -2605,7 +2605,9 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::common::crypto::{PayloadWriteSetupError, payload_write_plan_for_collection};
+    use crate::common::crypto::{
+        PayloadWriteSetupError, payload_write_plan_for_collection_for_test,
+    };
     use crate::settings::{
         CryptoBackendConfig, CryptoInstanceConfig, CryptoMaterialConfig, CryptoSettings, Settings,
     };
@@ -5699,9 +5701,10 @@ esac
     #[test]
     fn encrypts_points_list_payloads_before_upsert() {
         let settings = payload_runtime_settings();
-        let plan = payload_write_plan_for_collection(&settings, "docs", &encrypted_params())
-            .unwrap()
-            .unwrap();
+        let plan =
+            payload_write_plan_for_collection_for_test(&settings, "docs", &encrypted_params())
+                .unwrap()
+                .unwrap();
         let mut operation = PointInsertOperations::PointsList(api::rest::schema::PointsList {
             points: vec![api::rest::PointStruct {
                 id: 1.into(),
@@ -5742,9 +5745,10 @@ esac
     #[test]
     fn encrypts_batch_payloads_before_upsert() {
         let settings = payload_runtime_settings();
-        let plan = payload_write_plan_for_collection(&settings, "docs", &encrypted_params())
-            .unwrap()
-            .unwrap();
+        let plan =
+            payload_write_plan_for_collection_for_test(&settings, "docs", &encrypted_params())
+                .unwrap()
+                .unwrap();
         let mut operation = PointInsertOperations::PointsBatch(api::rest::schema::PointsBatch {
             batch: api::rest::schema::Batch {
                 ids: vec![1.into()],
@@ -5797,9 +5801,10 @@ esac
     #[test]
     fn payload_write_plan_rejects_client_supplied_envelope() {
         let settings = payload_runtime_settings();
-        let plan = payload_write_plan_for_collection(&settings, "docs", &encrypted_params())
-            .unwrap()
-            .unwrap();
+        let plan =
+            payload_write_plan_for_collection_for_test(&settings, "docs", &encrypted_params())
+                .unwrap()
+                .unwrap();
         let mut payload = segment::types::Payload(
             json!({ "body": "client supplied secret" })
                 .as_object()
@@ -5820,9 +5825,10 @@ esac
     #[test]
     fn payload_write_plan_decrypts_server_envelopes_for_crypto_migration() {
         let settings = payload_runtime_settings();
-        let plan = payload_write_plan_for_collection(&settings, "docs", &encrypted_params())
-            .unwrap()
-            .unwrap();
+        let plan =
+            payload_write_plan_for_collection_for_test(&settings, "docs", &encrypted_params())
+                .unwrap()
+                .unwrap();
         let mut payload = segment::types::Payload(
             json!({ "body": "server-side secret" })
                 .as_object()
@@ -6370,9 +6376,10 @@ esac
     #[test]
     fn payload_write_plan_detects_key_path_overlap_with_encrypted_fields() {
         let settings = payload_runtime_settings();
-        let plan = payload_write_plan_for_collection(&settings, "docs", &encrypted_params())
-            .unwrap()
-            .unwrap();
+        let plan =
+            payload_write_plan_for_collection_for_test(&settings, "docs", &encrypted_params())
+                .unwrap()
+                .unwrap();
         let payload =
             segment::types::Payload(json!({ "title": "public" }).as_object().unwrap().clone());
         let encrypted_key = "body".parse::<JsonPath>().unwrap();
