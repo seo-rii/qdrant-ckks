@@ -1952,8 +1952,10 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
             }
         }
 
-        if instance.provider == PAYLOAD_AES_GCM_PROVIDER
-            && let Some(retired_materials) = instance.options.get(RETIRED_MATERIALS_OPTION)
+        if matches!(
+            instance.provider.as_str(),
+            PAYLOAD_AES_GCM_PROVIDER | METADATA_AES_GCM_PROVIDER
+        ) && let Some(retired_materials) = instance.options.get(RETIRED_MATERIALS_OPTION)
         {
             let active_material_ref = instance.materials.get(PAYLOAD_SYM_KEY_ROLE);
             let Some(retired_materials) = retired_materials.as_array() else {
@@ -5070,6 +5072,52 @@ mod tests {
         };
         assert!(matches!(
             validate_crypto_settings(&metadata_without_fingerprint),
+            Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
+
+        let metadata_with_invalid_retired_material = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::from([(
+                "docs_metadata_value_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: METADATA_AES_GCM_PROVIDER.to_string(),
+                    materials: HashMap::from([(
+                        PAYLOAD_SYM_KEY_ROLE.to_string(),
+                        "tenant-a/metadata-v2".to_string(),
+                    )]),
+                    backend_ref: None,
+                    options: json!({
+                        "material_fingerprint_id": "tenant-a/metadata@v2",
+                        "retired_materials": [{
+                            "material": "tenant-a/metadata-v1",
+                        }],
+                    }),
+                },
+            )]),
+            materials: HashMap::from([
+                (
+                    "tenant-a/metadata-v1".to_string(),
+                    CryptoMaterialConfig {
+                        kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[1_u8; 32])),
+                        ..CryptoMaterialConfig::default()
+                    },
+                ),
+                (
+                    "tenant-a/metadata-v2".to_string(),
+                    CryptoMaterialConfig {
+                        kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[2_u8; 32])),
+                        ..CryptoMaterialConfig::default()
+                    },
+                ),
+            ]),
+            backends: HashMap::new(),
+        };
+        assert!(matches!(
+            validate_crypto_settings(&metadata_with_invalid_retired_material),
             Err(CryptoSetupError::InvalidInstanceOption { .. })
         ));
 
