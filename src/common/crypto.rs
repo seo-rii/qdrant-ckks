@@ -7208,6 +7208,48 @@ mod tests {
         ));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn decode_direct_material_key_rejects_symlink_parent_directory() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-material-parent-symlink-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let real_dir = dir.path().join("real");
+        let symlink_dir = dir.path().join("link");
+        std::fs::create_dir(&real_dir).unwrap();
+        symlink(&real_dir, &symlink_dir).unwrap();
+
+        let key_path = real_dir.join("payload.key");
+        let symlink_parent_key_path = symlink_dir.join("payload.key");
+        std::fs::write(&key_path, BASE64URL_NOPAD.encode(&[9u8; 32])).unwrap();
+
+        let mut root_permissions = std::fs::metadata(dir.path()).unwrap().permissions();
+        root_permissions.set_mode(0o700);
+        std::fs::set_permissions(dir.path(), root_permissions).unwrap();
+        let mut real_dir_permissions = std::fs::metadata(&real_dir).unwrap().permissions();
+        real_dir_permissions.set_mode(0o700);
+        std::fs::set_permissions(&real_dir, real_dir_permissions).unwrap();
+        let mut key_permissions = std::fs::metadata(&key_path).unwrap().permissions();
+        key_permissions.set_mode(0o600);
+        std::fs::set_permissions(&key_path, key_permissions).unwrap();
+
+        let file_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("file".to_string()),
+            path: Some(symlink_parent_key_path.to_string_lossy().to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        assert!(matches!(
+            decode_direct_material_key("tenant-a/payload-v1", &file_material),
+            Err(PayloadWriteSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("parent path must be a regular directory")
+        ));
+    }
+
     #[test]
     fn validate_crypto_settings_rejects_wrapped_resource_key_without_mk() {
         let settings = CryptoSettings {
