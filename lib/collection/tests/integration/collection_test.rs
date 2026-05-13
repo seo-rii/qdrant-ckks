@@ -2015,6 +2015,95 @@ async fn crypto_migration_rejects_client_envelope_mutation() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn crypto_migration_rejects_vector_sidecar_mutation() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, vector_encryption_config()).await;
+    let collection_crypto_id = collection.config_snapshot().await.uuid.unwrap().to_string();
+    let encryptor = CkksVectorEncryptor::new_from_resource_key_with_metadata(
+        "tenant-a:docs",
+        DEFAULT_VECTOR_NAME,
+        CkksParameters::default(),
+        &SecretKey::from_bytes([31u8; 32]),
+        "tenant-a/vector@v1",
+        "tenant-a/vector-rk@v1",
+        1,
+        CollectionTestCkksBackend,
+    )
+    .unwrap()
+    .with_collection_identity(collection_crypto_id)
+    .unwrap();
+    let public_material =
+        CkksPublicMaterial::new(b"openfhe context".to_vec(), b"openfhe public key".to_vec())
+            .unwrap();
+    let (envelope, verified_sidecar_key) = encryptor
+        .encrypt_sidecar_payload_value("docs", "1", &public_material, &[1.0, 2.0])
+        .unwrap();
+    let mut sidecar = Map::new();
+    sidecar.insert(DEFAULT_VECTOR_NAME.to_string(), envelope);
+    let mut payload = Map::new();
+    payload.insert(
+        ENCRYPTED_VECTOR_SIDECAR_FIELD.to_string(),
+        serde_json::Value::Object(sidecar),
+    );
+
+    let upsert = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+        PointInsertOperationsInternal::from(vec![PointStructPersisted {
+            id: 1.into(),
+            vector: VectorStructPersisted::Named(HashMap::new()),
+            payload: Some(Payload(payload)),
+        }]),
+    ));
+    collection
+        .update_from_client(
+            upsert,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::runtime_encrypted_vectors(vec![verified_sidecar_key]),
+        )
+        .await
+        .unwrap();
+
+    collection
+        .apply_crypto_migration_plan(&CryptoMigrationPlan {
+            from: CryptoMigrationState::Active,
+            to: CryptoMigrationState::Rotating,
+            target_epoch: 1,
+            active_rk_id: Some("tenant-a/vector-rk-v2".to_string()),
+            retired_rk_id: Some("tenant-a/vector-rk-v1".to_string()),
+            dry_run: false,
+            checkpoints: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    let err = collection
+        .rewrite_payloads_for_crypto_migration(|_, payload| {
+            payload
+                .0
+                .get_mut(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                .and_then(serde_json::Value::as_object_mut)
+                .and_then(|sidecar| sidecar.get_mut(DEFAULT_VECTOR_NAME))
+                .and_then(|entry| entry.get_mut(ENCRYPTED_CKKS_VECTOR_MARKER))
+                .and_then(|marker| marker.get_mut("envelope"))
+                .and_then(serde_json::Value::as_object_mut)
+                .unwrap()
+                .insert("ciphertext".to_string(), serde_json::json!("dGFtcGVyZWQ"));
+            Ok(1)
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, CollectionError::BadInput { ref description }
+            if description.contains("must not add, remove, or mutate encrypted vector sidecar payloads")),
+        "unexpected error: {err:?}",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn crypto_migration_completion_requires_all_collection_shards() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection =

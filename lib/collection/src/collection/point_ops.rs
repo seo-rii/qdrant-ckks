@@ -329,6 +329,13 @@ impl Collection {
                             "crypto payload migration must not add, remove, or mutate client-side encrypted payload envelopes",
                         ));
                     }
+                    if original_payload.0.get(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                        != payload.0.get(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                    {
+                        return Err(CollectionError::bad_input(
+                            "crypto payload migration must not add, remove, or mutate encrypted vector sidecar payloads",
+                        ));
+                    }
                     changed_points += 1;
 
                     let operation = CollectionUpdateOperations::PayloadOperation(
