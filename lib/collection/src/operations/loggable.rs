@@ -161,14 +161,23 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "api_key"
                         | "x_api_key"
                         | "x-api-key"
+                        | "cookie"
+                        | "set_cookie"
+                        | "set-cookie"
                         | "token"
                         | "access_token"
                         | "refresh_token"
                         | "bearer_token"
+                        | "id_token"
+                        | "jwt"
+                        | "session"
+                        | "session_token"
                         | "vault_token"
                         | "x_vault_token"
                         | "x-vault-token"
                         | "client_secret"
+                        | "credential"
+                        | "credentials"
                         | "password"
                         | "private_key"
                         | "private_key_b64"
@@ -481,7 +490,9 @@ mod tests {
         let mut value = json!({
             "headers": {
                 "authorization": "Bearer qdrant-sec-authorization-log-sentinel",
-                "x-api-key": "qdrant-sec-x-api-key-log-sentinel"
+                "x-api-key": "qdrant-sec-x-api-key-log-sentinel",
+                "cookie": "qdrant-sec-cookie-log-sentinel",
+                "set-cookie": "qdrant-sec-set-cookie-log-sentinel"
             },
             "snapshot": {
                 "api_key": "qdrant-sec-api-key-log-sentinel",
@@ -489,9 +500,15 @@ mod tests {
                 "access_token": "qdrant-sec-access-token-log-sentinel",
                 "refresh_token": "qdrant-sec-refresh-token-log-sentinel",
                 "bearer_token": "qdrant-sec-bearer-token-log-sentinel",
+                "id_token": "qdrant-sec-id-token-log-sentinel",
+                "jwt": "qdrant-sec-jwt-log-sentinel",
+                "session": "qdrant-sec-session-log-sentinel",
+                "session_token": "qdrant-sec-session-token-log-sentinel",
                 "vault_token": "qdrant-sec-vault-token-log-sentinel",
                 "x-vault-token": "qdrant-sec-x-vault-token-log-sentinel",
                 "client_secret": "qdrant-sec-client-secret-log-sentinel",
+                "credential": "qdrant-sec-credential-log-sentinel",
+                "credentials": "qdrant-sec-credentials-log-sentinel",
                 "password": "qdrant-sec-password-log-sentinel"
             },
             "tls": {
@@ -512,14 +529,22 @@ mod tests {
         for sentinel in [
             "qdrant-sec-authorization-log-sentinel",
             "qdrant-sec-x-api-key-log-sentinel",
+            "qdrant-sec-cookie-log-sentinel",
+            "qdrant-sec-set-cookie-log-sentinel",
             "qdrant-sec-api-key-log-sentinel",
             "qdrant-sec-token-log-sentinel",
             "qdrant-sec-access-token-log-sentinel",
             "qdrant-sec-refresh-token-log-sentinel",
             "qdrant-sec-bearer-token-log-sentinel",
+            "qdrant-sec-id-token-log-sentinel",
+            "qdrant-sec-jwt-log-sentinel",
+            "qdrant-sec-session-log-sentinel",
+            "qdrant-sec-session-token-log-sentinel",
             "qdrant-sec-vault-token-log-sentinel",
             "qdrant-sec-x-vault-token-log-sentinel",
             "qdrant-sec-client-secret-log-sentinel",
+            "qdrant-sec-credential-log-sentinel",
+            "qdrant-sec-credentials-log-sentinel",
             "qdrant-sec-password-log-sentinel",
             "qdrant-sec-private-key-log-sentinel",
             "qdrant-sec-private-key-b64-log-sentinel",
@@ -538,29 +563,45 @@ mod tests {
         let mut first = json!({
             "headers": {
                 "authorization": "Bearer secret-a",
-                "x-api-key": "api-secret-a"
+                "x-api-key": "api-secret-a",
+                "cookie": "cookie-secret-a",
+                "set-cookie": "set-cookie-secret-a"
             },
             "oauth": {
                 "access_token": "access-secret-a",
                 "refresh_token": "refresh-secret-a",
+                "id_token": "id-token-secret-a",
+                "jwt": "jwt-secret-a",
                 "client_secret": "client-secret-a"
             },
             "vault": {
                 "x-vault-token": "vault-secret-a"
+            },
+            "session": {
+                "session_token": "session-secret-a",
+                "credentials": "credentials-secret-a"
             }
         });
         let mut second = json!({
             "headers": {
                 "authorization": "Bearer secret-b",
-                "x-api-key": "api-secret-b"
+                "x-api-key": "api-secret-b",
+                "cookie": "cookie-secret-b",
+                "set-cookie": "set-cookie-secret-b"
             },
             "oauth": {
                 "access_token": "access-secret-b",
                 "refresh_token": "refresh-secret-b",
+                "id_token": "id-token-secret-b",
+                "jwt": "jwt-secret-b",
                 "client_secret": "client-secret-b"
             },
             "vault": {
                 "x-vault-token": "vault-secret-b"
+            },
+            "session": {
+                "session_token": "session-secret-b",
+                "credentials": "credentials-secret-b"
             }
         });
 
