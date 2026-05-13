@@ -10569,6 +10569,14 @@ mod tests {
             payload.0.get("tenant_id").unwrap()
         ));
         assert_eq!(payload.0.get("body").unwrap(), &json!("public"));
+
+        assert_eq!(
+            plan.decrypt_server_payload_for_read("1", &mut payload)
+                .unwrap(),
+            1
+        );
+        assert_eq!(payload.0.get("tenant_id").unwrap(), &json!("acme"));
+        assert_eq!(payload.0.get("body").unwrap(), &json!("public"));
     }
 
     #[test]
