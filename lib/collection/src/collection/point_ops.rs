@@ -804,6 +804,20 @@ impl Collection {
             }
             Ok(touches)
         };
+        let validate_payload_delete_does_not_mutate_vector_sidecar =
+            |keys: &[JsonPath]| -> CollectionResult<()> {
+                for key in keys {
+                    if key.first_key != ENCRYPTED_VECTOR_SIDECAR_FIELD {
+                        continue;
+                    }
+                    if !update_provenance.allows_vector_sidecar_delete_key(key) {
+                        return Err(CollectionError::bad_input(format!(
+                            "encrypted vector sidecar '{key}' can only be removed by runtime delete_vectors operations",
+                        )));
+                    }
+                }
+                Ok(())
+            };
         let touches_vector_sidecar = match &operation {
             CollectionUpdateOperations::PointOperation(point_operation) => match point_operation {
                 PointOperations::UpsertPoints(insert_operation)
@@ -889,8 +903,21 @@ impl Collection {
                     point_id.as_deref(),
                 )?
             }
-            CollectionUpdateOperations::PayloadOperation(_)
-            | CollectionUpdateOperations::VectorOperation(_)
+            CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(operation)) => {
+                validate_payload_delete_does_not_mutate_vector_sidecar(&operation.keys)?;
+                false
+            }
+            CollectionUpdateOperations::PayloadOperation(
+                PayloadOps::ClearPayload { .. } | PayloadOps::ClearPayloadByFilter(_),
+            ) => {
+                if !encrypted_vector_names.is_empty() {
+                    return Err(CollectionError::bad_input(format!(
+                        "encrypted vector sidecar '{ENCRYPTED_VECTOR_SIDECAR_FIELD}' cannot be removed by clear_payload; use delete_vectors for encrypted vector names",
+                    )));
+                }
+                false
+            }
+            CollectionUpdateOperations::VectorOperation(_)
             | CollectionUpdateOperations::FieldIndexOperation(_) => false,
             #[cfg(feature = "staging")]
             CollectionUpdateOperations::StagingOperation(_) => false,

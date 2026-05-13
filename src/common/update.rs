@@ -625,6 +625,8 @@ pub async fn do_delete_vectors(
     let vector_names: Vec<_> = vector.into_iter().collect();
     let (vector_names, encrypted_sidecar_keys) =
         split_encrypted_vector_delete_names(toc, &collection_name, &auth, vector_names).await?;
+    let encrypted_sidecar_vector_names =
+        encrypted_vector_sidecar_delete_names(&encrypted_sidecar_keys);
 
     let mut result = None;
 
@@ -648,7 +650,9 @@ pub async fn do_delete_vectors(
                     shard_key.clone(),
                     auth.clone(),
                     hw_measurement_acc.clone(),
-                    CollectionUpdateProvenance::client_plaintext(),
+                    CollectionUpdateProvenance::runtime_encrypted_vector_deletes(
+                        encrypted_sidecar_vector_names.clone(),
+                    ),
                 )
                 .await?,
             );
@@ -696,7 +700,9 @@ pub async fn do_delete_vectors(
                     shard_key.clone(),
                     auth.clone(),
                     hw_measurement_acc.clone(),
-                    CollectionUpdateProvenance::client_plaintext(),
+                    CollectionUpdateProvenance::runtime_encrypted_vector_deletes(
+                        encrypted_sidecar_vector_names.clone(),
+                    ),
                 )
                 .await?,
             );
@@ -2217,6 +2223,17 @@ async fn split_encrypted_vector_delete_names(
     }
 
     Ok((plaintext_vector_names, encrypted_sidecar_keys))
+}
+
+fn encrypted_vector_sidecar_delete_names(keys: &[JsonPath]) -> Vec<String> {
+    keys.iter()
+        .filter_map(|key| match key.rest.as_slice() {
+            [JsonPathItem::Key(vector_name)] if key.first_key == ENCRYPTED_VECTOR_SIDECAR_FIELD => {
+                Some(vector_name.clone())
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 enum PayloadUpdatePlan {

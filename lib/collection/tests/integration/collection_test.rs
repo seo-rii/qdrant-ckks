@@ -63,6 +63,7 @@ use ring::signature::{Ed25519KeyPair, KeyPair};
 use segment::data_types::facets::FacetParams;
 use segment::data_types::order_by::{Direction, OrderBy, OrderByInterface};
 use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, VectorInternal, VectorStructInternal};
+use segment::json_path::{JsonPath, JsonPathItem};
 use segment::types::{
     Condition, Distance, EncryptedPayloadReadMode, ExtendedPointId, FieldCondition, Filter,
     HasIdCondition, HasVectorCondition, Payload, PayloadEncryptedReadPolicy, PayloadFieldSchema,
@@ -6137,6 +6138,72 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
         CollectionError::BadInput { description }
             if description.contains("encrypted vector sidecar entry")
                 && description.contains("requires runtime vector encryption")
+    ));
+
+    let encrypted_sidecar_delete_key = JsonPath {
+        first_key: ENCRYPTED_VECTOR_SIDECAR_FIELD.to_string(),
+        rest: vec![JsonPathItem::Key(DEFAULT_VECTOR_NAME.to_string())],
+    };
+    let delete_sidecar =
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(DeletePayloadOp {
+            keys: vec![encrypted_sidecar_delete_key.clone()],
+            points: Some(vec![1.into()]),
+            filter: None,
+        }));
+    let err = collection
+        .update_from_client(
+            delete_sidecar.clone(),
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::client_plaintext(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("can only be removed by runtime delete_vectors")
+                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+    ));
+    let err = collection
+        .update_from_client(
+            delete_sidecar,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::runtime_encrypted_vector_deletes(vec![
+                DEFAULT_VECTOR_NAME.to_string(),
+            ]),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CollectionError::PointNotFound { .. }));
+
+    let clear_payload = CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayload {
+        points: vec![1.into()],
+    });
+    let err = collection
+        .update_from_client(
+            clear_payload,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::client_plaintext(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("clear_payload")
+                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
     ));
 }
 

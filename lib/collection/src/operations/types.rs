@@ -21,7 +21,8 @@ use common::{defaults, save_on_disk};
 use issues::IssueRecord;
 use qdrant_sec::{
     CkksVectorSidecarEnvelopeKey, CkksVectorVerifiedSidecarKey, ClientPayloadEnvelopeKey,
-    ClientPayloadVerifiedEnvelopeKey, ServerPayloadEnvelopeKey, ServerPayloadVerifiedEnvelopeKey,
+    ClientPayloadVerifiedEnvelopeKey, ENCRYPTED_VECTOR_SIDECAR_FIELD, ServerPayloadEnvelopeKey,
+    ServerPayloadVerifiedEnvelopeKey,
 };
 use schemars::JsonSchema;
 use segment::common::anonymize::Anonymize;
@@ -29,6 +30,7 @@ use segment::common::operation_error::{CancelledError, OperationError};
 use segment::data_types::groups::GroupId;
 use segment::data_types::modifier::Modifier;
 use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, DenseVector};
+use segment::json_path::{JsonPath, JsonPathItem};
 use segment::types::{
     Distance, Filter, HnswConfig, MultiVectorConfig, Payload, PayloadIndexInfo, PayloadKeyType,
     PointIdType, QuantizationConfig, SearchParams, SeqNumberType, ShardKey,
@@ -83,6 +85,7 @@ pub enum CollectionStatus {
 pub struct CollectionUpdateProvenance {
     server_envelopes: Option<RuntimeEncryptedPayloadEnvelopes>,
     vector_sidecars: Option<RuntimeEncryptedVectorSidecars>,
+    vector_sidecar_deletes: Option<RuntimeEncryptedVectorSidecarDeletes>,
     verified_client_envelopes: Option<RuntimeVerifiedClientEnvelopes>,
 }
 
@@ -105,6 +108,11 @@ struct RuntimeEncryptedPayloadEnvelopes {
 #[derive(Debug, PartialEq, Eq, Clone)]
 struct RuntimeEncryptedVectorSidecars {
     verified_sidecar_keys: Arc<HashSet<CkksVectorVerifiedSidecarKey>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+struct RuntimeEncryptedVectorSidecarDeletes {
+    vector_names: Arc<HashSet<String>>,
 }
 
 impl RuntimeEncryptedPayloadEnvelopes {
@@ -167,11 +175,28 @@ impl RuntimeEncryptedVectorSidecars {
     }
 }
 
+impl RuntimeEncryptedVectorSidecarDeletes {
+    fn from_vector_names(vector_names: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            vector_names: Arc::new(vector_names.into_iter().collect()),
+        }
+    }
+
+    fn allows_key(&self, key: &JsonPath) -> bool {
+        key.first_key == ENCRYPTED_VECTOR_SIDECAR_FIELD
+            && matches!(
+                key.rest.as_slice(),
+                [JsonPathItem::Key(vector_name)] if self.vector_names.contains(vector_name)
+            )
+    }
+}
+
 impl CollectionUpdateProvenance {
     pub const fn client_plaintext() -> Self {
         Self {
             server_envelopes: None,
             vector_sidecars: None,
+            vector_sidecar_deletes: None,
             verified_client_envelopes: None,
         }
     }
@@ -186,6 +211,7 @@ impl CollectionUpdateProvenance {
         Self {
             server_envelopes: Some(verified),
             vector_sidecars: None,
+            vector_sidecar_deletes: None,
             verified_client_envelopes: None,
         }
     }
@@ -200,6 +226,22 @@ impl CollectionUpdateProvenance {
         Self {
             server_envelopes: None,
             vector_sidecars: Some(verified),
+            vector_sidecar_deletes: None,
+            verified_client_envelopes: None,
+        }
+    }
+
+    pub fn runtime_encrypted_vector_deletes(
+        vector_names: impl IntoIterator<Item = String>,
+    ) -> Self {
+        let verified = RuntimeEncryptedVectorSidecarDeletes::from_vector_names(vector_names);
+        if verified.vector_names.is_empty() {
+            return Self::client_plaintext();
+        }
+        Self {
+            server_envelopes: None,
+            vector_sidecars: None,
+            vector_sidecar_deletes: Some(verified),
             verified_client_envelopes: None,
         }
     }
@@ -214,6 +256,7 @@ impl CollectionUpdateProvenance {
         Self {
             server_envelopes: None,
             vector_sidecars: None,
+            vector_sidecar_deletes: None,
             verified_client_envelopes: Some(verified),
         }
     }
@@ -232,6 +275,7 @@ impl CollectionUpdateProvenance {
                 Self {
                     server_envelopes: None,
                     vector_sidecars: None,
+                    vector_sidecar_deletes: None,
                     verified_client_envelopes: Some(verified),
                 }
             };
@@ -240,12 +284,14 @@ impl CollectionUpdateProvenance {
             return Self {
                 server_envelopes: Some(server_verified),
                 vector_sidecars: None,
+                vector_sidecar_deletes: None,
                 verified_client_envelopes: None,
             };
         }
         Self {
             server_envelopes: Some(server_verified),
             vector_sidecars: None,
+            vector_sidecar_deletes: None,
             verified_client_envelopes: Some(verified),
         }
     }
@@ -253,6 +299,9 @@ impl CollectionUpdateProvenance {
     pub fn with_runtime_encrypted_vector_provenance(mut self, provenance: Self) -> Self {
         if provenance.vector_sidecars.is_some() {
             self.vector_sidecars = provenance.vector_sidecars;
+        }
+        if provenance.vector_sidecar_deletes.is_some() {
+            self.vector_sidecar_deletes = provenance.vector_sidecar_deletes;
         }
         self
     }
@@ -274,6 +323,12 @@ impl CollectionUpdateProvenance {
 
     pub const fn allows_vector_sidecars(&self) -> bool {
         self.vector_sidecars.is_some()
+    }
+
+    pub fn allows_vector_sidecar_delete_key(&self, key: &JsonPath) -> bool {
+        self.vector_sidecar_deletes
+            .as_ref()
+            .is_some_and(|verified| verified.allows_key(key))
     }
 
     pub fn verified_vector_sidecar_key_for_binding(
