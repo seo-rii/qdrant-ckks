@@ -443,9 +443,45 @@ pub fn ckks_ciphertext_from_payload<'a>(
             "stored CKKS vector sidecar entry '{vector_name}' is malformed",
         )));
     };
-    let Some(ciphertext) = marker
+    let Some(marker) = marker.as_object() else {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' is malformed",
+        )));
+    };
+    if marker.get("version").and_then(serde_json::Value::as_u64) != Some(1) {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' has unsupported version",
+        )));
+    }
+    if marker.get("scheme").and_then(serde_json::Value::as_str) != Some("openfhe-ckks") {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' has unsupported scheme",
+        )));
+    }
+    let Some(envelope) = marker
         .get("envelope")
-        .and_then(|envelope| envelope.get("ciphertext"))
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' is missing envelope",
+        )));
+    };
+    if envelope.get("version").and_then(serde_json::Value::as_u64) != Some(1) {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' has unsupported envelope version",
+        )));
+    }
+    if envelope
+        .get("algorithm")
+        .and_then(serde_json::Value::as_str)
+        != Some("AES-256-GCM")
+    {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' has unsupported envelope algorithm",
+        )));
+    }
+    let Some(ciphertext) = envelope
+        .get("ciphertext")
         .and_then(serde_json::Value::as_str)
     else {
         return Err(OperationError::service_error(format!(
@@ -1600,5 +1636,66 @@ mod tests {
 
         let err = ckks_ciphertext_from_payload(&payload, "embedding").unwrap_err();
         assert!(err.to_string().contains("malformed"));
+    }
+
+    #[test]
+    fn ciphertext_record_extractor_rejects_unsupported_marker_metadata() {
+        let payload_with_marker = |marker: serde_json::Value| {
+            Payload(
+                serde_json::from_value(serde_json::json!({
+                    CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD: {
+                        "embedding": {
+                            CKKS_VECTOR_SIDECAR_MARKER: marker
+                        }
+                    }
+                }))
+                .unwrap(),
+            )
+        };
+
+        let err = ckks_ciphertext_from_payload(
+            &payload_with_marker(serde_json::json!({
+                "version": 2,
+                "scheme": "openfhe-ckks",
+                "envelope": {
+                    "version": 1,
+                    "algorithm": "AES-256-GCM",
+                    "ciphertext": "stored-ciphertext"
+                }
+            })),
+            "embedding",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unsupported version"));
+
+        let err = ckks_ciphertext_from_payload(
+            &payload_with_marker(serde_json::json!({
+                "version": 1,
+                "scheme": "other-scheme",
+                "envelope": {
+                    "version": 1,
+                    "algorithm": "AES-256-GCM",
+                    "ciphertext": "stored-ciphertext"
+                }
+            })),
+            "embedding",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unsupported scheme"));
+
+        let err = ckks_ciphertext_from_payload(
+            &payload_with_marker(serde_json::json!({
+                "version": 1,
+                "scheme": "openfhe-ckks",
+                "envelope": {
+                    "version": 1,
+                    "algorithm": "AES-128-GCM",
+                    "ciphertext": "stored-ciphertext"
+                }
+            })),
+            "embedding",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unsupported envelope algorithm"));
     }
 }
