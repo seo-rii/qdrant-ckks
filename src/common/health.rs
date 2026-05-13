@@ -488,9 +488,18 @@ mod tests {
             vec![3, 4],
         );
 
+        metadata.insert(
+            5,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(String::new())),
+        );
+        assert_eq!(
+            crypto_runtime_capability_mismatched_peers(1, &metadata),
+            vec![3, 4, 5],
+        );
+
         assert_eq!(
             crypto_runtime_capability_mismatched_peers(4, &metadata),
-            vec![1, 2, 3, 4],
+            vec![1, 2, 3, 4, 5],
         );
     }
 }
