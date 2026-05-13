@@ -1505,6 +1505,32 @@ mod tests {
     }
 
     #[test]
+    fn ciphertext_vector_index_rejects_graph_version_mismatch_on_open() {
+        let directory = tempfile::tempdir().unwrap();
+        let graph_file = CkksCiphertextVectorIndex::graph_file_path(directory.path());
+        let graph = CkksCiphertextHnswGraphFile {
+            version: CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_VERSION + 1,
+            record_count: 2,
+            links: vec![vec![1], vec![0]],
+        };
+        write_graph_file(&graph_file, &serde_json::to_vec(&graph).unwrap()).unwrap();
+
+        let err = CkksCiphertextVectorIndex::open_graph_file(
+            vec![
+                CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
+            ],
+            &graph_file,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("unsupported CKKS ciphertext HNSW graph file version")
+        );
+    }
+
+    #[test]
     fn ciphertext_vector_index_rejects_invalid_graph_links_on_open() {
         let directory = tempfile::tempdir().unwrap();
         let graph_file = CkksCiphertextVectorIndex::graph_file_path(directory.path());
