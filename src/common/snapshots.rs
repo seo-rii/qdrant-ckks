@@ -347,7 +347,13 @@ pub async fn recover_shard_snapshot_impl(
         .await?;
 
     let state = collection.state().await;
-    let shard_info = state.shards.get(&shard).unwrap(); // TODO: Handle `unwrap`?..
+    let shard_info = state.shards.get(&shard).ok_or_else(|| {
+        StorageError::service_error(format!(
+            "shard snapshot recovery for collection {} restored shard {shard}, but the shard \
+             metadata is missing after restore",
+            collection.name(),
+        ))
+    })?;
 
     // TODO: Unify (and de-duplicate) "recovered shard state notification" logic in `_do_recover_from_snapshot` with this one!
 
