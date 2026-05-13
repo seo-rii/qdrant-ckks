@@ -157,8 +157,18 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "wrapped_key_b64"
                         | "value_b64"
                         | "master_key_b64"
+                        | "authorization"
                         | "api_key"
+                        | "x_api_key"
+                        | "x-api-key"
                         | "token"
+                        | "access_token"
+                        | "refresh_token"
+                        | "bearer_token"
+                        | "vault_token"
+                        | "x_vault_token"
+                        | "x-vault-token"
+                        | "client_secret"
                         | "password"
                         | "private_key"
                         | "private_key_b64"
@@ -469,9 +479,19 @@ mod tests {
     #[test]
     fn log_value_redacts_generic_secret_fields_recursively() {
         let mut value = json!({
+            "headers": {
+                "authorization": "Bearer qdrant-sec-authorization-log-sentinel",
+                "x-api-key": "qdrant-sec-x-api-key-log-sentinel"
+            },
             "snapshot": {
                 "api_key": "qdrant-sec-api-key-log-sentinel",
                 "token": "qdrant-sec-token-log-sentinel",
+                "access_token": "qdrant-sec-access-token-log-sentinel",
+                "refresh_token": "qdrant-sec-refresh-token-log-sentinel",
+                "bearer_token": "qdrant-sec-bearer-token-log-sentinel",
+                "vault_token": "qdrant-sec-vault-token-log-sentinel",
+                "x-vault-token": "qdrant-sec-x-vault-token-log-sentinel",
+                "client_secret": "qdrant-sec-client-secret-log-sentinel",
                 "password": "qdrant-sec-password-log-sentinel"
             },
             "tls": {
@@ -490,8 +510,16 @@ mod tests {
         let serialized = serde_json::to_string(&value).unwrap();
 
         for sentinel in [
+            "qdrant-sec-authorization-log-sentinel",
+            "qdrant-sec-x-api-key-log-sentinel",
             "qdrant-sec-api-key-log-sentinel",
             "qdrant-sec-token-log-sentinel",
+            "qdrant-sec-access-token-log-sentinel",
+            "qdrant-sec-refresh-token-log-sentinel",
+            "qdrant-sec-bearer-token-log-sentinel",
+            "qdrant-sec-vault-token-log-sentinel",
+            "qdrant-sec-x-vault-token-log-sentinel",
+            "qdrant-sec-client-secret-log-sentinel",
             "qdrant-sec-password-log-sentinel",
             "qdrant-sec-private-key-log-sentinel",
             "qdrant-sec-private-key-b64-log-sentinel",
@@ -503,5 +531,46 @@ mod tests {
             assert!(!serialized.contains(sentinel));
         }
         assert!(serialized.contains("[redacted]"));
+    }
+
+    #[test]
+    fn generic_secret_request_hash_uses_redacted_material() {
+        let mut first = json!({
+            "headers": {
+                "authorization": "Bearer secret-a",
+                "x-api-key": "api-secret-a"
+            },
+            "oauth": {
+                "access_token": "access-secret-a",
+                "refresh_token": "refresh-secret-a",
+                "client_secret": "client-secret-a"
+            },
+            "vault": {
+                "x-vault-token": "vault-secret-a"
+            }
+        });
+        let mut second = json!({
+            "headers": {
+                "authorization": "Bearer secret-b",
+                "x-api-key": "api-secret-b"
+            },
+            "oauth": {
+                "access_token": "access-secret-b",
+                "refresh_token": "refresh-secret-b",
+                "client_secret": "client-secret-b"
+            },
+            "vault": {
+                "x-vault-token": "vault-secret-b"
+            }
+        });
+
+        redact_sensitive_log_fields(&mut first);
+        redact_sensitive_log_fields(&mut second);
+
+        assert_eq!(first, second);
+        assert_eq!(
+            redacted_request_hash("secret-bearing-request", &first),
+            redacted_request_hash("secret-bearing-request", &second),
+        );
     }
 }
