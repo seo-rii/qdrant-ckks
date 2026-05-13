@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::fs::{self, DirBuilder, File, OpenOptions};
+use std::fs::{self, DirBuilder, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -2390,10 +2390,16 @@ fn ckks_sidecar_hnsw_prune_persisted_graphs(
 
 #[cfg(unix)]
 fn ckks_sidecar_hnsw_sync_parent(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+
     let Some(parent) = path.parent() else {
         return Ok(());
     };
-    File::open(parent)?.sync_all()
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_DIRECTORY | nix::libc::O_NOFOLLOW)
+        .open(parent)?
+        .sync_all()
 }
 
 #[cfg(not(unix))]
