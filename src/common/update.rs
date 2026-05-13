@@ -11122,6 +11122,58 @@ esac
                         && description.contains("body")
             ));
 
+            let err = do_delete_payload(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "docs".to_string(),
+                DeletePayload {
+                    keys: vec!["body".parse().unwrap()],
+                    points: Some(vec![1.into()]),
+                    filter: None,
+                    shard_key: None,
+                },
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cannot delete encrypted payload field")
+                        && description.contains("body")
+            ));
+
+            let err = do_clear_payload(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "docs".to_string(),
+                PointsSelector::PointIdsSelector(PointIdsList {
+                    points: vec![1.into()],
+                    shard_key: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cannot clear payloads")
+                        && description.contains("body")
+            ));
+
             let err = do_clear_payload(
                 UncheckedTocProvider::new_unchecked(&toc),
                 "docs".to_string(),
