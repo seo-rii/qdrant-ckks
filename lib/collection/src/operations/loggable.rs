@@ -164,7 +164,16 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "wrapped_key"
                         | "wrapped_key_b64"
                         | "value_b64"
+                        | "secret"
+                        | "secret_b64"
+                        | "key_material"
+                        | "key_material_b64"
                         | "master_key_b64"
+                        | "master_key"
+                        | "resource_key"
+                        | "resource_key_b64"
+                        | "wrapping_key"
+                        | "wrapping_key_b64"
                         | "authorization"
                         | "api_key"
                         | "x_api_key"
@@ -528,6 +537,16 @@ mod tests {
                 "private_key_b64": "qdrant-sec-private-key-b64-log-sentinel"
             },
             "crypto": {
+                "secret": "qdrant-sec-generic-secret-log-sentinel",
+                "secret_b64": "qdrant-sec-generic-secret-b64-log-sentinel",
+                "key_material": "qdrant-sec-key-material-log-sentinel",
+                "key_material_b64": "qdrant-sec-key-material-b64-log-sentinel",
+                "master_key": "qdrant-sec-master-key-log-sentinel",
+                "master_key_b64": "qdrant-sec-master-key-b64-log-sentinel",
+                "resource_key": "qdrant-sec-resource-key-log-sentinel",
+                "resource_key_b64": "qdrant-sec-resource-key-b64-log-sentinel",
+                "wrapping_key": "qdrant-sec-wrapping-key-log-sentinel",
+                "wrapping_key_b64": "qdrant-sec-wrapping-key-b64-log-sentinel",
                 "secret_key": "qdrant-sec-secret-key-log-sentinel",
                 "secret_key_b64": "qdrant-sec-secret-key-b64-log-sentinel",
                 "public_key_b64": "qdrant-sec-public-key-b64-log-sentinel",
@@ -564,6 +583,16 @@ mod tests {
             "qdrant-sec-password-log-sentinel",
             "qdrant-sec-private-key-log-sentinel",
             "qdrant-sec-private-key-b64-log-sentinel",
+            "qdrant-sec-generic-secret-log-sentinel",
+            "qdrant-sec-generic-secret-b64-log-sentinel",
+            "qdrant-sec-key-material-log-sentinel",
+            "qdrant-sec-key-material-b64-log-sentinel",
+            "qdrant-sec-master-key-log-sentinel",
+            "qdrant-sec-master-key-b64-log-sentinel",
+            "qdrant-sec-resource-key-log-sentinel",
+            "qdrant-sec-resource-key-b64-log-sentinel",
+            "qdrant-sec-wrapping-key-log-sentinel",
+            "qdrant-sec-wrapping-key-b64-log-sentinel",
             "qdrant-sec-secret-key-log-sentinel",
             "qdrant-sec-secret-key-b64-log-sentinel",
             "qdrant-sec-public-key-b64-log-sentinel",
@@ -600,6 +629,18 @@ mod tests {
             "session": {
                 "session_token": "session-secret-a",
                 "credentials": "credentials-secret-a"
+            },
+            "crypto": {
+                "secret": "generic-secret-a",
+                "secret_b64": "generic-secret-b64-a",
+                "key_material": "material-secret-a",
+                "key_material_b64": "material-secret-b64-a",
+                "master_key": "master-secret-a",
+                "master_key_b64": "master-secret-b64-a",
+                "resource_key": "resource-secret-a",
+                "resource_key_b64": "resource-secret-b64-a",
+                "wrapping_key": "wrapping-secret-a",
+                "wrapping_key_b64": "wrapping-secret-b64-a"
             }
         });
         let mut second = json!({
@@ -626,6 +667,18 @@ mod tests {
             "session": {
                 "session_token": "session-secret-b",
                 "credentials": "credentials-secret-b"
+            },
+            "crypto": {
+                "secret": "generic-secret-b",
+                "secret_b64": "generic-secret-b64-b",
+                "key_material": "material-secret-b",
+                "key_material_b64": "material-secret-b64-b",
+                "master_key": "master-secret-b",
+                "master_key_b64": "master-secret-b64-b",
+                "resource_key": "resource-secret-b",
+                "resource_key_b64": "resource-secret-b64-b",
+                "wrapping_key": "wrapping-secret-b",
+                "wrapping_key_b64": "wrapping-secret-b64-b"
             }
         });
 
