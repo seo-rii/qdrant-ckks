@@ -8238,6 +8238,73 @@ mod tests {
     }
 
     #[test]
+    fn payload_write_plan_keeps_client_envelopes_store_only_for_migration() {
+        let (signed_envelope, public_key) =
+            signed_client_envelope("docs", "point-1", "body", "tenant-a/client-signing-v1");
+        let settings = Settings {
+            crypto: CryptoSettings {
+                instances: HashMap::from([(
+                    "docs_payload_client_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: client_policy_options(json!({
+                            "key_id": "tenant-a/client-rk-2026-04",
+                            "key_id_required": true,
+                            "signature_key_id": "tenant-a/client-signing-v1",
+                            "signature_public_key_b64": BASE64URL_NOPAD.encode(&public_key),
+                        })),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/client-rk-2026-04".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_client_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_client_v1".to_string(),
+                    binding: Some(CLIENT_PAYLOAD_ENVELOPE_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let mut payload = segment::types::Payload(
+            json!({ "body": signed_envelope })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+
+        let plan = payload_write_plan_for_collection_for_test(&settings, "docs", &params)
+            .unwrap()
+            .unwrap();
+        assert!(!plan.has_server_encrypt_rules());
+        assert!(plan.has_client_envelope_rules());
+        assert_eq!(plan.encrypt_payload("point-1", &mut payload).unwrap(), 1);
+        assert_eq!(
+            plan.reencrypt_payload_if_stale("point-1", &mut payload)
+                .unwrap(),
+            0,
+            "client-side envelopes are validated but never re-encrypted by Qdrant",
+        );
+        assert!(matches!(
+            plan.decrypt_payload_for_crypto_migration("point-1", &mut payload),
+            Err(PayloadWriteSetupError::ClientEnvelopeDecryptUnsupported),
+        ));
+    }
+
+    #[test]
     fn validate_collection_crypto_runtime_rejects_client_envelopes_in_clustered_mode() {
         let (_, public_key) =
             signed_client_envelope("docs", "point-1", "body", "tenant-a/client-signing-v1");
