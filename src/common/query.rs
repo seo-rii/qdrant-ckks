@@ -2353,6 +2353,18 @@ fn ckks_sidecar_hnsw_prune_persisted_graphs(
         if !metadata.is_file() {
             continue;
         }
+        #[cfg(unix)]
+        if let Err(err) =
+            ckks_sidecar_hnsw_validate_cache_file_unix_metadata(&path, &metadata, "cache file")
+        {
+            log::warn!("pruning insecure CKKS sidecar HNSW graph cache file {path:?}: {err}");
+            fs::remove_file(&path).map_err(|remove_err| {
+                StorageError::service_error(format!(
+                    "failed to prune insecure CKKS sidecar HNSW graph cache file {path:?}: {remove_err}",
+                ))
+            })?;
+            continue;
+        }
         files.push(CacheFile {
             path,
             len: metadata.len(),
@@ -8128,6 +8140,29 @@ mod tests {
         let target_path = dir.path().join("target.json");
         std::fs::write(&target_path, "{}").unwrap();
         symlink(&target_path, &stale_path).unwrap();
+
+        ckks_sidecar_hnsw_prune_persisted_graphs(cache_dir, &keep_path).unwrap();
+        assert!(!stale_path.exists());
+        assert!(keep_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ckks_sidecar_hnsw_persisted_graph_prune_removes_insecure_stale_cache_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let keep_key = ckks_sidecar_test_graph_cache_key("keep");
+        let graph = ckks_sidecar_test_graph(vec![Vec::new()]);
+        ckks_sidecar_hnsw_persist_graph(dir.path(), &keep_key, &graph).unwrap();
+        let keep_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &keep_key);
+        let cache_dir = keep_path.parent().unwrap();
+
+        let stale_key = ckks_sidecar_test_graph_cache_key("stale-permissions");
+        let stale_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &stale_key);
+        let disk = ckks_sidecar_test_graph_disk(&stale_key, vec![Vec::new()]);
+        write_ckks_sidecar_test_graph_disk(dir.path(), &stale_key, &disk);
+        std::fs::set_permissions(&stale_path, std::fs::Permissions::from_mode(0o640)).unwrap();
 
         ckks_sidecar_hnsw_prune_persisted_graphs(cache_dir, &keep_path).unwrap();
         assert!(!stale_path.exists());
