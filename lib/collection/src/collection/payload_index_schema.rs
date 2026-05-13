@@ -388,6 +388,27 @@ mod tests {
         }
     }
 
+    fn params_with_encrypted_vector_name(name: &str) -> CollectionParams {
+        CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:vector".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "vector_conf".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec![name.to_string()],
+                    },
+                    instance: "docs_vector_v1".to_string(),
+                    binding: Some("vector-envelope/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        }
+    }
+
     #[test]
     fn recovered_payload_index_schema_requires_keyword_for_metadata_blind_index() {
         let collection_params = params_with_metadata_blind_index_key("document_body__blind_eq");
@@ -479,6 +500,38 @@ mod tests {
                 if description.contains("encrypted metadata value field")
                     && description.contains("tenant_id.keyword")
         ));
+    }
+
+    #[test]
+    fn recovered_payload_index_schema_rejects_encrypted_vector_sidecar_children() {
+        let collection_params = params_with_encrypted_vector_name("embedding");
+        let mut schema = HashMap::new();
+
+        for field_name in [
+            format!("\"{ENCRYPTED_VECTOR_SIDECAR_FIELD}\""),
+            format!("\"{ENCRYPTED_VECTOR_SIDECAR_FIELD}\".embedding"),
+        ] {
+            schema.clear();
+            schema.insert(
+                field_name.parse().unwrap(),
+                PayloadFieldSchema::FieldType(PayloadSchemaType::Keyword),
+            );
+
+            let err = validate_payload_index_schema_for_encryption(
+                schema.iter(),
+                &collection_params,
+                "recover",
+            )
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                CollectionError::BadInput { description }
+                    if description.contains("recover payload index schema")
+                        && description.contains("encrypted vector sidecar field")
+                        && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+            ));
+        }
     }
 
     #[test]
