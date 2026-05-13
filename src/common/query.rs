@@ -36,6 +36,7 @@ use segment::data_types::vectors::{
 };
 use segment::index::hnsw_index::ckks_ciphertext_graph::{
     CkksCiphertextHnswGraph, CkksCiphertextIndexedRecord, CkksCiphertextVectorIndex,
+    ckks_ciphertext_from_payload,
 };
 use segment::json_path::JsonPath;
 use segment::types::{
@@ -2891,6 +2892,11 @@ fn encrypted_vector_from_payload(
             "stored CKKS vector sidecar entry '{vector_name}' is malformed",
         )));
     };
+    ckks_ciphertext_from_payload(payload, vector_name).map_err(|err| {
+        StorageError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' failed validation: {err}",
+        ))
+    })?;
     serde_json::from_value(marker.clone())
         .map(Some)
         .map_err(|err| {
@@ -7510,6 +7516,38 @@ mod tests {
                 stale_ciphertext
             ],
         ));
+    }
+
+    #[test]
+    fn encrypted_vector_from_payload_validates_sidecar_metadata() {
+        let payload = json!({
+            "$qdrant_sec_vectors": {
+                "embedding": {
+                    "$qdrant_sec_ckks_vector": {
+                        "version": 1,
+                        "scheme": "openfhe-ckks",
+                        "envelope": {
+                            "version": 1,
+                            "algorithm": "AES-256-GCM",
+                            "key_id": "tenant-a:vector",
+                            "material_fingerprint": "tenant-a/vector@v1",
+                            "rk_id": "tenant-a/vector-rk@v1",
+                            "rk_epoch": 1,
+                            "nonce": "AAAAAAAAAAAAAAAA",
+                            "ciphertext": "short"
+                        }
+                    }
+                }
+            }
+        });
+        let payload = Payload(payload.as_object().unwrap().clone());
+
+        let err = encrypted_vector_from_payload(&payload, "embedding")
+            .expect_err("common query sidecar scan must reject malformed ciphertext metadata");
+        assert!(
+            err.to_string().contains("failed validation"),
+            "unexpected error: {err:?}",
+        );
     }
 
     fn ckks_sidecar_test_segment_snapshot(
