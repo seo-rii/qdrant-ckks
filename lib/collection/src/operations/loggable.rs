@@ -580,8 +580,12 @@ mod tests {
             "headers": {
                 "authorization": "Bearer secret-a",
                 "x-api-key": "api-secret-a",
+                "Authorization": "Bearer title-secret-a",
+                "X-API-Key": "title-api-secret-a",
                 "cookie": "cookie-secret-a",
-                "set-cookie": "set-cookie-secret-a"
+                "set-cookie": "set-cookie-secret-a",
+                "Cookie": "title-cookie-secret-a",
+                "Set-Cookie": "title-set-cookie-secret-a"
             },
             "oauth": {
                 "access_token": "access-secret-a",
@@ -602,8 +606,12 @@ mod tests {
             "headers": {
                 "authorization": "Bearer secret-b",
                 "x-api-key": "api-secret-b",
+                "Authorization": "Bearer title-secret-b",
+                "X-API-Key": "title-api-secret-b",
                 "cookie": "cookie-secret-b",
-                "set-cookie": "set-cookie-secret-b"
+                "set-cookie": "set-cookie-secret-b",
+                "Cookie": "title-cookie-secret-b",
+                "Set-Cookie": "title-set-cookie-secret-b"
             },
             "oauth": {
                 "access_token": "access-secret-b",
