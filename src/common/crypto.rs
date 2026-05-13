@@ -1290,7 +1290,6 @@ pub fn validate_create_collection_crypto_runtime(
 ) -> Result<(), StorageError> {
     let params = CollectionParams {
         encryption: create_collection.encryption.clone(),
-        ckks: create_collection.ckks.clone(),
         ..CollectionParams::empty()
     };
     params.validate().map_err(|err| {
@@ -4772,7 +4771,6 @@ mod tests {
             quantization_config: None,
             sharding_method: None,
             encryption: params.encryption,
-            ckks: params.ckks,
             strict_mode_config: None,
             uuid: None,
             metadata: None,

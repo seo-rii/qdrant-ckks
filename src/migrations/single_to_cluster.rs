@@ -77,7 +77,6 @@ pub async fn handle_existing_collections(
                 optimizers_config: Some(optimizer_config.into()),
                 quantization_config,
                 encryption: params.encryption,
-                ckks: params.ckks,
                 strict_mode_config,
                 uuid,
                 metadata,

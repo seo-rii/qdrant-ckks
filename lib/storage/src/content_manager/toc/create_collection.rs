@@ -41,7 +41,6 @@ impl TableOfContent {
             quantization_config,
             sparse_vectors,
             encryption,
-            ckks,
             strict_mode_config,
             uuid,
             metadata,
@@ -151,7 +150,7 @@ impl TableOfContent {
             read_fan_out_factor: None,
             read_fan_out_delay_ms: None,
             encryption,
-            ckks,
+            ckks: None,
         };
         let wal_config = self.storage_config.wal.update_opt(wal_config_diff.as_ref());
 

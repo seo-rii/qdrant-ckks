@@ -116,7 +116,6 @@ fn test_alias_operation() {
                             quantization_config: None,
                             sharding_method: None,
                             encryption: None,
-                            ckks: None,
                             strict_mode_config: None,
                             uuid: None,
                             metadata: None,

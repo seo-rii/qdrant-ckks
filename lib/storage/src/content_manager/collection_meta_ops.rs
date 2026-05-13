@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use collection::config::{
-    CkksCollectionConfig, CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams,
-    CryptoMigrationPlan, ShardingMethod,
+    CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams, CryptoMigrationPlan,
+    ShardingMethod,
 };
 use collection::operations::config_diff::{
     CollectionParamsDiff, HnswConfigDiff, OptimizersConfigDiff, QuantizationConfigDiff,
@@ -105,27 +105,8 @@ impl From<RenameAlias> for AliasOperations {
     }
 }
 
-fn validate_create_collection_encryption_sections(
-    create_collection: &CreateCollection,
-) -> Result<(), validator::ValidationError> {
-    if create_collection.ckks.is_some() {
-        return Err(validator::ValidationError::new(
-            "legacy_ckks_config_unsupported",
-        ));
-    }
-
-    if create_collection.encryption.is_some() && create_collection.ckks.is_some() {
-        return Err(validator::ValidationError::new(
-            "conflicting_collection_encryption_sections",
-        ));
-    }
-
-    Ok(())
-}
-
 /// Operation for creating new collection and (optionally) specify index params
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Validate, PartialEq, Eq, Hash, Clone)]
-#[validate(schema(function = "validate_create_collection_encryption_sections"))]
 #[serde(rename_all = "snake_case")]
 pub struct CreateCollection {
     /// Vector data config.
@@ -192,10 +173,6 @@ pub struct CreateCollection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[validate(nested)]
     pub encryption: Option<CollectionEncryptionConfig>,
-    /// Collection-local encryption settings. Secret key material is resolved from runtime config.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[validate(nested)]
-    pub ckks: Option<CkksCollectionConfig>,
     /// Strict-mode config.
     #[validate(nested)]
     pub strict_mode_config: Option<StrictModeConfig>,
@@ -234,9 +211,7 @@ impl CreateCollectionOperation {
             }
         }
 
-        let crypto_identity_bound =
-            create_collection.encryption.is_some() || create_collection.ckks.is_some();
-        if crypto_identity_bound && create_collection.uuid.is_none() {
+        if create_collection.encryption.is_some() && create_collection.uuid.is_none() {
             create_collection.uuid = Some(Uuid::new_v4());
         }
         create_collection.validate().map_err(|err| {
@@ -495,7 +470,7 @@ impl From<CollectionConfigInternal> for CreateCollection {
             on_disk_payload,
             sparse_vectors,
             encryption,
-            ckks,
+            ckks: _,
         } = params;
 
         Self {
@@ -511,7 +486,6 @@ impl From<CollectionConfigInternal> for CreateCollection {
             quantization_config,
             sparse_vectors,
             encryption,
-            ckks,
             strict_mode_config,
             uuid,
             metadata,
@@ -542,7 +516,6 @@ mod tests {
             quantization_config: None,
             sparse_vectors: None,
             encryption,
-            ckks: None,
             strict_mode_config: None,
             uuid: None,
             metadata: None,
