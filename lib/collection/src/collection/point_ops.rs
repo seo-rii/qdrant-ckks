@@ -12,10 +12,10 @@ use qdrant_sec::{
     CKKS_SCHEME, CLIENT_ENCRYPTED_PAYLOAD_MARKER, CLIENT_PAYLOAD_ENVELOPE_BINDING,
     ClientPayloadNonceReplayKey, ClientPayloadValidationContext, ENCRYPTED_CKKS_VECTOR_MARKER,
     ENCRYPTED_PAYLOAD_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD, EncryptedCkksVector,
-    METADATA_EXACT_MATCH_TOKEN_BINDING, ServerPayloadValidationContext,
-    ckks_vector_sidecar_envelope_key, client_payload_envelope_key, client_payload_nonce_replay_key,
-    is_client_encrypted_payload_value, is_encrypted_payload_value, server_payload_envelope_key,
-    validate_client_payload_value_after_runtime_verification,
+    METADATA_EXACT_MATCH_TOKEN_BINDING, METADATA_VALUE_BINDING, PAYLOAD_FIELD_BINDING,
+    ServerPayloadValidationContext, ckks_vector_sidecar_envelope_key, client_payload_envelope_key,
+    client_payload_nonce_replay_key, is_client_encrypted_payload_value, is_encrypted_payload_value,
+    server_payload_envelope_key, validate_client_payload_value_after_runtime_verification,
     validate_server_payload_value_after_runtime_encryption,
 };
 use segment::data_types::order_by::{Direction, OrderBy};
@@ -215,7 +215,7 @@ impl Collection {
     where
         F: FnMut(&ExtendedPointId, &mut Payload) -> CollectionResult<usize>,
     {
-        let (migration_state, blind_index_paths) = {
+        let (migration_state, server_rewrite_paths, blind_index_paths) = {
             let collection_config = self.collection_config.read().await;
             let encryption = collection_config
                 .params
@@ -225,27 +225,57 @@ impl Collection {
                         "crypto payload migration requires an encrypted collection",
                     )
                 })?;
-            let blind_index_paths = encryption
-                .rules
-                .iter()
-                .filter(|rule| rule.binding.as_deref() == Some(METADATA_EXACT_MATCH_TOKEN_BINDING))
-                .filter_map(|rule| match &rule.selector {
-                    EncryptionSelector::MetadataKeys { keys } => Some(keys),
-                    _ => None,
-                })
-                .flatten()
-                .map(|path| {
-                    let path_string = path.clone();
-                    path.parse::<JsonPath>()
-                        .map(|json_path| (path_string, json_path))
-                        .map_err(|err| {
-                            CollectionError::bad_input(format!(
-                                "metadata blind-index field path '{path}' is invalid: {err:?}",
-                            ))
-                        })
-                })
-                .collect::<CollectionResult<Vec<_>>>()?;
-            (encryption.migration_state, blind_index_paths)
+            let mut server_rewrite_paths = Vec::new();
+            let mut blind_index_paths = Vec::new();
+            for rule in &encryption.rules {
+                match (&rule.selector, rule.binding.as_deref()) {
+                    (
+                        EncryptionSelector::PayloadPaths { paths },
+                        None | Some(PAYLOAD_FIELD_BINDING),
+                    ) => {
+                        for path in paths {
+                            let path_string = path.clone();
+                            let json_path = path.parse::<JsonPath>().map_err(|err| {
+                                CollectionError::bad_input(format!(
+                                    "payload encrypted field path '{path}' is invalid: {err:?}",
+                                ))
+                            })?;
+                            server_rewrite_paths.push((path_string, json_path));
+                        }
+                    }
+                    (EncryptionSelector::MetadataKeys { keys }, Some(METADATA_VALUE_BINDING)) => {
+                        for path in keys {
+                            let path_string = path.clone();
+                            let json_path = path.parse::<JsonPath>().map_err(|err| {
+                                CollectionError::bad_input(format!(
+                                    "metadata encrypted field path '{path}' is invalid: {err:?}",
+                                ))
+                            })?;
+                            server_rewrite_paths.push((path_string, json_path));
+                        }
+                    }
+                    (
+                        EncryptionSelector::MetadataKeys { keys },
+                        Some(METADATA_EXACT_MATCH_TOKEN_BINDING),
+                    ) => {
+                        for path in keys {
+                            let path_string = path.clone();
+                            let json_path = path.parse::<JsonPath>().map_err(|err| {
+                                CollectionError::bad_input(format!(
+                                    "metadata blind-index field path '{path}' is invalid: {err:?}",
+                                ))
+                            })?;
+                            blind_index_paths.push((path_string, json_path));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            (
+                encryption.migration_state,
+                server_rewrite_paths,
+                blind_index_paths,
+            )
         };
         if !matches!(
             migration_state,
@@ -373,6 +403,24 @@ impl Collection {
                                 "crypto payload migration must not add, remove, or mutate metadata blind-index token field '{blind_index_path}'",
                             )));
                         }
+                    }
+                    let mut original_non_migrated_payload = original_payload.0.clone();
+                    let mut updated_non_migrated_payload = payload.0.clone();
+                    for (server_rewrite_path, json_path) in &server_rewrite_paths {
+                        let original_values = json_path.value_get(&original_payload.0);
+                        let updated_values = json_path.value_get(&payload.0);
+                        if original_values.len() != updated_values.len() {
+                            return Err(CollectionError::bad_input(format!(
+                                "crypto payload migration must not add or remove server-side encrypted field '{server_rewrite_path}'",
+                            )));
+                        }
+                        json_path.value_remove(&mut original_non_migrated_payload);
+                        json_path.value_remove(&mut updated_non_migrated_payload);
+                    }
+                    if original_non_migrated_payload != updated_non_migrated_payload {
+                        return Err(CollectionError::bad_input(
+                            "crypto payload migration must not mutate payload fields outside server-side encrypted migration selectors",
+                        ));
                     }
                     changed_points += 1;
 

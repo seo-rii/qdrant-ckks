@@ -1815,17 +1815,39 @@ async fn crypto_migration_rewrites_payload_when_closure_underreports_change() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection =
         encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
+    let collection_crypto_id = collection.config_snapshot().await.uuid.unwrap().to_string();
+    let policy = PayloadEncryptionPolicy::new(["document.body"]).unwrap();
+    let resource_key = SecretKey::from_bytes([41u8; 32]);
+    let encryptor = PayloadTextEncryptor::new_from_resource_key_with_metadata(
+        &collection_crypto_id,
+        "tenant-a:docs",
+        &resource_key,
+        "tenant-a/docs@v0",
+        "tenant-a/docs-rk-v1",
+        0,
+    )
+    .unwrap()
+    .with_encryption_epoch(0);
 
+    let mut encrypted_payload = Payload(
+        serde_json::json!({ "document": { "body": "old" } })
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    let (_, verified_server_envelope_keys) = encryptor
+        .encrypt_selected_fields_for_runtime(
+            "1",
+            &mut encrypted_payload.0,
+            &policy,
+            &collection_crypto_id,
+        )
+        .unwrap();
     let upsert = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
         PointInsertOperationsInternal::from(vec![PointStructPersisted {
             id: 1.into(),
             vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
-            payload: Some(Payload(
-                serde_json::json!({ "migration_marker": "old" })
-                    .as_object()
-                    .unwrap()
-                    .clone(),
-            )),
+            payload: Some(encrypted_payload),
         }]),
     ));
     collection
@@ -1836,7 +1858,7 @@ async fn crypto_migration_rewrites_payload_when_closure_underreports_change() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::client_plaintext(),
+            CollectionUpdateProvenance::runtime_encrypted_payloads(verified_server_envelope_keys),
         )
         .await
         .unwrap();
@@ -1856,9 +1878,12 @@ async fn crypto_migration_rewrites_payload_when_closure_underreports_change() {
 
     let checkpoints = collection
         .rewrite_payloads_for_crypto_migration(|_, payload| {
-            payload
+            let body = payload
                 .0
-                .insert("migration_marker".to_string(), serde_json::json!("new"));
+                .get_mut("document")
+                .and_then(|document| document.get_mut("body"))
+                .expect("test payload must contain document.body");
+            *body = serde_json::json!("new");
             Ok(0)
         })
         .await
@@ -1900,7 +1925,8 @@ async fn crypto_migration_rewrites_payload_when_closure_underreports_change() {
             .as_ref()
             .unwrap()
             .0
-            .get("migration_marker"),
+            .get("document")
+            .and_then(|document| document.get("body")),
         Some(&serde_json::json!("new")),
     );
 }
@@ -2166,6 +2192,68 @@ async fn crypto_migration_rejects_blind_index_token_mutation() {
     assert!(
         matches!(err, CollectionError::BadInput { ref description }
             if description.contains("must not add, remove, or mutate metadata blind-index token field")),
+        "unexpected error: {err:?}",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn crypto_migration_rejects_non_migrated_payload_mutation() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
+
+    let upsert = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+        PointInsertOperationsInternal::from(vec![PointStructPersisted {
+            id: 1.into(),
+            vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+            payload: Some(Payload(
+                serde_json::json!({
+                    "untouched": "keep this value"
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            )),
+        }]),
+    ));
+    collection
+        .update_from_client(
+            upsert,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::client_plaintext(),
+        )
+        .await
+        .unwrap();
+
+    collection
+        .apply_crypto_migration_plan(&CryptoMigrationPlan {
+            from: CryptoMigrationState::Active,
+            to: CryptoMigrationState::Rotating,
+            target_epoch: 1,
+            active_rk_id: Some("tenant-a/payload-rk-v2".to_string()),
+            retired_rk_id: Some("tenant-a/payload-rk-v1".to_string()),
+            dry_run: false,
+            checkpoints: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    let err = collection
+        .rewrite_payloads_for_crypto_migration(|_, payload| {
+            payload
+                .0
+                .insert("untouched".to_string(), serde_json::json!("changed"));
+            Ok(1)
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, CollectionError::BadInput { ref description }
+            if description.contains("must not mutate payload fields outside server-side encrypted migration selectors")),
         "unexpected error: {err:?}",
     );
 }
