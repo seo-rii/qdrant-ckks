@@ -476,7 +476,22 @@ fn crypto_runtime_capability_mismatches(
     let base_fingerprint = base_telemetry
         .app
         .as_ref()
-        .and_then(|app| app.crypto_runtime_capability_fingerprint.as_deref())?;
+        .and_then(|app| app.crypto_runtime_capability_fingerprint.as_deref());
+    let Some(base_fingerprint) = base_fingerprint else {
+        let mut mismatches: Vec<_> = telemetry_by_peer.keys().copied().collect();
+        if let Some(base_peer_id) = base_telemetry
+            .cluster
+            .as_ref()
+            .and_then(|cluster| cluster.status.as_ref())
+            .and_then(|status| status.peer_id)
+        {
+            mismatches.push(base_peer_id);
+        }
+        mismatches.sort_unstable();
+        mismatches.dedup();
+        return (!mismatches.is_empty()).then_some(mismatches);
+    };
+
     let mut mismatches: Vec<_> = telemetry_by_peer
         .iter()
         .filter_map(|(peer_id, telemetry)| {
@@ -743,6 +758,32 @@ mod tests {
         assert_eq!(
             cluster.crypto_runtime_capability_mismatches.as_deref(),
             Some([2].as_slice()),
+        );
+    }
+
+    #[test]
+    fn distributed_telemetry_reports_missing_base_crypto_runtime_fingerprint() {
+        let mut base_without_crypto_fingerprint = telemetry_for_peer(1, 2, 10, "unused");
+        base_without_crypto_fingerprint
+            .app
+            .as_mut()
+            .unwrap()
+            .crypto_runtime_capability_fingerprint = None;
+
+        let distributed = DistributedTelemetryData::resolve_telemetries(
+            &Access::full("test"),
+            vec![
+                base_without_crypto_fingerprint,
+                telemetry_for_peer(2, 1, 9, "crypto-runtime-shared"),
+            ],
+            Vec::new(),
+        )
+        .unwrap();
+
+        let cluster = distributed.cluster.expect("cluster telemetry");
+        assert_eq!(
+            cluster.crypto_runtime_capability_mismatches.as_deref(),
+            Some([1, 2].as_slice()),
         );
     }
 }
