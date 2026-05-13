@@ -6064,6 +6064,76 @@ esac
                 },
                 None,
                 ShardSelectorInternal::All,
+                read_only_auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::Forbidden { description }
+                    if description.contains("Global manage access is required")
+            ));
+
+            let batch_search_request: CoreSearchRequest = SearchRequestInternal {
+                vector: vec![0.1, 0.2].into(),
+                with_payload: Some(WithPayloadInterface::Encrypted(
+                    PayloadEncryptedReadPolicy {
+                        encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                    },
+                )),
+                with_vector: Some(WithVector::Bool(false)),
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: None,
+                score_threshold: None,
+            }
+            .into();
+            let err = crate::common::query::do_search_batch_points(
+                &toc,
+                "docs",
+                vec![(batch_search_request, ShardSelectorInternal::All)],
+                None,
+                read_only_auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::Forbidden { description }
+                    if description.contains("Global manage access is required")
+            ));
+
+            let err = crate::common::query::do_query_batch_points(
+                &toc,
+                "docs",
+                vec![(
+                    CollectionQueryRequest {
+                        prefetch: Vec::new(),
+                        query: Some(Query::Vector(VectorQuery::Nearest(
+                            VectorInputInternal::Vector(VectorInternal::Dense(vec![0.1, 0.2])),
+                        ))),
+                        using: DEFAULT_VECTOR_NAME.to_string(),
+                        filter: None,
+                        score_threshold: None,
+                        limit: 1,
+                        offset: 0,
+                        params: None,
+                        with_vector: WithVector::Bool(false),
+                        with_payload: WithPayloadInterface::Encrypted(PayloadEncryptedReadPolicy {
+                            encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                        }),
+                        lookup_from: None,
+                    },
+                    ShardSelectorInternal::All,
+                )],
+                None,
                 read_only_auth,
                 None,
                 HwMeasurementAcc::disposable(),
