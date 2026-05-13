@@ -1922,6 +1922,10 @@ fn ckks_sidecar_hnsw_records_fingerprint(records: &[CkksSidecarSearchRecord]) ->
     let mut hasher = Sha256::new();
     hasher.update((records.len() as u64).to_be_bytes());
     for record in records {
+        let id = serde_json::to_vec(&record.id).expect("serializing a point id should not fail");
+        hasher.update((id.len() as u64).to_be_bytes());
+        hasher.update(id);
+        hasher.update([0]);
         hasher.update(record.point_id.as_bytes());
         hasher.update([0]);
         match &record.shard_key {
@@ -7434,6 +7438,17 @@ mod tests {
             ckks_sidecar_test_record(1, "ciphertext-a"),
             ckks_sidecar_test_record(3, "ciphertext-b"),
         ]);
+
+        assert_ne!(first, changed);
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_records_fingerprint_tracks_scored_point_id_identity() {
+        let first =
+            ckks_sidecar_hnsw_records_fingerprint(&[ckks_sidecar_test_record(1, "ciphertext-a")]);
+        let mut changed = ckks_sidecar_test_record(1, "ciphertext-a");
+        changed.id = 2.into();
+        let changed = ckks_sidecar_hnsw_records_fingerprint(&[changed]);
 
         assert_ne!(first, changed);
     }
