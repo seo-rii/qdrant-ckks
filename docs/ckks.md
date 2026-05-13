@@ -625,7 +625,7 @@ crypto:
       wrap_algorithm: AES-256-GCM
       rk_epoch: 3
       state: active
-      scope: collection:docs
+      scope: collection:uuid-123e4567-e89b-12d3-a456-426614174000
       nonce: base64url-no-pad-96-bit-nonce
       wrapped_key_b64: base64url-no-pad-wrapped-rk
     tenant-a/payload-v0:
@@ -634,7 +634,7 @@ crypto:
       wrap_algorithm: AES-256-GCM
       rk_epoch: 2
       state: retired
-      scope: collection:docs
+      scope: collection:uuid-123e4567-e89b-12d3-a456-426614174000
       nonce: base64url-no-pad-96-bit-nonce
       wrapped_key_b64: base64url-no-pad-wrapped-rk
     tenant-a/vector-v1:
