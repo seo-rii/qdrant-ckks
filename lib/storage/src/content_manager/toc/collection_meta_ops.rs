@@ -999,6 +999,34 @@ mod tests {
             err.to_string()
                 .contains("requires peer 2 crypto runtime capability metadata")
         );
+
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(String::new())),
+        );
+        let err = validate_encrypted_transfer_crypto_runtime_parity("docs", 1, 2, 3, &metadata)
+            .expect_err("blank transfer participant crypto metadata must fail closed");
+        assert!(
+            err.to_string()
+                .contains("requires peer 2 crypto runtime capability metadata")
+        );
+
+        metadata.insert(
+            1,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(String::new())),
+        );
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-a".to_string(),
+            )),
+        );
+        let err = validate_encrypted_transfer_crypto_runtime_parity("docs", 1, 2, 3, &metadata)
+            .expect_err("blank local crypto metadata must fail closed");
+        assert!(
+            err.to_string()
+                .contains("requires local peer 1 crypto runtime capability metadata")
+        );
     }
 
     #[test]
