@@ -1350,10 +1350,6 @@ pub struct CollectionParamsDiff {
     /// Define number of milliseconds to wait before attempting to read from another replica.
     #[prost(uint64, optional, tag = "5")]
     pub read_fan_out_delay_ms: ::core::option::Option<u64>,
-    /// Collection-local qdrant-sec encryption settings. Set enabled=false to disable.
-    #[prost(message, optional, tag = "6")]
-    #[validate(nested)]
-    pub ckks: ::core::option::Option<CkksCollectionConfig>,
 }
 #[derive(validator::Validate)]
 #[derive(serde::Serialize)]

@@ -573,8 +573,6 @@ message CollectionParamsDiff {
   optional uint32 read_fan_out_factor = 4;
   // Define number of milliseconds to wait before attempting to read from another replica.
   optional uint64 read_fan_out_delay_ms = 5;
-  // Collection-local qdrant-sec encryption settings. Set enabled=false to disable.
-  optional CkksCollectionConfig ckks = 6;
 }
 
 message CkksCollectionConfig {

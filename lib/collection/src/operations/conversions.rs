@@ -353,13 +353,7 @@ impl TryFrom<api::grpc::qdrant::CollectionParamsDiff> for CollectionParamsDiff {
             read_fan_out_factor,
             on_disk_payload,
             read_fan_out_delay_ms,
-            ckks,
         } = value;
-        if ckks.is_some() {
-            return Err(Status::invalid_argument(
-                "legacy_ckks_config_unsupported: use collection encryption and crypto runtime settings",
-            ));
-        }
         let diff = Self {
             replication_factor: replication_factor
                 .map(|factor| {
@@ -2037,24 +2031,6 @@ impl TryFrom<api::grpc::qdrant::CollectionConfig> for CollectionConfig {
 #[cfg(test)]
 mod ckks_grpc_tests {
     use super::*;
-
-    #[test]
-    fn collection_params_diff_rejects_ckks_config_from_grpc() {
-        let diff = api::grpc::qdrant::CollectionParamsDiff {
-            ckks: Some(api::grpc::qdrant::CkksCollectionConfig {
-                enabled: true,
-                key_id: Some("tenant-a:docs".to_string()),
-                payload_text_fields: vec!["body".to_string()],
-                vector_names: Vec::new(),
-            }),
-            ..Default::default()
-        };
-
-        let err = CollectionParamsDiff::try_from(diff).unwrap_err();
-
-        assert_eq!(err.code(), tonic::Code::InvalidArgument);
-        assert!(err.message().contains("legacy_ckks_config_unsupported"));
-    }
 
     #[test]
     fn grpc_ckks_config_redacts_legacy_fields() {

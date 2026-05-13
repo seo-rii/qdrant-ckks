@@ -139,7 +139,6 @@ fn configure_validation(builder: Builder) -> Builder {
             ("UpdateCollection.strict_mode_config", ""),
             ("CollectionParamsDiff.replication_factor", "range(min = 1)"),
             ("CollectionParamsDiff.write_consistency_factor", "range(min = 1)"),
-            ("CollectionParamsDiff.ckks", ""),
             ("DeleteCollection.collection_name", "length(min = 1, max = 255), custom(function = \"common::validation::validate_collection_name_legacy\")"),
             ("DeleteCollection.timeout", "range(min = 1)"),
             ("CollectionParams.vectors_config", ""),
