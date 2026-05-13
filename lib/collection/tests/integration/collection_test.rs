@@ -3177,6 +3177,25 @@ async fn encrypted_payload_field_rejects_payload_delete_and_clear() {
             if description.contains("cannot clear payloads")
                 && description.contains("document.body")
     ));
+
+    let err = collection
+        .update_from_client_simple(
+            CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayloadByFilter(
+                Filter::default(),
+            )),
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot clear payloads")
+                && description.contains("document.body")
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3251,6 +3270,26 @@ async fn encrypted_metadata_fields_reject_payload_delete_and_clear() {
         "unexpected error: {err:?}",
     );
 
+    let err = blind_index_collection
+        .update_from_client_simple(
+            CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayloadByFilter(
+                Filter::default(),
+            )),
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot clear payloads")
+                && description.contains("metadata blind-index field")
+                && description.contains("document_body__blind_eq")
+    ));
+
     let metadata_value_collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let metadata_value_collection = encrypted_collection_fixture(
         metadata_value_collection_dir.path(),
@@ -3303,6 +3342,26 @@ async fn encrypted_metadata_fields_reject_payload_delete_and_clear() {
             CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayload {
                 points: vec![1.into()],
             }),
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot clear payloads")
+                && description.contains("encrypted metadata value field")
+                && description.contains("tenant.private")
+    ));
+
+    let err = metadata_value_collection
+        .update_from_client_simple(
+            CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayloadByFilter(
+                Filter::default(),
+            )),
             true,
             None,
             WriteOrdering::default(),
