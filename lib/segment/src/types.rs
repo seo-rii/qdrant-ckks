@@ -3608,7 +3608,9 @@ pub enum EncryptedPayloadReadMode {
     Raw,
     /// Return payloads, but replace encrypted marker values with redaction sentinels.
     Redacted,
-    /// Reserved for a future RBAC-protected server decrypt mode.
+    /// Request API-runtime server-side decryption for server-managed AEAD
+    /// payload envelopes. Collection-internal reads reject this mode, and
+    /// client-side envelopes remain opaque.
     Decrypted,
 }
 
@@ -4214,6 +4216,15 @@ mod tests {
         assert_eq!(
             redacted.encrypted_payload_read_mode(),
             EncryptedPayloadReadMode::Redacted
+        );
+
+        let decrypted: WithPayloadInterface =
+            serde_json::from_value(serde_json::json!({ "encrypted_payload": "decrypted" }))
+                .unwrap();
+        assert!(decrypted.is_required());
+        assert_eq!(
+            decrypted.encrypted_payload_read_mode(),
+            EncryptedPayloadReadMode::Decrypted
         );
 
         let with_payload = WithPayload::from(redacted);
