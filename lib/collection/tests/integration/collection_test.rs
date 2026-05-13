@@ -1440,10 +1440,11 @@ async fn crypto_migration_rewrites_stale_payload_envelopes_and_returns_checkpoin
     let checkpoints = collection
         .rewrite_payloads_for_crypto_migration(|point_id, payload| {
             rotating_encryptor
-                .encrypt_selected_fields_with_mode(
+                .encrypt_selected_fields_with_mode_for_runtime(
                     &point_id.to_string(),
                     &mut payload.0,
                     &policy,
+                    &collection_crypto_id,
                     ExistingPayloadMode::ReencryptIfStale,
                 )
                 .map_err(|err| CollectionError::bad_input(err.to_string()))
@@ -1462,10 +1463,11 @@ async fn crypto_migration_rewrites_stale_payload_envelopes_and_returns_checkpoin
     let checkpoints = collection
         .rewrite_payloads_for_crypto_migration(|point_id, payload| {
             rotating_encryptor
-                .encrypt_selected_fields_with_mode(
+                .encrypt_selected_fields_with_mode_for_runtime(
                     &point_id.to_string(),
                     &mut payload.0,
                     &policy,
+                    &collection_crypto_id,
                     ExistingPayloadMode::ReencryptIfStale,
                 )
                 .map_err(|err| CollectionError::bad_input(err.to_string()))
@@ -1894,7 +1896,7 @@ async fn crypto_migration_rewrites_payload_when_closure_underreports_change() {
         .unwrap_err();
     assert!(
         matches!(err, CollectionError::BadInput { ref description }
-            if description.contains("must leave server-side encrypted field 'document.body' as an encrypted marker")),
+            if description.contains("must provide a runtime server-envelope proof for field 'document.body'")),
         "unexpected error: {err:?}",
     );
 
@@ -1937,13 +1939,14 @@ async fn crypto_migration_rewrites_payload_when_closure_underreports_change() {
     let checkpoints = collection
         .rewrite_payloads_for_crypto_migration(|point_id, payload| {
             rotating_encryptor
-                .encrypt_selected_fields_with_mode(
+                .encrypt_selected_fields_with_mode_for_runtime(
                     &point_id.to_string(),
                     &mut payload.0,
                     &policy,
+                    &collection_crypto_id,
                     ExistingPayloadMode::ReencryptIfStale,
                 )
-                .map(|_| 0)
+                .map(|(_, verified_envelope_keys)| (0, verified_envelope_keys))
                 .map_err(|err| CollectionError::bad_input(err.to_string()))
         })
         .await

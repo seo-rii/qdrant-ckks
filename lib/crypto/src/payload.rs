@@ -556,17 +556,30 @@ impl PayloadTextEncryptor {
         policy: &PayloadEncryptionPolicy,
         collection_id: &str,
     ) -> Result<(usize, Vec<ServerPayloadVerifiedEnvelopeKey>), PayloadEncryptionError> {
+        self.encrypt_selected_fields_with_mode_for_runtime(
+            point_id,
+            payload,
+            policy,
+            collection_id,
+            ExistingPayloadMode::FailIfExisting,
+        )
+    }
+
+    pub fn encrypt_selected_fields_with_mode_for_runtime(
+        &self,
+        point_id: &str,
+        payload: &mut Map<String, Value>,
+        policy: &PayloadEncryptionPolicy,
+        collection_id: &str,
+        existing_mode: ExistingPayloadMode,
+    ) -> Result<(usize, Vec<ServerPayloadVerifiedEnvelopeKey>), PayloadEncryptionError> {
         if collection_id != self.collection {
             return Err(PayloadEncryptionError::InvalidFieldPath(
                 "collection_id".to_string(),
             ));
         }
-        let changed = self.encrypt_selected_fields_with_mode(
-            point_id,
-            payload,
-            policy,
-            ExistingPayloadMode::FailIfExisting,
-        )?;
+        let changed =
+            self.encrypt_selected_fields_with_mode(point_id, payload, policy, existing_mode)?;
         let mut verified_envelope_keys = Vec::new();
         for field in policy.fields() {
             let Some(value) = locate_path_mut(payload, field)? else {

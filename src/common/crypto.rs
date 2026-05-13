@@ -612,6 +612,76 @@ impl PayloadWritePlan {
         Ok(encrypted)
     }
 
+    pub(crate) fn reencrypt_payload_if_stale_for_crypto_migration(
+        &self,
+        point_id: &str,
+        payload: &mut Payload,
+    ) -> Result<PayloadWriteOutcome, PayloadWriteSetupError> {
+        let mut changed = 0;
+        let mut verified_server_envelope_keys = HashSet::new();
+        let mut verified_client_envelope_keys = HashSet::new();
+
+        for rule in &self.rules {
+            match rule {
+                PayloadWriteRule::ServerEncrypt { encryptor, policy } => {
+                    let (server_changed, server_keys) = encryptor
+                        .encrypt_selected_fields_with_mode_for_runtime(
+                            point_id,
+                            &mut payload.0,
+                            policy,
+                            &self.collection_crypto_id,
+                            ExistingPayloadMode::ReencryptIfStale,
+                        )?;
+                    changed += server_changed;
+                    verified_server_envelope_keys.extend(server_keys);
+                }
+                PayloadWriteRule::ClientEnvelope {
+                    policy,
+                    expected_key_id,
+                    expected_rk_id,
+                    min_rk_epoch,
+                    max_rk_epoch,
+                    key_id_required,
+                    signature_verifier,
+                } => {
+                    for field in policy.fields() {
+                        let encrypted_path = field.parse::<JsonPath>().map_err(|_| {
+                            PayloadWriteSetupError::Payload(
+                                PayloadEncryptionError::InvalidFieldPath(field.clone()),
+                            )
+                        })?;
+                        for value in encrypted_path.value_get(&payload.0) {
+                            let signature_verification =
+                                signature_verifier.verification_for_value(value, field)?;
+                            let verified_client_key = validate_client_payload_value_for_runtime(
+                                value,
+                                ClientPayloadValidationContext {
+                                    collection_id: &self.collection_crypto_id,
+                                    point_id,
+                                    field_path: field,
+                                    expected_key_id: expected_key_id.as_deref(),
+                                    expected_rk_id: expected_rk_id.as_deref(),
+                                    min_rk_epoch: *min_rk_epoch,
+                                    max_rk_epoch: *max_rk_epoch,
+                                    key_id_required: *key_id_required,
+                                    signature_required: true,
+                                    signature_verification: Some(signature_verification),
+                                },
+                            )?;
+                            verified_client_envelope_keys.insert(verified_client_key);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(PayloadWriteOutcome {
+            changed,
+            verified_server_envelope_keys,
+            verified_client_envelope_keys,
+        })
+    }
+
     pub(crate) fn decrypt_payload_for_crypto_migration(
         &self,
         point_id: &str,

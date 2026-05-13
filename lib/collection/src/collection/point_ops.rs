@@ -13,10 +13,11 @@ use qdrant_sec::{
     ClientPayloadNonceReplayKey, ClientPayloadValidationContext, ENCRYPTED_CKKS_VECTOR_MARKER,
     ENCRYPTED_PAYLOAD_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD, EncryptedCkksVector,
     METADATA_EXACT_MATCH_TOKEN_BINDING, METADATA_VALUE_BINDING, PAYLOAD_FIELD_BINDING,
-    ServerPayloadValidationContext, ckks_vector_sidecar_envelope_key, client_payload_envelope_key,
-    client_payload_nonce_replay_key, is_client_encrypted_payload_value, is_encrypted_payload_value,
-    server_payload_envelope_key, validate_client_payload_value_after_runtime_verification,
-    validate_server_payload_value_after_runtime_encryption, validate_server_payload_value_metadata,
+    ServerPayloadValidationContext, ServerPayloadVerifiedEnvelopeKey,
+    ckks_vector_sidecar_envelope_key, client_payload_envelope_key, client_payload_nonce_replay_key,
+    is_client_encrypted_payload_value, is_encrypted_payload_value, server_payload_envelope_key,
+    validate_client_payload_value_after_runtime_verification,
+    validate_server_payload_value_after_runtime_encryption,
 };
 use segment::data_types::order_by::{Direction, OrderBy};
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
@@ -208,18 +209,20 @@ impl Collection {
         Ok(())
     }
 
-    pub async fn rewrite_payloads_for_crypto_migration<F>(
+    pub async fn rewrite_payloads_for_crypto_migration<F, R>(
         &self,
         mut rewrite_payload: F,
     ) -> CollectionResult<Vec<CryptoMigrationCheckpoint>>
     where
-        F: FnMut(&ExtendedPointId, &mut Payload) -> CollectionResult<usize>,
+        F: FnMut(&ExtendedPointId, &mut Payload) -> CollectionResult<R>,
+        R: Into<CryptoPayloadMigrationRewrite>,
     {
         let (
             migration_state,
             key_id,
             crypto_schema_version,
             encryption_epoch,
+            collection_crypto_id,
             server_rewrite_paths,
             blind_index_paths,
         ) = {
@@ -283,6 +286,7 @@ impl Collection {
                 encryption.key_id.clone(),
                 encryption.crypto_schema_version,
                 encryption.encryption_epoch,
+                collection_config.stable_crypto_id(self.name())?,
                 server_rewrite_paths,
                 blind_index_paths,
             )
@@ -344,7 +348,8 @@ impl Collection {
                         continue;
                     };
                     let original_payload = payload.clone();
-                    let changed = rewrite_payload(&record.id, &mut payload)?;
+                    let rewrite = rewrite_payload(&record.id, &mut payload)?.into();
+                    let changed = rewrite.changed;
                     let payload_changed = changed > 0 || payload != original_payload;
                     // Migration completion checkpoints represent verified
                     // coverage, not only points that needed byte changes. A
@@ -424,14 +429,42 @@ impl Collection {
                         match migration_state {
                             CryptoMigrationState::Encrypting | CryptoMigrationState::Rotating => {
                                 for value in &updated_values {
-                                    validate_server_payload_value_metadata(
+                                    let Some(envelope_key) = server_payload_envelope_key(
                                         value,
+                                        &collection_crypto_id,
+                                        &record.id.to_string(),
+                                        server_rewrite_path,
+                                    )
+                                    .map_err(|err| {
+                                        CollectionError::bad_input(format!(
+                                            "crypto payload migration must leave server-side encrypted field '{server_rewrite_path}' as an encrypted marker during {migration_state:?}: {err}",
+                                        ))
+                                    })?
+                                    else {
+                                        return Err(CollectionError::bad_input(format!(
+                                            "crypto payload migration must leave server-side encrypted field '{server_rewrite_path}' as an encrypted marker during {migration_state:?}",
+                                        )));
+                                    };
+                                    let Some(verified_envelope_key) = rewrite
+                                        .verified_server_envelope_keys
+                                        .iter()
+                                        .find(|verified| verified.envelope_key() == &envelope_key)
+                                    else {
+                                        return Err(CollectionError::bad_input(format!(
+                                            "crypto payload migration must provide a runtime server-envelope proof for field '{server_rewrite_path}' during {migration_state:?}",
+                                        )));
+                                    };
+                                    validate_server_payload_value_after_runtime_encryption(
+                                        value,
+                                        &collection_crypto_id,
+                                        &record.id.to_string(),
                                         ServerPayloadValidationContext {
                                             field_path: server_rewrite_path,
                                             key_id: key_id.as_deref(),
                                             crypto_schema_version,
                                             encryption_epoch,
                                         },
+                                        verified_envelope_key,
                                     )
                                     .map_err(|err| {
                                         CollectionError::bad_input(format!(
@@ -2463,6 +2496,44 @@ impl Collection {
         }
 
         Ok(())
+    }
+}
+
+pub struct CryptoPayloadMigrationRewrite {
+    pub changed: usize,
+    pub verified_server_envelope_keys: Vec<ServerPayloadVerifiedEnvelopeKey>,
+}
+
+impl CryptoPayloadMigrationRewrite {
+    pub fn new(changed: usize) -> Self {
+        Self {
+            changed,
+            verified_server_envelope_keys: Vec::new(),
+        }
+    }
+
+    pub fn with_server_envelope_keys(
+        changed: usize,
+        verified_server_envelope_keys: impl IntoIterator<Item = ServerPayloadVerifiedEnvelopeKey>,
+    ) -> Self {
+        Self {
+            changed,
+            verified_server_envelope_keys: verified_server_envelope_keys.into_iter().collect(),
+        }
+    }
+}
+
+impl From<usize> for CryptoPayloadMigrationRewrite {
+    fn from(changed: usize) -> Self {
+        Self::new(changed)
+    }
+}
+
+impl From<(usize, Vec<ServerPayloadVerifiedEnvelopeKey>)> for CryptoPayloadMigrationRewrite {
+    fn from(
+        (changed, verified_server_envelope_keys): (usize, Vec<ServerPayloadVerifiedEnvelopeKey>),
+    ) -> Self {
+        Self::with_server_envelope_keys(changed, verified_server_envelope_keys)
     }
 }
 

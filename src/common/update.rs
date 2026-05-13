@@ -1625,7 +1625,16 @@ pub async fn do_reencrypt_stale_payloads_for_crypto_migration(
 
     collection
         .rewrite_payloads_for_crypto_migration(|point_id, payload| {
-            plan.reencrypt_payload_if_stale(&point_id.to_string(), payload)
+            plan.reencrypt_payload_if_stale_for_crypto_migration(&point_id.to_string(), payload)
+                .map(|outcome| {
+                    (
+                        outcome.changed,
+                        outcome
+                            .verified_server_envelope_keys
+                            .into_iter()
+                            .collect::<Vec<_>>(),
+                    )
+                })
                 .map_err(|err| {
                     CollectionError::bad_input(format!(
                         "payload crypto migration rewrite failed for point {point_id}: {err}",
@@ -2705,6 +2714,7 @@ mod tests {
                 env: None,
                 path: None,
                 value_b64: Some(BASE64URL_NOPAD.encode(&[5u8; 32])),
+                rk_epoch: Some(1),
                 ..crate::settings::CryptoMaterialConfig::default()
             },
         )]);
