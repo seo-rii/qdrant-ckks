@@ -1906,6 +1906,115 @@ async fn crypto_migration_rewrites_payload_when_closure_underreports_change() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn crypto_migration_rejects_client_envelope_mutation() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, client_payload_encryption_config())
+            .await;
+    let collection_crypto_id = collection.config_snapshot().await.uuid.unwrap().to_string();
+    let rng = SystemRandom::new();
+    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+    let public_key = key_pair.public_key().as_ref().to_vec();
+
+    let mut client_payload = Payload(
+        serde_json::json!({
+            "document": {
+                "body": {
+                    CLIENT_ENCRYPTED_PAYLOAD_MARKER: {
+                        "version": 1,
+                        "kind": "payload_text",
+                        "algorithm": "AES-256-GCM",
+                        "key_id": "tenant-a/client-rk-2026-04",
+                        "rk_id": "tenant-a/client-rk-2026-04",
+                        "rk_epoch": 3,
+                        "kdf_domain": "qdrant-sec/client-payload-text/v1",
+                        "aad": {
+                            "collection_id": collection_crypto_id.clone(),
+                            "point_id": "1",
+                            "field_path": "document.body",
+                            "schema_version": 1
+                        },
+                        "nonce": "AAAAAAAAAAAAAAAA",
+                        "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA",
+                        "signature": {
+                            "alg": "ed25519",
+                            "key_id": "tenant-a/client-signing-v1",
+                            "sig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                        }
+                    }
+                }
+            }
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
+    sign_client_payload(&mut client_payload, &key_pair);
+
+    let upsert = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+        PointInsertOperationsInternal::from(vec![PointStructPersisted {
+            id: 1.into(),
+            vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+            payload: Some(client_payload),
+        }]),
+    ));
+    let provenance = runtime_verified_client_envelopes_for_operation(
+        &upsert,
+        &collection_crypto_id,
+        &public_key,
+    );
+    collection
+        .update_from_client(
+            upsert,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            provenance,
+        )
+        .await
+        .unwrap();
+
+    collection
+        .apply_crypto_migration_plan(&CryptoMigrationPlan {
+            from: CryptoMigrationState::Active,
+            to: CryptoMigrationState::Rotating,
+            target_epoch: 4,
+            active_rk_id: Some("tenant-a/client-rk-2026-05".to_string()),
+            retired_rk_id: Some("tenant-a/client-rk-2026-04".to_string()),
+            dry_run: false,
+            checkpoints: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    let err = collection
+        .rewrite_payloads_for_crypto_migration(|_, payload| {
+            payload
+                .0
+                .get_mut("document")
+                .and_then(|document| document.get_mut("body"))
+                .and_then(|body| body.get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER))
+                .and_then(serde_json::Value::as_object_mut)
+                .unwrap()
+                .insert(
+                    "ciphertext".to_string(),
+                    serde_json::json!("BBBBBBBBBBBBBBBBBBBBBB"),
+                );
+            Ok(1)
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, CollectionError::BadInput { ref description }
+            if description.contains("must not add, remove, or mutate client-side encrypted payload envelopes")),
+        "unexpected error: {err:?}",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn crypto_migration_completion_requires_all_collection_shards() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection =

@@ -293,6 +293,42 @@ impl Collection {
                     if !payload_changed {
                         continue;
                     }
+                    let mut original_client_envelopes = std::collections::BTreeMap::new();
+                    let mut updated_client_envelopes = std::collections::BTreeMap::new();
+                    for (payload, envelopes) in [
+                        (&original_payload, &mut original_client_envelopes),
+                        (&payload, &mut updated_client_envelopes),
+                    ] {
+                        let mut stack = payload
+                            .0
+                            .iter()
+                            .map(|(key, value)| (key.clone(), value))
+                            .collect::<Vec<_>>();
+                        while let Some((path, value)) = stack.pop() {
+                            if is_client_encrypted_payload_value(value) {
+                                envelopes.insert(path, value.clone());
+                                continue;
+                            }
+                            match value {
+                                serde_json::Value::Object(object) => {
+                                    for (key, child) in object {
+                                        stack.push((format!("{path}.{key}"), child));
+                                    }
+                                }
+                                serde_json::Value::Array(items) => {
+                                    for (index, child) in items.iter().enumerate() {
+                                        stack.push((format!("{path}[{index}]"), child));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    if original_client_envelopes != updated_client_envelopes {
+                        return Err(CollectionError::bad_input(
+                            "crypto payload migration must not add, remove, or mutate client-side encrypted payload envelopes",
+                        ));
+                    }
                     changed_points += 1;
 
                     let operation = CollectionUpdateOperations::PayloadOperation(
