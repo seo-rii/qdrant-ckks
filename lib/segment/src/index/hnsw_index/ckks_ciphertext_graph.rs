@@ -516,6 +516,20 @@ pub fn ckks_ciphertext_from_payload<'a>(
             )));
         }
     }
+    let nonce = envelope
+        .get("nonce")
+        .and_then(serde_json::Value::as_str)
+        .expect("nonce was checked above");
+    let is_base64url_no_pad = |value: &str| {
+        value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    };
+    if nonce.len() != 16 || !is_base64url_no_pad(nonce) {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' has invalid nonce",
+        )));
+    }
     if envelope
         .get("rk_epoch")
         .and_then(serde_json::Value::as_u64)
@@ -536,6 +550,11 @@ pub fn ckks_ciphertext_from_payload<'a>(
     if ciphertext.is_empty() {
         return Err(OperationError::service_error(format!(
             "stored CKKS vector sidecar entry '{vector_name}' has empty ciphertext",
+        )));
+    }
+    if ciphertext.len() < 22 || !is_base64url_no_pad(ciphertext) {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' has invalid ciphertext",
         )));
     }
     Ok(Some(ciphertext))
@@ -1657,7 +1676,7 @@ mod tests {
                                 "rk_id": "tenant-a/vector-rk@v1",
                                 "rk_epoch": 1,
                                 "nonce": "AAAAAAAAAAAAAAAA",
-                                "ciphertext": "stored-ciphertext"
+                                "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA"
                             }
                         }
                     }
@@ -1668,7 +1687,7 @@ mod tests {
 
         assert_eq!(
             ckks_ciphertext_from_payload(&payload, "embedding").unwrap(),
-            Some("stored-ciphertext"),
+            Some("AAAAAAAAAAAAAAAAAAAAAA"),
         );
         assert_eq!(
             ckks_ciphertext_from_payload(&payload, "other").unwrap(),
@@ -1713,7 +1732,7 @@ mod tests {
                 "envelope": {
                     "version": 1,
                     "algorithm": "AES-256-GCM",
-                    "ciphertext": "stored-ciphertext"
+                    "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA"
                 }
             })),
             "embedding",
@@ -1728,7 +1747,7 @@ mod tests {
                 "envelope": {
                     "version": 1,
                     "algorithm": "AES-256-GCM",
-                    "ciphertext": "stored-ciphertext"
+                    "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA"
                 }
             })),
             "embedding",
@@ -1749,7 +1768,7 @@ mod tests {
                     "rk_id": "tenant-a/vector-rk@v1",
                     "rk_epoch": 1,
                     "nonce": "AAAAAAAAAAAAAAAA",
-                    "ciphertext": "stored-ciphertext"
+                    "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA"
                 }
             })),
             "embedding",
@@ -1769,7 +1788,7 @@ mod tests {
                     "rk_id": "tenant-a/vector-rk@v1",
                     "rk_epoch": 1,
                     "nonce": "AAAAAAAAAAAAAAAA",
-                    "ciphertext": "stored-ciphertext",
+                    "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA",
                     "unexpected": true
                 }
             })),
@@ -1788,7 +1807,7 @@ mod tests {
                     "key_id": "tenant-a:vector",
                     "material_fingerprint": "tenant-a/vector@v1",
                     "nonce": "AAAAAAAAAAAAAAAA",
-                    "ciphertext": "stored-ciphertext"
+                    "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA"
                 }
             })),
             "embedding",
@@ -1822,13 +1841,53 @@ mod tests {
                 "scheme": "openfhe-ckks",
                 "envelope": {
                     "version": 1,
+                    "algorithm": "AES-256-GCM",
+                    "key_id": "tenant-a:vector",
+                    "material_fingerprint": "tenant-a/vector@v1",
+                    "rk_id": "tenant-a/vector-rk@v1",
+                    "rk_epoch": 1,
+                    "nonce": "not-base64url",
+                    "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA"
+                }
+            })),
+            "embedding",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("invalid nonce"));
+
+        let err = ckks_ciphertext_from_payload(
+            &payload_with_marker(serde_json::json!({
+                "version": 1,
+                "scheme": "openfhe-ckks",
+                "envelope": {
+                    "version": 1,
+                    "algorithm": "AES-256-GCM",
+                    "key_id": "tenant-a:vector",
+                    "material_fingerprint": "tenant-a/vector@v1",
+                    "rk_id": "tenant-a/vector-rk@v1",
+                    "rk_epoch": 1,
+                    "nonce": "AAAAAAAAAAAAAAAA",
+                    "ciphertext": "too-short"
+                }
+            })),
+            "embedding",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("invalid ciphertext"));
+
+        let err = ckks_ciphertext_from_payload(
+            &payload_with_marker(serde_json::json!({
+                "version": 1,
+                "scheme": "openfhe-ckks",
+                "envelope": {
+                    "version": 1,
                     "algorithm": "AES-128-GCM",
                     "key_id": "tenant-a:vector",
                     "material_fingerprint": "tenant-a/vector@v1",
                     "rk_id": "tenant-a/vector-rk@v1",
                     "rk_epoch": 1,
                     "nonce": "AAAAAAAAAAAAAAAA",
-                    "ciphertext": "stored-ciphertext"
+                    "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA"
                 }
             })),
             "embedding",

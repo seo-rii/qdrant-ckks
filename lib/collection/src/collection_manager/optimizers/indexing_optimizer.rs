@@ -135,7 +135,7 @@ mod tests {
                                     "rk_id": "tenant-a/vector-rk@v1",
                                     "rk_epoch": 1,
                                     "nonce": "AAAAAAAAAAAAAAAA",
-                                    "ciphertext": format!("ciphertext-{idx:04}")
+                                    "ciphertext": format!("AAAAAAAAAAAAAAAAAAAAAA{idx:04}")
                                 }
                             }
                         }
