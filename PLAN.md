@@ -3,7 +3,7 @@
 이 문서는 `RISK_REGISTER.md`의 대형 작업을 구현 순서대로 정리한다. 작은 방어 패치는 이미 별도 커밋으로 일부 처리됐고, 여기서는 설계, migration, 테스트 인프라, 구조 변경이 필요한 작업만 다룬다.
 
 기준 브랜치: `sec`
-최종 갱신: 2026-05-12
+최종 갱신: 2026-05-13
 
 ## 작업 원칙
 
@@ -29,14 +29,16 @@
 - Quantization/ACORN/indexed-only search params와 plaintext-vector `HNSWIndex` file-format reuse는 아직 unsupported 상태에서 fail-closed 된다. Client-supplied encrypted CKKS query ciphertext, search matrix, prefetch/fusion/MMR, point-id recommend/discover/context examples, grouped variants는 문서화된 범위에서 sidecar scoring으로 라우팅된다.
 - Snapshot/restore preflight, shard-transfer/replication/resharding start, dead-replica recovery source selection, readiness gate는 encrypted collection의 runtime crypto parity mismatch를 fail-closed 한다.
 - OpenFHE bridge path/hash validation, parent-dir checks, env secret stripping, timeout/stdout/stderr malicious-behavior coverage, worker pool, batch protocol이 들어가 있다.
+- Encrypted payload read policy는 raw/redacted/decrypted 모드로 연결되어 있다. `decrypted`는 server-side `$qdrant_sec` payload에만 적용되고 runtime settings와 global manage 권한이 필요하며, client-side `$qdrant_client_aead`는 계속 raw/redacted만 지원한다.
+- Metadata value AEAD와 client-generated blind-index token field는 canonical provider로 들어갔다. Blind-index token은 exact-match 전용이고 range/geo/full-text searchable encryption은 계속 unsupported다.
 
 남은 대형 작업:
 
 - CKKS encrypted vector production-grade indexing: sidecar storage/search, segment-level ciphertext HNSW graph primitive, and client-supplied encrypted query ciphertext scoring are implemented, but plaintext-vector `HNSWIndex` file-format reuse, score decryption, and broader distributed rebuild/recovery coverage are still not implemented.
 - Background migration/re-encrypt job: plan/state primitive는 있지만 point scan, checkpoint resume, verification, rollback, old-key disable/destroy job은 아직 없다.
 - Cluster-wide client nonce replay ledger: request/process/collection-local/reload cache는 있지만 consensus-backed global ledger는 없다.
-- Metadata encryption: server-side metadata value AEAD와 client-generated exact-match blind-index token field provider/query integration은 들어갔다. Server-computed tokens, range/geo/full-text searchable encryption, and decrypt/RBAC read mode는 아직 없다.
-- Encrypted payload read policy: raw envelope 반환은 기본값이며, REST `encrypted_payload=redacted`는 marker redaction으로 연결되어 있다. `encrypted_payload=decrypted`와 RBAC-protected decrypt response는 아직 fail-closed future work다.
+- Metadata encryption: server-side metadata value AEAD와 client-generated exact-match blind-index token field provider/query integration은 들어갔다. Server-computed tokens, range/geo/full-text searchable encryption, metadata value decrypt response, and dedicated metadata RBAC는 아직 없다.
+- Encrypted payload read policy: raw envelope 반환은 기본값이고, REST/gRPC redacted/decrypted modes는 연결되어 있다. 남은 범위는 global manage보다 세분화된 `payload:decrypt` capability, export/read dump 정책, SDK-side client envelope decrypt flow다.
 - KMS/Vault key providers: local/env/file/fd/`unix_socket`/`vault_kv2`/wrapped material 기반은 있지만 external KMS lifecycle은 future work다.
 - Broader distributed integration: current unit/integration coverage는 많지만 multi-node parity/restore/replay ledger e2e는 남아 있다.
 
@@ -172,17 +174,17 @@
 
 대상 리스크: `SEC-002`, `PERF-001`
 
-목표: bridge worker를 단일 mutex 직렬 처리에서 bounded process pool로 바꾸고, timeout/restart 경로를 검증한다.
+목표: bridge worker를 단일 mutex 직렬 처리에서 process pool로 바꾸고, timeout/restart 경로를 검증한다.
 
 작업 순서:
 
 - `CryptoBackendConfig.size`가 실제 process pool size로 동작하도록 backend factory를 연결한다.
 - worker pool abstraction을 추가한다.
-- request queue는 bounded로 두고 초과 시 backpressure 또는 explicit overload error를 반환한다.
+- pool saturation은 caller를 무제한 queue에 쌓지 않고 worker request lock/timeout 경로에서 fail-closed 또는 backpressure semantics를 유지한다.
 - worker별 stdin/stdout reader lifecycle을 독립 관리한다.
 - timeout, EOF, invalid JSON, huge stdout/stderr, process exit 후 worker 재시작을 pool 단위로 처리한다.
 - batch encrypt request/response protocol을 추가한다.
-- bridge init 단계에서 context/public key를 등록하고 request에는 context id만 보내는 cache protocol을 설계한다.
+- successful first request 이후 같은 worker/context에서는 context/public key를 재전송하지 않는 cache protocol을 유지한다.
 - binary framing 또는 MessagePack/CBOR 전환은 batch protocol 안정화 후 별도 단계로 진행한다.
 
 테스트:
