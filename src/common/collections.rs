@@ -1294,6 +1294,64 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_cluster_data_movement_rejects_empty_crypto_runtime_fingerprints() {
+        let operation = ClusterOperations::ReplicateShard(ReplicateShardOperation {
+            replicate_shard: collection::operations::cluster_ops::ReplicateShard {
+                shard_id: 1,
+                from_peer_id: 1,
+                to_peer_id: 2,
+                method: None,
+                to_shard_id: None,
+            },
+        });
+
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            1,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(String::new())),
+        );
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "local-fingerprint".to_string(),
+            )),
+        );
+
+        let err = validate_encrypted_cluster_data_movement_parity(
+            "docs",
+            true,
+            &operation,
+            1,
+            &[1, 2],
+            &metadata,
+        )
+        .expect_err("encrypted movement must fail closed when local fingerprint is empty");
+        assert!(err.to_string().contains("local peer 1 has not published"));
+
+        metadata.insert(
+            1,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "local-fingerprint".to_string(),
+            )),
+        );
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(String::new())),
+        );
+
+        let err = validate_encrypted_cluster_data_movement_parity(
+            "docs",
+            true,
+            &operation,
+            1,
+            &[1, 2],
+            &metadata,
+        )
+        .expect_err("encrypted movement must fail closed when peer fingerprint is empty");
+        assert!(err.to_string().contains("peer 2 has not published"));
+    }
+
+    #[test]
     fn encrypted_cluster_resharding_requires_target_peer_crypto_runtime_parity() {
         let operation = ClusterOperations::StartResharding(
             collection::operations::cluster_ops::StartReshardingOperation {

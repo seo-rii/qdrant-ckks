@@ -2171,6 +2171,21 @@ impl PeerMetadata {
     }
 
     pub fn crypto_runtime_capability_fingerprint(&self) -> Option<&str> {
-        self.crypto_runtime_capability_fingerprint.as_deref()
+        self.crypto_runtime_capability_fingerprint
+            .as_deref()
+            .filter(|fingerprint| !fingerprint.is_empty())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PeerMetadata;
+
+    #[test]
+    fn peer_metadata_treats_empty_crypto_runtime_fingerprint_as_missing() {
+        let metadata =
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(String::new()));
+
+        assert_eq!(metadata.crypto_runtime_capability_fingerprint(), None);
     }
 }
