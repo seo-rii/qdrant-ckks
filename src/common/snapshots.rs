@@ -541,6 +541,18 @@ mod tests {
     }
 
     #[test]
+    fn shard_snapshot_recovery_requires_stable_uuid_for_encrypted_collection() {
+        let settings = Settings::new(None).unwrap();
+        let mut config = encrypted_config();
+        config.uuid = None;
+
+        let err = validate_shard_snapshot_recovery_crypto_runtime(Some(&settings), "docs", &config)
+            .expect_err("encrypted shard recovery without stable UUID must fail closed");
+
+        assert!(err.to_string().contains("missing a stable UUID"));
+    }
+
+    #[test]
     fn shard_snapshot_recovery_validates_encrypted_runtime_when_present() {
         let settings = Settings::new(None).unwrap();
         let err = validate_shard_snapshot_recovery_crypto_runtime(
