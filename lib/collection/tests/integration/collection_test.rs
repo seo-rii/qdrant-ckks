@@ -5399,6 +5399,48 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
         .unwrap();
     assert_eq!(redacted_lookup_body, redacted_body);
 
+    let lookup_collection = Arc::clone(&collection);
+    let err = GroupBy::new(
+        GroupRequest {
+            source: SourceRequest::Search(SearchRequestInternal {
+                vector: vec![1.0, 0.0, 0.0, 0.0].into(),
+                with_payload: Some(WithPayloadInterface::Bool(false)),
+                with_vector: Some(WithVector::Bool(false)),
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: Some(0),
+                score_threshold: None,
+            }),
+            group_by: "group".parse().unwrap(),
+            group_size: 1,
+            limit: 1,
+            with_lookup: Some(collection::lookup::WithLookup {
+                collection_name: "test".to_string(),
+                with_payload: Some(WithPayloadInterface::Encrypted(
+                    PayloadEncryptedReadPolicy {
+                        encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                    },
+                )),
+                with_vectors: Some(WithVector::Bool(false)),
+            }),
+        },
+        &collection,
+        move |_name| {
+            let lookup_collection = Arc::clone(&lookup_collection);
+            async move { Some(lookup_collection) }
+        },
+        HwMeasurementAcc::new(),
+    )
+    .execute()
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("collection-internal reads must use 'raw' or 'redacted'")
+    ));
+
     let redacted_query = collection
         .query(
             ShardQueryRequest {
