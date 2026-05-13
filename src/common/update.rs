@@ -10590,6 +10590,76 @@ esac
                 StorageError::BadInput { description }
                     if description.contains("cluster-wide nonce replay ledger")
             ));
+            let err = do_batch_update_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "client_docs".to_string(),
+                vec![UpdateOperation::SetPayload(SetPayloadOperation {
+                    set_payload: SetPayload {
+                        points: Some(vec![16.into()]),
+                        payload: segment::types::Payload(
+                            json!({ "body": signed_client_body(&client_docs_uuid_string, "16") })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        ),
+                        filter: None,
+                        shard_key: None,
+                        key: None,
+                    },
+                })],
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                Some(&clustered_client_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cluster-wide nonce replay ledger")
+            ));
+            let err = do_batch_update_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "client_docs".to_string(),
+                vec![UpdateOperation::OverwritePayload(OverwritePayloadOperation {
+                    overwrite_payload: SetPayload {
+                        points: Some(vec![17.into()]),
+                        payload: segment::types::Payload(
+                            json!({ "body": signed_client_body(&client_docs_uuid_string, "17") })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        ),
+                        filter: None,
+                        shard_key: None,
+                        key: None,
+                    },
+                })],
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                Some(&clustered_client_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("cluster-wide nonce replay ledger")
+            ));
 
             do_upsert_points(
                 UncheckedTocProvider::new_unchecked(&toc),
