@@ -6282,6 +6282,126 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
                 && description.contains("not configured")
     ));
 
+    let (mut wrong_version_payload, wrong_version_verified_sidecar_key) =
+        vector_sidecar(DEFAULT_VECTOR_NAME, "tenant-a:docs");
+    let wrong_version_provenance = vector_sidecar_provenance(wrong_version_verified_sidecar_key);
+    let sidecar_marker = wrong_version_payload
+        .0
+        .get_mut(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+        .and_then(|sidecar| sidecar.as_object_mut())
+        .and_then(|sidecar| sidecar.get_mut(DEFAULT_VECTOR_NAME))
+        .and_then(|entry| entry.as_object_mut())
+        .and_then(|entry| entry.get_mut(ENCRYPTED_CKKS_VECTOR_MARKER))
+        .and_then(|marker| marker.as_object_mut())
+        .unwrap();
+    sidecar_marker.insert("version".to_string(), serde_json::json!(2));
+    let wrong_version_sidecar =
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
+            payload: wrong_version_payload,
+            points: Some(vec![1.into()]),
+            filter: None,
+            key: None,
+        }));
+    let err = collection
+        .update_from_client(
+            wrong_version_sidecar,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            wrong_version_provenance,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("encrypted vector sidecar entry")
+                && description.contains("unsupported version")
+    ));
+
+    let (mut wrong_scheme_payload, wrong_scheme_verified_sidecar_key) =
+        vector_sidecar(DEFAULT_VECTOR_NAME, "tenant-a:docs");
+    let wrong_scheme_provenance = vector_sidecar_provenance(wrong_scheme_verified_sidecar_key);
+    let sidecar_marker = wrong_scheme_payload
+        .0
+        .get_mut(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+        .and_then(|sidecar| sidecar.as_object_mut())
+        .and_then(|sidecar| sidecar.get_mut(DEFAULT_VECTOR_NAME))
+        .and_then(|entry| entry.as_object_mut())
+        .and_then(|entry| entry.get_mut(ENCRYPTED_CKKS_VECTOR_MARKER))
+        .and_then(|marker| marker.as_object_mut())
+        .unwrap();
+    sidecar_marker.insert("scheme".to_string(), serde_json::json!("other-scheme"));
+    let wrong_scheme_sidecar =
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
+            payload: wrong_scheme_payload,
+            points: Some(vec![1.into()]),
+            filter: None,
+            key: None,
+        }));
+    let err = collection
+        .update_from_client(
+            wrong_scheme_sidecar,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            wrong_scheme_provenance,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("encrypted vector sidecar entry")
+                && description.contains("unsupported scheme")
+    ));
+
+    let (mut wrong_algorithm_payload, wrong_algorithm_verified_sidecar_key) =
+        vector_sidecar(DEFAULT_VECTOR_NAME, "tenant-a:docs");
+    let wrong_algorithm_provenance =
+        vector_sidecar_provenance(wrong_algorithm_verified_sidecar_key);
+    let sidecar_envelope = wrong_algorithm_payload
+        .0
+        .get_mut(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+        .and_then(|sidecar| sidecar.as_object_mut())
+        .and_then(|sidecar| sidecar.get_mut(DEFAULT_VECTOR_NAME))
+        .and_then(|entry| entry.as_object_mut())
+        .and_then(|entry| entry.get_mut(ENCRYPTED_CKKS_VECTOR_MARKER))
+        .and_then(|marker| marker.as_object_mut())
+        .and_then(|marker| marker.get_mut("envelope"))
+        .and_then(|envelope| envelope.as_object_mut())
+        .unwrap();
+    sidecar_envelope.insert("algorithm".to_string(), serde_json::json!("AES-128-GCM"));
+    let wrong_algorithm_sidecar =
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
+            payload: wrong_algorithm_payload,
+            points: Some(vec![1.into()]),
+            filter: None,
+            key: None,
+        }));
+    let err = collection
+        .update_from_client(
+            wrong_algorithm_sidecar,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            wrong_algorithm_provenance,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("encrypted vector sidecar entry")
+                && description.contains("unsupported envelope algorithm")
+    ));
+
     let malformed_nonce_payload = vector_sidecar_with_raw_parts(
         DEFAULT_VECTOR_NAME,
         "tenant-a:docs",
