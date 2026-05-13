@@ -6966,6 +6966,74 @@ esac
                 decrypted_payload.0.get("title").and_then(Value::as_str),
                 Some("public"),
             );
+
+            let decrypted_scroll = crate::common::query::do_scroll_points(
+                &toc,
+                "metadata_docs",
+                shard::scroll::ScrollRequestInternal {
+                    offset: None,
+                    limit: Some(1),
+                    filter: None,
+                    with_payload: Some(WithPayloadInterface::Encrypted(
+                        PayloadEncryptedReadPolicy {
+                            encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                        },
+                    )),
+                    with_vector: WithVector::Bool(false),
+                    order_by: None,
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                decrypted_scroll.points[0]
+                    .payload
+                    .as_ref()
+                    .and_then(|payload| payload.0.get("tenant_id"))
+                    .and_then(Value::as_str),
+                Some("acme"),
+            );
+
+            let decrypted_search = crate::common::query::do_search_points(
+                &toc,
+                "metadata_docs",
+                SearchRequestInternal {
+                    vector: vec![0.1, 0.2].into(),
+                    with_payload: Some(WithPayloadInterface::Encrypted(
+                        PayloadEncryptedReadPolicy {
+                            encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                        },
+                    )),
+                    with_vector: Some(WithVector::Bool(false)),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    score_threshold: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth,
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                decrypted_search[0]
+                    .payload
+                    .as_ref()
+                    .and_then(|payload| payload.0.get("tenant_id"))
+                    .and_then(Value::as_str),
+                Some("acme"),
+            );
         });
     }
 
