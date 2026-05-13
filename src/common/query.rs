@@ -2348,6 +2348,11 @@ fn ckks_sidecar_hnsw_prune_persisted_graphs(
                     "failed to prune CKKS sidecar HNSW graph cache symlink {path:?}: {err}",
                 ))
             })?;
+            ckks_sidecar_hnsw_sync_parent(&path).map_err(|err| {
+                StorageError::service_error(format!(
+                    "failed to sync CKKS sidecar HNSW graph cache directory after pruning symlink {path:?}: {err}",
+                ))
+            })?;
             continue;
         }
         if !metadata.is_file() {
@@ -2361,6 +2366,11 @@ fn ckks_sidecar_hnsw_prune_persisted_graphs(
             fs::remove_file(&path).map_err(|remove_err| {
                 StorageError::service_error(format!(
                     "failed to prune insecure CKKS sidecar HNSW graph cache file {path:?}: {remove_err}",
+                ))
+            })?;
+            ckks_sidecar_hnsw_sync_parent(&path).map_err(|sync_err| {
+                StorageError::service_error(format!(
+                    "failed to sync CKKS sidecar HNSW graph cache directory after pruning insecure file {path:?}: {sync_err}",
                 ))
             })?;
             continue;
@@ -2392,6 +2402,12 @@ fn ckks_sidecar_hnsw_prune_persisted_graphs(
         fs::remove_file(&file.path).map_err(|err| {
             StorageError::service_error(format!(
                 "failed to prune CKKS sidecar HNSW graph cache file {:?}: {err}",
+                file.path,
+            ))
+        })?;
+        ckks_sidecar_hnsw_sync_parent(&file.path).map_err(|err| {
+            StorageError::service_error(format!(
+                "failed to sync CKKS sidecar HNSW graph cache directory after pruning file {:?}: {err}",
                 file.path,
             ))
         })?;
