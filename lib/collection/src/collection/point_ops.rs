@@ -2628,6 +2628,7 @@ mod tests {
     use segment::types::{FieldCondition, IsEmptyCondition, Match, ValueVariants};
 
     use super::*;
+    use crate::config::{CollectionEncryptionConfig, EncryptionRuleRef};
 
     fn blind_index_token(byte: u8) -> String {
         BASE64URL_NOPAD.encode(&[byte; 32])
@@ -2638,6 +2639,43 @@ mod tests {
             key.parse().unwrap(),
             r#match,
         )))
+    }
+
+    fn params_with_encrypted_vector_name(name: &str) -> CollectionEncryptionConfig {
+        CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a:vector".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 3,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![EncryptionRuleRef {
+                id: "vector_conf".to_string(),
+                selector: EncryptionSelector::VectorNames {
+                    names: vec![name.to_string()],
+                },
+                instance: "docs_vector_v1".to_string(),
+                binding: Some("vector-envelope/v1".to_string()),
+            }],
+        }
+    }
+
+    #[test]
+    fn encrypted_vector_sidecar_path_matches_quoted_sidecar_children() {
+        let encryption = params_with_encrypted_vector_name("embedding");
+        let sidecar_path = encrypted_vector_sidecar_path(&encryption)
+            .unwrap()
+            .expect("vector rules must expose the sidecar path");
+
+        for path in [
+            format!("\"{ENCRYPTED_VECTOR_SIDECAR_FIELD}\""),
+            format!("\"{ENCRYPTED_VECTOR_SIDECAR_FIELD}\".embedding"),
+        ] {
+            let path = path.parse::<JsonPath>().unwrap();
+            assert!(path.compatible(&sidecar_path));
+        }
+
+        let unrelated = "group".parse::<JsonPath>().unwrap();
+        assert!(!unrelated.compatible(&sidecar_path));
     }
 
     #[test]
