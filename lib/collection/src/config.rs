@@ -1329,6 +1329,39 @@ mod ckks_tests {
     }
 
     #[test]
+    fn encryption_config_rejects_reserved_and_unsupported_metadata_keys() {
+        for key in [
+            "$qdrant_sec.body",
+            "$qdrant_client_aead.body",
+            "$qdrant_sec_vectors.embedding",
+            "items[].name",
+            "items.*.name",
+            "items.0.name",
+        ] {
+            let params = CollectionParams {
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 3,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "metadata_conf".to_string(),
+                        selector: EncryptionSelector::MetadataKeys {
+                            keys: vec![key.to_string()],
+                        },
+                        instance: "docs_metadata_v1".to_string(),
+                        binding: Some("metadata-value/v1".to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            };
+
+            assert!(params.validate().is_err(), "{key} should be rejected");
+        }
+    }
+
+    #[test]
     fn encryption_config_allows_metadata_value_binding_and_rejects_overlap() {
         let metadata_value_params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
