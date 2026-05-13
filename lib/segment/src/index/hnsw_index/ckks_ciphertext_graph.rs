@@ -804,7 +804,7 @@ fn sync_graph_parent_directory(path: &Path) -> io::Result<()> {
         };
         let directory = fs::OpenOptions::new()
             .read(true)
-            .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_DIRECTORY)
+            .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_DIRECTORY | nix::libc::O_NOFOLLOW)
             .open(parent)?;
         directory.sync_all()?;
     }
@@ -1409,6 +1409,43 @@ mod tests {
 
         assert!(err.to_string().contains("must not be group/world writable"));
         std::fs::set_permissions(directory.path(), PermissionsExt::from_mode(0o700)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ciphertext_vector_index_rejects_symlink_graph_parent() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let real_parent = directory.path().join("real-parent");
+        let symlink_parent = directory.path().join("symlink-parent");
+        std::fs::create_dir(&real_parent).unwrap();
+        symlink(&real_parent, &symlink_parent).unwrap();
+        let graph_file = CkksCiphertextVectorIndex::graph_file_path(&symlink_parent);
+
+        let mut index = CkksCiphertextVectorIndex::from_graph(
+            vec![
+                CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
+            ],
+            CkksCiphertextHnswGraph::from_validated_links(vec![vec![1], vec![0]]).unwrap(),
+        )
+        .unwrap();
+
+        let err = index.persist_graph_file(&graph_file).unwrap_err();
+        assert!(err.to_string().contains("must be a directory"));
+
+        let real_graph_file = CkksCiphertextVectorIndex::graph_file_path(&real_parent);
+        index.persist_graph_file(&real_graph_file).unwrap();
+        let err = CkksCiphertextVectorIndex::open_graph_file(
+            vec![
+                CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
+            ],
+            &graph_file,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("must be a directory"));
     }
 
     #[test]
