@@ -744,8 +744,10 @@ encrypted markers from the collection layer,
 decrypts only server-side payload AEAD fields in the API runtime layer, leaves
 client-side `$qdrant_client_aead` envelopes opaque, and fails closed if runtime
 settings are unavailable or invalid. Group lookup payloads are not decrypted
-because lookups may target another collection. Decrypted payload responses for
-export, logs, and telemetry remain future work.
+because lookups may target another collection. Decrypted export remains future
+work; slow request logs and request hashes use redacted request values, and
+collection telemetry has sentinel coverage so decrypted plaintext is not
+intentionally emitted there.
 Client-side-only envelope collections must use `raw` or `redacted`; requesting
 `decrypted` fails closed because Qdrant has no client data key.
 The REST single-point `GET /collections/{collection}/points/{id}` endpoint has
