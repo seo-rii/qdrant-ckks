@@ -7,7 +7,9 @@ use qdrant_sec::{
 };
 use segment::common::operation_error::OperationError;
 use segment::id_tracker::IdTracker as _;
-use segment::index::hnsw_index::ckks_ciphertext_graph::CkksCiphertextIndexedRecord;
+use segment::index::hnsw_index::ckks_ciphertext_graph::{
+    CkksCiphertextIndexedRecord, ckks_ciphertext_from_payload,
+};
 use segment::index::{PayloadIndex as _, VectorIndexEnum};
 use segment::types::{Payload, ShardKey};
 use shard::locked_segment::LockedSegment;
@@ -56,6 +58,17 @@ impl LocalShard {
                 else {
                     continue;
                 };
+                let ciphertext =
+                    ckks_ciphertext_from_payload(&payload, vector_name).map_err(|err| {
+                        CollectionError::service_error(format!(
+                            "stored CKKS vector sidecar entry '{vector_name}' failed validation: {err}",
+                        ))
+                    })?;
+                let Some(ciphertext) = ciphertext else {
+                    return Err(CollectionError::service_error(format!(
+                        "stored CKKS vector sidecar entry '{vector_name}' disappeared during validation",
+                    )));
+                };
                 sidecar_by_offset.insert(
                     point_offset,
                     CkksCiphertextSegmentSearchRecord {
@@ -64,7 +77,7 @@ impl LocalShard {
                         point_id: id.to_string(),
                         indexed_record: CkksCiphertextIndexedRecord::new(
                             point_offset,
-                            encrypted.envelope.ciphertext.as_bytes().to_vec(),
+                            ciphertext.as_bytes().to_vec(),
                         ),
                         encrypted,
                     },
