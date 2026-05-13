@@ -533,6 +533,11 @@ pub fn ckks_ciphertext_from_payload<'a>(
             "stored CKKS vector sidecar entry '{vector_name}' is missing ciphertext",
         )));
     };
+    if ciphertext.is_empty() {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' has empty ciphertext",
+        )));
+    }
     Ok(Some(ciphertext))
 }
 
@@ -1790,6 +1795,26 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("missing rk_id"));
+
+        let err = ckks_ciphertext_from_payload(
+            &payload_with_marker(serde_json::json!({
+                "version": 1,
+                "scheme": "openfhe-ckks",
+                "envelope": {
+                    "version": 1,
+                    "algorithm": "AES-256-GCM",
+                    "key_id": "tenant-a:vector",
+                    "material_fingerprint": "tenant-a/vector@v1",
+                    "rk_id": "tenant-a/vector-rk@v1",
+                    "rk_epoch": 1,
+                    "nonce": "AAAAAAAAAAAAAAAA",
+                    "ciphertext": ""
+                }
+            })),
+            "embedding",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("empty ciphertext"));
 
         let err = ckks_ciphertext_from_payload(
             &payload_with_marker(serde_json::json!({
