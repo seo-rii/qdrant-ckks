@@ -1555,6 +1555,42 @@ mod tests {
             .unwrap();
     }
 
+    #[test]
+    fn encrypted_automatic_transfer_rejects_empty_crypto_runtime_peer_metadata() {
+        let mut metadata = HashMap::<PeerId, PeerMetadata>::new();
+        metadata.insert(
+            1,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(String::new())),
+        );
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-a".to_string(),
+            )),
+        );
+
+        let err =
+            validate_encrypted_automatic_transfer_crypto_runtime_parity("docs", 0, 1, 2, &metadata)
+                .unwrap_err();
+        assert!(format!("{err:?}").contains("source peer 1"));
+
+        metadata.insert(
+            1,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-a".to_string(),
+            )),
+        );
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(String::new())),
+        );
+
+        let err =
+            validate_encrypted_automatic_transfer_crypto_runtime_parity("docs", 0, 1, 2, &metadata)
+                .unwrap_err();
+        assert!(format!("{err:?}").contains("target peer 2"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn client_payload_nonce_replay_cache_files_are_owner_only() {
