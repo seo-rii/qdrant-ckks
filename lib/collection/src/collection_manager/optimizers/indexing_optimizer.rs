@@ -131,6 +131,9 @@ mod tests {
                                     "version": 1,
                                     "algorithm": "AES-256-GCM",
                                     "key_id": "tenant-a:docs",
+                                    "material_fingerprint": "tenant-a/vector@v1",
+                                    "rk_id": "tenant-a/vector-rk@v1",
+                                    "rk_epoch": 1,
                                     "nonce": "AAAAAAAAAAAAAAAA",
                                     "ciphertext": format!("ciphertext-{idx:04}")
                                 }
