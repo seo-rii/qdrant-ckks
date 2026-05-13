@@ -6033,7 +6033,7 @@ esac
                         id: 1.into(),
                         vector: api::rest::VectorStruct::Single(vec![0.1, 0.2]),
                         payload: Some(segment::types::Payload(
-                            json!({ "body": "server secret", "title": "public" })
+                            json!({ "body": "server secret", "title": "public", "lookup_id": 1 })
                                 .as_object()
                                 .unwrap()
                                 .clone(),
@@ -6573,6 +6573,48 @@ esac
                     .and_then(Value::as_str),
                 Some("server secret"),
             );
+
+            let err = crate::common::query::do_search_point_groups(
+                &toc,
+                "docs",
+                SearchGroupsRequestInternal {
+                    vector: vec![0.1, 0.2].into(),
+                    filter: None,
+                    params: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                    group_request: BaseGroupRequest {
+                        group_by: "lookup_id".parse().unwrap(),
+                        group_size: 1,
+                        limit: 1,
+                        with_lookup: Some(api::rest::WithLookupInterface::WithLookup(
+                            api::rest::WithLookup {
+                                collection_name: "docs".to_string(),
+                                with_payload: Some(WithPayloadInterface::Encrypted(
+                                    PayloadEncryptedReadPolicy {
+                                        encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                                    },
+                                )),
+                                with_vectors: Some(WithVector::Bool(false)),
+                            },
+                        )),
+                    },
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("collection-internal reads must use 'raw' or 'redacted'")
+            ));
 
             let decrypted_query_groups = crate::common::query::do_query_point_groups(
                 &toc,
