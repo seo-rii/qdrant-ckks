@@ -1799,6 +1799,166 @@ fn validate_bridge_security_metadata(
 mod tests {
     use super::*;
 
+    #[test]
+    fn cached_context_requests_strip_public_material_for_all_openfhe_operations() {
+        let parameters = CkksParameters::default();
+        let score_item = CommandOpenFheScoreBatchItem {
+            point_id: "42",
+            ciphertext: "ciphertext".to_string(),
+        };
+        let batch_item = CommandOpenFheBatchItem {
+            point_id: "42",
+            values: &[1.0, 2.0],
+        };
+
+        let mut requests = Vec::new();
+        requests.push(
+            serialize_bridge_request_without_public_material(
+                &CommandOpenFheRequest {
+                    version: 1,
+                    operation: "encrypt",
+                    scheme: CKKS_SCHEME,
+                    collection: "docs",
+                    point_id: "42",
+                    vector_name: "text",
+                    context_id: "ctx-1".to_string(),
+                    parameters: Some(&parameters),
+                    crypto_context: Some("crypto-context".to_string()),
+                    public_key: Some("public-key".to_string()),
+                    values: &[1.0, 2.0],
+                },
+                "test encrypt request",
+            )
+            .unwrap(),
+        );
+        requests.push(
+            serialize_bridge_request_without_public_material(
+                &CommandOpenFheBatchRequest {
+                    version: 1,
+                    operation: "encrypt_batch",
+                    scheme: CKKS_SCHEME,
+                    collection: "docs",
+                    vector_name: "text",
+                    context_id: "ctx-1".to_string(),
+                    parameters: Some(&parameters),
+                    crypto_context: Some("crypto-context".to_string()),
+                    public_key: Some("public-key".to_string()),
+                    items: vec![batch_item],
+                },
+                "test batch request",
+            )
+            .unwrap(),
+        );
+        requests.push(
+            serialize_bridge_request_without_public_material(
+                &CommandOpenFheQueryRequest {
+                    version: 1,
+                    operation: "encrypt_query",
+                    scheme: CKKS_SCHEME,
+                    collection: "docs",
+                    vector_name: "text",
+                    context_id: "ctx-1".to_string(),
+                    parameters: Some(&parameters),
+                    crypto_context: Some("crypto-context".to_string()),
+                    public_key: Some("public-key".to_string()),
+                    values: &[1.0, 2.0],
+                },
+                "test query request",
+            )
+            .unwrap(),
+        );
+        requests.push(
+            serialize_bridge_request_without_public_material(
+                &CommandOpenFheScoreRequest {
+                    version: 1,
+                    operation: "score_plaintext_query",
+                    scheme: CKKS_SCHEME,
+                    collection: "docs",
+                    point_id: "42",
+                    vector_name: "text",
+                    distance: "cosine",
+                    context_id: "ctx-1".to_string(),
+                    parameters: Some(&parameters),
+                    crypto_context: Some("crypto-context".to_string()),
+                    public_key: Some("public-key".to_string()),
+                    query_values: &[1.0, 2.0],
+                    ciphertext: "ciphertext".to_string(),
+                },
+                "test score request",
+            )
+            .unwrap(),
+        );
+        requests.push(
+            serialize_bridge_request_without_public_material(
+                &CommandOpenFheScoreBatchRequest {
+                    version: 1,
+                    operation: "score_plaintext_query_batch",
+                    scheme: CKKS_SCHEME,
+                    collection: "docs",
+                    vector_name: "text",
+                    distance: "cosine",
+                    context_id: "ctx-1".to_string(),
+                    parameters: Some(&parameters),
+                    crypto_context: Some("crypto-context".to_string()),
+                    public_key: Some("public-key".to_string()),
+                    query_values: &[1.0, 2.0],
+                    items: vec![score_item.clone()],
+                },
+                "test score batch request",
+            )
+            .unwrap(),
+        );
+        requests.push(
+            serialize_bridge_request_without_public_material(
+                &CommandOpenFheEncryptedScoreRequest {
+                    version: 1,
+                    operation: "score_encrypted_query",
+                    scheme: CKKS_SCHEME,
+                    collection: "docs",
+                    point_id: "42",
+                    vector_name: "text",
+                    distance: "cosine",
+                    context_id: "ctx-1".to_string(),
+                    parameters: Some(&parameters),
+                    crypto_context: Some("crypto-context".to_string()),
+                    public_key: Some("public-key".to_string()),
+                    encrypted_query: "query-ciphertext".to_string(),
+                    ciphertext: "ciphertext".to_string(),
+                },
+                "test encrypted score request",
+            )
+            .unwrap(),
+        );
+        requests.push(
+            serialize_bridge_request_without_public_material(
+                &CommandOpenFheEncryptedScoreBatchRequest {
+                    version: 1,
+                    operation: "score_encrypted_query_batch",
+                    scheme: CKKS_SCHEME,
+                    collection: "docs",
+                    vector_name: "text",
+                    distance: "cosine",
+                    context_id: "ctx-1".to_string(),
+                    parameters: Some(&parameters),
+                    crypto_context: Some("crypto-context".to_string()),
+                    public_key: Some("public-key".to_string()),
+                    encrypted_query: "query-ciphertext".to_string(),
+                    items: vec![score_item],
+                },
+                "test encrypted score batch request",
+            )
+            .unwrap(),
+        );
+
+        for request in requests {
+            let request: serde_json::Value = serde_json::from_slice(&request).unwrap();
+            assert_eq!(request["context_id"], "ctx-1");
+            assert!(request.get("parameters").is_none());
+            assert!(request.get("crypto_context").is_none());
+            assert!(request.get("public_key").is_none());
+        }
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn checked_bridge_spawn_program_uses_validated_proc_fd_path() {
