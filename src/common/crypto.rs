@@ -1961,20 +1961,6 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
             }
         }
 
-        if instance.provider == VECTOR_OPENFHE_CKKS_PROVIDER
-            && let Some(active_material_ref) = instance.materials.get(PAYLOAD_SYM_KEY_ROLE)
-            && let Some(active_material) = settings.materials.get(active_material_ref)
-            && active_material.rk_epoch.is_none()
-        {
-            return Err(CryptoSetupError::InvalidInstanceOption {
-                instance: instance_name.clone(),
-                option: format!("materials.{PAYLOAD_SYM_KEY_ROLE}"),
-                reason: format!(
-                    "vector/openfhe-ckks@v1 sym_key material {active_material_ref} must set rk_epoch"
-                ),
-            });
-        }
-
         if matches!(
             instance.provider.as_str(),
             PAYLOAD_AES_GCM_PROVIDER | METADATA_AES_GCM_PROVIDER
@@ -2056,7 +2042,33 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                         reason: "wrapped retired material must have state retired".to_string(),
                     });
                 }
+                if retired_material_config.rk_epoch.is_none() {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: RETIRED_MATERIALS_OPTION.to_string(),
+                        reason: format!(
+                            "retired material {retired_material_ref} must set rk_epoch"
+                        ),
+                    });
+                }
             }
+        }
+
+        if matches!(
+            instance.provider.as_str(),
+            PAYLOAD_AES_GCM_PROVIDER | METADATA_AES_GCM_PROVIDER | VECTOR_OPENFHE_CKKS_PROVIDER
+        ) && let Some(active_material_ref) = instance.materials.get(PAYLOAD_SYM_KEY_ROLE)
+            && let Some(active_material) = settings.materials.get(active_material_ref)
+            && active_material.rk_epoch.is_none()
+        {
+            return Err(CryptoSetupError::InvalidInstanceOption {
+                instance: instance_name.clone(),
+                option: format!("materials.{PAYLOAD_SYM_KEY_ROLE}"),
+                reason: format!(
+                    "{} sym_key material {active_material_ref} must set rk_epoch",
+                    instance.provider
+                ),
+            });
         }
     }
 
@@ -2085,7 +2097,6 @@ fn validate_material(
         || material.wrap_algorithm.is_some()
         || material.nonce.is_some()
         || material.wrapped_key_b64.is_some()
-        || material.rk_epoch.is_some()
         || material.state.is_some()
         || material.scope.is_some()
     {
@@ -2971,6 +2982,12 @@ fn generic_payload_write_plan(
                 let key_id =
                     resolve_payload_key_id(collection_name, encryption, &rule.instance, instance)?;
                 let resource_key = decode_resource_key(runtime_settings, material_ref, material)?;
+                let Some(rk_epoch) = material.rk_epoch else {
+                    return Err(PayloadWriteSetupError::InvalidWrappedMaterial {
+                        material: material_ref.to_string(),
+                        reason: "server-side AEAD material must set rk_epoch".to_string(),
+                    });
+                };
                 let material_fingerprint_id =
                     match instance.options.get(MATERIAL_FINGERPRINT_ID_OPTION) {
                         Some(material_fingerprint_id) => {
@@ -2986,23 +3003,14 @@ fn generic_payload_write_plan(
                             });
                         }
                     };
-                let mut encryptor = if let Some(rk_epoch) = material.rk_epoch {
-                    PayloadTextEncryptor::new_from_resource_key_with_metadata(
-                        collection_crypto_id,
-                        key_id,
-                        &resource_key,
-                        material_fingerprint_id,
-                        material_ref.clone(),
-                        rk_epoch,
-                    )
-                } else {
-                    PayloadTextEncryptor::new_from_resource_key_with_material_fingerprint(
-                        collection_crypto_id,
-                        key_id,
-                        &resource_key,
-                        material_fingerprint_id,
-                    )
-                }?
+                let mut encryptor = PayloadTextEncryptor::new_from_resource_key_with_metadata(
+                    collection_crypto_id,
+                    key_id,
+                    &resource_key,
+                    material_fingerprint_id,
+                    material_ref.clone(),
+                    rk_epoch,
+                )?
                 .with_encryption_epoch(encryption.encryption_epoch);
 
                 if let Some(retired_materials) = instance.options.get(RETIRED_MATERIALS_OPTION) {
@@ -3053,21 +3061,20 @@ fn generic_payload_write_plan(
                             retired_material_ref,
                             retired_material_config,
                         )?;
-                        encryptor = if let Some(rk_epoch) = retired_material_config.rk_epoch {
-                            encryptor.with_retired_resource_key_metadata(
-                                key_id,
-                                &retired_resource_key,
-                                retired_material_fingerprint_id,
-                                retired_material_ref,
-                                rk_epoch,
-                            )
-                        } else {
-                            encryptor.with_retired_resource_key(
-                                key_id,
-                                &retired_resource_key,
-                                retired_material_fingerprint_id,
-                            )
-                        }?;
+                        let Some(retired_rk_epoch) = retired_material_config.rk_epoch else {
+                            return Err(PayloadWriteSetupError::InvalidWrappedMaterial {
+                                material: retired_material_ref.to_string(),
+                                reason: "retired server-side AEAD material must set rk_epoch"
+                                    .to_string(),
+                            });
+                        };
+                        encryptor = encryptor.with_retired_resource_key_metadata(
+                            key_id,
+                            &retired_resource_key,
+                            retired_material_fingerprint_id,
+                            retired_material_ref,
+                            retired_rk_epoch,
+                        )?;
                     }
                 }
 
@@ -5092,6 +5099,7 @@ mod tests {
                     kind: SYMMETRIC_KEY_32_KIND.to_string(),
                     source: Some("inline".to_string()),
                     value_b64: Some(BASE64URL_NOPAD.encode(&[2_u8; 32])),
+                    rk_epoch: Some(2),
                     ..CryptoMaterialConfig::default()
                 },
             )]),
@@ -5484,6 +5492,7 @@ mod tests {
                     kind: SYMMETRIC_KEY_32_KIND.to_string(),
                     source: Some("inline".to_string()),
                     value_b64: Some(BASE64URL_NOPAD.encode(&[2_u8; 32])),
+                    rk_epoch: Some(2),
                     ..CryptoMaterialConfig::default()
                 },
             )]),
@@ -5603,6 +5612,7 @@ mod tests {
                     kind: SYMMETRIC_KEY_32_KIND.to_string(),
                     source: Some("inline".to_string()),
                     value_b64: Some(BASE64URL_NOPAD.encode(&[2_u8; 32])),
+                    rk_epoch: Some(2),
                     ..CryptoMaterialConfig::default()
                 },
             )]),
@@ -5666,6 +5676,7 @@ mod tests {
                     kind: SYMMETRIC_KEY_32_KIND.to_string(),
                     source: Some("inline".to_string()),
                     value_b64: Some(BASE64URL_NOPAD.encode(&[2_u8; 32])),
+                    rk_epoch: Some(2),
                     ..CryptoMaterialConfig::default()
                 },
             )]),
@@ -5690,7 +5701,39 @@ mod tests {
                 ..CryptoMaterialConfig::default()
             },
         );
+        assert!(matches!(
+            validate_crypto_settings(&settings),
+            Err(CryptoSetupError::InvalidInstanceOption {
+                instance,
+                option,
+                reason,
+            }) if instance == "docs_payload_v1"
+                && option == RETIRED_MATERIALS_OPTION
+                && reason == "retired material tenant-a/payload-v1 must set rk_epoch"
+        ));
+        settings
+            .materials
+            .get_mut("tenant-a/payload-v1")
+            .unwrap()
+            .rk_epoch = Some(1);
         validate_crypto_settings(&settings).unwrap();
+
+        let mut active_without_epoch_settings = settings.clone();
+        active_without_epoch_settings
+            .materials
+            .get_mut("tenant-a/payload-v2")
+            .unwrap()
+            .rk_epoch = None;
+        assert!(matches!(
+            validate_crypto_settings(&active_without_epoch_settings),
+            Err(CryptoSetupError::InvalidInstanceOption {
+                instance,
+                option,
+                reason,
+            }) if instance == "docs_payload_v1"
+                && option == "materials.sym_key"
+                && reason == "payload/aes-256-gcm@v1 sym_key material tenant-a/payload-v2 must set rk_epoch"
+        ));
 
         settings
             .instances
@@ -7838,6 +7881,7 @@ mod tests {
                         env: None,
                         path: None,
                         value_b64: Some(BASE64URL_NOPAD.encode(&[7u8; 32])),
+                        rk_epoch: Some(5),
                         ..CryptoMaterialConfig::default()
                     },
                 )]),
@@ -7983,6 +8027,7 @@ mod tests {
                         env: None,
                         path: None,
                         value_b64: Some(BASE64URL_NOPAD.encode(&[7u8; 32])),
+                        rk_epoch: Some(5),
                         ..CryptoMaterialConfig::default()
                     },
                 )]),
@@ -8028,6 +8073,7 @@ mod tests {
                 env: None,
                 path: None,
                 value_b64: Some(BASE64URL_NOPAD.encode(&[8u8; 32])),
+                rk_epoch: Some(6),
                 ..CryptoMaterialConfig::default()
             },
         );
@@ -8148,6 +8194,7 @@ mod tests {
                         env: None,
                         path: None,
                         value_b64: Some(BASE64URL_NOPAD.encode(&[7u8; 32])),
+                        rk_epoch: Some(5),
                         ..CryptoMaterialConfig::default()
                     },
                 )]),
@@ -8190,6 +8237,20 @@ mod tests {
             "material_fingerprint_id": "tenant-a/payload@v5",
         });
         assert!(payload_write_plan_for_collection_for_test(&settings, "docs", &params).is_ok());
+
+        let mut missing_epoch_settings = settings.clone();
+        missing_epoch_settings
+            .crypto
+            .materials
+            .get_mut("tenant-a/payload-v1")
+            .unwrap()
+            .rk_epoch = None;
+        assert!(matches!(
+            payload_write_plan_for_collection_for_test(&missing_epoch_settings, "docs", &params),
+            Err(PayloadWriteSetupError::InvalidWrappedMaterial { material, reason })
+                if material == "tenant-a/payload-v1"
+                    && reason == "server-side AEAD material must set rk_epoch"
+        ));
     }
 
     #[test]
@@ -10279,6 +10340,7 @@ mod tests {
                             env: None,
                             path: None,
                             value_b64: Some(BASE64URL_NOPAD.encode(&[7u8; 32])),
+                            rk_epoch: Some(1),
                             ..CryptoMaterialConfig::default()
                         },
                     ),
@@ -10539,6 +10601,7 @@ mod tests {
                         kind: SYMMETRIC_KEY_32_KIND.to_string(),
                         source: Some("inline".to_string()),
                         value_b64: Some(BASE64URL_NOPAD.encode(&[9_u8; 32])),
+                        rk_epoch: Some(3),
                         ..CryptoMaterialConfig::default()
                     },
                 )]),
@@ -11349,6 +11412,7 @@ mod tests {
                         env: None,
                         path: None,
                         value_b64: Some(BASE64URL_NOPAD.encode(&[8u8; 32])),
+                        rk_epoch: Some(1),
                         ..CryptoMaterialConfig::default()
                     },
                 )]),
@@ -11420,6 +11484,7 @@ mod tests {
                         env: None,
                         path: None,
                         value_b64: Some(BASE64URL_NOPAD.encode(&[8u8; 32])),
+                        rk_epoch: Some(1),
                         ..CryptoMaterialConfig::default()
                     },
                 )]),
