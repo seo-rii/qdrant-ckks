@@ -6033,7 +6033,39 @@ esac
                 None,
                 None,
                 ShardSelectorInternal::All,
+                read_only_auth.clone(),
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::Forbidden { description }
+                    if description.contains("Global manage access is required")
+            ));
+
+            let err = crate::common::query::do_search_points(
+                &toc,
+                "docs",
+                SearchRequestInternal {
+                    vector: vec![0.1, 0.2].into(),
+                    with_payload: Some(WithPayloadInterface::Encrypted(
+                        PayloadEncryptedReadPolicy {
+                            encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                        },
+                    )),
+                    with_vector: Some(WithVector::Bool(false)),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    score_threshold: None,
+                },
+                None,
+                ShardSelectorInternal::All,
                 read_only_auth,
+                None,
                 HwMeasurementAcc::disposable(),
                 Some(&settings),
             )
