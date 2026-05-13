@@ -37,8 +37,8 @@ use super::types::{
     VectorsConfigDiff,
 };
 use crate::config::{
-    CkksCollectionConfig, CollectionParams, RedactedLegacyCkksValue, ShardingMethod, WalConfig,
-    default_replication_factor, default_write_consistency_factor,
+    CollectionParams, ShardingMethod, WalConfig, default_replication_factor,
+    default_write_consistency_factor,
 };
 use crate::lookup::WithLookup;
 use crate::lookup::types::WithLookupInterface;
@@ -300,49 +300,6 @@ impl From<api::grpc::qdrant::WalConfigDiff> for WalConfigDiff {
     }
 }
 
-impl TryFrom<api::grpc::qdrant::CkksCollectionConfig> for CkksCollectionConfig {
-    type Error = Status;
-
-    fn try_from(value: api::grpc::qdrant::CkksCollectionConfig) -> Result<Self, Self::Error> {
-        let api::grpc::qdrant::CkksCollectionConfig {
-            enabled,
-            key_id,
-            payload_text_fields,
-            vector_names,
-        } = value;
-        let mut legacy_fields = BTreeMap::new();
-        if enabled {
-            legacy_fields.insert("enabled".to_string(), RedactedLegacyCkksValue);
-        }
-        if key_id.is_some() {
-            legacy_fields.insert("key_id".to_string(), RedactedLegacyCkksValue);
-        }
-        if !payload_text_fields.is_empty() {
-            legacy_fields.insert("payload_text_fields".to_string(), RedactedLegacyCkksValue);
-        }
-        if !vector_names.is_empty() {
-            legacy_fields.insert("vector_names".to_string(), RedactedLegacyCkksValue);
-        }
-        let config = Self { legacy_fields };
-        config
-            .validate()
-            .map_err(|err| Status::invalid_argument(format!("invalid ckks config: {err}")))?;
-        Ok(config)
-    }
-}
-
-impl From<CkksCollectionConfig> for api::grpc::qdrant::CkksCollectionConfig {
-    fn from(value: CkksCollectionConfig) -> Self {
-        let legacy_fields = value.legacy_fields;
-        Self {
-            enabled: legacy_fields.contains_key("enabled"),
-            key_id: None,
-            payload_text_fields: Vec::new(),
-            vector_names: Vec::new(),
-        }
-    }
-}
-
 impl TryFrom<api::grpc::qdrant::CollectionParamsDiff> for CollectionParamsDiff {
     type Error = Status;
 
@@ -556,7 +513,6 @@ impl From<CollectionInfo> for api::grpc::qdrant::CollectionInfo {
                         }
                     }),
                     read_fan_out_delay_ms,
-                    ckks: None,
                 }),
                 hnsw_config: Some(api::grpc::qdrant::HnswConfigDiff {
                     m: Some(m as u64),
@@ -1929,13 +1885,7 @@ impl TryFrom<api::grpc::qdrant::CollectionConfig> for CollectionConfig {
                     sharding_method,
                     sparse_vectors_config,
                     read_fan_out_delay_ms,
-                    ckks,
                 } = params;
-                if ckks.is_some() {
-                    return Err(Status::invalid_argument(
-                        "legacy_ckks_config_unsupported: use collection encryption and crypto runtime settings",
-                    ));
-                }
                 CollectionParams {
                     vectors: match vectors_config {
                         None => {
@@ -2025,50 +1975,6 @@ impl TryFrom<api::grpc::qdrant::CollectionConfig> for CollectionConfig {
                 Some(api::conversions::json::proto_to_payloads(metadata)?)
             },
         })
-    }
-}
-
-#[cfg(test)]
-mod ckks_grpc_tests {
-    use super::*;
-
-    #[test]
-    fn grpc_ckks_config_redacts_legacy_fields() {
-        let config = api::grpc::qdrant::CkksCollectionConfig {
-            enabled: true,
-            key_id: Some("tenant/key-material-must-not-survive".to_string()),
-            payload_text_fields: vec!["body".to_string()],
-            vector_names: vec!["embedding".to_string()],
-        };
-
-        let converted = CkksCollectionConfig::try_from(config).unwrap();
-
-        assert_eq!(converted.legacy_fields.len(), 4);
-        assert!(converted.legacy_fields.contains_key("enabled"));
-        assert!(converted.legacy_fields.contains_key("key_id"));
-        assert!(converted.legacy_fields.contains_key("payload_text_fields"));
-        assert!(converted.legacy_fields.contains_key("vector_names"));
-
-        let roundtrip = api::grpc::qdrant::CkksCollectionConfig::from(converted);
-        assert!(roundtrip.enabled);
-        assert!(roundtrip.key_id.is_none());
-        assert!(roundtrip.payload_text_fields.is_empty());
-        assert!(roundtrip.vector_names.is_empty());
-    }
-
-    #[test]
-    fn grpc_ckks_config_preserves_empty_legacy_presence() {
-        let config = api::grpc::qdrant::CkksCollectionConfig {
-            enabled: true,
-            key_id: None,
-            payload_text_fields: Vec::new(),
-            vector_names: Vec::new(),
-        };
-
-        let converted = CkksCollectionConfig::try_from(config).unwrap();
-
-        assert_eq!(converted.legacy_fields.len(), 1);
-        assert!(converted.legacy_fields.contains_key("enabled"));
     }
 }
 

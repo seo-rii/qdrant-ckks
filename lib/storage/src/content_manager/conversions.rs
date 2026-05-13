@@ -83,15 +83,9 @@ impl TryFrom<grpc::CreateCollection> for CollectionMetaOperations {
             quantization_config,
             sharding_method,
             sparse_vectors_config,
-            ckks,
             strict_mode_config,
             metadata,
         } = value;
-        if ckks.is_some() {
-            return Err(Status::invalid_argument(
-                "legacy_ckks_config_unsupported: use collection encryption and crypto runtime settings",
-            ));
-        }
         let op = CreateCollectionOperation::new(
             collection_name,
             CreateCollection {
@@ -379,44 +373,5 @@ impl From<ConsensusThreadStatus> for grpc::ConsensusThreadStatus {
                 )),
             },
         }
-    }
-}
-
-#[cfg(test)]
-mod ckks_grpc_tests {
-    use super::*;
-
-    #[test]
-    fn create_collection_rejects_legacy_ckks_config_from_grpc() {
-        let err = CollectionMetaOperations::try_from(grpc::CreateCollection {
-            collection_name: "docs".to_string(),
-            ckks: Some(grpc::CkksCollectionConfig {
-                enabled: true,
-                key_id: Some("tenant-a:docs".to_string()),
-                payload_text_fields: vec!["body".to_string()],
-                vector_names: Vec::new(),
-            }),
-            ..Default::default()
-        })
-        .unwrap_err();
-
-        assert!(err.message().contains("legacy_ckks_config_unsupported"));
-    }
-
-    #[test]
-    fn create_collection_rejects_ckks_vector_names_from_grpc() {
-        let err = CollectionMetaOperations::try_from(grpc::CreateCollection {
-            collection_name: "docs".to_string(),
-            ckks: Some(grpc::CkksCollectionConfig {
-                enabled: true,
-                key_id: Some("tenant-a:docs".to_string()),
-                payload_text_fields: vec!["body".to_string()],
-                vector_names: vec!["embedding".to_string()],
-            }),
-            ..Default::default()
-        })
-        .unwrap_err();
-
-        assert!(err.message().contains("legacy_ckks_config_unsupported"));
     }
 }

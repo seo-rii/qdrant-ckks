@@ -487,9 +487,6 @@ message CreateCollection {
   optional StrictModeConfig strict_mode_config = 17;
   // Arbitrary JSON metadata for the collection
   map<string, Value> metadata = 18;
-  // Collection-local qdrant-sec encryption settings.
-  // Secret key material is provided by runtime config, not by this message.
-  optional CkksCollectionConfig ckks = 19;
 }
 
 message UpdateCollection {
@@ -557,9 +554,6 @@ message CollectionParams {
   optional SparseVectorConfig sparse_vectors_config = 10;
   // Define number of milliseconds to wait before attempting to read from another replica.
   optional uint64 read_fan_out_delay_ms = 11;
-  // Collection-local qdrant-sec encryption settings.
-  // Secret key material is provided by runtime config, not by this message.
-  optional CkksCollectionConfig ckks = 12;
 }
 
 message CollectionParamsDiff {
@@ -573,17 +567,6 @@ message CollectionParamsDiff {
   optional uint32 read_fan_out_factor = 4;
   // Define number of milliseconds to wait before attempting to read from another replica.
   optional uint64 read_fan_out_delay_ms = 5;
-}
-
-message CkksCollectionConfig {
-  // Enable encryption for this collection.
-  bool enabled = 1;
-  // Public key id recorded in encryption envelopes. Key material is resolved from runtime config.
-  optional string key_id = 2;
-  // Dot-separated payload string fields encrypted before storage.
-  repeated string payload_text_fields = 3;
-  // Named dense vectors that should be encrypted through the OpenFHE CKKS bridge.
-  repeated string vector_names = 4;
 }
 
 message CollectionConfig {
