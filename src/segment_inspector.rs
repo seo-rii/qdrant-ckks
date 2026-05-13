@@ -3,9 +3,14 @@ use std::sync::atomic::AtomicBool;
 
 use clap::Parser;
 use common::counter::hardware_counter::HardwareCounterCell;
+use qdrant_sec::{
+    CLIENT_ENCRYPTED_PAYLOAD_MARKER, ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_PAYLOAD_MARKER,
+    ENCRYPTED_VECTOR_SIDECAR_FIELD,
+};
 use segment::entry::ReadSegmentEntry;
 use segment::segment_constructor::load_segment;
-use segment::types::PointIdType;
+use segment::types::{Payload, PointIdType};
+use serde_json::Value;
 use uuid::Uuid;
 
 #[derive(Parser, Debug)]
@@ -26,6 +31,10 @@ struct Args {
     /// Point ID to inspect (UUID)
     #[clap(long)]
     point_id_uuid: Option<String>,
+
+    /// Print encrypted payload/vector markers without redaction.
+    #[clap(long)]
+    raw_payload: bool,
 }
 
 fn main() {
@@ -74,9 +83,104 @@ fn main() {
 
                 println!("Internal ID: {internal_id:?}");
                 println!("Version: {version:?}");
-                println!("Payload: {payload:?}");
+                if args.raw_payload {
+                    println!("Payload: {payload:?}");
+                } else {
+                    println!("Payload: {:?}", payload_redacted_for_display(payload));
+                }
                 // println!("Vectors: {vectors:?}");
             }
         }
+    }
+}
+
+fn payload_redacted_for_display(payload: Payload) -> Payload {
+    let mut value = Value::Object(payload.0);
+    redact_encrypted_payload_markers(&mut value);
+    match value {
+        Value::Object(map) => Payload(map),
+        _ => unreachable!("payload root remains an object"),
+    }
+}
+
+fn redact_encrypted_payload_markers(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if map.contains_key(ENCRYPTED_PAYLOAD_MARKER)
+                || map.contains_key(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+                || map.contains_key(ENCRYPTED_CKKS_VECTOR_MARKER)
+            {
+                *value =
+                    Value::String("[encrypted marker redacted; use --raw-payload]".to_string());
+                return;
+            }
+
+            for (key, value) in map.iter_mut() {
+                if key == ENCRYPTED_VECTOR_SIDECAR_FIELD {
+                    *value = Value::String(
+                        "[encrypted vector sidecar redacted; use --raw-payload]".to_string(),
+                    );
+                } else {
+                    redact_encrypted_payload_markers(value);
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                redact_encrypted_payload_markers(value);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn payload_redaction_hides_server_client_and_vector_markers() {
+        let payload = Payload(
+            json!({
+                "server": {
+                    "$qdrant_sec": {
+                        "nonce": "server-nonce",
+                        "ciphertext": "server-ciphertext"
+                    }
+                },
+                "client": {
+                    "$qdrant_client_aead": {
+                        "nonce": "client-nonce",
+                        "ciphertext": "client-ciphertext"
+                    }
+                },
+                "$qdrant_sec_vectors": {
+                    "embedding": {
+                        "$qdrant_sec_ckks_vector": {
+                            "nonce": "vector-nonce",
+                            "ciphertext": "vector-ciphertext"
+                        }
+                    }
+                },
+                "public": "visible"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+
+        let redacted = format!("{:?}", payload_redacted_for_display(payload));
+
+        assert!(redacted.contains("visible"));
+        assert!(redacted.contains("encrypted marker redacted"));
+        assert!(redacted.contains("encrypted vector sidecar redacted"));
+        assert!(!redacted.contains("server-nonce"));
+        assert!(!redacted.contains("server-ciphertext"));
+        assert!(!redacted.contains("client-nonce"));
+        assert!(!redacted.contains("client-ciphertext"));
+        assert!(!redacted.contains("vector-nonce"));
+        assert!(!redacted.contains("vector-ciphertext"));
     }
 }
