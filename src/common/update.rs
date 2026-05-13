@@ -6134,6 +6134,80 @@ esac
                     ShardSelectorInternal::All,
                 )],
                 None,
+                read_only_auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::Forbidden { description }
+                    if description.contains("Global manage access is required")
+            ));
+
+            let err = crate::common::query::do_recommend_batch_points(
+                &toc,
+                "docs",
+                vec![(
+                    RecommendRequestInternal {
+                        positive: vec![RecommendExample::Dense(vec![0.1, 0.2])],
+                        negative: Vec::new(),
+                        strategy: Some(api::rest::RecommendStrategy::AverageVector),
+                        filter: None,
+                        params: None,
+                        limit: 1,
+                        offset: None,
+                        with_payload: Some(WithPayloadInterface::Encrypted(
+                            PayloadEncryptedReadPolicy {
+                                encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                            },
+                        )),
+                        with_vector: Some(WithVector::Bool(false)),
+                        score_threshold: None,
+                        using: None,
+                        lookup_from: None,
+                    },
+                    ShardSelectorInternal::All,
+                )],
+                None,
+                read_only_auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::Forbidden { description }
+                    if description.contains("Global manage access is required")
+            ));
+
+            let err = crate::common::query::do_discover_batch_points(
+                &toc,
+                "docs",
+                vec![(
+                    DiscoverRequestInternal {
+                        target: Some(RecommendExample::Dense(vec![0.1, 0.2])),
+                        context: None,
+                        filter: None,
+                        params: None,
+                        limit: 1,
+                        offset: None,
+                        with_payload: Some(WithPayloadInterface::Encrypted(
+                            PayloadEncryptedReadPolicy {
+                                encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                            },
+                        )),
+                        with_vector: Some(WithVector::Bool(false)),
+                        using: None,
+                        lookup_from: None,
+                    },
+                    ShardSelectorInternal::All,
+                )],
+                None,
                 read_only_auth,
                 None,
                 HwMeasurementAcc::disposable(),
