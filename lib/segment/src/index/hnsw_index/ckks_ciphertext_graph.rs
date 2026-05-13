@@ -245,6 +245,18 @@ impl CkksCiphertextVectorIndex {
         records: Vec<CkksCiphertextIndexedRecord>,
         graph: CkksCiphertextHnswGraph,
     ) -> Option<Self> {
+        let mut point_offsets = records
+            .iter()
+            .map(|record| record.point_offset)
+            .collect::<Vec<_>>();
+        point_offsets.sort_unstable();
+        if point_offsets
+            .windows(2)
+            .any(|window| window[0] == window[1])
+        {
+            return None;
+        }
+
         CkksCiphertextHnswIndex::from_graph(records, graph).map(|index| Self {
             index,
             graph_file: None,
@@ -1123,6 +1135,22 @@ mod tests {
         let graph = CkksCiphertextHnswGraph::from_validated_links(vec![vec![1], vec![0]]).unwrap();
 
         assert!(CkksCiphertextHnswIndex::from_graph(vec!["a"], graph).is_none());
+    }
+
+    #[test]
+    fn ciphertext_vector_index_rejects_duplicate_record_offsets() {
+        let graph = CkksCiphertextHnswGraph::from_validated_links(vec![vec![1], vec![0]]).unwrap();
+
+        assert!(
+            CkksCiphertextVectorIndex::from_graph(
+                vec![
+                    CkksCiphertextIndexedRecord::new(7, b"ciphertext-a".to_vec()),
+                    CkksCiphertextIndexedRecord::new(7, b"ciphertext-b".to_vec()),
+                ],
+                graph,
+            )
+            .is_none()
+        );
     }
 
     #[test]
