@@ -2,6 +2,8 @@ use std::env;
 use std::path::Path;
 
 use collection::operations::OperationWithClockTag;
+use collection::operations::loggable::Loggable;
+use shard::operations::CollectionUpdateOperations;
 use shard::wal::SerdeWal;
 use storage::content_manager::consensus::consensus_wal::ConsensusOpWal;
 use storage::content_manager::consensus_ops::ConsensusOperations;
@@ -13,10 +15,20 @@ use wal::WalOptions;
 /// `cargo run --bin wal_inspector -- storage/node4/wal/ consensus` (expects `collections_meta_wal` folder as first child)
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let wal_path = Path::new(&args[1]);
-    let wal_type = args[2].as_str();
+    let raw = args.iter().any(|arg| arg == "--raw");
+    let positional = args
+        .iter()
+        .skip(1)
+        .filter(|arg| arg.as_str() != "--raw")
+        .collect::<Vec<_>>();
+    if positional.len() != 2 {
+        eprintln!("Usage: wal_inspector [--raw] <wal_path> <collection|consensus>");
+        return;
+    }
+    let wal_path = Path::new(positional[0]);
+    let wal_type = positional[1].as_str();
     match wal_type {
-        "collection" => print_collection_wal(wal_path),
+        "collection" => print_collection_wal(wal_path, raw),
         "consensus" => print_consensus_wal(wal_path),
         _ => eprintln!("Unknown wal type: {wal_type}"),
     }
@@ -55,7 +67,7 @@ fn print_consensus_wal(wal_path: &Path) {
     }
 }
 
-fn print_collection_wal(wal_path: &Path) {
+fn print_collection_wal(wal_path: &Path, raw: bool) {
     let wal: Result<SerdeWal<OperationWithClockTag>, _> =
         SerdeWal::new(wal_path, WalOptions::default());
 
@@ -71,8 +83,9 @@ fn print_collection_wal(wal_path: &Path) {
                     Ok((idx, op)) => {
                         println!("==========================");
                         println!(
-                            "Entry: {idx} Operation: {:?} Clock: {:?}",
-                            op.operation, op.clock_tag
+                            "Entry: {idx} Operation: {} Clock: {:?}",
+                            collection_operation_for_display(&op.operation, raw),
+                            op.clock_tag
                         );
                         count += 1;
                     }
@@ -85,5 +98,54 @@ fn print_collection_wal(wal_path: &Path) {
             println!("End of WAL.");
             println!("Found {count} entries.");
         }
+    }
+}
+
+fn collection_operation_for_display(operation: &CollectionUpdateOperations, raw: bool) -> String {
+    if raw {
+        format!("{operation:?}")
+    } else {
+        operation.to_log_value().to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use segment::types::{Payload, PointIdType};
+    use serde_json::json;
+    use shard::operations::payload_ops::{PayloadOps, SetPayloadOp};
+
+    use super::*;
+
+    #[test]
+    fn collection_wal_display_redacts_payloads_by_default() {
+        let operation =
+            CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
+                payload: Payload(
+                    json!({
+                        "body": {
+                            "$qdrant_client_aead": {
+                                "nonce": "client-nonce",
+                                "ciphertext": "client-ciphertext"
+                            }
+                        }
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                ),
+                points: Some(vec![PointIdType::NumId(1)]),
+                filter: None,
+                key: None,
+            }));
+
+        let redacted = collection_operation_for_display(&operation, false);
+        let raw = collection_operation_for_display(&operation, true);
+
+        assert!(redacted.contains("[redacted]"));
+        assert!(!redacted.contains("client-nonce"));
+        assert!(!redacted.contains("client-ciphertext"));
+        assert!(raw.contains("client-nonce"));
+        assert!(raw.contains("client-ciphertext"));
     }
 }
