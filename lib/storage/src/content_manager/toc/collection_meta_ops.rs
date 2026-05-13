@@ -1073,5 +1073,17 @@ mod tests {
             err.to_string()
                 .contains("requires peer 2 crypto runtime capability metadata")
         );
+
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(String::new())),
+        );
+        let err =
+            validate_encrypted_resharding_crypto_runtime_parity("docs", 1, [1, 2, 3], &metadata)
+                .expect_err("blank peer crypto metadata must fail closed");
+        assert!(
+            err.to_string()
+                .contains("requires peer 2 crypto runtime capability metadata")
+        );
     }
 }
