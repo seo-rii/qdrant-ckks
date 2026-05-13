@@ -2259,6 +2259,69 @@ async fn crypto_migration_rejects_non_migrated_payload_mutation() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn crypto_migration_rejects_server_encrypted_field_add() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
+
+    let upsert = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+        PointInsertOperationsInternal::from(vec![PointStructPersisted {
+            id: 1.into(),
+            vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+            payload: Some(Payload(
+                serde_json::json!({
+                    "untouched": "keep this value"
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            )),
+        }]),
+    ));
+    collection
+        .update_from_client(
+            upsert,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::client_plaintext(),
+        )
+        .await
+        .unwrap();
+
+    collection
+        .apply_crypto_migration_plan(&CryptoMigrationPlan {
+            from: CryptoMigrationState::Active,
+            to: CryptoMigrationState::Rotating,
+            target_epoch: 1,
+            active_rk_id: Some("tenant-a/payload-rk-v2".to_string()),
+            retired_rk_id: Some("tenant-a/payload-rk-v1".to_string()),
+            dry_run: false,
+            checkpoints: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    let err = collection
+        .rewrite_payloads_for_crypto_migration(|_, payload| {
+            payload.0.insert(
+                "document".to_string(),
+                serde_json::json!({ "body": "new field" }),
+            );
+            Ok(1)
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, CollectionError::BadInput { ref description }
+            if description.contains("must not add or remove server-side encrypted field")),
+        "unexpected add error: {err:?}",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn crypto_migration_completion_requires_all_collection_shards() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection =
