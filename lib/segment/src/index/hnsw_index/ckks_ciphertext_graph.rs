@@ -60,6 +60,12 @@ pub struct CkksCiphertextVectorIndex {
     graph_file: Option<PathBuf>,
 }
 
+#[derive(Debug, PartialEq)]
+pub enum CkksCiphertextVectorIndexBuildError<E> {
+    DuplicatePointOffset,
+    Scoring(E),
+}
+
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 struct CkksCiphertextHnswGraphFile {
@@ -245,15 +251,7 @@ impl CkksCiphertextVectorIndex {
         records: Vec<CkksCiphertextIndexedRecord>,
         graph: CkksCiphertextHnswGraph,
     ) -> Option<Self> {
-        let mut point_offsets = records
-            .iter()
-            .map(|record| record.point_offset)
-            .collect::<Vec<_>>();
-        point_offsets.sort_unstable();
-        if point_offsets
-            .windows(2)
-            .any(|window| window[0] == window[1])
-        {
+        if !ckks_ciphertext_records_have_unique_offsets(&records) {
             return None;
         }
 
@@ -271,9 +269,14 @@ impl CkksCiphertextVectorIndex {
             &CkksCiphertextIndexedRecord,
             &[&CkksCiphertextIndexedRecord],
         ) -> Result<Vec<f32>, E>,
-    ) -> Result<Self, E> {
+    ) -> Result<Self, CkksCiphertextVectorIndexBuildError<E>> {
+        if !ckks_ciphertext_records_have_unique_offsets(&records) {
+            return Err(CkksCiphertextVectorIndexBuildError::DuplicatePointOffset);
+        }
+
         Ok(Self {
-            index: CkksCiphertextHnswIndex::build(records, m, score_order, score_previous_records)?,
+            index: CkksCiphertextHnswIndex::build(records, m, score_order, score_previous_records)
+                .map_err(CkksCiphertextVectorIndexBuildError::Scoring)?,
             graph_file: None,
         })
     }
@@ -955,6 +958,17 @@ fn ckks_ciphertext_records_digest(records: &[CkksCiphertextIndexedRecord]) -> St
     BASE64URL_NOPAD.encode(&digest.finalize())
 }
 
+fn ckks_ciphertext_records_have_unique_offsets(records: &[CkksCiphertextIndexedRecord]) -> bool {
+    let mut point_offsets = records
+        .iter()
+        .map(|record| record.point_offset)
+        .collect::<Vec<_>>();
+    point_offsets.sort_unstable();
+    !point_offsets
+        .windows(2)
+        .any(|window| window[0] == window[1])
+}
+
 fn links_have_valid_neighbors(links: &[Vec<usize>]) -> bool {
     links.iter().enumerate().all(|(from, neighbors)| {
         let mut unique_neighbors = std::collections::HashSet::with_capacity(neighbors.len());
@@ -1394,6 +1408,25 @@ mod tests {
 
         assert_eq!(results[0].idx, 1);
         assert_eq!(results[0].score, 3.0);
+    }
+
+    #[test]
+    fn ciphertext_vector_index_build_rejects_duplicate_record_offsets() {
+        let err = CkksCiphertextVectorIndex::build(
+            vec![
+                CkksCiphertextIndexedRecord::new(9, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(9, b"ciphertext-b".to_vec()),
+            ],
+            1,
+            Order::LargeBetter,
+            |_record, _candidates| -> Result<Vec<f32>, std::convert::Infallible> { Ok(Vec::new()) },
+        )
+        .expect_err("build must reject duplicate point offsets");
+
+        assert_eq!(
+            err,
+            CkksCiphertextVectorIndexBuildError::DuplicatePointOffset,
+        );
     }
 
     #[test]

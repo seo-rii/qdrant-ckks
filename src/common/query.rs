@@ -36,7 +36,7 @@ use segment::data_types::vectors::{
 };
 use segment::index::hnsw_index::ckks_ciphertext_graph::{
     CkksCiphertextHnswGraph, CkksCiphertextIndexedRecord, CkksCiphertextVectorIndex,
-    ckks_ciphertext_from_payload,
+    CkksCiphertextVectorIndexBuildError, ckks_ciphertext_from_payload,
 };
 use segment::json_path::JsonPath;
 use segment::types::{
@@ -2820,7 +2820,15 @@ fn ckks_sidecar_hnsw_search_points(
                             ))
                         })
                     },
-                )?;
+                )
+                .map_err(|err| match err {
+                    CkksCiphertextVectorIndexBuildError::DuplicatePointOffset => {
+                        StorageError::service_error(
+                            "CKKS sidecar HNSW indexed records must have unique point offsets",
+                        )
+                    }
+                    CkksCiphertextVectorIndexBuildError::Scoring(err) => err,
+                })?;
                 let graph = Arc::new(index.graph().clone());
                 if let Err(err) =
                     ckks_sidecar_hnsw_persist_graph(collection_path, &cache_key, &graph)
