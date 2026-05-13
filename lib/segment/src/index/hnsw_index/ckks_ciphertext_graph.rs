@@ -6,6 +6,7 @@ use std::{fs, io};
 
 use common::counter::hardware_counter::HardwareCounterCell;
 use common::types::{PointOffsetType, ScoredPointOffset, TelemetryDetail};
+use data_encoding::BASE64URL_NOPAD;
 
 use crate::common::operation_error::{OperationError, OperationResult};
 use crate::data_types::query_context::VectorQueryContext;
@@ -520,12 +521,12 @@ pub fn ckks_ciphertext_from_payload<'a>(
         .get("nonce")
         .and_then(serde_json::Value::as_str)
         .expect("nonce was checked above");
-    let is_base64url_no_pad = |value: &str| {
-        value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
-    };
-    if nonce.len() != 16 || !is_base64url_no_pad(nonce) {
+    let nonce = BASE64URL_NOPAD.decode(nonce.as_bytes()).map_err(|_| {
+        OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' has invalid nonce",
+        ))
+    })?;
+    if nonce.len() != 12 {
         return Err(OperationError::service_error(format!(
             "stored CKKS vector sidecar entry '{vector_name}' has invalid nonce",
         )));
@@ -552,7 +553,12 @@ pub fn ckks_ciphertext_from_payload<'a>(
             "stored CKKS vector sidecar entry '{vector_name}' has empty ciphertext",
         )));
     }
-    if ciphertext.len() < 22 || !is_base64url_no_pad(ciphertext) {
+    let ciphertext_bytes = BASE64URL_NOPAD.decode(ciphertext.as_bytes()).map_err(|_| {
+        OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' has invalid ciphertext",
+        ))
+    })?;
+    if ciphertext_bytes.len() < 16 {
         return Err(OperationError::service_error(format!(
             "stored CKKS vector sidecar entry '{vector_name}' has invalid ciphertext",
         )));

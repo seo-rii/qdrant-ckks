@@ -12,6 +12,7 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     use common::counter::hardware_counter::HardwareCounterCell;
+    use data_encoding::BASE64URL_NOPAD;
     use fs_err as fs;
     use itertools::Itertools;
     use rand::rng;
@@ -120,6 +121,7 @@ mod tests {
             .collect_vec();
         let hw_counter = HardwareCounterCell::new();
         for (idx, point_id) in point_ids.into_iter().enumerate() {
+            let ciphertext = BASE64URL_NOPAD.encode(format!("ciphertext-{idx:04}-pad").as_bytes());
             let payload = Payload(
                 serde_json::from_value(serde_json::json!({
                     CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD: {
@@ -135,7 +137,7 @@ mod tests {
                                     "rk_id": "tenant-a/vector-rk@v1",
                                     "rk_epoch": 1,
                                     "nonce": "AAAAAAAAAAAAAAAA",
-                                    "ciphertext": format!("AAAAAAAAAAAAAAAAAAAAAA{idx:04}")
+                                    "ciphertext": ciphertext
                                 }
                             }
                         }
