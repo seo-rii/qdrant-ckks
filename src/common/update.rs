@@ -937,6 +937,7 @@ pub async fn do_delete_payload(
         filter,
         shard_key,
     } = operation;
+    ensure_delete_payload_keys_do_not_touch_encrypted_vector_sidecar(&keys)?;
 
     let operation =
         CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(DeletePayloadOp {
@@ -957,6 +958,23 @@ pub async fn do_delete_payload(
         CollectionUpdateProvenance::client_plaintext(),
     )
     .await
+}
+
+fn ensure_delete_payload_keys_do_not_touch_encrypted_vector_sidecar(
+    keys: &[JsonPath],
+) -> Result<(), StorageError> {
+    let sidecar_path = JsonPath {
+        first_key: ENCRYPTED_VECTOR_SIDECAR_FIELD.to_string(),
+        rest: Vec::new(),
+    };
+    for key in keys {
+        if key.compatible(&sidecar_path) {
+            return Err(StorageError::bad_input(format!(
+                "cannot delete reserved encrypted vector sidecar payload field '{key}' via delete_payload; use delete_vectors for encrypted vector names",
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub async fn do_clear_payload(
@@ -6568,6 +6586,29 @@ esac
     }
 
     #[test]
+    fn delete_payload_rejects_encrypted_vector_sidecar_paths() {
+        for key in [
+            format!("\"{ENCRYPTED_VECTOR_SIDECAR_FIELD}\""),
+            format!("\"{ENCRYPTED_VECTOR_SIDECAR_FIELD}\".embedding"),
+        ] {
+            let key = key.parse::<JsonPath>().unwrap();
+            let err = ensure_delete_payload_keys_do_not_touch_encrypted_vector_sidecar(&[key])
+                .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                        && description.contains("delete_vectors")
+            ));
+        }
+
+        ensure_delete_payload_keys_do_not_touch_encrypted_vector_sidecar(&["public"
+            .parse::<JsonPath>()
+            .unwrap()])
+        .unwrap();
+    }
+
+    #[test]
     fn do_upsert_points_encrypts_payload_before_storage() {
         if std::env::var_os("QDRANT_SEC_LONG_UPDATE_TEST_STACK").is_none() {
             let status = std::process::Command::new(std::env::current_exe().unwrap())
@@ -6856,6 +6897,35 @@ esac
             let serialized_vector_payload = serde_json::to_string(&retrieved[0].payload).unwrap();
             assert!(!serialized_vector_payload.contains("0.7"));
             assert!(!serialized_vector_payload.contains("-0.25"));
+
+            let err = do_delete_payload(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "vector_docs".to_string(),
+                DeletePayload {
+                    keys: vec![format!("\"{ENCRYPTED_VECTOR_SIDECAR_FIELD}\"")
+                        .parse()
+                        .unwrap()],
+                    points: Some(vec![1.into()]),
+                    filter: None,
+                    shard_key: None,
+                },
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                        && description.contains("delete_vectors")
+            ));
 
             let plaintext_vector_patterns = [
                 vec![0.7_f32, -0.25]
