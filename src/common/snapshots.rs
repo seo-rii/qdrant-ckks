@@ -641,6 +641,7 @@ mod tests {
                         kind: "symmetric_key_32".to_string(),
                         source: Some("inline".to_string()),
                         value_b64: Some(BASE64URL_NOPAD.encode(&[8u8; 32])),
+                        rk_epoch: Some(3),
                         ..crate::settings::CryptoMaterialConfig::default()
                     },
                 )]),

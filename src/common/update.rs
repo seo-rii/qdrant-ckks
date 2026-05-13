@@ -2843,6 +2843,7 @@ esac
                     env: None,
                     path: None,
                     value_b64: Some(BASE64URL_NOPAD.encode(&[8u8; 32])),
+                    rk_epoch: Some(1),
                     ..CryptoMaterialConfig::default()
                 },
             )]),

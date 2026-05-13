@@ -1046,6 +1046,12 @@ fn generic_vector_write_plan(
                 rule.instance
             ))
         })?;
+        let Some(rk_epoch) = material.rk_epoch else {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} vector crypto instance {} metadata key material {material_ref} must set rk_epoch",
+                rule.instance
+            )));
+        };
         let resource_key = decode_resource_key(runtime_settings, material_ref, material).map_err(
             |err| {
                 StorageError::bad_input(format!(
@@ -1071,27 +1077,16 @@ fn generic_vector_write_plan(
 
         for vector_name in names {
             let distance = ckks_vector_distance(params, collection_name, vector_name)?;
-            let encryptor = if let Some(rk_epoch) = material.rk_epoch {
-                CkksVectorEncryptor::new_from_resource_key_with_metadata(
-                    key_id,
-                    vector_name,
-                    CkksParameters::openfhe_default_128_bit(),
-                    &resource_key,
-                    material_fingerprint_id,
-                    material_ref.clone(),
-                    rk_epoch,
-                    backend.clone(),
-                )
-            } else {
-                CkksVectorEncryptor::new_from_resource_key_with_material_fingerprint(
-                    key_id,
-                    vector_name,
-                    CkksParameters::openfhe_default_128_bit(),
-                    &resource_key,
-                    material_fingerprint_id,
-                    backend.clone(),
-                )
-            }
+            let encryptor = CkksVectorEncryptor::new_from_resource_key_with_metadata(
+                key_id,
+                vector_name,
+                CkksParameters::openfhe_default_128_bit(),
+                &resource_key,
+                material_fingerprint_id,
+                material_ref.clone(),
+                rk_epoch,
+                backend.clone(),
+            )
             .and_then(|encryptor| encryptor.with_collection_identity(collection_crypto_id))
             .map(|encryptor| encryptor.with_encryption_epoch(encryption.encryption_epoch))
             .map_err(|err| {
@@ -1964,6 +1959,20 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                     reason: "invalid material_fingerprint_id".to_string(),
                 });
             }
+        }
+
+        if instance.provider == VECTOR_OPENFHE_CKKS_PROVIDER
+            && let Some(active_material_ref) = instance.materials.get(PAYLOAD_SYM_KEY_ROLE)
+            && let Some(active_material) = settings.materials.get(active_material_ref)
+            && active_material.rk_epoch.is_none()
+        {
+            return Err(CryptoSetupError::InvalidInstanceOption {
+                instance: instance_name.clone(),
+                option: format!("materials.{PAYLOAD_SYM_KEY_ROLE}"),
+                reason: format!(
+                    "vector/openfhe-ckks@v1 sym_key material {active_material_ref} must set rk_epoch"
+                ),
+            });
         }
 
         if matches!(
@@ -3650,6 +3659,12 @@ fn validate_generic_collection_crypto_runtime(
                 rule.instance
             )));
         };
+        let Some(rk_epoch) = material.rk_epoch else {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} vector crypto instance {} metadata key material {material_ref} must set rk_epoch",
+                rule.instance
+            )));
+        };
         let resource_key = decode_resource_key(runtime_settings, material_ref, material).map_err(|err| {
             StorageError::bad_input(format!(
                 "collection {collection_name} vector crypto metadata key validation failed: {err}"
@@ -3688,15 +3703,13 @@ fn validate_generic_collection_crypto_runtime(
                     "collection {collection_name} vector crypto metadata key validation failed: {err}"
                 ))
             })?;
-            if let Some(rk_epoch) = material.rk_epoch {
-                metadata_cipher
-                    .with_resource_key_metadata(material_ref, rk_epoch)
-                    .map_err(|err| {
-                        StorageError::bad_input(format!(
-                            "collection {collection_name} vector crypto metadata key validation failed: {err}"
-                        ))
-                    })?;
-            }
+            metadata_cipher
+                .with_resource_key_metadata(material_ref, rk_epoch)
+                .map_err(|err| {
+                    StorageError::bad_input(format!(
+                        "collection {collection_name} vector crypto metadata key validation failed: {err}"
+                    ))
+                })?;
         }
         for vector_name in names {
             let _distance = ckks_vector_distance(params, collection_name, vector_name)?;
@@ -6297,6 +6310,7 @@ mod tests {
                         kind: SYMMETRIC_KEY_32_KIND.to_string(),
                         source: Some("env".to_string()),
                         env: Some("QDRANT_TEST_VECTOR_RK".to_string()),
+                        rk_epoch: Some(1),
                         ..CryptoMaterialConfig::default()
                     },
                 )]),
@@ -10276,6 +10290,7 @@ mod tests {
                             env: None,
                             path: None,
                             value_b64: Some(BASE64URL_NOPAD.encode(&[8u8; 32])),
+                            rk_epoch: Some(1),
                             ..CryptoMaterialConfig::default()
                         },
                     ),
@@ -11077,6 +11092,7 @@ mod tests {
                         env: None,
                         path: None,
                         value_b64: Some(BASE64URL_NOPAD.encode(&[8u8; 32])),
+                        rk_epoch: Some(1),
                         ..CryptoMaterialConfig::default()
                     },
                 )]),
@@ -11263,6 +11279,7 @@ mod tests {
                         env: None,
                         path: None,
                         value_b64: Some(BASE64URL_NOPAD.encode(&[8u8; 32])),
+                        rk_epoch: Some(1),
                         ..CryptoMaterialConfig::default()
                     },
                 )]),
@@ -11441,6 +11458,78 @@ mod tests {
         let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
         assert!(
             matches!(err, StorageError::BadInput { description } if description.contains("must set material_fingerprint_id"))
+        );
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_requires_vector_resource_key_epoch() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_vector_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: VECTOR_OPENFHE_CKKS_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            "tenant-a/vector-v1".to_string(),
+                        )]),
+                        backend_ref: Some("openfhe_local".to_string()),
+                        options: json!({
+                            "key_id": "tenant-a:docs",
+                            "material_fingerprint_id": "tenant-a/vector@v2",
+                            "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                            "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                            "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([(
+                    "tenant-a/vector-v1".to_string(),
+                    CryptoMaterialConfig {
+                        kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        env: None,
+                        path: None,
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[8u8; 32])),
+                        ..CryptoMaterialConfig::default()
+                    },
+                )]),
+                backends: HashMap::from([(
+                    "openfhe_local".to_string(),
+                    CryptoBackendConfig {
+                        kind: "process_pool".to_string(),
+                        program: Some("/usr/local/bin/openfhe-bridge".to_string()),
+                        sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
+                        size: Some(1),
+                        timeout_ms: Some(5_000),
+                    },
+                )]),
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "embedding_conf".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["embedding".to_string()],
+                    },
+                    instance: "docs_vector_v1".to_string(),
+                    binding: Some("vector-envelope/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
+        assert!(
+            matches!(err, StorageError::BadInput { description } if description.contains("must set rk_epoch"))
         );
     }
 
