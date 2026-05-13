@@ -3129,6 +3129,57 @@ async fn encrypted_payload_field_rejects_update_filters() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn encrypted_payload_field_rejects_payload_delete_and_clear() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
+
+    for key in ["document.body", "document", "document.body.marker"] {
+        let err = collection
+            .update_from_client_simple(
+                CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(
+                    DeletePayloadOp {
+                        keys: vec![key.parse().unwrap()],
+                        points: Some(vec![1.into()]),
+                        filter: None,
+                    },
+                )),
+                true,
+                None,
+                WriteOrdering::default(),
+                HwMeasurementAcc::new(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            CollectionError::BadInput { description }
+                if description.contains("cannot delete encrypted payload field")
+                    && description.contains("document.body")
+        ));
+    }
+
+    let err = collection
+        .update_from_client_simple(
+            CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayload {
+                points: vec![1.into()],
+            }),
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot clear payloads")
+                && description.contains("document.body")
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn encrypted_payload_field_rejects_plaintext_order_by() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection =

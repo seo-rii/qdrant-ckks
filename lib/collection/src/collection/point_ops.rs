@@ -1090,6 +1090,27 @@ impl Collection {
 
                 Ok(false)
             };
+            let reject_payload_delete_for_encrypted_path = |keys: &[JsonPath],
+                                                            protected_path: &JsonPath,
+                                                            protected_path_str: &str,
+                                                            protected_kind: &str|
+             -> CollectionResult<()> {
+                for key in keys {
+                    if key.compatible(protected_path) {
+                        return Err(CollectionError::bad_input(format!(
+                            "cannot delete {protected_kind} '{protected_path_str}' via delete_payload key '{key}'; use a crypto-aware update or migration path",
+                        )));
+                    }
+                }
+                Ok(())
+            };
+            let reject_payload_clear_for_encrypted_path = |protected_path_str: &str,
+                                                           protected_kind: &str|
+             -> CollectionResult<()> {
+                Err(CollectionError::bad_input(format!(
+                    "cannot clear payloads containing {protected_kind} '{protected_path_str}'; use a crypto-aware update or migration path",
+                )))
+            };
             let vector_write_touches_encrypted_name =
                 |vector: &VectorStructPersisted, encrypted_name: &str| match vector {
                     VectorStructPersisted::Single(_) | VectorStructPersisted::MultiDense(_) => {
@@ -1224,12 +1245,28 @@ impl Collection {
                                         allow_client_envelope,
                                     )?
                                 }
-                                CollectionUpdateOperations::VectorOperation(_)
-                                | CollectionUpdateOperations::PayloadOperation(
-                                    PayloadOps::DeletePayload(_)
-                                    | PayloadOps::ClearPayload { .. }
+                                CollectionUpdateOperations::PayloadOperation(
+                                    PayloadOps::DeletePayload(operation),
+                                ) => {
+                                    reject_payload_delete_for_encrypted_path(
+                                        &operation.keys,
+                                        &encrypted_json_path,
+                                        encrypted_path,
+                                        "encrypted payload field",
+                                    )?;
+                                    false
+                                }
+                                CollectionUpdateOperations::PayloadOperation(
+                                    PayloadOps::ClearPayload { .. }
                                     | PayloadOps::ClearPayloadByFilter(_),
-                                )
+                                ) => {
+                                    reject_payload_clear_for_encrypted_path(
+                                        encrypted_path,
+                                        "encrypted payload field",
+                                    )?;
+                                    false
+                                }
+                                CollectionUpdateOperations::VectorOperation(_)
                                 | CollectionUpdateOperations::FieldIndexOperation(_) => false,
                                 #[cfg(feature = "staging")]
                                 CollectionUpdateOperations::StagingOperation(_) => false,
@@ -1434,12 +1471,28 @@ impl Collection {
                                             false,
                                         )?
                                     }
-                                    CollectionUpdateOperations::VectorOperation(_)
-                                    | CollectionUpdateOperations::PayloadOperation(
-                                        PayloadOps::DeletePayload(_)
-                                        | PayloadOps::ClearPayload { .. }
+                                    CollectionUpdateOperations::PayloadOperation(
+                                        PayloadOps::DeletePayload(operation),
+                                    ) => {
+                                        reject_payload_delete_for_encrypted_path(
+                                            &operation.keys,
+                                            &metadata_path,
+                                            metadata_key,
+                                            "encrypted metadata value field",
+                                        )?;
+                                        false
+                                    }
+                                    CollectionUpdateOperations::PayloadOperation(
+                                        PayloadOps::ClearPayload { .. }
                                         | PayloadOps::ClearPayloadByFilter(_),
-                                    )
+                                    ) => {
+                                        reject_payload_clear_for_encrypted_path(
+                                            metadata_key,
+                                            "encrypted metadata value field",
+                                        )?;
+                                        false
+                                    }
+                                    CollectionUpdateOperations::VectorOperation(_)
                                     | CollectionUpdateOperations::FieldIndexOperation(_) => false,
                                     #[cfg(feature = "staging")]
                                     CollectionUpdateOperations::StagingOperation(_) => false,
@@ -1520,8 +1573,26 @@ impl Collection {
                                         metadata_key,
                                     )?;
                                 }
-                                CollectionUpdateOperations::PayloadOperation(_)
-                                | CollectionUpdateOperations::VectorOperation(_)
+                                CollectionUpdateOperations::PayloadOperation(
+                                    PayloadOps::DeletePayload(operation),
+                                ) => {
+                                    reject_payload_delete_for_encrypted_path(
+                                        &operation.keys,
+                                        &metadata_path,
+                                        metadata_key,
+                                        "metadata blind-index field",
+                                    )?;
+                                }
+                                CollectionUpdateOperations::PayloadOperation(
+                                    PayloadOps::ClearPayload { .. }
+                                    | PayloadOps::ClearPayloadByFilter(_),
+                                ) => {
+                                    reject_payload_clear_for_encrypted_path(
+                                        metadata_key,
+                                        "metadata blind-index field",
+                                    )?;
+                                }
+                                CollectionUpdateOperations::VectorOperation(_)
                                 | CollectionUpdateOperations::FieldIndexOperation(_) => {}
                                 #[cfg(feature = "staging")]
                                 CollectionUpdateOperations::StagingOperation(_) => {}
