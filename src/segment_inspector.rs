@@ -5,7 +5,7 @@ use clap::Parser;
 use common::counter::hardware_counter::HardwareCounterCell;
 use qdrant_sec::{
     CLIENT_ENCRYPTED_PAYLOAD_MARKER, ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_PAYLOAD_MARKER,
-    ENCRYPTED_VECTOR_SIDECAR_FIELD,
+    ENCRYPTED_VECTOR_SIDECAR_FIELD, GENERIC_CIPHERTEXT_MARKER,
 };
 use segment::entry::ReadSegmentEntry;
 use segment::segment_constructor::load_segment;
@@ -109,6 +109,7 @@ fn redact_encrypted_payload_markers(value: &mut Value) {
             if map.contains_key(ENCRYPTED_PAYLOAD_MARKER)
                 || map.contains_key(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
                 || map.contains_key(ENCRYPTED_CKKS_VECTOR_MARKER)
+                || map.contains_key(GENERIC_CIPHERTEXT_MARKER)
             {
                 *value =
                     Value::String("[encrypted marker redacted; use --raw-payload]".to_string());
@@ -156,6 +157,12 @@ mod tests {
                         "ciphertext": "client-ciphertext"
                     }
                 },
+                "metadata": {
+                    "$qdrant_ciphertext": {
+                        "nonce": "metadata-nonce",
+                        "ciphertext": "metadata-ciphertext"
+                    }
+                },
                 "$qdrant_sec_vectors": {
                     "embedding": {
                         "$qdrant_sec_ckks_vector": {
@@ -180,6 +187,8 @@ mod tests {
         assert!(!redacted.contains("server-ciphertext"));
         assert!(!redacted.contains("client-nonce"));
         assert!(!redacted.contains("client-ciphertext"));
+        assert!(!redacted.contains("metadata-nonce"));
+        assert!(!redacted.contains("metadata-ciphertext"));
         assert!(!redacted.contains("vector-nonce"));
         assert!(!redacted.contains("vector-ciphertext"));
     }
