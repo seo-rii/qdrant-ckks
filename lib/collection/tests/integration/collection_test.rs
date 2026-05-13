@@ -1811,6 +1811,101 @@ async fn client_encrypted_collection_load_rejects_malformed_client_nonce_cache()
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn crypto_migration_rewrites_payload_when_closure_underreports_change() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
+
+    let upsert = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+        PointInsertOperationsInternal::from(vec![PointStructPersisted {
+            id: 1.into(),
+            vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+            payload: Some(Payload(
+                serde_json::json!({ "migration_marker": "old" })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )),
+        }]),
+    ));
+    collection
+        .update_from_client(
+            upsert,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::client_plaintext(),
+        )
+        .await
+        .unwrap();
+
+    collection
+        .apply_crypto_migration_plan(&CryptoMigrationPlan {
+            from: CryptoMigrationState::Active,
+            to: CryptoMigrationState::Rotating,
+            target_epoch: 1,
+            active_rk_id: Some("tenant-a/payload-rk-v2".to_string()),
+            retired_rk_id: Some("tenant-a/payload-rk-v1".to_string()),
+            dry_run: false,
+            checkpoints: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    let checkpoints = collection
+        .rewrite_payloads_for_crypto_migration(|_, payload| {
+            payload
+                .0
+                .insert("migration_marker".to_string(), serde_json::json!("new"));
+            Ok(0)
+        })
+        .await
+        .unwrap();
+    assert_eq!(checkpoints.len(), 1);
+    assert_eq!(checkpoints[0].rewritten_points, 1);
+    assert_eq!(checkpoints[0].changed_points, 1);
+
+    collection
+        .apply_crypto_migration_plan(&CryptoMigrationPlan {
+            from: CryptoMigrationState::Rotating,
+            to: CryptoMigrationState::Active,
+            target_epoch: 1,
+            active_rk_id: Some("tenant-a/payload-rk-v2".to_string()),
+            retired_rk_id: Some("tenant-a/payload-rk-v1".to_string()),
+            dry_run: false,
+            checkpoints,
+        })
+        .await
+        .unwrap();
+
+    let records = collection
+        .retrieve(
+            PointRequestInternal {
+                ids: vec![1.into()],
+                with_payload: Some(WithPayloadInterface::Bool(true)),
+                with_vector: false.into(),
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        records[0]
+            .payload
+            .as_ref()
+            .unwrap()
+            .0
+            .get("migration_marker"),
+        Some(&serde_json::json!("new")),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn crypto_migration_completion_requires_all_collection_shards() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection =

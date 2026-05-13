@@ -282,13 +282,15 @@ impl Collection {
                         rewritten_points += 1;
                         continue;
                     };
+                    let original_payload = payload.clone();
                     let changed = rewrite_payload(&record.id, &mut payload)?;
+                    let payload_changed = changed > 0 || payload != original_payload;
                     // Migration completion checkpoints represent verified
                     // coverage, not only points that needed byte changes. A
                     // rerun over already-current data must still be usable as
                     // the completion proof.
                     rewritten_points += 1;
-                    if changed == 0 {
+                    if !payload_changed {
                         continue;
                     }
                     changed_points += 1;
