@@ -1609,6 +1609,16 @@ async fn crypto_migration_decrypts_payload_envelopes_and_returns_checkpoints() {
         .await
         .unwrap();
 
+    let err = collection
+        .rewrite_payloads_for_crypto_migration(|_, _| Ok(0))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, CollectionError::BadInput { ref description }
+            if description.contains("must decrypt server-side encrypted field 'document.body' during decrypting migration")),
+        "unexpected error: {err:?}",
+    );
+
     let checkpoints = collection
         .rewrite_payloads_for_crypto_migration(|point_id, payload| {
             encryptor
@@ -1819,12 +1829,13 @@ async fn crypto_migration_rewrites_payload_when_closure_underreports_change() {
     let collection_crypto_id = collection.config_snapshot().await.uuid.unwrap().to_string();
     let policy = PayloadEncryptionPolicy::new(["document.body"]).unwrap();
     let resource_key = SecretKey::from_bytes([41u8; 32]);
+    let new_resource_key = SecretKey::from_bytes([42u8; 32]);
     let encryptor = PayloadTextEncryptor::new_from_resource_key_with_metadata(
         &collection_crypto_id,
         "tenant-a:docs",
         &resource_key,
         "tenant-a/docs@v0",
-        "tenant-a/docs-rk-v1",
+        "tenant-a/payload-rk-v1",
         0,
     )
     .unwrap()
@@ -1877,7 +1888,17 @@ async fn crypto_migration_rewrites_payload_when_closure_underreports_change() {
         .await
         .unwrap();
 
-    let checkpoints = collection
+    let err = collection
+        .rewrite_payloads_for_crypto_migration(|_, _| Ok(0))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, CollectionError::BadInput { ref description }
+            if description.contains("must leave server-side encrypted field 'document.body' as an encrypted marker")),
+        "unexpected error: {err:?}",
+    );
+
+    let err = collection
         .rewrite_payloads_for_crypto_migration(|_, payload| {
             let body = payload
                 .0
@@ -1886,6 +1907,44 @@ async fn crypto_migration_rewrites_payload_when_closure_underreports_change() {
                 .expect("test payload must contain document.body");
             *body = serde_json::json!("new");
             Ok(0)
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, CollectionError::BadInput { ref description }
+            if description.contains("must leave server-side encrypted field 'document.body' as an encrypted marker")),
+        "unexpected error: {err:?}",
+    );
+
+    let rotating_encryptor = PayloadTextEncryptor::new_from_resource_key_with_metadata(
+        &collection_crypto_id,
+        "tenant-a:docs",
+        &new_resource_key,
+        "tenant-a/docs@v1",
+        "tenant-a/payload-rk-v2",
+        1,
+    )
+    .unwrap()
+    .with_encryption_epoch(1)
+    .with_retired_resource_key_metadata(
+        "tenant-a:docs",
+        &resource_key,
+        "tenant-a/docs@v0",
+        "tenant-a/payload-rk-v1",
+        0,
+    )
+    .unwrap();
+    let checkpoints = collection
+        .rewrite_payloads_for_crypto_migration(|point_id, payload| {
+            rotating_encryptor
+                .encrypt_selected_fields_with_mode(
+                    &point_id.to_string(),
+                    &mut payload.0,
+                    &policy,
+                    ExistingPayloadMode::ReencryptIfStale,
+                )
+                .map(|_| 0)
+                .map_err(|err| CollectionError::bad_input(err.to_string()))
         })
         .await
         .unwrap();
@@ -1920,15 +1979,20 @@ async fn crypto_migration_rewrites_payload_when_closure_underreports_change() {
         )
         .await
         .unwrap();
+    let body = records[0]
+        .payload
+        .as_ref()
+        .unwrap()
+        .0
+        .get("document")
+        .and_then(|document| document.get("body"))
+        .unwrap();
+    assert!(is_encrypted_payload_value(body));
     assert_eq!(
-        records[0]
-            .payload
-            .as_ref()
-            .unwrap()
-            .0
-            .get("document")
-            .and_then(|document| document.get("body")),
-        Some(&serde_json::json!("new")),
+        body.get(ENCRYPTED_PAYLOAD_MARKER)
+            .and_then(|marker| marker.get("encryption_epoch"))
+            .and_then(|epoch| epoch.as_u64()),
+        Some(1),
     );
 }
 

@@ -16,7 +16,7 @@ use qdrant_sec::{
     ServerPayloadValidationContext, ckks_vector_sidecar_envelope_key, client_payload_envelope_key,
     client_payload_nonce_replay_key, is_client_encrypted_payload_value, is_encrypted_payload_value,
     server_payload_envelope_key, validate_client_payload_value_after_runtime_verification,
-    validate_server_payload_value_after_runtime_encryption,
+    validate_server_payload_value_after_runtime_encryption, validate_server_payload_value_metadata,
 };
 use segment::data_types::order_by::{Direction, OrderBy};
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
@@ -215,7 +215,14 @@ impl Collection {
     where
         F: FnMut(&ExtendedPointId, &mut Payload) -> CollectionResult<usize>,
     {
-        let (migration_state, server_rewrite_paths, blind_index_paths) = {
+        let (
+            migration_state,
+            key_id,
+            crypto_schema_version,
+            encryption_epoch,
+            server_rewrite_paths,
+            blind_index_paths,
+        ) = {
             let collection_config = self.collection_config.read().await;
             let encryption = collection_config
                 .params
@@ -273,6 +280,9 @@ impl Collection {
             }
             (
                 encryption.migration_state,
+                encryption.key_id.clone(),
+                encryption.crypto_schema_version,
+                encryption.encryption_epoch,
                 server_rewrite_paths,
                 blind_index_paths,
             )
@@ -341,9 +351,6 @@ impl Collection {
                     // rerun over already-current data must still be usable as
                     // the completion proof.
                     rewritten_points += 1;
-                    if !payload_changed {
-                        continue;
-                    }
                     let mut original_client_envelopes = std::collections::BTreeMap::new();
                     let mut updated_client_envelopes = std::collections::BTreeMap::new();
                     for (payload, envelopes) in [
@@ -414,6 +421,37 @@ impl Collection {
                                 "crypto payload migration must not add or remove server-side encrypted field '{server_rewrite_path}'",
                             )));
                         }
+                        match migration_state {
+                            CryptoMigrationState::Encrypting | CryptoMigrationState::Rotating => {
+                                for value in &updated_values {
+                                    validate_server_payload_value_metadata(
+                                        value,
+                                        ServerPayloadValidationContext {
+                                            field_path: server_rewrite_path,
+                                            key_id: key_id.as_deref(),
+                                            crypto_schema_version,
+                                            encryption_epoch,
+                                        },
+                                    )
+                                    .map_err(|err| {
+                                        CollectionError::bad_input(format!(
+                                            "crypto payload migration must leave server-side encrypted field '{server_rewrite_path}' as an encrypted marker during {migration_state:?}: {err}",
+                                        ))
+                                    })?;
+                                }
+                            }
+                            CryptoMigrationState::Decrypting => {
+                                if updated_values
+                                    .iter()
+                                    .any(|value| is_encrypted_payload_value(value))
+                                {
+                                    return Err(CollectionError::bad_input(format!(
+                                        "crypto payload migration must decrypt server-side encrypted field '{server_rewrite_path}' during decrypting migration",
+                                    )));
+                                }
+                            }
+                            CryptoMigrationState::Disabled | CryptoMigrationState::Active => {}
+                        }
                         json_path.value_remove(&mut original_non_migrated_payload);
                         json_path.value_remove(&mut updated_non_migrated_payload);
                     }
@@ -421,6 +459,9 @@ impl Collection {
                         return Err(CollectionError::bad_input(
                             "crypto payload migration must not mutate payload fields outside server-side encrypted migration selectors",
                         ));
+                    }
+                    if !payload_changed {
+                        continue;
                     }
                     changed_points += 1;
 
