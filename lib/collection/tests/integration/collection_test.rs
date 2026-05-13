@@ -7,10 +7,9 @@ use ahash::AHashSet;
 use api::rest::SearchRequestInternal;
 use collection::collection::distance_matrix::CollectionSearchMatrixRequest;
 use collection::config::{
-    CkksCollectionConfig, CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams,
+    CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams,
     CryptoMigrationCheckpoint, CryptoMigrationCheckpointStatus, CryptoMigrationPlan,
-    CryptoMigrationState, EncryptionRuleRef, EncryptionSelector, RedactedLegacyCkksValue,
-    WalConfig,
+    CryptoMigrationState, EncryptionRuleRef, EncryptionSelector, WalConfig,
 };
 use collection::discovery::{discover, discover_batch};
 use collection::grouping::GroupBy;
@@ -7270,57 +7269,35 @@ async fn encrypted_vector_rejects_sidecar_payload_query_surfaces() {
     ));
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn collection_params_diff_rejects_crypto_mutation() {
-    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
-    let collection = simple_collection_fixture(collection_dir.path(), 1).await;
+#[test]
+fn collection_params_diff_rejects_crypto_mutation() {
+    let generic_err = serde_json::from_value::<CollectionParamsDiff>(serde_json::json!({
+        "encryption": {
+            "version": 1,
+            "key_id": "tenant-a:docs",
+            "crypto_schema_version": 1,
+            "encryption_epoch": 0,
+            "migration_state": "active",
+            "rules": []
+        }
+    }))
+    .unwrap_err();
+    assert!(
+        generic_err.to_string().contains("unknown field"),
+        "{generic_err}",
+    );
 
-    let err = collection
-        .update_params_from_diff(CollectionParamsDiff {
-            replication_factor: None,
-            write_consistency_factor: None,
-            read_fan_out_factor: None,
-            read_fan_out_delay_ms: None,
-            on_disk_payload: None,
-            encryption: Some(payload_encryption_config()),
-            ckks: None,
-        })
-        .await
-        .unwrap_err();
-
-    assert!(matches!(
-        err,
-        CollectionError::BadInput { description }
-            if description.contains("crypto migration")
-                && description.contains("params diff")
-    ));
-
-    let err = collection
-        .update_params_from_diff(CollectionParamsDiff {
-            replication_factor: None,
-            write_consistency_factor: None,
-            read_fan_out_factor: None,
-            read_fan_out_delay_ms: None,
-            on_disk_payload: None,
-            encryption: None,
-            ckks: Some(CkksCollectionConfig {
-                legacy_fields: [
-                    ("enabled".to_string(), RedactedLegacyCkksValue),
-                    ("payload_text_fields".to_string(), RedactedLegacyCkksValue),
-                ]
-                .into_iter()
-                .collect(),
-            }),
-        })
-        .await
-        .unwrap_err();
-
-    assert!(matches!(
-        err,
-        CollectionError::BadInput { description }
-            if description.contains("crypto migration")
-                && description.contains("params diff")
-    ));
+    let legacy_err = serde_json::from_value::<CollectionParamsDiff>(serde_json::json!({
+        "ckks": {
+            "enabled": true,
+            "payload_text_fields": ["body"]
+        }
+    }))
+    .unwrap_err();
+    assert!(
+        legacy_err.to_string().contains("unknown field"),
+        "{legacy_err}",
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

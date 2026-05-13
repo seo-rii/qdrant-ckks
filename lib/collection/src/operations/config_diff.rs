@@ -12,9 +12,7 @@ use segment::types::{
 use serde::{Deserialize, Serialize};
 use validator::{Validate, ValidationErrors};
 
-use crate::config::{
-    CkksCollectionConfig, CollectionEncryptionConfig, CollectionParams, WalConfig,
-};
+use crate::config::{CollectionParams, WalConfig};
 use crate::optimizers_builder::OptimizersConfig;
 
 pub trait DiffConfig<Diff>: Clone {
@@ -88,20 +86,8 @@ pub struct WalConfigDiff {
     pub wal_retain_closed: Option<usize>,
 }
 
-fn validate_collection_encryption_diff_sections(
-    diff: &CollectionParamsDiff,
-) -> Result<(), validator::ValidationError> {
-    if diff.encryption.is_some() || diff.ckks.is_some() {
-        return Err(validator::ValidationError::new(
-            "collection_encryption_diff_requires_crypto_migration",
-        ));
-    }
-
-    Ok(())
-}
-
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Validate, Clone, PartialEq, Eq, Hash)]
-#[validate(schema(function = "validate_collection_encryption_diff_sections"))]
+#[serde(deny_unknown_fields)]
 pub struct CollectionParamsDiff {
     /// Number of replicas for each shard
     pub replication_factor: Option<NonZeroU32>,
@@ -117,14 +103,6 @@ pub struct CollectionParamsDiff {
     /// Note: those payload values that are involved in filtering and are indexed - remain in RAM.
     #[serde(default)]
     pub on_disk_payload: Option<bool>,
-    /// Capability-oriented collection encryption rules. Secret key material is never stored here.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[validate(nested)]
-    pub encryption: Option<CollectionEncryptionConfig>,
-    /// Collection-local encryption settings. Set `enabled: false` to disable collection encryption.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[validate(nested)]
-    pub ckks: Option<CkksCollectionConfig>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Validate, Clone, PartialEq)]
@@ -324,8 +302,6 @@ impl DiffConfig<CollectionParamsDiff> for CollectionParams {
             read_fan_out_factor,
             read_fan_out_delay_ms,
             on_disk_payload,
-            encryption: _,
-            ckks: _,
         } = diff;
 
         CollectionParams {
@@ -467,8 +443,6 @@ impl From<CollectionParams> for CollectionParamsDiff {
             read_fan_out_factor,
             read_fan_out_delay_ms,
             on_disk_payload: Some(on_disk_payload),
-            encryption: None,
-            ckks: None,
         }
     }
 }
@@ -541,6 +515,7 @@ mod tests {
     use segment::types::{Distance, HnswConfig};
 
     use super::*;
+    use crate::config::{CkksCollectionConfig, CollectionEncryptionConfig};
     use crate::operations::vector_params_builder::VectorParamsBuilder;
     use crate::optimizers_builder::OptimizersConfig;
 
@@ -568,8 +543,6 @@ mod tests {
             read_fan_out_factor: None,
             read_fan_out_delay_ms: None,
             on_disk_payload: None,
-            encryption: None,
-            ckks: None,
         };
 
         let new_params = params.update(&diff);
@@ -581,43 +554,33 @@ mod tests {
 
     #[test]
     fn test_collection_params_diff_rejects_crypto_sections() {
-        let encryption = CollectionEncryptionConfig {
-            version: 1,
-            key_id: Some("tenant-a:docs".to_string()),
-            crypto_schema_version: 1,
-            encryption_epoch: 0,
-            migration_state: crate::config::CryptoMigrationState::Active,
-            rules: vec![crate::config::EncryptionRuleRef {
-                id: "body_conf".to_string(),
-                selector: crate::config::EncryptionSelector::PayloadPaths {
-                    paths: vec!["body".to_string()],
-                },
-                instance: "docs_payload_v1".to_string(),
-                binding: Some("payload-field/v1".to_string()),
-            }],
-        };
+        let generic_err = serde_json::from_value::<CollectionParamsDiff>(serde_json::json!({
+            "encryption": {
+                "version": 1,
+                "key_id": "tenant-a:docs",
+                "crypto_schema_version": 1,
+                "encryption_epoch": 0,
+                "migration_state": "active",
+                "rules": []
+            }
+        }))
+        .unwrap_err();
+        assert!(
+            generic_err.to_string().contains("unknown field"),
+            "{generic_err}",
+        );
 
-        let generic_diff = CollectionParamsDiff {
-            replication_factor: None,
-            write_consistency_factor: None,
-            read_fan_out_factor: None,
-            read_fan_out_delay_ms: None,
-            on_disk_payload: None,
-            encryption: Some(encryption),
-            ckks: None,
-        };
-        assert!(generic_diff.validate().is_err());
-
-        let legacy_diff = CollectionParamsDiff {
-            replication_factor: None,
-            write_consistency_factor: None,
-            read_fan_out_factor: None,
-            read_fan_out_delay_ms: None,
-            on_disk_payload: None,
-            encryption: None,
-            ckks: Some(legacy_ckks_config(&["key_id"])),
-        };
-        assert!(legacy_diff.validate().is_err());
+        let legacy_err = serde_json::from_value::<CollectionParamsDiff>(serde_json::json!({
+            "ckks": {
+                "enabled": true,
+                "payload_text_fields": ["body"]
+            }
+        }))
+        .unwrap_err();
+        assert!(
+            legacy_err.to_string().contains("unknown field"),
+            "{legacy_err}",
+        );
     }
 
     #[test]
@@ -643,15 +606,16 @@ mod tests {
         };
 
         let diff = CollectionParamsDiff::from(params);
+        let serialized = serde_json::to_value(&diff).unwrap();
 
-        assert!(diff.encryption.is_none());
-        assert!(diff.ckks.is_none());
+        assert!(serialized.get("encryption").is_none());
+        assert!(serialized.get("ckks").is_none());
         diff.validate()
             .expect("params-to-diff conversion must not emit crypto migration fields");
     }
 
     #[test]
-    fn test_ckks_collection_params_update_ignores_crypto_sections() {
+    fn test_ckks_collection_params_update_preserves_crypto_sections() {
         let enabled_ckks = legacy_ckks_config(&["enabled", "payload_text_fields"]);
         let params = CollectionParams {
             ckks: Some(enabled_ckks.clone()),
@@ -664,27 +628,12 @@ mod tests {
             read_fan_out_factor: None,
             read_fan_out_delay_ms: None,
             on_disk_payload: None,
-            encryption: None,
-            ckks: None,
         });
-        assert_eq!(unchanged.ckks, Some(enabled_ckks.clone()));
-
-        let disabled = legacy_ckks_config(&["key_id"]);
-        let updated = params.update(&CollectionParamsDiff {
-            replication_factor: None,
-            write_consistency_factor: None,
-            read_fan_out_factor: None,
-            read_fan_out_delay_ms: None,
-            on_disk_payload: None,
-            encryption: None,
-            ckks: Some(disabled.clone()),
-        });
-
-        assert_eq!(updated.ckks, Some(enabled_ckks));
+        assert_eq!(unchanged.ckks, Some(enabled_ckks));
     }
 
     #[test]
-    fn test_encryption_diff_updates_and_rejects_legacy_conflicts() {
+    fn test_encryption_diff_update_preserves_crypto_sections() {
         let params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
@@ -710,37 +659,8 @@ mod tests {
             read_fan_out_factor: None,
             read_fan_out_delay_ms: None,
             on_disk_payload: None,
-            encryption: None,
-            ckks: None,
         };
         assert_eq!(params.update(&diff).encryption, params.encryption);
-
-        let ignored = params.update(&CollectionParamsDiff {
-            replication_factor: None,
-            write_consistency_factor: None,
-            read_fan_out_factor: None,
-            read_fan_out_delay_ms: None,
-            on_disk_payload: None,
-            encryption: None,
-            ckks: Some(legacy_ckks_config(&["enabled", "payload_text_fields"])),
-        });
-        assert_eq!(ignored.encryption, params.encryption);
-        assert!(ignored.ckks.is_none());
-
-        let conflicting = CollectionParamsDiff {
-            ckks: Some(legacy_ckks_config(&["enabled", "payload_text_fields"])),
-            ..CollectionParamsDiff {
-                replication_factor: None,
-                write_consistency_factor: None,
-                read_fan_out_factor: None,
-                read_fan_out_delay_ms: None,
-                on_disk_payload: None,
-                encryption: params.encryption.clone(),
-                ckks: None,
-            }
-        };
-
-        assert!(conflicting.validate().is_err());
     }
 
     #[test]

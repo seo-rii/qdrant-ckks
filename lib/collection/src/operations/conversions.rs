@@ -377,8 +377,6 @@ impl TryFrom<api::grpc::qdrant::CollectionParamsDiff> for CollectionParamsDiff {
             read_fan_out_factor,
             read_fan_out_delay_ms,
             on_disk_payload,
-            encryption: None,
-            ckks: None,
         };
         diff.validate().map_err(|err| {
             Status::invalid_argument(format!("invalid collection params diff: {err}"))
