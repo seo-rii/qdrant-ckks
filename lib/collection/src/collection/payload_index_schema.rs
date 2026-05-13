@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use common::save_on_disk::SaveOnDisk;
-use qdrant_sec::ENCRYPTED_VECTOR_SIDECAR_FIELD;
+use qdrant_sec::{ENCRYPTED_VECTOR_SIDECAR_FIELD, METADATA_VALUE_BINDING};
 use segment::json_path::JsonPath;
 use segment::types::{Filter, PayloadFieldSchema, PayloadSchemaType};
 use shard::files::PAYLOAD_INDEX_CONFIG_FILE;
@@ -73,7 +73,7 @@ pub fn validate_payload_index_paths_for_encrypted_paths<'a>(
         let EncryptionSelector::MetadataKeys { keys } = &rule.selector else {
             continue;
         };
-        if rule.binding.as_deref() != Some("metadata-value/v1") {
+        if rule.binding.as_deref() != Some(METADATA_VALUE_BINDING) {
             continue;
         }
 
@@ -381,7 +381,7 @@ mod tests {
                         keys: vec![key.to_string()],
                     },
                     instance: "docs_metadata_v1".to_string(),
-                    binding: Some("metadata-value/v1".to_string()),
+                    binding: Some(METADATA_VALUE_BINDING.to_string()),
                 }],
             }),
             ..CollectionParams::empty()

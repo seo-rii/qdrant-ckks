@@ -1357,7 +1357,7 @@ impl Collection {
                                 ))
                             })?;
 
-                            if rule.binding.as_deref() == Some("metadata-value/v1") {
+                            if rule.binding.as_deref() == Some(METADATA_VALUE_BINDING) {
                                 let touches_encrypted_metadata = match &operation {
                                     CollectionUpdateOperations::PointOperation(point_operation) => {
                                         match point_operation {
@@ -2140,7 +2140,7 @@ impl Collection {
                                 "metadata blind-index field path '{metadata_key}' is invalid: {err:?}",
                             ))
                         })?;
-                        if rule.binding.as_deref() == Some("metadata-value/v1") {
+                        if rule.binding.as_deref() == Some(METADATA_VALUE_BINDING) {
                             if let Some(filter_path) =
                                 filter_touches_encrypted_payload(filter, &metadata_path)
                             {
@@ -2210,7 +2210,7 @@ impl Collection {
                 EncryptionSelector::MetadataKeys { keys } => {
                     for metadata_key in keys {
                         let metadata_path = parse_metadata_blind_index_path(metadata_key)?;
-                        if rule.binding.as_deref() == Some("metadata-value/v1") {
+                        if rule.binding.as_deref() == Some(METADATA_VALUE_BINDING) {
                             if order_by.key.compatible(&metadata_path) {
                                 return Err(CollectionError::bad_input(format!(
                                     "cannot order by encrypted metadata value field '{}' because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
@@ -2276,7 +2276,7 @@ impl Collection {
                 EncryptionSelector::MetadataKeys { keys } => {
                     for metadata_key in keys {
                         let metadata_path = parse_metadata_blind_index_path(metadata_key)?;
-                        if rule.binding.as_deref() == Some("metadata-value/v1") {
+                        if rule.binding.as_deref() == Some(METADATA_VALUE_BINDING) {
                             if group_by.compatible(&metadata_path) {
                                 return Err(CollectionError::bad_input(format!(
                                     "cannot group by encrypted metadata value field '{group_by}' because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
@@ -2373,7 +2373,7 @@ impl Collection {
                     for metadata_key in keys {
                         let metadata_path = parse_metadata_blind_index_path(metadata_key)?;
 
-                        if rule.binding.as_deref() == Some("metadata-value/v1") {
+                        if rule.binding.as_deref() == Some(METADATA_VALUE_BINDING) {
                             if let Some(formula_path) = formula
                                 .payload_vars
                                 .iter()

@@ -5,7 +5,7 @@ use std::time::Duration;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use futures::TryStreamExt;
 use futures::stream::FuturesUnordered;
-use qdrant_sec::ENCRYPTED_VECTOR_SIDECAR_FIELD;
+use qdrant_sec::{ENCRYPTED_VECTOR_SIDECAR_FIELD, METADATA_VALUE_BINDING};
 use segment::data_types::facets::{FacetParams, FacetResponse, FacetValue};
 use segment::json_path::JsonPath;
 
@@ -84,7 +84,7 @@ impl Collection {
                                     ))
                                 })?;
                             if request.key.compatible(&metadata_path) {
-                                if rule.binding.as_deref() == Some("metadata-value/v1") {
+                                if rule.binding.as_deref() == Some(METADATA_VALUE_BINDING) {
                                     return Err(CollectionError::bad_input(format!(
                                         "cannot facet on encrypted metadata value field '{}' because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
                                         request.key,

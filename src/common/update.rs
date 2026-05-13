@@ -21,7 +21,8 @@ use collection::shards::shard::ShardId;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use qdrant_sec::{
     CkksVectorVerifiedSidecarKey, ClientPayloadNonceReplayKey, ClientPayloadVerifiedEnvelopeKey,
-    ENCRYPTED_VECTOR_SIDECAR_FIELD, PayloadEncryptionError, ServerPayloadVerifiedEnvelopeKey,
+    ENCRYPTED_VECTOR_SIDECAR_FIELD, METADATA_VALUE_BINDING, PayloadEncryptionError,
+    ServerPayloadVerifiedEnvelopeKey,
 };
 use schemars::JsonSchema;
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
@@ -1404,7 +1405,7 @@ async fn ensure_payload_index_allowed_by_encryption(
         let collection::config::EncryptionSelector::MetadataKeys { keys } = &rule.selector else {
             continue;
         };
-        if rule.binding.as_deref() != Some("metadata-value/v1") {
+        if rule.binding.as_deref() != Some(METADATA_VALUE_BINDING) {
             continue;
         }
         for metadata_key in keys {
@@ -2572,7 +2573,7 @@ fn payload_touches_encrypted_config(
         let paths = match &rule.selector {
             collection::config::EncryptionSelector::PayloadPaths { paths } => paths.as_slice(),
             collection::config::EncryptionSelector::MetadataKeys { keys }
-                if rule.binding.as_deref() == Some("metadata-value/v1") =>
+                if rule.binding.as_deref() == Some(METADATA_VALUE_BINDING) =>
             {
                 keys.as_slice()
             }
@@ -5729,7 +5730,7 @@ esac
                         keys: vec!["tenant_id".to_string()],
                     },
                     instance: "docs_metadata_v1".to_string(),
-                    binding: Some("metadata-value/v1".to_string()),
+                    binding: Some(METADATA_VALUE_BINDING.to_string()),
                 }],
             }),
             ..CollectionParams::empty()
