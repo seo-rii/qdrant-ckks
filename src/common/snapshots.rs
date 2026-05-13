@@ -457,6 +457,8 @@ pub async fn try_take_partial_snapshot_recovery_lock(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use collection::config::{
         CollectionEncryptionConfig, CollectionParams, CryptoMigrationState, EncryptionRuleRef,
         EncryptionSelector, WalConfig,
@@ -542,5 +544,46 @@ mod tests {
         .expect_err("missing runtime instance must fail encrypted recovery preflight");
 
         assert!(err.to_string().contains("unknown payload crypto instance"));
+    }
+
+    #[test]
+    fn shard_snapshot_recovery_rejects_client_envelopes_in_clustered_mode() {
+        let mut settings = Settings::new(None).unwrap();
+        settings.cluster.enabled = true;
+        settings.crypto.instances.insert(
+            "docs_payload_client_v1".to_string(),
+            crate::settings::CryptoInstanceConfig {
+                provider: "payload/client-aead@v1".to_string(),
+                materials: HashMap::new(),
+                backend_ref: None,
+                options: serde_json::json!({}),
+            },
+        );
+        let config = config_with_params(CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/client-rk-2026-04".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_client_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_client_v1".to_string(),
+                    binding: Some("client-payload-envelope/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        });
+
+        let err = validate_shard_snapshot_recovery_crypto_runtime(Some(&settings), "docs", &config)
+            .expect_err("clustered client envelope recovery must fail closed");
+
+        assert!(
+            err.to_string().contains("cluster-wide nonce replay ledger"),
+            "unexpected error: {err:?}",
+        );
     }
 }
