@@ -97,6 +97,41 @@ mod tests {
     }
 
     #[test]
+    fn test_jwt_parser_preserves_payload_decrypt_collection_access() {
+        let exp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_secs();
+        let claims = Claims {
+            sub: None,
+            exp: Some(exp),
+            access: Access::Collection(CollectionAccessList(vec![CollectionAccess {
+                collection: "encrypted_docs".to_string(),
+                access: CollectionAccessMode::Read,
+                payload_decrypt: true,
+                #[expect(deprecated)]
+                payload: None,
+            }])),
+            value_exists: None,
+            subject: None,
+        };
+        let token = create_token(&claims);
+
+        let parser = JwtParser::new("secret");
+        let decoded_claims = parser.decode(&token).unwrap().unwrap();
+
+        assert_eq!(claims, decoded_claims);
+        assert!(matches!(
+            decoded_claims.access,
+            Access::Collection(CollectionAccessList(ref collections))
+                if collections
+                    .iter()
+                    .any(|access| access.collection == "encrypted_docs"
+                        && access.payload_decrypt)
+        ));
+    }
+
+    #[test]
     fn test_jwt_parser_with_deprecated_payloads() {
         let exp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
