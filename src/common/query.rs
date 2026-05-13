@@ -1920,39 +1920,37 @@ fn ckks_sidecar_hnsw_distance_cache_tag(distance: Distance) -> &'static str {
 
 fn ckks_sidecar_hnsw_records_fingerprint(records: &[CkksSidecarSearchRecord]) -> String {
     let mut hasher = Sha256::new();
+    macro_rules! hash_bytes {
+        ($bytes:expr) => {{
+            let bytes = $bytes;
+            hasher.update((bytes.len() as u64).to_be_bytes());
+            hasher.update(bytes);
+        }};
+    }
+
     hasher.update((records.len() as u64).to_be_bytes());
     for record in records {
         let id = serde_json::to_vec(&record.id).expect("serializing a point id should not fail");
-        hasher.update((id.len() as u64).to_be_bytes());
-        hasher.update(id);
-        hasher.update([0]);
-        hasher.update(record.point_id.as_bytes());
-        hasher.update([0]);
+        hash_bytes!(id.as_slice());
+        hash_bytes!(record.point_id.as_bytes());
         match &record.shard_key {
             Some(shard_key) => {
                 let shard_key =
                     serde_json::to_vec(shard_key).expect("serializing a shard key should not fail");
                 hasher.update([1]);
-                hasher.update((shard_key.len() as u64).to_be_bytes());
-                hasher.update(shard_key);
+                hash_bytes!(shard_key.as_slice());
             }
             None => hasher.update([0]),
         }
-        hasher.update([0]);
         hasher.update(record.encrypted.version.to_be_bytes());
-        hasher.update(record.encrypted.scheme.as_bytes());
-        hasher.update([0]);
+        hash_bytes!(record.encrypted.scheme.as_bytes());
 
         let envelope = &record.encrypted.envelope;
         hasher.update(envelope.version.to_be_bytes());
-        hasher.update(envelope.algorithm.as_bytes());
-        hasher.update([0]);
-        hasher.update(envelope.key_id.as_bytes());
-        hasher.update([0]);
-        hasher.update(envelope.material_fingerprint.as_bytes());
-        hasher.update([0]);
-        hasher.update(envelope.rk_id.as_bytes());
-        hasher.update([0]);
+        hash_bytes!(envelope.algorithm.as_bytes());
+        hash_bytes!(envelope.key_id.as_bytes());
+        hash_bytes!(envelope.material_fingerprint.as_bytes());
+        hash_bytes!(envelope.rk_id.as_bytes());
         match envelope.rk_epoch {
             Some(epoch) => {
                 hasher.update([1]);
@@ -1960,10 +1958,8 @@ fn ckks_sidecar_hnsw_records_fingerprint(records: &[CkksSidecarSearchRecord]) ->
             }
             None => hasher.update([0]),
         }
-        hasher.update(envelope.nonce.as_bytes());
-        hasher.update([0]);
-        hasher.update(envelope.ciphertext.as_bytes());
-        hasher.update([0xff]);
+        hash_bytes!(envelope.nonce.as_bytes());
+        hash_bytes!(envelope.ciphertext.as_bytes());
     }
 
     let digest = hasher.finalize();
