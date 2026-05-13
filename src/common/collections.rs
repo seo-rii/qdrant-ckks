@@ -1083,6 +1083,9 @@ fn validate_encrypted_cluster_data_movement_parity(
 mod tests {
     use std::collections::HashSet;
 
+    use data_encoding::BASE64URL_NOPAD;
+    use qdrant_sec::{CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, VECTOR_OPENFHE_CKKS_PROVIDER};
+
     use super::*;
 
     #[test]
@@ -1232,6 +1235,106 @@ mod tests {
                 "unexpected error for {operation:?}: {err}",
             );
         }
+    }
+
+    #[test]
+    fn encrypted_cluster_transfer_rejects_vector_public_material_drift() {
+        let settings = crate::settings::Settings {
+            crypto: crate::settings::CryptoSettings {
+                instances: HashMap::from([(
+                    "docs_vector_v1".to_string(),
+                    crate::settings::CryptoInstanceConfig {
+                        provider: VECTOR_OPENFHE_CKKS_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            "sym_key".to_string(),
+                            "tenant-a/vector-v1".to_string(),
+                        )]),
+                        backend_ref: Some("openfhe_bridge_v1".to_string()),
+                        options: serde_json::json!({
+                            "key_id": "tenant-a:docs",
+                            "material_fingerprint_id": "tenant-a/vector@v1",
+                            "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                            "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                            "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([(
+                    "tenant-a/vector-v1".to_string(),
+                    crate::settings::CryptoMaterialConfig {
+                        kind: "symmetric_key_32".to_string(),
+                        source: Some("env".to_string()),
+                        env: Some("QDRANT_TEST_VECTOR_RK".to_string()),
+                        ..crate::settings::CryptoMaterialConfig::default()
+                    },
+                )]),
+                backends: HashMap::from([(
+                    "openfhe_bridge_v1".to_string(),
+                    crate::settings::CryptoBackendConfig {
+                        kind: "process_pool".to_string(),
+                        program: Some("/usr/local/bin/qdrant-sec-openfhe".to_string()),
+                        sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
+                        size: Some(1),
+                        timeout_ms: Some(5_000),
+                    },
+                )]),
+                ..crate::settings::CryptoSettings::default()
+            },
+            ..crate::settings::Settings::new(None).unwrap()
+        };
+        let local_fingerprint =
+            crate::common::crypto::crypto_runtime_capability_fingerprint(&settings);
+        let mut peer_with_different_public_material = settings.clone();
+        peer_with_different_public_material
+            .crypto
+            .instances
+            .get_mut("docs_vector_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                "public_key_b64".to_string(),
+                serde_json::json!(BASE64URL_NOPAD.encode(b"other openfhe public key")),
+            );
+        let peer_fingerprint = crate::common::crypto::crypto_runtime_capability_fingerprint(
+            &peer_with_different_public_material,
+        );
+        let operation = ClusterOperations::MoveShard(MoveShardOperation {
+            move_shard: collection::operations::cluster_ops::MoveShard {
+                shard_id: 1,
+                to_shard_id: None,
+                from_peer_id: 1,
+                to_peer_id: 2,
+                method: None,
+            },
+        });
+        let metadata = HashMap::from([
+            (
+                1,
+                PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                    local_fingerprint,
+                )),
+            ),
+            (
+                2,
+                PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                    peer_fingerprint,
+                )),
+            ),
+        ]);
+
+        let err = validate_encrypted_cluster_data_movement_parity(
+            "docs",
+            true,
+            &operation,
+            1,
+            &[1, 2],
+            &metadata,
+        )
+        .expect_err("OpenFHE public-material drift must fail encrypted shard movement");
+        assert!(matches!(err, StorageError::BadRequest { .. }));
+        assert!(err.to_string().contains("crypto runtime parity"));
     }
 
     #[test]
