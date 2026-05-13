@@ -7393,6 +7393,20 @@ mod tests {
     }
 
     #[test]
+    fn ckks_sidecar_hnsw_records_fingerprint_tracks_record_order() {
+        let first = ckks_sidecar_hnsw_records_fingerprint(&[
+            ckks_sidecar_test_record(1, "ciphertext-a"),
+            ckks_sidecar_test_record(2, "ciphertext-b"),
+        ]);
+        let reordered = ckks_sidecar_hnsw_records_fingerprint(&[
+            ckks_sidecar_test_record(2, "ciphertext-b"),
+            ckks_sidecar_test_record(1, "ciphertext-a"),
+        ]);
+
+        assert_ne!(first, reordered);
+    }
+
+    #[test]
     fn ckks_sidecar_hnsw_records_fingerprint_tracks_resource_key_metadata() {
         let first =
             ckks_sidecar_hnsw_records_fingerprint(&[ckks_sidecar_test_record(1, "ciphertext-a")]);
