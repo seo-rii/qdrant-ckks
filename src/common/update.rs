@@ -989,6 +989,7 @@ pub async fn do_clear_payload(
     let toc = toc_provider
         .check_strict_mode(&points, &collection_name, params.timeout_as_secs(), &auth)
         .await?;
+    ensure_clear_payload_does_not_drop_encrypted_vector_sidecars(toc, &collection_name).await?;
 
     let (point_operation, shard_key) = match points {
         PointsSelector::PointIdsSelector(PointIdsList { points, shard_key }) => {
@@ -1013,6 +1014,37 @@ pub async fn do_clear_payload(
         CollectionUpdateProvenance::client_plaintext(),
     )
     .await
+}
+
+async fn ensure_clear_payload_does_not_drop_encrypted_vector_sidecars(
+    toc: &TableOfContent,
+    collection_name: &str,
+) -> Result<(), StorageError> {
+    let multipass = CollectionMultipass;
+    let collection_pass = multipass.issue_pass(collection_name);
+    let collection = toc.get_collection(&collection_pass).await?;
+    let collection_config = collection.config_snapshot().await;
+    let has_encrypted_vector_rule =
+        collection_config
+            .params
+            .effective_encryption()
+            .is_some_and(|encryption| {
+                encryption.rules.iter().any(|rule| {
+                    matches!(
+                        &rule.selector,
+                        collection::config::EncryptionSelector::VectorNames { names }
+                            if !names.is_empty()
+                    )
+                })
+            });
+
+    if has_encrypted_vector_rule {
+        return Err(StorageError::bad_input(format!(
+            "cannot clear payloads for collection {collection_name} because encrypted vector sidecars are stored in reserved payload field '{ENCRYPTED_VECTOR_SIDECAR_FIELD}'; use delete_vectors for encrypted vector names",
+        )));
+    }
+
+    Ok(())
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -6909,6 +6941,31 @@ esac
                     filter: None,
                     shard_key: None,
                 },
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                        && description.contains("delete_vectors")
+            ));
+
+            let err = do_clear_payload(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "vector_docs".to_string(),
+                PointsSelector::PointIdsSelector(PointIdsList {
+                    points: vec![1.into()],
+                    shard_key: None,
+                }),
                 InternalUpdateParams::default(),
                 UpdateParams {
                     wait: true,
