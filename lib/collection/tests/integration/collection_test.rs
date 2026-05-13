@@ -53,8 +53,8 @@ use qdrant_sec::{
     CkksVectorEncryptor, CkksVectorVerifiedSidecarKey, ClientPayloadSignatureVerification,
     ClientPayloadValidationContext, ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_PAYLOAD_MARKER,
     ENCRYPTED_VECTOR_SIDECAR_FIELD, ExistingPayloadMode, METADATA_EXACT_MATCH_TOKEN_BINDING,
-    PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
-    ServerPayloadValidationContext, client_payload_signature_message,
+    METADATA_VALUE_BINDING, PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionPolicy, PayloadTextEncryptor,
+    SecretKey, ServerPayloadValidationContext, client_payload_signature_message,
     is_client_encrypted_payload_value, is_encrypted_payload_value,
     validate_client_payload_value_for_runtime, validate_server_payload_value_metadata,
 };
@@ -3176,6 +3176,146 @@ async fn encrypted_payload_field_rejects_payload_delete_and_clear() {
         CollectionError::BadInput { description }
             if description.contains("cannot clear payloads")
                 && description.contains("document.body")
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn encrypted_metadata_fields_reject_payload_delete_and_clear() {
+    let blind_index_collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let blind_index_collection = encrypted_collection_fixture(
+        blind_index_collection_dir.path(),
+        1,
+        CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a:docs".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 3,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![EncryptionRuleRef {
+                id: "document_body_blind_eq".to_string(),
+                selector: EncryptionSelector::MetadataKeys {
+                    keys: vec!["document_body__blind_eq".to_string()],
+                },
+                instance: "docs_body_blind_v1".to_string(),
+                binding: Some(METADATA_EXACT_MATCH_TOKEN_BINDING.to_string()),
+            }],
+        },
+    )
+    .await;
+
+    for key in ["document_body__blind_eq", "document_body__blind_eq.child"] {
+        let err = blind_index_collection
+            .update_from_client_simple(
+                CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(
+                    DeletePayloadOp {
+                        keys: vec![key.parse().unwrap()],
+                        points: Some(vec![1.into()]),
+                        filter: None,
+                    },
+                )),
+                true,
+                None,
+                WriteOrdering::default(),
+                HwMeasurementAcc::new(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            CollectionError::BadInput { description }
+                if description.contains("cannot delete metadata blind-index field")
+                    && description.contains("document_body__blind_eq")
+        ));
+    }
+
+    let err = blind_index_collection
+        .update_from_client_simple(
+            CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayload {
+                points: vec![1.into()],
+            }),
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CollectionError::BadInput { ref description }
+                if description.contains("cannot clear payloads")
+                    && description.contains("metadata blind-index field")
+                    && description.contains("document_body__blind_eq")
+        ),
+        "unexpected error: {err:?}",
+    );
+
+    let metadata_value_collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let metadata_value_collection = encrypted_collection_fixture(
+        metadata_value_collection_dir.path(),
+        1,
+        CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a:docs".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 3,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![EncryptionRuleRef {
+                id: "tenant_metadata".to_string(),
+                selector: EncryptionSelector::MetadataKeys {
+                    keys: vec!["tenant.private".to_string()],
+                },
+                instance: "docs_metadata_value_v1".to_string(),
+                binding: Some(METADATA_VALUE_BINDING.to_string()),
+            }],
+        },
+    )
+    .await;
+
+    for key in ["tenant.private", "tenant", "tenant.private.child"] {
+        let err = metadata_value_collection
+            .update_from_client_simple(
+                CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(
+                    DeletePayloadOp {
+                        keys: vec![key.parse().unwrap()],
+                        points: Some(vec![1.into()]),
+                        filter: None,
+                    },
+                )),
+                true,
+                None,
+                WriteOrdering::default(),
+                HwMeasurementAcc::new(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            CollectionError::BadInput { description }
+                if description.contains("cannot delete encrypted metadata value field")
+                    && description.contains("tenant.private")
+        ));
+    }
+
+    let err = metadata_value_collection
+        .update_from_client_simple(
+            CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayload {
+                points: vec![1.into()],
+            }),
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot clear payloads")
+                && description.contains("encrypted metadata value field")
+                && description.contains("tenant.private")
     ));
 }
 
