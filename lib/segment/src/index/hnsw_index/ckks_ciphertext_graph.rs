@@ -448,6 +448,14 @@ pub fn ckks_ciphertext_from_payload<'a>(
             "stored CKKS vector sidecar entry '{vector_name}' is malformed",
         )));
     };
+    if let Some(key) = marker
+        .keys()
+        .find(|key| !matches!(key.as_str(), "version" | "scheme" | "envelope"))
+    {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' has unsupported metadata field '{key}'",
+        )));
+    }
     if marker.get("version").and_then(serde_json::Value::as_u64) != Some(1) {
         return Err(OperationError::service_error(format!(
             "stored CKKS vector sidecar entry '{vector_name}' has unsupported version",
@@ -466,6 +474,23 @@ pub fn ckks_ciphertext_from_payload<'a>(
             "stored CKKS vector sidecar entry '{vector_name}' is missing envelope",
         )));
     };
+    if let Some(key) = envelope.keys().find(|key| {
+        !matches!(
+            key.as_str(),
+            "version"
+                | "algorithm"
+                | "key_id"
+                | "material_fingerprint"
+                | "rk_id"
+                | "rk_epoch"
+                | "nonce"
+                | "ciphertext"
+        )
+    }) {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' has unsupported envelope field '{key}'",
+        )));
+    }
     if envelope.get("version").and_then(serde_json::Value::as_u64) != Some(1) {
         return Err(OperationError::service_error(format!(
             "stored CKKS vector sidecar entry '{vector_name}' has unsupported envelope version",
@@ -478,6 +503,26 @@ pub fn ckks_ciphertext_from_payload<'a>(
     {
         return Err(OperationError::service_error(format!(
             "stored CKKS vector sidecar entry '{vector_name}' has unsupported envelope algorithm",
+        )));
+    }
+    for required_field in ["key_id", "material_fingerprint", "rk_id", "nonce"] {
+        if envelope
+            .get(required_field)
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(str::is_empty)
+        {
+            return Err(OperationError::service_error(format!(
+                "stored CKKS vector sidecar entry '{vector_name}' is missing {required_field}",
+            )));
+        }
+    }
+    if envelope
+        .get("rk_epoch")
+        .and_then(serde_json::Value::as_u64)
+        .is_none()
+    {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' is missing rk_epoch",
         )));
     }
     let Some(ciphertext) = envelope
@@ -1603,6 +1648,9 @@ mod tests {
                                 "version": 1,
                                 "algorithm": "AES-256-GCM",
                                 "key_id": "tenant-a:vector",
+                                "material_fingerprint": "tenant-a/vector@v1",
+                                "rk_id": "tenant-a/vector-rk@v1",
+                                "rk_epoch": 1,
                                 "nonce": "AAAAAAAAAAAAAAAA",
                                 "ciphertext": "stored-ciphertext"
                             }
@@ -1687,9 +1735,74 @@ mod tests {
             &payload_with_marker(serde_json::json!({
                 "version": 1,
                 "scheme": "openfhe-ckks",
+                "unexpected": true,
                 "envelope": {
                     "version": 1,
                     "algorithm": "AES-128-GCM",
+                    "key_id": "tenant-a:vector",
+                    "material_fingerprint": "tenant-a/vector@v1",
+                    "rk_id": "tenant-a/vector-rk@v1",
+                    "rk_epoch": 1,
+                    "nonce": "AAAAAAAAAAAAAAAA",
+                    "ciphertext": "stored-ciphertext"
+                }
+            })),
+            "embedding",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unsupported metadata field"));
+
+        let err = ckks_ciphertext_from_payload(
+            &payload_with_marker(serde_json::json!({
+                "version": 1,
+                "scheme": "openfhe-ckks",
+                "envelope": {
+                    "version": 1,
+                    "algorithm": "AES-256-GCM",
+                    "key_id": "tenant-a:vector",
+                    "material_fingerprint": "tenant-a/vector@v1",
+                    "rk_id": "tenant-a/vector-rk@v1",
+                    "rk_epoch": 1,
+                    "nonce": "AAAAAAAAAAAAAAAA",
+                    "ciphertext": "stored-ciphertext",
+                    "unexpected": true
+                }
+            })),
+            "embedding",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unsupported envelope field"));
+
+        let err = ckks_ciphertext_from_payload(
+            &payload_with_marker(serde_json::json!({
+                "version": 1,
+                "scheme": "openfhe-ckks",
+                "envelope": {
+                    "version": 1,
+                    "algorithm": "AES-256-GCM",
+                    "key_id": "tenant-a:vector",
+                    "material_fingerprint": "tenant-a/vector@v1",
+                    "nonce": "AAAAAAAAAAAAAAAA",
+                    "ciphertext": "stored-ciphertext"
+                }
+            })),
+            "embedding",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("missing rk_id"));
+
+        let err = ckks_ciphertext_from_payload(
+            &payload_with_marker(serde_json::json!({
+                "version": 1,
+                "scheme": "openfhe-ckks",
+                "envelope": {
+                    "version": 1,
+                    "algorithm": "AES-128-GCM",
+                    "key_id": "tenant-a:vector",
+                    "material_fingerprint": "tenant-a/vector@v1",
+                    "rk_id": "tenant-a/vector-rk@v1",
+                    "rk_epoch": 1,
+                    "nonce": "AAAAAAAAAAAAAAAA",
                     "ciphertext": "stored-ciphertext"
                 }
             })),
