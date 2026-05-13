@@ -281,14 +281,13 @@ impl CkksCiphertextVectorIndex {
     pub fn build_optimizer_candidate_graph(
         records: Vec<CkksCiphertextIndexedRecord>,
         m: usize,
-    ) -> Self {
+    ) -> OperationResult<Self> {
         let graph = CkksCiphertextHnswGraph::build_optimizer_candidate_graph(records.len(), m);
-        let index = CkksCiphertextHnswIndex::from_graph(records, graph)
-            .expect("candidate graph node count is derived from records");
-        Self {
-            index,
-            graph_file: None,
-        }
+        Self::from_graph(records, graph).ok_or_else(|| {
+            OperationError::service_error(
+                "CKKS ciphertext HNSW candidate graph records must have unique point offsets",
+            )
+        })
     }
 
     pub fn open_graph_file(
@@ -1298,7 +1297,8 @@ mod tests {
                 CkksCiphertextIndexedRecord::new(12, b"ciphertext-c".to_vec()),
             ],
             2,
-        );
+        )
+        .unwrap();
 
         assert_eq!(index.indexed_vector_count(), 3);
         assert_eq!(index.records()[1].point_offset, 11);
@@ -1312,6 +1312,23 @@ mod tests {
     }
 
     #[test]
+    fn vector_index_rejects_duplicate_optimizer_candidate_record_offsets() {
+        let err = CkksCiphertextVectorIndex::build_optimizer_candidate_graph(
+            vec![
+                CkksCiphertextIndexedRecord::new(10, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(10, b"ciphertext-b".to_vec()),
+            ],
+            1,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("unique point offsets"),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
     fn ciphertext_vector_index_rejects_plaintext_vector_index_search_api() {
         let index = CkksCiphertextVectorIndex::build_optimizer_candidate_graph(
             vec![CkksCiphertextIndexedRecord::new(
@@ -1319,7 +1336,8 @@ mod tests {
                 b"ciphertext-a".to_vec(),
             )],
             1,
-        );
+        )
+        .unwrap();
         let query = QueryVector::Nearest(crate::data_types::vectors::VectorInternal::Dense(vec![
             0.1, 0.2,
         ]));

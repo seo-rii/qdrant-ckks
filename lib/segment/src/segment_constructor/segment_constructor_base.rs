@@ -408,7 +408,7 @@ pub(crate) fn build_vector_index<R: Rng + ?Sized>(
                 &HardwareCounterCell::disposable(),
             )?;
             let mut index =
-                CkksCiphertextVectorIndex::build_optimizer_candidate_graph(records, hnsw_config.m);
+                CkksCiphertextVectorIndex::build_optimizer_candidate_graph(records, hnsw_config.m)?;
             let graph_path = CkksCiphertextVectorIndex::graph_file_path(path);
             index.persist_graph_file(&graph_path)?;
             VectorIndexEnum::CkksCiphertextHnsw(index)
