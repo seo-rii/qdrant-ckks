@@ -7500,6 +7500,16 @@ mod tests {
             &snapshots,
             &[ckks_sidecar_test_record(1, "ciphertext-a"), changed],
         ));
+
+        let mut stale_ciphertext = ckks_sidecar_test_record(2, "ciphertext-b");
+        stale_ciphertext.encrypted.envelope.ciphertext = "ciphertext-c".to_string();
+        assert!(!ckks_sidecar_segment_snapshots_cover_records(
+            &snapshots,
+            &[
+                ckks_sidecar_test_record(1, "ciphertext-a"),
+                stale_ciphertext
+            ],
+        ));
     }
 
     fn ckks_sidecar_test_segment_snapshot(
