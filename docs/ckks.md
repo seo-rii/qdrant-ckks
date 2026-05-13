@@ -747,6 +747,20 @@ decrypts only server-side payload text and metadata value AEAD fields in the API
 runtime layer, leaves client-side `$qdrant_client_aead` envelopes opaque, and
 fails closed if runtime settings are unavailable or invalid. Group lookup
 payloads are not decrypted because lookups may target another collection.
+JWT RBAC claims must grant the decrypt capability explicitly:
+
+```json
+{
+  "access": [
+    {
+      "collection": "docs",
+      "access": "r",
+      "payload_decrypt": true
+    }
+  ]
+}
+```
+
 Decrypted export remains future work; slow request logs and request hashes use
 redacted request values, and collection telemetry has sentinel coverage so
 decrypted plaintext is not intentionally emitted there.
