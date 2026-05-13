@@ -719,4 +719,30 @@ mod tests {
         let cluster = distributed.cluster.expect("cluster telemetry");
         assert!(cluster.crypto_runtime_capability_mismatches.is_none());
     }
+
+    #[test]
+    fn distributed_telemetry_reports_missing_peer_crypto_runtime_fingerprint() {
+        let mut peer_without_crypto_fingerprint = telemetry_for_peer(2, 1, 9, "unused");
+        peer_without_crypto_fingerprint
+            .app
+            .as_mut()
+            .unwrap()
+            .crypto_runtime_capability_fingerprint = None;
+
+        let distributed = DistributedTelemetryData::resolve_telemetries(
+            &Access::full("test"),
+            vec![
+                telemetry_for_peer(1, 2, 10, "crypto-runtime-shared"),
+                peer_without_crypto_fingerprint,
+            ],
+            Vec::new(),
+        )
+        .unwrap();
+
+        let cluster = distributed.cluster.expect("cluster telemetry");
+        assert_eq!(
+            cluster.crypto_runtime_capability_mismatches.as_deref(),
+            Some([2].as_slice()),
+        );
+    }
 }
