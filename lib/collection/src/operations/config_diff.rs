@@ -453,8 +453,8 @@ impl From<CollectionParams> for CollectionParamsDiff {
             read_fan_out_factor,
             read_fan_out_delay_ms,
             on_disk_payload,
-            encryption,
-            ckks,
+            encryption: _,
+            ckks: _,
             shard_number: _,
             sharding_method: _,
             sparse_vectors: _,
@@ -467,8 +467,8 @@ impl From<CollectionParams> for CollectionParamsDiff {
             read_fan_out_factor,
             read_fan_out_delay_ms,
             on_disk_payload: Some(on_disk_payload),
-            encryption,
-            ckks,
+            encryption: None,
+            ckks: None,
         }
     }
 }
@@ -618,6 +618,36 @@ mod tests {
             ckks: Some(legacy_ckks_config(&["key_id"])),
         };
         assert!(legacy_diff.validate().is_err());
+    }
+
+    #[test]
+    fn test_collection_params_diff_from_params_strips_crypto_sections() {
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: crate::config::CryptoMigrationState::Active,
+                rules: vec![crate::config::EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: crate::config::EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ckks: Some(legacy_ckks_config(&["enabled", "payload_text_fields"])),
+            ..CollectionParams::empty()
+        };
+
+        let diff = CollectionParamsDiff::from(params);
+
+        assert!(diff.encryption.is_none());
+        assert!(diff.ckks.is_none());
+        diff.validate()
+            .expect("params-to-diff conversion must not emit crypto migration fields");
     }
 
     #[test]
