@@ -149,12 +149,21 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "signature"
                         | "sig"
                         | "public_key"
+                        | "public_key_b64"
+                        | "signature_public_key_b64"
                         | "crypto_context"
                         | "context_digest"
                         | "wrapped_key"
                         | "wrapped_key_b64"
                         | "value_b64"
                         | "master_key_b64"
+                        | "api_key"
+                        | "token"
+                        | "password"
+                        | "private_key"
+                        | "private_key_b64"
+                        | "secret_key"
+                        | "secret_key_b64"
                 ) {
                     *value = Value::String("[redacted]".to_string());
                 } else {
@@ -451,6 +460,45 @@ mod tests {
             "qdrant-sec-encrypted-query-log-sentinel",
             "qdrant-sec-wrapped-key-log-sentinel",
             "qdrant-sec-inline-key-log-sentinel",
+        ] {
+            assert!(!serialized.contains(sentinel));
+        }
+        assert!(serialized.contains("[redacted]"));
+    }
+
+    #[test]
+    fn log_value_redacts_generic_secret_fields_recursively() {
+        let mut value = json!({
+            "snapshot": {
+                "api_key": "qdrant-sec-api-key-log-sentinel",
+                "token": "qdrant-sec-token-log-sentinel",
+                "password": "qdrant-sec-password-log-sentinel"
+            },
+            "tls": {
+                "private_key": "qdrant-sec-private-key-log-sentinel",
+                "private_key_b64": "qdrant-sec-private-key-b64-log-sentinel"
+            },
+            "crypto": {
+                "secret_key": "qdrant-sec-secret-key-log-sentinel",
+                "secret_key_b64": "qdrant-sec-secret-key-b64-log-sentinel",
+                "public_key_b64": "qdrant-sec-public-key-b64-log-sentinel",
+                "signature_public_key_b64": "qdrant-sec-signature-public-key-log-sentinel"
+            }
+        });
+
+        redact_sensitive_log_fields(&mut value);
+        let serialized = serde_json::to_string(&value).unwrap();
+
+        for sentinel in [
+            "qdrant-sec-api-key-log-sentinel",
+            "qdrant-sec-token-log-sentinel",
+            "qdrant-sec-password-log-sentinel",
+            "qdrant-sec-private-key-log-sentinel",
+            "qdrant-sec-private-key-b64-log-sentinel",
+            "qdrant-sec-secret-key-log-sentinel",
+            "qdrant-sec-secret-key-b64-log-sentinel",
+            "qdrant-sec-public-key-b64-log-sentinel",
+            "qdrant-sec-signature-public-key-log-sentinel",
         ] {
             assert!(!serialized.contains(sentinel));
         }
