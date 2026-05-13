@@ -1152,6 +1152,36 @@ mod tests {
     }
 
     #[test]
+    fn ciphertext_vector_index_rejects_plaintext_vector_index_search_api() {
+        let index = CkksCiphertextVectorIndex::build_optimizer_candidate_graph(
+            vec![CkksCiphertextIndexedRecord::new(
+                10,
+                b"ciphertext-a".to_vec(),
+            )],
+            1,
+        );
+        let query = QueryVector::Nearest(crate::data_types::vectors::VectorInternal::Dense(vec![
+            0.1, 0.2,
+        ]));
+
+        let err = VectorIndex::search(
+            &index,
+            &[&query],
+            None,
+            1,
+            None,
+            &VectorQueryContext::default(),
+        )
+        .expect_err("ciphertext index must reject plaintext VectorIndex search API");
+
+        assert!(
+            err.to_string()
+                .contains("does not accept plaintext QueryVector search requests"),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
     fn ciphertext_vector_index_can_reopen_from_valid_graph() {
         let records = vec![
             CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
