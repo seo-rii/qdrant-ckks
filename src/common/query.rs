@@ -1924,6 +1924,17 @@ fn ckks_sidecar_hnsw_records_fingerprint(records: &[CkksSidecarSearchRecord]) ->
     for record in records {
         hasher.update(record.point_id.as_bytes());
         hasher.update([0]);
+        match &record.shard_key {
+            Some(shard_key) => {
+                let shard_key =
+                    serde_json::to_vec(shard_key).expect("serializing a shard key should not fail");
+                hasher.update([1]);
+                hasher.update((shard_key.len() as u64).to_be_bytes());
+                hasher.update(shard_key);
+            }
+            None => hasher.update([0]),
+        }
+        hasher.update([0]);
         hasher.update(record.encrypted.version.to_be_bytes());
         hasher.update(record.encrypted.scheme.as_bytes());
         hasher.update([0]);
@@ -7425,6 +7436,21 @@ mod tests {
         ]);
 
         assert_ne!(first, changed);
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_records_fingerprint_tracks_shard_key_identity() {
+        let without_shard =
+            ckks_sidecar_hnsw_records_fingerprint(&[ckks_sidecar_test_record(1, "ciphertext-a")]);
+        let mut keyword_shard = ckks_sidecar_test_record(1, "ciphertext-a");
+        keyword_shard.shard_key = Some(ShardKey::from("tenant-a"));
+        let keyword = ckks_sidecar_hnsw_records_fingerprint(std::slice::from_ref(&keyword_shard));
+        let mut numeric_shard = ckks_sidecar_test_record(1, "ciphertext-a");
+        numeric_shard.shard_key = Some(ShardKey::from(7_u64));
+        let numeric = ckks_sidecar_hnsw_records_fingerprint(&[numeric_shard]);
+
+        assert_ne!(without_shard, keyword);
+        assert_ne!(keyword, numeric);
     }
 
     #[test]
