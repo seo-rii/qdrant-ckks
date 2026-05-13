@@ -2656,10 +2656,10 @@ mod tests {
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_sec::{
         CLIENT_ENCRYPTED_PAYLOAD_MARKER, ENCRYPTED_CKKS_VECTOR_MARKER,
-        ENCRYPTED_VECTOR_SIDECAR_FIELD, VECTOR_ENVELOPE_BINDING, ckks_vector_sidecar_envelope_key,
-        client_payload_signature_message, is_client_encrypted_payload_value,
-        is_encrypted_ckks_vector_payload_value, is_encrypted_payload_value,
-        server_payload_envelope_key,
+        ENCRYPTED_VECTOR_SIDECAR_FIELD, METADATA_AES_GCM_PROVIDER, VECTOR_ENVELOPE_BINDING,
+        ckks_vector_sidecar_envelope_key, client_payload_signature_message,
+        is_client_encrypted_payload_value, is_encrypted_ckks_vector_payload_value,
+        is_encrypted_payload_value, server_payload_envelope_key,
     };
     use ring::rand::SystemRandom;
     use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -2716,6 +2716,38 @@ mod tests {
                 path: None,
                 value_b64: Some(BASE64URL_NOPAD.encode(&[5u8; 32])),
                 rk_epoch: Some(1),
+                ..crate::settings::CryptoMaterialConfig::default()
+            },
+        )]);
+        settings
+    }
+
+    fn metadata_value_runtime_settings() -> Settings {
+        let mut settings = Settings::new(None).unwrap();
+        settings.crypto.instances = HashMap::from([(
+            "docs_metadata_v1".to_string(),
+            CryptoInstanceConfig {
+                provider: METADATA_AES_GCM_PROVIDER.to_string(),
+                materials: HashMap::from([(
+                    "sym_key".to_string(),
+                    "tenant-a/metadata-v1".to_string(),
+                )]),
+                backend_ref: None,
+                options: json!({
+                    "key_id": "tenant-a:docs",
+                    "material_fingerprint_id": "tenant-a/metadata@v1",
+                }),
+            },
+        )]);
+        settings.crypto.materials = HashMap::from([(
+            "tenant-a/metadata-v1".to_string(),
+            crate::settings::CryptoMaterialConfig {
+                kind: "symmetric_key_32".to_string(),
+                source: Some("inline".to_string()),
+                env: None,
+                path: None,
+                value_b64: Some(BASE64URL_NOPAD.encode(&[17u8; 32])),
+                rk_epoch: Some(3),
                 ..crate::settings::CryptoMaterialConfig::default()
             },
         )]);
@@ -6703,6 +6735,236 @@ esac
                     .and_then(|payload| payload.0.get("body"))
                     .and_then(Value::as_str),
                 Some("server secret"),
+            );
+        });
+    }
+
+    #[test]
+    fn metadata_value_encrypted_read_mode_decrypts_with_payload_decrypt_access() {
+        let runtime = Runtime::new().unwrap();
+        let storage_dir = Builder::new()
+            .prefix("metadata-decrypted-read")
+            .tempdir()
+            .unwrap();
+        let temp_dir = Builder::new()
+            .prefix("metadata-decrypted-read-temp")
+            .tempdir()
+            .unwrap();
+        let storage_config = StorageConfig {
+            storage_path: storage_dir.path().to_path_buf(),
+            snapshots_path: storage_dir.path().join("snapshots"),
+            snapshots_config: Default::default(),
+            temp_path: Some(temp_dir.path().to_path_buf()),
+            on_disk_payload: false,
+            optimizers: OptimizersConfig {
+                deleted_threshold: 0.5,
+                vacuum_min_vector_number: 100,
+                default_segment_number: 1,
+                max_segment_size: None,
+                #[expect(deprecated)]
+                memmap_threshold: Some(100),
+                indexing_threshold: Some(100),
+                flush_interval_sec: 2,
+                max_optimization_threads: Some(1),
+                prevent_unoptimized: None,
+            },
+            optimizers_overwrite: None,
+            wal: Default::default(),
+            performance: PerformanceConfig {
+                max_search_threads: 1,
+                max_optimization_runtime_threads: 1,
+                optimizer_cpu_budget: 0,
+                optimizer_io_budget: 0,
+                update_rate_limit: None,
+                search_timeout_sec: None,
+                incoming_shard_transfers_limit: Some(1),
+                outgoing_shard_transfers_limit: Some(1),
+                async_scorer: None,
+                load_concurrency: LoadConcurrencyConfig::default(),
+            },
+            hnsw_index: Default::default(),
+            hnsw_global_config: Default::default(),
+            mmap_advice: mmap::Advice::Random,
+            node_type: Default::default(),
+            update_queue_size: Default::default(),
+            handle_collection_load_errors: false,
+            recovery_mode: None,
+            update_concurrency: Some(NonZeroUsize::new(1).unwrap()),
+            shard_transfer_method: None,
+            collection: None,
+            max_collections: None,
+        };
+        let toc = Arc::new(TableOfContent::new(
+            &storage_config,
+            Runtime::new().unwrap(),
+            Runtime::new().unwrap(),
+            Runtime::new().unwrap(),
+            ResourceBudget::default(),
+            ChannelService::new(6333, false, None, None),
+            0,
+            None,
+        ));
+        let dispatcher = Dispatcher::new(toc.clone());
+        let auth = Auth::new_internal(Access::full("For test"));
+        let settings = metadata_value_runtime_settings();
+
+        runtime.block_on(async {
+            dispatcher
+                .submit_collection_meta_op(
+                    CollectionMetaOperations::CreateCollection(
+                        CreateCollectionOperation::new(
+                            "metadata_docs".to_string(),
+                            CreateCollection {
+                                vectors: VectorParamsBuilder::new(2, Distance::Dot).build().into(),
+                                sparse_vectors: None,
+                                hnsw_config: None,
+                                wal_config: None,
+                                optimizers_config: None,
+                                shard_number: Some(1),
+                                on_disk_payload: None,
+                                replication_factor: None,
+                                write_consistency_factor: None,
+                                quantization_config: None,
+                                sharding_method: None,
+                                encryption: metadata_value_params().encryption,
+                                strict_mode_config: None,
+                                uuid: None,
+                                metadata: None,
+                            },
+                        )
+                        .unwrap(),
+                    ),
+                    auth.clone(),
+                    None,
+                )
+                .await
+                .unwrap();
+
+            do_upsert_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "metadata_docs".to_string(),
+                PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                    points: vec![api::rest::PointStruct {
+                        id: 1.into(),
+                        vector: api::rest::VectorStruct::Single(vec![0.1, 0.2]),
+                        payload: Some(segment::types::Payload(
+                            json!({ "tenant_id": "acme", "title": "public" })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        )),
+                    }],
+                    shard_key: None,
+                    update_filter: None,
+                    update_mode: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap();
+
+            let raw_records = crate::common::query::do_get_points(
+                &toc,
+                "metadata_docs",
+                PointRequestInternal {
+                    ids: vec![1.into()],
+                    with_payload: Some(WithPayloadInterface::Bool(true)),
+                    with_vector: WithVector::Bool(false),
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap();
+            let raw_payload = raw_records[0].payload.as_ref().unwrap();
+            assert!(is_encrypted_payload_value(
+                raw_payload.0.get("tenant_id").unwrap()
+            ));
+            assert_eq!(
+                raw_payload.0.get("title").and_then(Value::as_str),
+                Some("public"),
+            );
+
+            let read_only_auth = Auth::new_internal(Access::full_ro("For test"));
+            let err = crate::common::query::do_get_points(
+                &toc,
+                "metadata_docs",
+                PointRequestInternal {
+                    ids: vec![1.into()],
+                    with_payload: Some(WithPayloadInterface::Encrypted(
+                        PayloadEncryptedReadPolicy {
+                            encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                        },
+                    )),
+                    with_vector: WithVector::Bool(false),
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                read_only_auth,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::Forbidden { description }
+                    if description.contains("payload decrypt")
+            ));
+
+            let payload_decrypt_auth =
+                Auth::new_internal(Access::Collection(CollectionAccessList(vec![
+                    CollectionAccess {
+                        collection: "metadata_docs".to_string(),
+                        access: CollectionAccessMode::Read,
+                        payload_decrypt: true,
+                        #[expect(deprecated)]
+                        payload: None,
+                    },
+                ])));
+            let decrypted_records = crate::common::query::do_get_points(
+                &toc,
+                "metadata_docs",
+                PointRequestInternal {
+                    ids: vec![1.into()],
+                    with_payload: Some(WithPayloadInterface::Encrypted(
+                        PayloadEncryptedReadPolicy {
+                            encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                        },
+                    )),
+                    with_vector: WithVector::Bool(false),
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                payload_decrypt_auth,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap();
+            let decrypted_payload = decrypted_records[0].payload.as_ref().unwrap();
+            assert_eq!(
+                decrypted_payload.0.get("tenant_id").and_then(Value::as_str),
+                Some("acme"),
+            );
+            assert_eq!(
+                decrypted_payload.0.get("title").and_then(Value::as_str),
+                Some("public"),
             );
         });
     }
