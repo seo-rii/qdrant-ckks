@@ -7407,6 +7407,33 @@ mod tests {
     }
 
     #[test]
+    fn ckks_sidecar_hnsw_records_fingerprint_tracks_envelope_header_metadata() {
+        let first =
+            ckks_sidecar_hnsw_records_fingerprint(&[ckks_sidecar_test_record(1, "ciphertext-a")]);
+
+        let mut changed_scheme = ckks_sidecar_test_record(1, "ciphertext-a");
+        changed_scheme.encrypted.scheme = "other-scheme".to_string();
+        assert_ne!(
+            first,
+            ckks_sidecar_hnsw_records_fingerprint(&[changed_scheme])
+        );
+
+        let mut changed_algorithm = ckks_sidecar_test_record(1, "ciphertext-a");
+        changed_algorithm.encrypted.envelope.algorithm = "other-algorithm".to_string();
+        assert_ne!(
+            first,
+            ckks_sidecar_hnsw_records_fingerprint(&[changed_algorithm])
+        );
+
+        let mut changed_nonce = ckks_sidecar_test_record(1, "ciphertext-a");
+        changed_nonce.encrypted.envelope.nonce = "BBBBBBBBBBBBBBBB".to_string();
+        assert_ne!(
+            first,
+            ckks_sidecar_hnsw_records_fingerprint(&[changed_nonce])
+        );
+    }
+
+    #[test]
     fn ckks_sidecar_segment_snapshots_must_cover_scroll_records() {
         let first = ckks_sidecar_test_record(1, "ciphertext-a");
         let second = ckks_sidecar_test_record(2, "ciphertext-b");
