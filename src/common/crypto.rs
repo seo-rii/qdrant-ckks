@@ -6270,6 +6270,92 @@ mod tests {
     }
 
     #[test]
+    fn crypto_runtime_capability_fingerprint_tracks_vector_public_material() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                instances: HashMap::from([(
+                    "docs_vector_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: VECTOR_OPENFHE_CKKS_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            "tenant-a/vector-rk-v1".to_string(),
+                        )]),
+                        backend_ref: Some("openfhe_bridge_v1".to_string()),
+                        options: json!({
+                            "key_id": "tenant-a:docs",
+                            "material_fingerprint_id": "tenant-a/vector@v1",
+                            "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                            "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                            "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([(
+                    "tenant-a/vector-rk-v1".to_string(),
+                    CryptoMaterialConfig {
+                        kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                        source: Some("env".to_string()),
+                        env: Some("QDRANT_TEST_VECTOR_RK".to_string()),
+                        ..CryptoMaterialConfig::default()
+                    },
+                )]),
+                backends: HashMap::from([(
+                    "openfhe_bridge_v1".to_string(),
+                    CryptoBackendConfig {
+                        kind: "process_pool".to_string(),
+                        program: Some("/usr/local/bin/qdrant-sec-openfhe".to_string()),
+                        sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
+                        size: Some(1),
+                        timeout_ms: Some(5_000),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let fingerprint = crypto_runtime_capability_fingerprint(&settings);
+
+        let mut peer_with_different_context = settings.clone();
+        peer_with_different_context
+            .crypto
+            .instances
+            .get_mut("docs_vector_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                CKKS_CRYPTO_CONTEXT_B64_OPTION.to_string(),
+                json!(BASE64URL_NOPAD.encode(b"other openfhe context")),
+            );
+        assert_ne!(
+            fingerprint,
+            crypto_runtime_capability_fingerprint(&peer_with_different_context),
+            "CKKS crypto context drift must change the parity fingerprint",
+        );
+
+        let mut peer_with_different_public_key = settings.clone();
+        peer_with_different_public_key
+            .crypto
+            .instances
+            .get_mut("docs_vector_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                CKKS_PUBLIC_KEY_B64_OPTION.to_string(),
+                json!(BASE64URL_NOPAD.encode(b"other openfhe public key")),
+            );
+        assert_ne!(
+            fingerprint,
+            crypto_runtime_capability_fingerprint(&peer_with_different_public_key),
+            "CKKS public key drift must change the parity fingerprint",
+        );
+    }
+
+    #[test]
     fn crypto_runtime_capability_fingerprint_tracks_vault_material_field() {
         let settings = Settings {
             crypto: CryptoSettings {
