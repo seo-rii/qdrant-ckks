@@ -415,8 +415,9 @@ only for exact-match equality filtering over opaque HMAC tokens.
 ```
 
 Runtime settings provide key material and providers through the canonical
-`crypto` section. The old runtime `ckks` section and `master_key_b64` /
-`resource_key_b64` direct-key shape are rejected by startup validation; define a
+`crypto` section. The old runtime `ckks` section is no longer part of the
+settings schema; `master_key_b64` / `resource_key_b64` direct-key material must
+not be used. Define a
 `payload/aes-256-gcm@v1` or `payload/client-aead@v1` instance instead:
 
 ```yaml
@@ -759,9 +760,9 @@ id. Payload and vector runtime validation rejects missing values so envelopes
 do not fall back to key-derived fingerprints. Low-level test helpers may still
 construct deterministic fingerprints directly from key material, but production
 runtime configuration must provide explicit opaque fingerprint ids.
-If the old `ckks` runtime section is configured, startup validation fails and
-requires migration to the canonical `crypto` control plane before encrypted
-writes are accepted.
+If the old `ckks` runtime section is configured, settings parsing fails with an
+unknown-field error. Migrate to the canonical `crypto` control plane before
+enabling encrypted writes.
 
 ## Storage path threat model
 

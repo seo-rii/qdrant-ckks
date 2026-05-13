@@ -9,8 +9,7 @@ use collection::operations::validation;
 use collection::shards::shard::PeerId;
 use common::flags::FeatureFlags;
 use config::{Config, ConfigError, Environment, File, FileFormat, Source};
-use serde::{Deserialize, Deserializer};
-use serde_json::Value;
+use serde::Deserialize;
 use storage::types::StorageConfig;
 use validator::{Validate, ValidationError, ValidationErrors};
 
@@ -403,112 +402,8 @@ impl CryptoSettings {
     }
 }
 
-#[derive(Deserialize, Clone, Default, Validate)]
-pub struct CkksCollectionKeyConfig {
-    /// Legacy collection-scoped runtime fields are unsupported. They are kept
-    /// only as redacted field names so any non-empty old `ckks.collections.*`
-    /// entry fails validation instead of being silently ignored.
-    #[serde(flatten)]
-    pub legacy_fields: HashMap<String, Value>,
-}
-
-impl fmt::Debug for CkksCollectionKeyConfig {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut legacy_field_names: Vec<_> = self.legacy_fields.keys().collect();
-        legacy_field_names.sort();
-        f.debug_struct("CkksCollectionKeyConfig")
-            .field("legacy_fields", &legacy_field_names)
-            .finish()
-    }
-}
-
-impl CkksCollectionKeyConfig {
-    pub fn is_configured(&self) -> bool {
-        !self.legacy_fields.is_empty()
-    }
-}
-
-#[derive(Clone, Validate)]
-pub struct CkksConfig {
-    pub present: bool,
-    /// Legacy collection-specific runtime settings retained only to reject old config files.
-    #[validate(nested)]
-    pub collections: HashMap<String, CkksCollectionKeyConfig>,
-    /// Unsupported legacy top-level `ckks` fields. Values are never inspected or
-    /// printed because they may contain old inline key material.
-    pub legacy_fields: HashMap<String, Value>,
-}
-
-#[derive(Deserialize)]
-struct CkksConfigDeserialize {
-    #[serde(default)]
-    collections: HashMap<String, CkksCollectionKeyConfig>,
-    #[serde(flatten)]
-    legacy_fields: HashMap<String, Value>,
-}
-
-impl<'de> Deserialize<'de> for CkksConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = CkksConfigDeserialize::deserialize(deserializer)?;
-        Ok(Self {
-            present: true,
-            collections: value.collections,
-            legacy_fields: value.legacy_fields,
-        })
-    }
-}
-
-impl Default for CkksConfig {
-    fn default() -> Self {
-        Self {
-            present: false,
-            collections: HashMap::new(),
-            legacy_fields: HashMap::new(),
-        }
-    }
-}
-
-impl fmt::Debug for CkksConfig {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut legacy_field_names: Vec<_> = self.legacy_fields.keys().collect();
-        legacy_field_names.sort();
-        f.debug_struct("CkksConfig")
-            .field("present", &self.present)
-            .field("collections", &self.collections)
-            .field("legacy_fields", &legacy_field_names)
-            .finish()
-    }
-}
-
-impl CkksConfig {
-    pub fn is_configured(&self) -> bool {
-        self.present
-            || !self.legacy_fields.is_empty()
-            || !self.collections.is_empty()
-            || self
-                .collections
-                .values()
-                .any(CkksCollectionKeyConfig::is_configured)
-    }
-}
-
-fn validate_settings_crypto_sections(settings: &Settings) -> Result<(), ValidationError> {
-    if settings.ckks.is_configured() {
-        return Err(ValidationError::new("legacy_ckks_runtime_unsupported"));
-    }
-
-    if settings.crypto.is_configured() && settings.ckks.is_configured() {
-        return Err(ValidationError::new("conflicting_runtime_crypto_sections"));
-    }
-
-    Ok(())
-}
-
 #[derive(Debug, Deserialize, Clone, Validate)]
-#[validate(schema(function = "validate_settings_crypto_sections"))]
+#[serde(deny_unknown_fields)]
 pub struct Settings {
     #[serde(default)]
     pub log_level: Option<String>,
@@ -545,11 +440,6 @@ pub struct Settings {
     #[serde(default)]
     #[validate(nested)]
     pub crypto: CryptoSettings,
-    /// Legacy `ckks` runtime config is unsupported. The field remains only so
-    /// old config files are rejected explicitly instead of being silently ignored.
-    #[serde(default)]
-    #[validate(nested)]
-    pub ckks: CkksConfig,
 }
 
 impl Settings {
@@ -814,7 +704,6 @@ mod tests {
             default_http_client_disconnect_timeout_sec()
         );
         assert!(!config.crypto.is_configured());
-        assert!(!config.ckks.is_configured());
 
         config
             .validate()
@@ -923,7 +812,7 @@ mod tests {
 
     #[test]
     fn test_legacy_ckks_runtime_is_rejected() {
-        let config = Config::builder()
+        let err = Config::builder()
             .add_source(File::from_str(DEFAULT_CONFIG, FileFormat::Yaml))
             .add_source(File::from_str(
                 r#"
@@ -946,17 +835,13 @@ ckks:
             .build()
             .expect("failed to build config")
             .try_deserialize::<Settings>()
-            .expect("failed to deserialize config");
-
-        let err = config
-            .validate()
-            .expect_err("legacy ckks runtime settings must be rejected");
-        assert!(format!("{err:?}").contains("legacy_ckks_runtime_unsupported"));
+            .expect_err("legacy ckks runtime settings must be rejected at parse time");
+        assert!(err.to_string().contains("unknown field `ckks`"));
     }
 
     #[test]
     fn test_empty_legacy_ckks_runtime_section_is_rejected() {
-        let config = Config::builder()
+        let err = Config::builder()
             .add_source(File::from_str(DEFAULT_CONFIG, FileFormat::Yaml))
             .add_source(File::from_str(
                 r#"
@@ -967,19 +852,14 @@ ckks: {}
             .build()
             .expect("failed to build config")
             .try_deserialize::<Settings>()
-            .expect("failed to deserialize config");
-
-        assert!(config.ckks.is_configured());
-        let err = config
-            .validate()
-            .expect_err("legacy ckks runtime section presence must be rejected");
-        assert!(format!("{err:?}").contains("legacy_ckks_runtime_unsupported"));
+            .expect_err("legacy ckks runtime section presence must be rejected at parse time");
+        assert!(err.to_string().contains("unknown field `ckks`"));
     }
 
     #[test]
-    fn test_legacy_ckks_collection_runtime_is_rejected_and_redacted() {
+    fn test_legacy_ckks_collection_runtime_is_rejected() {
         let secret = "legacy-secret-material-must-not-leak";
-        let config = Config::builder()
+        let err = Config::builder()
             .add_source(File::from_str(DEFAULT_CONFIG, FileFormat::Yaml))
             .add_source(File::from_str(
                 &format!(
@@ -995,16 +875,13 @@ ckks:
             .build()
             .expect("failed to build config")
             .try_deserialize::<Settings>()
-            .expect("failed to deserialize config");
-
-        let debug = format!("{:?}", config.ckks);
-        assert!(debug.contains("master_key_b64"));
-        assert!(!debug.contains(secret));
-
-        let err = config
-            .validate()
-            .expect_err("legacy ckks collection runtime settings must be rejected");
-        assert!(format!("{err:?}").contains("legacy_ckks_runtime_unsupported"));
+            .expect_err("legacy ckks collection runtime settings must be rejected at parse time");
+        let err = err.to_string();
+        assert!(err.contains("unknown field `ckks`"));
+        assert!(
+            !err.contains(secret),
+            "legacy parse errors must not leak inline key material"
+        );
     }
 
     #[test]

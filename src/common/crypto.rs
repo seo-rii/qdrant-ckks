@@ -115,8 +115,6 @@ pub enum CryptoSetupError {
         option: String,
         reason: String,
     },
-    #[error("legacy ckks runtime settings are unsupported; use crypto.* runtime settings")]
-    LegacyCkksRuntimeUnsupported,
 }
 
 const PAYLOAD_SYM_KEY_ROLE: &str = "sym_key";
@@ -1467,9 +1465,6 @@ pub fn validate_runtime_config(settings: &Settings) -> Result<(), CryptoSetupErr
     let _capability_fingerprint = crypto_runtime_capability_fingerprint(settings);
     if settings.crypto.is_configured() {
         validate_crypto_settings(&settings.crypto)?;
-    }
-    if settings.ckks.is_configured() {
-        return Err(CryptoSetupError::LegacyCkksRuntimeUnsupported);
     }
 
     Ok(())
@@ -4683,7 +4678,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::settings::{CkksConfig, CryptoInstanceConfig};
+    use crate::settings::CryptoInstanceConfig;
 
     fn with_embedding_vector(mut params: CollectionParams, distance: Distance) -> CollectionParams {
         params.vectors = collection::operations::types::VectorsConfig::Multi(BTreeMap::from([(
@@ -6043,35 +6038,6 @@ mod tests {
             crypto_runtime_capability_fingerprint(&settings),
             "fingerprint must change when retired payload key policy changes",
         );
-    }
-
-    #[test]
-    fn crypto_runtime_capability_fingerprint_ignores_unsupported_legacy_ckks() {
-        let baseline = Settings::new(None).unwrap();
-        let with_legacy = Settings {
-            ckks: CkksConfig {
-                legacy_fields: HashMap::from([
-                    ("enabled".to_string(), json!(true)),
-                    ("key_id".to_string(), json!("tenant-a:legacy")),
-                    (
-                        "resource_key_b64".to_string(),
-                        json!(BASE64URL_NOPAD.encode(&[7_u8; 32])),
-                    ),
-                ]),
-                ..CkksConfig::default()
-            },
-            ..Settings::new(None).unwrap()
-        };
-
-        assert_eq!(
-            crypto_runtime_capability_fingerprint(&baseline),
-            crypto_runtime_capability_fingerprint(&with_legacy),
-            "unsupported legacy ckks runtime settings must not influence canonical crypto parity",
-        );
-        assert!(matches!(
-            validate_runtime_config(&with_legacy),
-            Err(CryptoSetupError::LegacyCkksRuntimeUnsupported),
-        ));
     }
 
     #[test]
@@ -10212,30 +10178,6 @@ mod tests {
             retired_payload.0.get("body").and_then(Value::as_str),
             Some("retired mk rotation batch"),
         );
-    }
-
-    #[test]
-    fn runtime_validation_rejects_legacy_ckks_settings() {
-        let settings = Settings {
-            ckks: CkksConfig {
-                legacy_fields: HashMap::from([
-                    ("enabled".to_string(), json!(true)),
-                    ("allow_inline_key_material".to_string(), json!(true)),
-                    ("key_id".to_string(), json!("tenant-a:docs")),
-                    (
-                        "resource_key_b64".to_string(),
-                        json!(BASE64URL_NOPAD.encode(&[5u8; 32])),
-                    ),
-                ]),
-                ..CkksConfig::default()
-            },
-            ..Settings::new(None).unwrap()
-        };
-
-        assert!(matches!(
-            validate_runtime_config(&settings),
-            Err(CryptoSetupError::LegacyCkksRuntimeUnsupported)
-        ));
     }
 
     #[test]
