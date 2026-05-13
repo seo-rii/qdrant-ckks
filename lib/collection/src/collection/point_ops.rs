@@ -12,9 +12,10 @@ use qdrant_sec::{
     CKKS_SCHEME, CLIENT_ENCRYPTED_PAYLOAD_MARKER, CLIENT_PAYLOAD_ENVELOPE_BINDING,
     ClientPayloadNonceReplayKey, ClientPayloadValidationContext, ENCRYPTED_CKKS_VECTOR_MARKER,
     ENCRYPTED_PAYLOAD_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD, EncryptedCkksVector,
-    ServerPayloadValidationContext, ckks_vector_sidecar_envelope_key, client_payload_envelope_key,
-    client_payload_nonce_replay_key, is_client_encrypted_payload_value, is_encrypted_payload_value,
-    server_payload_envelope_key, validate_client_payload_value_after_runtime_verification,
+    METADATA_EXACT_MATCH_TOKEN_BINDING, ServerPayloadValidationContext,
+    ckks_vector_sidecar_envelope_key, client_payload_envelope_key, client_payload_nonce_replay_key,
+    is_client_encrypted_payload_value, is_encrypted_payload_value, server_payload_envelope_key,
+    validate_client_payload_value_after_runtime_verification,
     validate_server_payload_value_after_runtime_encryption,
 };
 use segment::data_types::order_by::{Direction, OrderBy};
@@ -214,18 +215,38 @@ impl Collection {
     where
         F: FnMut(&ExtendedPointId, &mut Payload) -> CollectionResult<usize>,
     {
-        let migration_state = self
-            .collection_config
-            .read()
-            .await
-            .params
-            .effective_encryption()
-            .map(|encryption| encryption.migration_state)
-            .ok_or_else(|| {
-                CollectionError::bad_input(
-                    "crypto payload migration requires an encrypted collection",
-                )
-            })?;
+        let (migration_state, blind_index_paths) = {
+            let collection_config = self.collection_config.read().await;
+            let encryption = collection_config
+                .params
+                .effective_encryption()
+                .ok_or_else(|| {
+                    CollectionError::bad_input(
+                        "crypto payload migration requires an encrypted collection",
+                    )
+                })?;
+            let blind_index_paths = encryption
+                .rules
+                .iter()
+                .filter(|rule| rule.binding.as_deref() == Some(METADATA_EXACT_MATCH_TOKEN_BINDING))
+                .filter_map(|rule| match &rule.selector {
+                    EncryptionSelector::MetadataKeys { keys } => Some(keys),
+                    _ => None,
+                })
+                .flatten()
+                .map(|path| {
+                    let path_string = path.clone();
+                    path.parse::<JsonPath>()
+                        .map(|json_path| (path_string, json_path))
+                        .map_err(|err| {
+                            CollectionError::bad_input(format!(
+                                "metadata blind-index field path '{path}' is invalid: {err:?}",
+                            ))
+                        })
+                })
+                .collect::<CollectionResult<Vec<_>>>()?;
+            (encryption.migration_state, blind_index_paths)
+        };
         if !matches!(
             migration_state,
             CryptoMigrationState::Encrypting
@@ -335,6 +356,23 @@ impl Collection {
                         return Err(CollectionError::bad_input(
                             "crypto payload migration must not add, remove, or mutate encrypted vector sidecar payloads",
                         ));
+                    }
+                    for (blind_index_path, json_path) in &blind_index_paths {
+                        let original_values = json_path
+                            .value_get(&original_payload.0)
+                            .into_iter()
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        let updated_values = json_path
+                            .value_get(&payload.0)
+                            .into_iter()
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        if original_values != updated_values {
+                            return Err(CollectionError::bad_input(format!(
+                                "crypto payload migration must not add, remove, or mutate metadata blind-index token field '{blind_index_path}'",
+                            )));
+                        }
                     }
                     changed_points += 1;
 

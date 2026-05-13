@@ -2104,6 +2104,73 @@ async fn crypto_migration_rejects_vector_sidecar_mutation() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn crypto_migration_rejects_blind_index_token_mutation() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection = encrypted_collection_fixture(
+        collection_dir.path(),
+        1,
+        payload_encryption_with_blind_index_config(),
+    )
+    .await;
+
+    let upsert = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+        PointInsertOperationsInternal::from(vec![PointStructPersisted {
+            id: 1.into(),
+            vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+            payload: Some(Payload(
+                serde_json::json!({
+                    "document_body__blind_eq": BASE64URL_NOPAD.encode(&[7u8; 32])
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            )),
+        }]),
+    ));
+    collection
+        .update_from_client(
+            upsert,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::client_plaintext(),
+        )
+        .await
+        .unwrap();
+
+    collection
+        .apply_crypto_migration_plan(&CryptoMigrationPlan {
+            from: CryptoMigrationState::Active,
+            to: CryptoMigrationState::Rotating,
+            target_epoch: 1,
+            active_rk_id: Some("tenant-a/payload-rk-v2".to_string()),
+            retired_rk_id: Some("tenant-a/payload-rk-v1".to_string()),
+            dry_run: false,
+            checkpoints: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    let err = collection
+        .rewrite_payloads_for_crypto_migration(|_, payload| {
+            payload.0.insert(
+                "document_body__blind_eq".to_string(),
+                serde_json::json!(BASE64URL_NOPAD.encode(&[8u8; 32])),
+            );
+            Ok(1)
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, CollectionError::BadInput { ref description }
+            if description.contains("must not add, remove, or mutate metadata blind-index token field")),
+        "unexpected error: {err:?}",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn crypto_migration_completion_requires_all_collection_shards() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection =
