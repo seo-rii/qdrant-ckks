@@ -128,8 +128,16 @@ fn redact_sensitive_log_fields(value: &mut Value) {
     match value {
         Value::Object(map) => {
             for (key, value) in map.iter_mut() {
+                let key = key.as_str();
+                let key_lowercase;
+                let key = if key.bytes().any(|byte| byte.is_ascii_uppercase()) {
+                    key_lowercase = key.to_ascii_lowercase();
+                    key_lowercase.as_str()
+                } else {
+                    key
+                };
                 if matches!(
-                    key.as_str(),
+                    key,
                     "payload"
                         | "payloads"
                         | "vector"
@@ -492,7 +500,11 @@ mod tests {
                 "authorization": "Bearer qdrant-sec-authorization-log-sentinel",
                 "x-api-key": "qdrant-sec-x-api-key-log-sentinel",
                 "cookie": "qdrant-sec-cookie-log-sentinel",
-                "set-cookie": "qdrant-sec-set-cookie-log-sentinel"
+                "set-cookie": "qdrant-sec-set-cookie-log-sentinel",
+                "Authorization": "Bearer qdrant-sec-title-authorization-log-sentinel",
+                "X-API-Key": "qdrant-sec-title-api-key-log-sentinel",
+                "Cookie": "qdrant-sec-title-cookie-log-sentinel",
+                "Set-Cookie": "qdrant-sec-title-set-cookie-log-sentinel"
             },
             "snapshot": {
                 "api_key": "qdrant-sec-api-key-log-sentinel",
@@ -531,6 +543,10 @@ mod tests {
             "qdrant-sec-x-api-key-log-sentinel",
             "qdrant-sec-cookie-log-sentinel",
             "qdrant-sec-set-cookie-log-sentinel",
+            "qdrant-sec-title-authorization-log-sentinel",
+            "qdrant-sec-title-api-key-log-sentinel",
+            "qdrant-sec-title-cookie-log-sentinel",
+            "qdrant-sec-title-set-cookie-log-sentinel",
             "qdrant-sec-api-key-log-sentinel",
             "qdrant-sec-token-log-sentinel",
             "qdrant-sec-access-token-log-sentinel",
