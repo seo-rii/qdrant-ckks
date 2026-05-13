@@ -549,65 +549,6 @@ impl PayloadWritePlan {
         })
     }
 
-    pub(crate) fn reencrypt_payload_if_stale(
-        &self,
-        point_id: &str,
-        payload: &mut Payload,
-    ) -> Result<usize, PayloadWriteSetupError> {
-        let mut encrypted = 0;
-
-        for rule in &self.rules {
-            match rule {
-                PayloadWriteRule::ServerEncrypt { encryptor, policy } => {
-                    encrypted += encryptor.encrypt_selected_fields_with_mode(
-                        point_id,
-                        &mut payload.0,
-                        policy,
-                        ExistingPayloadMode::ReencryptIfStale,
-                    )?;
-                }
-                PayloadWriteRule::ClientEnvelope {
-                    policy,
-                    expected_key_id,
-                    expected_rk_id,
-                    min_rk_epoch,
-                    max_rk_epoch,
-                    key_id_required,
-                    signature_verifier,
-                } => {
-                    for field in policy.fields() {
-                        let encrypted_path = field.parse::<JsonPath>().map_err(|_| {
-                            PayloadWriteSetupError::Payload(
-                                PayloadEncryptionError::InvalidFieldPath(field.clone()),
-                            )
-                        })?;
-                        for value in encrypted_path.value_get(&payload.0) {
-                            let signature_verification =
-                                signature_verifier.verification_for_value(value, field)?;
-                            validate_client_payload_value_for_runtime(
-                                value,
-                                ClientPayloadValidationContext {
-                                    collection_id: &self.collection_crypto_id,
-                                    point_id,
-                                    field_path: field,
-                                    expected_key_id: expected_key_id.as_deref(),
-                                    expected_rk_id: expected_rk_id.as_deref(),
-                                    min_rk_epoch: *min_rk_epoch,
-                                    max_rk_epoch: *max_rk_epoch,
-                                    key_id_required: *key_id_required,
-                                    signature_required: true,
-                                    signature_verification: Some(signature_verification),
-                                },
-                            )?;
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(encrypted)
-    }
-
     pub(crate) fn reencrypt_payload_if_stale_for_crypto_migration(
         &self,
         point_id: &str,
@@ -8130,12 +8071,12 @@ mod tests {
             )) if field == "body"
         ));
 
-        assert_eq!(
-            rotated_plan
-                .reencrypt_payload_if_stale("point-1", &mut payload)
-                .unwrap(),
-            1,
-        );
+        let rotated_outcome = rotated_plan
+            .reencrypt_payload_if_stale_for_crypto_migration("point-1", &mut payload)
+            .unwrap();
+        assert_eq!(rotated_outcome.changed, 1);
+        assert_eq!(rotated_outcome.verified_server_envelope_keys.len(), 1);
+        assert!(rotated_outcome.verified_client_envelope_keys.is_empty());
         assert_eq!(
             payload
                 .0
@@ -8155,12 +8096,12 @@ mod tests {
                 .and_then(|fingerprint| fingerprint.as_str()),
             Some("tenant-a/payload@v6"),
         );
-        assert_eq!(
-            rotated_plan
-                .reencrypt_payload_if_stale("point-1", &mut payload)
-                .unwrap(),
-            0,
-        );
+        let unchanged_outcome = rotated_plan
+            .reencrypt_payload_if_stale_for_crypto_migration("point-1", &mut payload)
+            .unwrap();
+        assert_eq!(unchanged_outcome.changed, 0);
+        assert_eq!(unchanged_outcome.verified_server_envelope_keys.len(), 1);
+        assert!(unchanged_outcome.verified_client_envelope_keys.is_empty());
     }
 
     #[test]
@@ -8361,12 +8302,15 @@ mod tests {
         assert!(!plan.has_server_encrypt_rules());
         assert!(plan.has_client_envelope_rules());
         assert_eq!(plan.encrypt_payload("point-1", &mut payload).unwrap(), 1);
+        let client_outcome = plan
+            .reencrypt_payload_if_stale_for_crypto_migration("point-1", &mut payload)
+            .unwrap();
         assert_eq!(
-            plan.reencrypt_payload_if_stale("point-1", &mut payload)
-                .unwrap(),
-            0,
+            client_outcome.changed, 0,
             "client-side envelopes are validated but never re-encrypted by Qdrant",
         );
+        assert!(client_outcome.verified_server_envelope_keys.is_empty());
+        assert_eq!(client_outcome.verified_client_envelope_keys.len(), 1);
         assert!(matches!(
             plan.decrypt_payload_for_crypto_migration("point-1", &mut payload),
             Err(PayloadWriteSetupError::ClientEnvelopeDecryptUnsupported),
