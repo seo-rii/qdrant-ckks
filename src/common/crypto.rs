@@ -6334,6 +6334,22 @@ mod tests {
             crypto_runtime_capability_fingerprint(&peer_with_different_context),
             "CKKS crypto context drift must change the parity fingerprint",
         );
+        let peer_context_fingerprint =
+            crypto_runtime_capability_fingerprint(&peer_with_different_context);
+        let err = validate_crypto_runtime_capability_parity(
+            &settings,
+            [("peer-vector-context", peer_context_fingerprint.as_str())],
+        )
+        .expect_err("CKKS crypto context drift must fail peer parity checks");
+        assert!(
+            err.to_string()
+                .contains("crypto runtime capability mismatch"),
+            "unexpected error: {err:?}",
+        );
+        assert!(
+            err.to_string().contains("peer-vector-context"),
+            "unexpected error: {err:?}",
+        );
 
         let mut peer_with_different_public_key = settings.clone();
         peer_with_different_public_key
@@ -6352,6 +6368,25 @@ mod tests {
             fingerprint,
             crypto_runtime_capability_fingerprint(&peer_with_different_public_key),
             "CKKS public key drift must change the parity fingerprint",
+        );
+        let peer_public_key_fingerprint =
+            crypto_runtime_capability_fingerprint(&peer_with_different_public_key);
+        let err = validate_crypto_runtime_capability_parity(
+            &settings,
+            [(
+                "peer-vector-public-key",
+                peer_public_key_fingerprint.as_str(),
+            )],
+        )
+        .expect_err("CKKS public-key drift must fail peer parity checks");
+        assert!(
+            err.to_string()
+                .contains("crypto runtime capability mismatch"),
+            "unexpected error: {err:?}",
+        );
+        assert!(
+            err.to_string().contains("peer-vector-public-key"),
+            "unexpected error: {err:?}",
         );
     }
 
