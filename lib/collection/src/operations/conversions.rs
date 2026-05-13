@@ -449,7 +449,6 @@ impl From<CollectionInfo> for api::grpc::qdrant::CollectionInfo {
             sharding_method,
             sparse_vectors,
             encryption: _,
-            ckks: _,
         } = params;
 
         api::grpc::qdrant::CollectionInfo {
@@ -1939,7 +1938,6 @@ impl TryFrom<api::grpc::qdrant::CollectionConfig> for CollectionConfig {
                         .transpose()?,
                     read_fan_out_delay_ms,
                     encryption: None,
-                    ckks: None,
                 }
             }
         };

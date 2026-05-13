@@ -111,7 +111,7 @@ impl CollectionContainer for TableOfContent {
 }
 
 fn collection_params_bind_crypto_identity(params: &CollectionParams) -> bool {
-    params.effective_encryption().is_some() || params.ckks.is_some()
+    params.effective_encryption().is_some()
 }
 
 fn encrypted_uuid_mismatch_requires_fail_closed(
@@ -124,17 +124,33 @@ fn encrypted_uuid_mismatch_requires_fail_closed(
 
 #[cfg(test)]
 mod tests {
-    use collection::config::{CkksCollectionConfig, CollectionParams, RedactedLegacyCkksValue};
+    use collection::config::{
+        CollectionEncryptionConfig, CollectionParams, CryptoMigrationState, EncryptionRuleRef,
+        EncryptionSelector,
+    };
 
     use super::{
         collection_params_bind_crypto_identity, encrypted_uuid_mismatch_requires_fail_closed,
     };
 
-    fn legacy_ckks_config() -> CkksCollectionConfig {
-        CkksCollectionConfig {
-            legacy_fields: [("enabled".to_string(), RedactedLegacyCkksValue)]
-                .into_iter()
-                .collect(),
+    fn encrypted_params() -> CollectionParams {
+        CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/payload".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
         }
     }
 
@@ -144,10 +160,7 @@ mod tests {
             &CollectionParams::empty()
         ));
 
-        let encrypted = CollectionParams {
-            ckks: Some(legacy_ckks_config()),
-            ..CollectionParams::empty()
-        };
+        let encrypted = encrypted_params();
 
         assert!(collection_params_bind_crypto_identity(&encrypted));
     }
@@ -155,10 +168,7 @@ mod tests {
     #[test]
     fn encrypted_uuid_mismatch_requires_fail_closed_for_encrypted_configs() {
         let plaintext = CollectionParams::empty();
-        let encrypted = CollectionParams {
-            ckks: Some(legacy_ckks_config()),
-            ..CollectionParams::empty()
-        };
+        let encrypted = encrypted_params();
 
         assert!(!encrypted_uuid_mismatch_requires_fail_closed(
             &plaintext, &plaintext,

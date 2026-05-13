@@ -470,7 +470,6 @@ impl From<CollectionConfigInternal> for CreateCollection {
             on_disk_payload,
             sparse_vectors,
             encryption,
-            ckks: _,
         } = params;
 
         Self {

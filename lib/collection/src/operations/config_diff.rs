@@ -316,7 +316,6 @@ impl DiffConfig<CollectionParamsDiff> for CollectionParams {
             sparse_vectors: self.sparse_vectors.clone(),
             vectors: self.vectors.clone(),
             encryption: self.encryption.clone(),
-            ckks: self.ckks.clone(),
         }
     }
 }
@@ -430,7 +429,6 @@ impl From<CollectionParams> for CollectionParamsDiff {
             read_fan_out_delay_ms,
             on_disk_payload,
             encryption: _,
-            ckks: _,
             shard_number: _,
             sharding_method: _,
             sparse_vectors: _,
@@ -515,18 +513,9 @@ mod tests {
     use segment::types::{Distance, HnswConfig};
 
     use super::*;
-    use crate::config::{CkksCollectionConfig, CollectionEncryptionConfig};
+    use crate::config::CollectionEncryptionConfig;
     use crate::operations::vector_params_builder::VectorParamsBuilder;
     use crate::optimizers_builder::OptimizersConfig;
-
-    fn legacy_ckks_config(fields: &[&str]) -> CkksCollectionConfig {
-        CkksCollectionConfig {
-            legacy_fields: fields
-                .iter()
-                .map(|field| ((*field).to_string(), crate::config::RedactedLegacyCkksValue))
-                .collect(),
-        }
-    }
 
     #[test]
     fn test_update_collection_params() {
@@ -601,7 +590,6 @@ mod tests {
                     binding: Some("payload-field/v1".to_string()),
                 }],
             }),
-            ckks: Some(legacy_ckks_config(&["enabled", "payload_text_fields"])),
             ..CollectionParams::empty()
         };
 
@@ -612,24 +600,6 @@ mod tests {
         assert!(serialized.get("ckks").is_none());
         diff.validate()
             .expect("params-to-diff conversion must not emit crypto migration fields");
-    }
-
-    #[test]
-    fn test_ckks_collection_params_update_preserves_crypto_sections() {
-        let enabled_ckks = legacy_ckks_config(&["enabled", "payload_text_fields"]);
-        let params = CollectionParams {
-            ckks: Some(enabled_ckks.clone()),
-            ..CollectionParams::empty()
-        };
-
-        let unchanged = params.update(&CollectionParamsDiff {
-            replication_factor: None,
-            write_consistency_factor: None,
-            read_fan_out_factor: None,
-            read_fan_out_delay_ms: None,
-            on_disk_payload: None,
-        });
-        assert_eq!(unchanged.ckks, Some(enabled_ckks));
     }
 
     #[test]

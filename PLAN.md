@@ -3,14 +3,14 @@
 이 문서는 `RISK_REGISTER.md`의 대형 작업을 구현 순서대로 정리한다. 작은 방어 패치는 이미 별도 커밋으로 일부 처리됐고, 여기서는 설계, migration, 테스트 인프라, 구조 변경이 필요한 작업만 다룬다.
 
 기준 브랜치: `sec`
-최종 갱신: 2026-05-13
+최종 갱신: 2026-05-14
 
 ## 작업 원칙
 
 - 각 단계는 독립 커밋 또는 작은 PR 단위로 끝낸다.
 - 보안 기능은 fail-closed 테스트를 먼저 추가하고 구현한다.
 - collection config 변경, key lifecycle, snapshot/replication 동작은 문서와 테스트 없이 코드만 바꾸지 않는다.
-- legacy `params.ckks`는 boundary adapter로만 남기고, 내부 구현은 generic `params.encryption` 기준으로 수렴시킨다.
+- legacy `params.ckks`는 더 이상 호환성 표면으로 유지하지 않고, collection config는 canonical `params.encryption`만 허용한다.
 - `RISK_REGISTER.md`는 추적 문서이고 커밋 대상이 아니다.
 
 ## 현재 상태 요약
@@ -296,7 +296,7 @@
 작업 순서:
 
 - 내부 canonical type을 generic crypto plan으로 고정한다.
-- legacy `params.ckks`는 REST/gRPC boundary에서만 generic plan으로 normalize한다.
+- legacy `params.ckks` REST/gRPC/schema 표면을 제거하고, canonical `params.encryption`만 받아들인다.
 - 공통 AEAD envelope, key derivation, runtime registry를 `lib/crypto` 또는 equivalent module로 이동한다.
 - CKKS vector provider를 `crypto-openfhe-ckks` 성격으로 분리한다.
 - payload AEAD provider와 blind-index provider를 독립 모듈로 둔다.

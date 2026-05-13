@@ -422,7 +422,7 @@ fn validate_shard_snapshot_recovery_crypto_runtime(
     collection_name: &str,
     config: &CollectionConfigInternal,
 ) -> Result<(), StorageError> {
-    if config.params.effective_encryption().is_none() && config.params.ckks.is_none() {
+    if config.params.effective_encryption().is_none() {
         return Ok(());
     }
 

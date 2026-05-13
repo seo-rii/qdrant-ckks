@@ -16,7 +16,7 @@ use segment::types::{
     SparseVectorDataConfig, StrictModeConfig, VectorDataConfig, VectorName, VectorNameBuf,
     VectorStorageDatatype, VectorStorageType,
 };
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use validator::{Validate, ValidationError, ValidationErrors};
 use wal::WalOptions;
@@ -75,17 +75,8 @@ mod ckks_tests {
 
     use super::*;
 
-    fn legacy_ckks_config(fields: &[&str]) -> CkksCollectionConfig {
-        CkksCollectionConfig {
-            legacy_fields: fields
-                .iter()
-                .map(|field| ((*field).to_string(), RedactedLegacyCkksValue))
-                .collect(),
-        }
-    }
-
     #[test]
-    fn ckks_collection_config_deserializes_but_is_unsupported() {
+    fn collection_params_reject_legacy_ckks_field() {
         let raw = r#"{
             "ckks": {
                 "enabled": true,
@@ -93,46 +84,13 @@ mod ckks_tests {
                 "payload_text_fields": ["body", "document.summary"]
             }
         }"#;
-        let params: CollectionParams = serde_json::from_str(raw).unwrap();
-
-        assert_eq!(
-            params.ckks,
-            Some(legacy_ckks_config(&[
-                "enabled",
-                "key_id",
-                "payload_text_fields"
-            ]))
-        );
-
-        let serialized = serde_json::to_string(&params).unwrap();
-        assert!(serialized.contains("\"ckks\""));
-        assert!(serialized.contains("payload_text_fields"));
-        assert!(!serialized.contains("tenant-a:docs"));
-        assert!(serialized.contains("[redacted]"));
-
-        let deserialized: CollectionParams = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(deserialized.ckks, params.ckks);
-        let err = deserialized
-            .validate()
-            .expect_err("legacy ckks collection config must be rejected");
-        assert!(err.to_string().contains("legacy_ckks_config_unsupported"));
+        let err = serde_json::from_str::<CollectionParams>(raw)
+            .expect_err("legacy ckks collection config must be rejected at parse time");
+        assert!(err.to_string().contains("unknown field `ckks`"));
     }
 
     #[test]
-    fn empty_ckks_collection_config_is_still_rejected_when_present() {
-        let params = CollectionParams {
-            ckks: Some(CkksCollectionConfig::default()),
-            ..CollectionParams::empty()
-        };
-
-        let err = params
-            .validate()
-            .expect_err("legacy ckks collection config must be rejected");
-        assert!(err.to_string().contains("legacy_ckks_config_unsupported"));
-    }
-
-    #[test]
-    fn encryption_config_round_trips_and_rejects_legacy_conflicts() {
+    fn encryption_config_round_trips() {
         let params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
@@ -157,12 +115,6 @@ mod ckks_tests {
         let deserialized: CollectionParams = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized.encryption, params.encryption);
         deserialized.validate().unwrap();
-
-        let conflicting = CollectionParams {
-            ckks: Some(legacy_ckks_config(&["enabled", "payload_text_fields"])),
-            ..params
-        };
-        assert!(conflicting.validate().is_err());
     }
 
     #[test]
@@ -1189,24 +1141,6 @@ mod ckks_tests {
 
     #[test]
     fn collection_params_reject_encryption_changes_without_migration() {
-        let ckks = legacy_ckks_config(&["enabled", "payload_text_fields"]);
-        let ckks_params = CollectionParams {
-            ckks: Some(ckks.clone()),
-            ..CollectionParams::empty()
-        };
-        assert!(ckks_params.check_compatible(&ckks_params).is_ok());
-
-        let disabled_ckks = CollectionParams {
-            ckks: Some(legacy_ckks_config(&["key_id"])),
-            ..CollectionParams::empty()
-        };
-        assert!(ckks_params.check_compatible(&disabled_ckks).is_err());
-        assert!(
-            CollectionParams::empty()
-                .check_compatible(&ckks_params)
-                .is_err()
-        );
-
         let encryption_params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
@@ -1254,34 +1188,6 @@ mod ckks_tests {
                 .check_compatible(&changed_encryption)
                 .is_err()
         );
-    }
-
-    #[test]
-    fn collection_params_rejects_generic_and_legacy_encryption_together() {
-        let params = CollectionParams {
-            encryption: Some(CollectionEncryptionConfig {
-                version: 1,
-                key_id: Some("tenant-a:docs".to_string()),
-                crypto_schema_version: 1,
-                encryption_epoch: 0,
-                migration_state: CryptoMigrationState::Active,
-                rules: vec![EncryptionRuleRef {
-                    id: "body_conf".to_string(),
-                    selector: EncryptionSelector::PayloadPaths {
-                        paths: vec!["body".to_string()],
-                    },
-                    instance: "docs_payload_v1".to_string(),
-                    binding: Some("payload-field/v1".to_string()),
-                }],
-            }),
-            ckks: Some(legacy_ckks_config(&["enabled", "payload_text_fields"])),
-            ..CollectionParams::empty()
-        };
-
-        let err = params
-            .validate()
-            .expect_err("legacy ckks collection config must be rejected");
-        assert!(err.to_string().contains("legacy_ckks_config_unsupported"));
     }
 
     #[test]
@@ -1807,48 +1713,6 @@ pub enum CryptoMigrationCheckpointStatus {
     RolledBack,
 }
 
-#[derive(Debug, Clone, Copy, Default, JsonSchema, Anonymize, PartialEq, Eq, Hash)]
-pub struct RedactedLegacyCkksValue;
-
-impl Serialize for RedactedLegacyCkksValue {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str("[redacted]")
-    }
-}
-
-impl<'de> Deserialize<'de> for RedactedLegacyCkksValue {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        serde::de::IgnoredAny::deserialize(deserializer).map(|_| Self)
-    }
-}
-
-#[derive(
-    Debug, Deserialize, Serialize, JsonSchema, Validate, Anonymize, Clone, PartialEq, Eq, Hash,
-)]
-#[serde(rename_all = "snake_case")]
-pub struct CkksCollectionConfig {
-    /// Unsupported legacy `params.ckks` fields. Values are ignored and
-    /// serialized redacted so old inline key material never becomes part of the
-    /// canonical collection config model.
-    #[serde(flatten)]
-    #[anonymize(false)]
-    pub legacy_fields: BTreeMap<String, RedactedLegacyCkksValue>,
-}
-
-impl Default for CkksCollectionConfig {
-    fn default() -> Self {
-        Self {
-            legacy_fields: BTreeMap::new(),
-        }
-    }
-}
-
 fn validate_encryption_key_id(key_id: &str) -> Result<(), validator::ValidationError> {
     if key_id.is_empty()
         || key_id.len() > 128
@@ -2272,18 +2136,6 @@ fn encryption_paths_overlap(left: &str, right: &str) -> bool {
 fn validate_collection_encryption_sections(
     params: &CollectionParams,
 ) -> Result<(), validator::ValidationError> {
-    if params.ckks.is_some() {
-        return Err(validator::ValidationError::new(
-            "legacy_ckks_config_unsupported",
-        ));
-    }
-
-    if params.encryption.is_some() && params.ckks.is_some() {
-        return Err(validator::ValidationError::new(
-            "conflicting_collection_encryption_sections",
-        ));
-    }
-
     if let Some(encryption) = &params.encryption {
         for rule in &encryption.rules {
             let EncryptionSelector::VectorNames { names } = &rule.selector else {
@@ -2312,7 +2164,7 @@ fn validate_collection_encryption_sections(
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Validate, Anonymize, Clone, PartialEq, Eq)]
 #[validate(schema(function = "validate_collection_encryption_sections"))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct CollectionParams {
     /// Configuration of the vector storage
     #[validate(nested)]
@@ -2368,11 +2220,6 @@ pub struct CollectionParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[validate(nested)]
     pub encryption: Option<CollectionEncryptionConfig>,
-    /// Legacy `params.ckks` is unsupported. This field remains only so old
-    /// collection configs are rejected explicitly instead of silently ignored.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[validate(nested)]
-    pub ckks: Option<CkksCollectionConfig>,
 }
 
 impl CollectionParams {
@@ -2402,7 +2249,6 @@ impl CollectionParams {
             on_disk_payload: _, // May be changed
             sparse_vectors,  // Parameters may be changes, but not the structure
             encryption,
-            ckks,
         } = other;
 
         self.vectors.check_compatible(vectors)?;
@@ -2410,12 +2256,6 @@ impl CollectionParams {
         if &self.encryption != encryption {
             return Err(CollectionError::bad_input(
                 "collection encryption config is incompatible: encryption changes require a migration",
-            ));
-        }
-
-        if &self.ckks != ckks {
-            return Err(CollectionError::bad_input(
-                "collection ckks config is incompatible: encryption changes require a migration",
             ));
         }
 
@@ -2722,7 +2562,6 @@ impl CollectionParams {
             on_disk_payload: default_on_disk_payload(),
             sparse_vectors: None,
             encryption: None,
-            ckks: None,
         }
     }
 
