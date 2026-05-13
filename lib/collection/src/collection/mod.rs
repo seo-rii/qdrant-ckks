@@ -16,7 +16,7 @@ mod state_management;
 mod telemetry;
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -167,7 +167,7 @@ impl ClientPayloadNonceReplayCache {
             }
         };
         #[cfg(not(unix))]
-        let file = match File::open(&cache_path) {
+        let file = match std::fs::File::open(&cache_path) {
             Ok(file) => file,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
             Err(err) => {
@@ -1377,14 +1377,20 @@ fn validate_client_payload_nonce_replay_cache_parent(_path: &Path) -> Collection
 
 #[cfg(unix)]
 fn sync_client_payload_nonce_replay_cache_parent(path: &Path) -> CollectionResult<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+
     let Some(parent) = path.parent() else {
         return Ok(());
     };
-    let directory = File::open(parent).map_err(|err| {
-        CollectionError::service_error(format!(
-            "failed to open client payload nonce replay cache directory {parent:?}: {err}",
-        ))
-    })?;
+    let directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_DIRECTORY | nix::libc::O_NOFOLLOW)
+        .open(parent)
+        .map_err(|err| {
+            CollectionError::service_error(format!(
+                "failed to open client payload nonce replay cache directory {parent:?}: {err}",
+            ))
+        })?;
     directory.sync_all().map_err(|err| {
         CollectionError::service_error(format!(
             "failed to sync client payload nonce replay cache directory {parent:?}: {err}",
@@ -1649,5 +1655,30 @@ mod tests {
             std::fs::read_to_string(&target_path).unwrap(),
             "target-before\n"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_payload_nonce_replay_cache_rejects_symlink_parent_directory() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let real_parent = dir.path().join("real-parent");
+        let symlink_parent = dir.path().join("symlink-parent");
+        std::fs::create_dir(&real_parent).unwrap();
+        symlink(&real_parent, &symlink_parent).unwrap();
+        let cache_path = symlink_parent.join(CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE);
+
+        let err = ClientPayloadNonceReplayCache::load(&symlink_parent).unwrap_err();
+        assert!(format!("{err:?}").contains("must be a regular directory"));
+
+        let err = append_client_payload_nonce_replay_cache(&cache_path, &["nonce-a".to_string()])
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("must be a regular directory"));
+
+        let mut keys = VecDeque::new();
+        keys.push_back("nonce-b".to_string());
+        let err = rewrite_client_payload_nonce_replay_cache(&cache_path, &keys).unwrap_err();
+        assert!(format!("{err:?}").contains("must be a regular directory"));
     }
 }
