@@ -3083,8 +3083,9 @@ async fn try_ckks_vector_search_groups(
 fn ensure_group_path_does_not_touch_encrypted_vector_sidecar(
     group_by: &JsonPath,
 ) -> Result<(), StorageError> {
-    let Ok(sidecar_path) = ENCRYPTED_VECTOR_SIDECAR_FIELD.parse::<JsonPath>() else {
-        return Ok(());
+    let sidecar_path = JsonPath {
+        first_key: ENCRYPTED_VECTOR_SIDECAR_FIELD.to_string(),
+        rest: Vec::new(),
     };
     if group_by.compatible(&sidecar_path) {
         return Err(StorageError::bad_input(format!(
@@ -8243,5 +8244,22 @@ mod tests {
     fn ckks_sidecar_grouping_allows_plain_group_path() {
         let group_by = "group".parse::<JsonPath>().unwrap();
         ensure_group_path_does_not_touch_encrypted_vector_sidecar(&group_by).unwrap();
+    }
+
+    #[test]
+    fn ckks_sidecar_grouping_rejects_sidecar_group_paths() {
+        for group_by in [
+            "\"$qdrant_sec_vectors\"",
+            "\"$qdrant_sec_vectors\".embedding",
+        ] {
+            let group_by = group_by.parse::<JsonPath>().unwrap();
+            let err = ensure_group_path_does_not_touch_encrypted_vector_sidecar(&group_by)
+                .expect_err("grouping by encrypted vector sidecar path must fail");
+
+            assert!(
+                format!("{err}").contains("cannot group by encrypted vector sidecar field"),
+                "unexpected error: {err}",
+            );
+        }
     }
 }
