@@ -4769,9 +4769,11 @@ async fn payload_decrypt_plan_for_read(
         return Ok(None);
     }
 
-    let collection_pass = auth
-        .check_global_access(AccessRequirements::new().manage(), "decrypt_payload_read")?
-        .issue_pass(collection_name);
+    let collection_pass = auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new().payload_decrypt(),
+        "decrypt_payload_read",
+    )?;
     let collection = toc.get_collection(&collection_pass).await?;
     let collection_config = collection.config_snapshot().await;
     if collection_config.params.effective_encryption().is_none() {

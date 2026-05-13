@@ -80,6 +80,7 @@ mod tests {
             access: Access::Collection(CollectionAccessList(vec![CollectionAccess {
                 collection: "collection".to_string(),
                 access: CollectionAccessMode::ReadWrite,
+                payload_decrypt: false,
                 #[expect(deprecated)]
                 payload: None,
             }])),
@@ -107,6 +108,7 @@ mod tests {
             access: Access::Collection(CollectionAccessList(vec![CollectionAccess {
                 collection: "collection".to_string(),
                 access: CollectionAccessMode::ReadWrite,
+                payload_decrypt: false,
                 #[expect(deprecated)]
                 payload: Some(json!({
                     "field1": "value",

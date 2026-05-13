@@ -2676,6 +2676,7 @@ mod tests {
     use storage::content_manager::collection_meta_ops::{
         CollectionMetaOperations, CreateCollectionOperation,
     };
+    use storage::rbac::{CollectionAccess, CollectionAccessList, CollectionAccessMode};
     use storage::types::{PerformanceConfig, StorageConfig};
     use tempfile::Builder;
     use tokio::runtime::Runtime;
@@ -6117,8 +6118,48 @@ esac
             assert!(matches!(
                 err,
                 StorageError::Forbidden { description }
-                    if description.contains("Global manage access is required")
+                    if description.contains("payload decrypt")
             ));
+
+            let payload_decrypt_auth =
+                Auth::new_internal(Access::Collection(CollectionAccessList(vec![
+                    CollectionAccess {
+                        collection: "docs".to_string(),
+                        access: CollectionAccessMode::Read,
+                        payload_decrypt: true,
+                        #[expect(deprecated)]
+                        payload: None,
+                    },
+                ])));
+            let decrypted_records = crate::common::query::do_get_points(
+                &toc,
+                "docs",
+                PointRequestInternal {
+                    ids: vec![1.into()],
+                    with_payload: Some(WithPayloadInterface::Encrypted(
+                        PayloadEncryptedReadPolicy {
+                            encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                        },
+                    )),
+                    with_vector: WithVector::Bool(false),
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                payload_decrypt_auth,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                decrypted_records[0]
+                    .payload
+                    .as_ref()
+                    .and_then(|payload| payload.0.get("body"))
+                    .and_then(serde_json::Value::as_str),
+                Some("server secret"),
+            );
 
             let err = crate::common::query::do_search_points(
                 &toc,
@@ -6149,7 +6190,7 @@ esac
             assert!(matches!(
                 err,
                 StorageError::Forbidden { description }
-                    if description.contains("Global manage access is required")
+                    if description.contains("payload decrypt")
             ));
 
             let batch_search_request: CoreSearchRequest = SearchRequestInternal {
@@ -6182,7 +6223,7 @@ esac
             assert!(matches!(
                 err,
                 StorageError::Forbidden { description }
-                    if description.contains("Global manage access is required")
+                    if description.contains("payload decrypt")
             ));
 
             let err = crate::common::query::do_query_batch_points(
@@ -6219,7 +6260,7 @@ esac
             assert!(matches!(
                 err,
                 StorageError::Forbidden { description }
-                    if description.contains("Global manage access is required")
+                    if description.contains("payload decrypt")
             ));
 
             let err = crate::common::query::do_recommend_batch_points(
@@ -6257,7 +6298,7 @@ esac
             assert!(matches!(
                 err,
                 StorageError::Forbidden { description }
-                    if description.contains("Global manage access is required")
+                    if description.contains("payload decrypt")
             ));
 
             let err = crate::common::query::do_discover_batch_points(
@@ -6293,7 +6334,7 @@ esac
             assert!(matches!(
                 err,
                 StorageError::Forbidden { description }
-                    if description.contains("Global manage access is required")
+                    if description.contains("payload decrypt")
             ));
 
             let decrypted_records = crate::common::query::do_get_points(

@@ -110,6 +110,7 @@ impl CheckableCollectionOperation for SearchRequestInternal {
             write: false,
             manage: false,
             extras: false,
+            payload_decrypt: false,
         }
     }
 
@@ -124,6 +125,7 @@ impl CheckableCollectionOperation for RecommendRequestInternal {
             write: false,
             manage: false,
             extras: false,
+            payload_decrypt: false,
         }
     }
 
@@ -139,6 +141,7 @@ impl CheckableCollectionOperation for PointRequestInternal {
             write: false,
             manage: false,
             extras: false,
+            payload_decrypt: false,
         }
     }
 
@@ -153,6 +156,7 @@ impl CheckableCollectionOperation for CoreSearchRequest {
             write: false,
             manage: false,
             extras: false,
+            payload_decrypt: false,
         }
     }
 
@@ -167,6 +171,7 @@ impl CheckableCollectionOperation for CountRequestInternal {
             write: false,
             manage: false,
             extras: false,
+            payload_decrypt: false,
         }
     }
 
@@ -181,6 +186,7 @@ impl CheckableCollectionOperation for GroupRequest {
             write: false,
             manage: false,
             extras: false,
+            payload_decrypt: false,
         }
     }
 
@@ -201,6 +207,7 @@ impl CheckableCollectionOperation for DiscoverRequestInternal {
             write: false,
             manage: false,
             extras: false,
+            payload_decrypt: false,
         }
     }
 
@@ -216,6 +223,7 @@ impl CheckableCollectionOperation for ScrollRequestInternal {
             write: false,
             manage: false,
             extras: false,
+            payload_decrypt: false,
         }
     }
 
@@ -230,6 +238,7 @@ impl CheckableCollectionOperation for CollectionQueryRequest {
             write: false,
             manage: false,
             extras: false,
+            payload_decrypt: false,
         }
     }
 
@@ -264,6 +273,7 @@ impl CheckableCollectionOperation for FacetParams {
             write: false,
             manage: false,
             extras: false,
+            payload_decrypt: false,
         }
     }
 
@@ -278,6 +288,7 @@ impl CheckableCollectionOperation for CollectionSearchMatrixRequest {
             write: false,
             manage: false,
             extras: false,
+            payload_decrypt: false,
         }
     }
 
@@ -295,17 +306,20 @@ impl CheckableCollectionOperation for CollectionUpdateOperations {
                 write: true,
                 manage: false,
                 extras: false,
+                payload_decrypt: false,
             },
             CollectionUpdateOperations::FieldIndexOperation(_) => AccessRequirements {
                 write: true,
                 manage: true,
                 extras: true,
+                payload_decrypt: false,
             },
             #[cfg(feature = "staging")]
             CollectionUpdateOperations::StagingOperation(_) => AccessRequirements {
                 write: true,
                 manage: false,
                 extras: false,
+                payload_decrypt: false,
             },
         }
     }

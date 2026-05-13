@@ -51,6 +51,13 @@ pub struct CollectionAccess {
 
     pub access: CollectionAccessMode,
 
+    /// Permit server-side decryption of `$qdrant_sec` payload envelopes for this collection.
+    ///
+    /// This does not allow decrypting client-side `$qdrant_client_aead` envelopes because Qdrant
+    /// intentionally does not hold client data keys.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub payload_decrypt: bool,
+
     /// Payload constraints.
     /// An object where each key is a JSON path, and each value is JSON value.
     ///
@@ -71,11 +78,16 @@ fn validate_payload_empty(_payload: &Value) -> Result<(), ValidationError> {
     })
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 impl CollectionAccess {
     fn view(&self) -> CollectionAccessView<'_> {
         CollectionAccessView {
             collection: &self.collection,
             access: self.access,
+            payload_decrypt: self.payload_decrypt,
         }
     }
 }
@@ -181,6 +193,7 @@ impl CollectionAccessList {
 struct CollectionAccessView<'a> {
     pub collection: &'a str,
     pub access: CollectionAccessMode,
+    pub payload_decrypt: bool,
 }
 
 impl CollectionAccessView<'_> {
@@ -189,7 +202,15 @@ impl CollectionAccessView<'_> {
             write,
             manage,
             extras,
+            payload_decrypt,
         } = requirements;
+
+        if payload_decrypt && !self.payload_decrypt {
+            return Err(StorageError::forbidden(format!(
+                "Payload decrypt access to collection {} is required",
+                self.collection,
+            )));
+        }
 
         if extras {
             match self.access {
@@ -266,6 +287,8 @@ pub struct AccessRequirements {
     pub manage: bool,
     /// Require access to collection extras, like snapshots, payload indexes, cluster info.
     pub extras: bool,
+    /// Require permission to decrypt server-side encrypted payload fields.
+    pub payload_decrypt: bool,
 }
 
 impl AccessRequirements {
@@ -293,6 +316,13 @@ impl AccessRequirements {
             ..*self
         }
     }
+
+    pub fn payload_decrypt(&self) -> Self {
+        Self {
+            payload_decrypt: true,
+            ..*self
+        }
+    }
 }
 
 impl GlobalAccessMode {
@@ -300,12 +330,18 @@ impl GlobalAccessMode {
         let AccessRequirements {
             write,
             manage,
+            payload_decrypt,
             extras: _,
         } = requirements;
-        if write || manage {
+        if write || manage || payload_decrypt {
             match self {
                 GlobalAccessMode::Read => {
-                    return Err(StorageError::forbidden("Global manage access is required"));
+                    let message = if payload_decrypt && !write && !manage {
+                        "Global manage or payload decrypt collection access is required"
+                    } else {
+                        "Global manage access is required"
+                    };
+                    return Err(StorageError::forbidden(message));
                 }
                 GlobalAccessMode::Manage => (),
             }
@@ -371,6 +407,18 @@ impl AccessCollectionBuilder {
             } else {
                 CollectionAccessMode::Read
             },
+            payload_decrypt: false,
+            #[expect(deprecated)]
+            payload: None,
+        });
+        self
+    }
+
+    pub(self) fn add_with_payload_decrypt(mut self, name: &str) -> Self {
+        self.0.push(CollectionAccess {
+            collection: name.to_string(),
+            access: CollectionAccessMode::Read,
+            payload_decrypt: true,
             #[expect(deprecated)]
             payload: None,
         });
@@ -382,5 +430,40 @@ impl AccessCollectionBuilder {
 impl From<AccessCollectionBuilder> for Access {
     fn from(builder: AccessCollectionBuilder) -> Self {
         Access::Collection(CollectionAccessList(builder.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collection_payload_decrypt_capability_is_separate_from_read() {
+        let read_only: Access = AccessCollectionBuilder::new().add("docs", false).into();
+        assert!(
+            read_only
+                .check_collection_access("docs", AccessRequirements::new().payload_decrypt(),)
+                .is_err()
+        );
+
+        let decrypt: Access = AccessCollectionBuilder::new()
+            .add_with_payload_decrypt("docs")
+            .into();
+        decrypt
+            .check_collection_access("docs", AccessRequirements::new().payload_decrypt())
+            .expect("payload decrypt capability must satisfy decrypt-only reads");
+    }
+
+    #[test]
+    fn global_manage_satisfies_payload_decrypt_but_global_read_does_not() {
+        Access::full("test")
+            .check_collection_access("docs", AccessRequirements::new().payload_decrypt())
+            .expect("global manage satisfies payload decrypt");
+
+        assert!(
+            Access::full_ro("test")
+                .check_collection_access("docs", AccessRequirements::new().payload_decrypt())
+                .is_err()
+        );
     }
 }
