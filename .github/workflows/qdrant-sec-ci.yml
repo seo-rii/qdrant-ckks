@@ -91,7 +91,9 @@ jobs:
           cargo test --locked -p collection encrypted_vector_rejects_plaintext_vector_reads --test integration
 
       - name: Run encrypted shard recovery tests
-        run: cargo test --locked -p qdrant shard_snapshot_recovery_
+        run: |
+          cargo test --locked -p qdrant shard_snapshot_recovery_
+          cargo test --locked -p storage encrypted_snapshot_recovery_
 
       - name: Run CLI snapshot crypto preflight tests
         run: cargo test --locked -p qdrant cli_snapshot_crypto_preflight_rejects
