@@ -63,6 +63,11 @@ jobs:
       - name: Run encrypted data movement tests
         run: cargo test --locked -p storage encrypted_
 
+      - name: Run encrypted leakage integration tests
+        run: |
+          cargo test --locked -p collection encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_files --test integration
+          cargo test --locked -p collection encrypted_vector_rejects_plaintext_vector_writes --test integration
+
       - name: Run encrypted shard recovery tests
         run: cargo test --locked -p qdrant shard_snapshot_recovery_
 
