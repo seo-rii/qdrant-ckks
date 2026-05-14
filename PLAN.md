@@ -71,6 +71,7 @@
 - migration 상태를 `Disabled`, `Encrypting`, `Active`, `Rotating`, `Decrypting`으로 정의한다.
 - 일반 collection update에서는 encryption enable/disable/rule 변경을 계속 거부한다.
 - admin-only migration plan/rewrite/decrypt command를 유지하고, point scan과 verified checkpoint를 completion gate로 사용한다.
+- completion checkpoint는 모든 shard id를 커버해야 하며, local shard가 있는 node에서는 checkpoint `total_points`가 실제 local shard point count와 일치해야 한다.
 - migration dry-run이 변경 대상 point 수, selector 충돌, key availability를 보고하도록 유지한다.
 - disable/decrypt migration은 client-side opaque envelope와 blind-index token을 건드리지 않으며, server-side decrypt completion은 verified checkpoint를 요구한다.
 - 남은 작업은 migration run을 background task로 예약/재개하고, 실패 rollback과 old-key disable/destroy retirement gate를 운영 API로 묶는 것이다.
@@ -79,7 +80,7 @@
 
 - migration 없이 encryption config 변경 시 실패한다.
 - migration 시작 후 collection 상태가 `Encrypting` 또는 `Rotating`으로 저장된다.
-- rewrite/decrypt endpoint가 verified checkpoint를 반환하고 completion plan이 shard coverage를 검증한다.
+- rewrite/decrypt endpoint가 verified checkpoint를 반환하고 completion plan이 shard coverage와 local shard point count를 검증한다.
 - 중단 후 재시작 시 background scheduler가 저장된 checkpoint부터 재개한다.
 - 잘못된 key/runtime instance가 있으면 migration 시작 전에 실패한다.
 
