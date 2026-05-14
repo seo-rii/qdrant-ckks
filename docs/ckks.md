@@ -767,12 +767,14 @@ when completing `Rotating -> Active`, the retired RK id:
 ```
 
 The endpoint first verifies the current collection state is `Encrypting`,
-`Rotating`, or `Decrypting`, runs the appropriate payload rewrite/decrypt scan,
-builds the completion `CryptoMigrationPlan` from the returned verified
-checkpoints, validates it against the current collection config, and submits the
-admin completion operation. It is still a foreground admin operation, not a
-cluster-wide background scheduler; interrupted or failed runs should be rerun to
-produce fresh checkpoints.
+`Rotating`, or `Decrypting` and preflights the supplied active/retired RK ids
+against the current collection config. Invalid completion requests fail before
+any payload rewrite/decrypt scan starts. Valid requests then run the appropriate
+payload rewrite/decrypt scan, build the completion `CryptoMigrationPlan` from
+the returned verified checkpoints, validate it again against the current
+collection config, and submit the admin completion operation. It is still a
+foreground admin operation, not a cluster-wide background scheduler; interrupted
+or failed runs should be rerun to produce fresh checkpoints.
 After a verified `Decrypting -> Disabled` completion, the stored encryption
 section remains as audit/migration metadata, but it is not treated as effective
 encryption for write/read guards. Re-enabling encryption must start a new admin
