@@ -923,33 +923,41 @@ fn validate_private_graph_parent(path: &Path) -> io::Result<()> {
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
-        let Some(parent) = path.parent() else {
-            return Ok(());
-        };
-        let metadata = fs::symlink_metadata(parent)?;
-        if !metadata.is_dir() {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!("graph file parent {parent:?} must be a directory"),
-            ));
-        }
-        let mode = metadata.permissions().mode();
-        if mode & 0o022 != 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!("graph file parent {parent:?} must not be group/world writable"),
-            ));
-        }
-
-        let owner = metadata.uid();
         let effective_uid = nix::unistd::Uid::effective().as_raw();
-        if owner != 0 && owner != effective_uid {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "graph file parent {parent:?} must be owned by root or the Qdrant process user"
-                ),
-            ));
+        let direct_parent = path.parent();
+        let mut parent = direct_parent;
+        while let Some(directory) = parent {
+            let metadata = fs::symlink_metadata(directory)?;
+            if !metadata.is_dir() {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!("graph file parent {directory:?} must be a directory"),
+                ));
+            }
+            let mode = metadata.permissions().mode();
+            if mode & 0o022 != 0 {
+                let sticky_ancestor =
+                    Some(directory) != direct_parent && mode & nix::libc::S_ISVTX != 0;
+                if sticky_ancestor {
+                    parent = directory.parent();
+                    continue;
+                }
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!("graph file parent {directory:?} must not be group/world writable"),
+                ));
+            }
+
+            let owner = metadata.uid();
+            if owner != 0 && owner != effective_uid {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!(
+                        "graph file parent {directory:?} must be owned by root or the Qdrant process user"
+                    ),
+                ));
+            }
+            parent = directory.parent();
         }
     }
 
@@ -1800,6 +1808,35 @@ mod tests {
 
         assert!(err.to_string().contains("must not be group/world writable"));
         std::fs::set_permissions(directory.path(), PermissionsExt::from_mode(0o700)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ciphertext_vector_index_rejects_writable_graph_ancestor() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let ancestor = directory.path().join("writable-ancestor");
+        let direct_parent = ancestor.join("graph-parent");
+        std::fs::create_dir(&ancestor).unwrap();
+        std::fs::create_dir(&direct_parent).unwrap();
+        std::fs::set_permissions(&ancestor, PermissionsExt::from_mode(0o722)).unwrap();
+        std::fs::set_permissions(&direct_parent, PermissionsExt::from_mode(0o700)).unwrap();
+
+        let graph_file = CkksCiphertextVectorIndex::graph_file_path(&direct_parent);
+        let mut index = CkksCiphertextVectorIndex::from_graph(
+            vec![
+                CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
+            ],
+            CkksCiphertextHnswGraph::from_validated_links(vec![vec![1], vec![0]]).unwrap(),
+        )
+        .unwrap();
+
+        let err = index.persist_graph_file(&graph_file).unwrap_err();
+        assert!(err.to_string().contains("must not be group/world writable"));
+
+        std::fs::set_permissions(&ancestor, PermissionsExt::from_mode(0o700)).unwrap();
     }
 
     #[cfg(unix)]
