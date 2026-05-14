@@ -1968,6 +1968,8 @@ fn ckks_sidecar_hnsw_records_fingerprint(records: &[CkksSidecarSearchRecord]) ->
 
 fn ckks_sidecar_hnsw_graph_cache_file_name(key: &CkksSidecarHnswGraphCacheKey) -> String {
     let mut hasher = Sha256::new();
+    hasher.update(b"qdrant-sec/ckks-sidecar-hnsw-graph-cache-file/v1");
+    hasher.update(CKKS_SIDECAR_HNSW_GRAPH_CACHE_VERSION.to_be_bytes());
     for value in [
         key.collection_identity.as_str(),
         key.vector_name.as_str(),
