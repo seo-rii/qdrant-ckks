@@ -868,6 +868,30 @@ fn public_client_payload_validation_requires_signature_verifier_when_signature_i
 }
 
 #[test]
+fn runtime_client_payload_proof_requires_signature_verifier() {
+    let (envelope, _public_key) = signed_client_envelope("point-1", "body");
+
+    assert_eq!(
+        validate_client_payload_value_for_runtime(
+            &envelope,
+            ClientPayloadValidationContext {
+                collection_id: "docs",
+                point_id: "point-1",
+                field_path: "body",
+                expected_key_id: Some("tenant-a/client-rk-2026-04"),
+                expected_rk_id: Some("tenant-a/client-rk-2026-04"),
+                min_rk_epoch: Some(3),
+                max_rk_epoch: Some(3),
+                key_id_required: true,
+                signature_required: true,
+                signature_verification: None,
+            },
+        ),
+        Err(PayloadEncryptionError::InvalidClientSignature),
+    );
+}
+
+#[test]
 fn selected_body_field_is_encrypted_without_leaking_plaintext() {
     let encryptor = encryptor();
     let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
