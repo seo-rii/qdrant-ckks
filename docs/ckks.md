@@ -588,6 +588,22 @@ The old and new MK material must both be available in the current runtime during
 the rewrap, and operators should roll out the resulting material patch
 atomically across nodes so runtime parity fingerprints stay aligned.
 
+Operators can inspect the non-secret collection crypto manifest before and after
+rotation:
+
+```text
+GET /collections/{collection_name}/crypto/manifest
+```
+
+The endpoint is manage-only and first revalidates the collection config against
+the current runtime crypto settings. It returns the stable collection crypto id,
+schema/epoch/state, each rule's provider and binding, active material references,
+retired material references, and client-side RK policy. It does not return
+`value_b64`, `wrapped_key_b64`, nonces, signatures, or public material. If a
+runtime material referenced by the collection is missing RK epoch metadata or no
+longer satisfies the provider policy, manifest generation fails closed instead
+of reporting a stale or incomplete key lifecycle view.
+
 After an RK rotation migration has been verified and the runtime provider no
 longer references the old RK in either `materials.sym_key` or
 `options.retired_materials`, operators can request a non-mutating retirement

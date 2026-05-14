@@ -1,9 +1,13 @@
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use actix_web::rt::time::Instant;
 use actix_web::{HttpResponse, Responder, delete, get, patch, post, put, web};
 use actix_web_validator::{Json, Path, Query};
-use collection::config::{CryptoMigrationCheckpoint, CryptoMigrationPlan, CryptoMigrationState};
+use collection::config::{
+    CollectionConfigInternal, CryptoMigrationCheckpoint, CryptoMigrationPlan, CryptoMigrationState,
+    EncryptionSelector,
+};
 use collection::operations::cluster_ops::ClusterOperations;
 use collection::operations::types::CollectionError;
 use collection::operations::verification::new_unchecked_verification_pass;
@@ -24,7 +28,9 @@ use crate::actix::api::StrictCollectionPath;
 use crate::actix::auth::ActixAuth;
 use crate::actix::helpers::{self, process_response};
 use crate::common::collections::*;
-use crate::common::crypto::validate_create_collection_crypto_runtime;
+use crate::common::crypto::{
+    validate_collection_crypto_runtime, validate_create_collection_crypto_runtime,
+};
 use crate::common::update::{
     do_decrypt_payloads_for_crypto_migration, do_reencrypt_stale_payloads_for_crypto_migration,
 };
@@ -80,6 +86,34 @@ async fn get_collection(
         None,
     ))
     .await
+}
+
+#[get("/collections/{collection_name}/crypto/manifest")]
+async fn get_collection_crypto_manifest(
+    dispatcher: web::Data<Dispatcher>,
+    collection: Path<CollectionPath>,
+    settings: web::Data<Settings>,
+    ActixAuth(auth): ActixAuth,
+) -> HttpResponse {
+    let timing = Instant::now();
+    let pass = new_unchecked_verification_pass();
+    let collection_name = collection.collection_name.clone();
+
+    let response = async {
+        let collection_pass = auth.check_collection_access(
+            &collection_name,
+            AccessRequirements::new().manage(),
+            "get_collection_crypto_manifest",
+        )?;
+        let collection = dispatcher
+            .toc(&auth, &pass)
+            .get_collection(&collection_pass)
+            .await?;
+        let config = collection.config_snapshot().await;
+        build_collection_crypto_manifest_response(&collection_name, &config, settings.get_ref())
+    };
+
+    process_response(response.await, timing, None)
 }
 
 #[get("/collections/{collection_name}/exists")]
@@ -210,6 +244,268 @@ pub struct RunPayloadCryptoMigrationResponse {
     pub completion_plan: CryptoMigrationPlan,
     pub completed: bool,
     pub dry_run: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CollectionCryptoManifestResponse {
+    pub collection_name: String,
+    pub stable_crypto_id: String,
+    pub crypto_schema_version: u16,
+    pub encryption_epoch: u64,
+    pub migration_state: CryptoMigrationState,
+    pub rules: Vec<CollectionCryptoManifestRule>,
+    pub resource_keys: Vec<CollectionCryptoManifestResourceKey>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CollectionCryptoManifestRule {
+    pub rule_id: String,
+    pub selector: String,
+    pub instance: String,
+    pub provider: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binding: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_material: Option<String>,
+    pub retired_materials: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_rk_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_rk_epoch: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CollectionCryptoManifestResourceKey {
+    pub rk_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub material_ref: Option<String>,
+    pub epoch: u64,
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wrapped_by: Option<String>,
+    pub used_by_rules: Vec<String>,
+}
+
+#[derive(Debug)]
+struct CollectionCryptoManifestResourceKeyBuilder {
+    material_ref: Option<String>,
+    epoch: u64,
+    state: String,
+    scope: Option<String>,
+    wrapped_by: Option<String>,
+    used_by_rules: Vec<String>,
+}
+
+fn selector_kind(selector: &EncryptionSelector) -> &'static str {
+    match selector {
+        EncryptionSelector::PayloadPaths { .. } => "payload_paths",
+        EncryptionSelector::VectorNames { .. } => "vector_names",
+        EncryptionSelector::MetadataKeys { .. } => "metadata_keys",
+    }
+}
+
+fn option_string<'a>(options: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    options.get(key).and_then(serde_json::Value::as_str)
+}
+
+fn option_u64(options: &serde_json::Value, key: &str) -> Option<u64> {
+    options.get(key).and_then(serde_json::Value::as_u64)
+}
+
+fn add_manifest_material_resource_key(
+    material_ref: &str,
+    rule_id: &str,
+    settings: &Settings,
+    resource_keys: &mut BTreeMap<String, CollectionCryptoManifestResourceKeyBuilder>,
+) -> Result<(), StorageError> {
+    let Some(material) = settings.crypto.materials.get(material_ref) else {
+        return Err(StorageError::bad_request(format!(
+            "crypto manifest material {material_ref} is referenced by rule {rule_id} but is missing from runtime settings",
+        )));
+    };
+    let Some(epoch) = material.rk_epoch else {
+        return Err(StorageError::bad_request(format!(
+            "crypto manifest material {material_ref} is referenced by rule {rule_id} but is missing rk_epoch",
+        )));
+    };
+    let state = material
+        .state
+        .clone()
+        .unwrap_or_else(|| "active".to_string());
+    let entry = resource_keys
+        .entry(material_ref.to_string())
+        .or_insert_with(|| CollectionCryptoManifestResourceKeyBuilder {
+            material_ref: Some(material_ref.to_string()),
+            epoch,
+            state,
+            scope: material.scope.clone(),
+            wrapped_by: material.wrapped_by.clone(),
+            used_by_rules: Vec::new(),
+        });
+
+    if entry.epoch != epoch || entry.state != material.state.as_deref().unwrap_or("active") {
+        return Err(StorageError::bad_request(format!(
+            "crypto manifest material {material_ref} has inconsistent RK metadata across rules",
+        )));
+    }
+    if !entry
+        .used_by_rules
+        .iter()
+        .any(|existing| existing == rule_id)
+    {
+        entry.used_by_rules.push(rule_id.to_string());
+    }
+
+    Ok(())
+}
+
+fn add_manifest_client_resource_key(
+    rk_id: &str,
+    epoch: u64,
+    rule_id: &str,
+    resource_keys: &mut BTreeMap<String, CollectionCryptoManifestResourceKeyBuilder>,
+) -> Result<(), StorageError> {
+    let entry = resource_keys.entry(rk_id.to_string()).or_insert_with(|| {
+        CollectionCryptoManifestResourceKeyBuilder {
+            material_ref: None,
+            epoch,
+            state: "active".to_string(),
+            scope: Some("client-envelope".to_string()),
+            wrapped_by: None,
+            used_by_rules: Vec::new(),
+        }
+    });
+
+    if entry.epoch != epoch || entry.state != "active" {
+        return Err(StorageError::bad_request(format!(
+            "crypto manifest client RK {rk_id} has inconsistent policy metadata across rules",
+        )));
+    }
+    if !entry
+        .used_by_rules
+        .iter()
+        .any(|existing| existing == rule_id)
+    {
+        entry.used_by_rules.push(rule_id.to_string());
+    }
+
+    Ok(())
+}
+
+fn build_collection_crypto_manifest_response(
+    collection_name: &str,
+    config: &CollectionConfigInternal,
+    settings: &Settings,
+) -> Result<CollectionCryptoManifestResponse, StorageError> {
+    let encryption = config.params.effective_encryption().ok_or_else(|| {
+        StorageError::bad_request(format!(
+            "collection {collection_name} does not have encryption configured",
+        ))
+    })?;
+    validate_collection_crypto_runtime(settings, collection_name, &config.params)?;
+
+    let stable_crypto_id = config.stable_crypto_id(collection_name)?;
+    let mut rules = Vec::new();
+    let mut resource_keys = BTreeMap::new();
+
+    for rule in &encryption.rules {
+        let instance = settings
+            .crypto
+            .instances
+            .get(&rule.instance)
+            .ok_or_else(|| {
+                StorageError::bad_request(format!(
+                    "collection {collection_name} references unknown crypto instance {}",
+                    rule.instance
+                ))
+            })?;
+        let active_material = instance.materials.get("sym_key").cloned();
+        if let Some(material_ref) = active_material.as_deref() {
+            add_manifest_material_resource_key(
+                material_ref,
+                &rule.id,
+                settings,
+                &mut resource_keys,
+            )?;
+        }
+
+        let mut retired_materials = Vec::new();
+        if let Some(retired) = instance.options.get("retired_materials") {
+            let Some(retired) = retired.as_array() else {
+                return Err(StorageError::bad_request(format!(
+                    "collection {collection_name} crypto instance {} has malformed retired_materials",
+                    rule.instance
+                )));
+            };
+            for retired_entry in retired {
+                let Some(material_ref) = retired_entry
+                    .as_object()
+                    .and_then(|entry| entry.get("material"))
+                    .and_then(serde_json::Value::as_str)
+                else {
+                    return Err(StorageError::bad_request(format!(
+                        "collection {collection_name} crypto instance {} has malformed retired_materials",
+                        rule.instance
+                    )));
+                };
+                add_manifest_material_resource_key(
+                    material_ref,
+                    &rule.id,
+                    settings,
+                    &mut resource_keys,
+                )?;
+                retired_materials.push(material_ref.to_string());
+            }
+        }
+
+        let client_rk_id =
+            option_string(&instance.options, "expected_rk_id").map(ToOwned::to_owned);
+        let client_rk_epoch = match (
+            option_u64(&instance.options, "min_rk_epoch"),
+            option_u64(&instance.options, "max_rk_epoch"),
+        ) {
+            (Some(min), Some(max)) if min == max => Some(min),
+            _ => None,
+        };
+        if let (Some(rk_id), Some(epoch)) = (client_rk_id.as_deref(), client_rk_epoch) {
+            add_manifest_client_resource_key(rk_id, epoch, &rule.id, &mut resource_keys)?;
+        }
+
+        rules.push(CollectionCryptoManifestRule {
+            rule_id: rule.id.clone(),
+            selector: selector_kind(&rule.selector).to_string(),
+            instance: rule.instance.clone(),
+            provider: instance.provider.clone(),
+            binding: rule.binding.clone(),
+            active_material,
+            retired_materials,
+            client_rk_id,
+            client_rk_epoch,
+        });
+    }
+
+    Ok(CollectionCryptoManifestResponse {
+        collection_name: collection_name.to_string(),
+        stable_crypto_id,
+        crypto_schema_version: encryption.crypto_schema_version,
+        encryption_epoch: encryption.encryption_epoch,
+        migration_state: encryption.migration_state,
+        rules,
+        resource_keys: resource_keys
+            .into_iter()
+            .map(|(rk_id, key)| CollectionCryptoManifestResourceKey {
+                rk_id,
+                material_ref: key.material_ref,
+                epoch: key.epoch,
+                state: key.state,
+                scope: key.scope,
+                wrapped_by: key.wrapped_by,
+                used_by_rules: key.used_by_rules,
+            })
+            .collect(),
+    })
 }
 
 fn payload_crypto_migration_completion_plan(
@@ -618,6 +914,7 @@ pub fn config_collections_api(cfg: &mut web::ServiceConfig) {
     cfg.service(update_aliases)
         .service(get_collections)
         .service(get_collection)
+        .service(get_collection_crypto_manifest)
         .service(get_collection_existence)
         .service(create_collection)
         .service(update_collection)
@@ -635,13 +932,20 @@ pub fn config_collections_api(cfg: &mut web::ServiceConfig) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use actix_web::web::Query;
     use collection::config::{
-        CollectionEncryptionConfig, CryptoMigrationCheckpointStatus, EncryptionRuleRef,
-        EncryptionSelector,
+        CollectionEncryptionConfig, CollectionParams, CryptoMigrationCheckpointStatus,
+        EncryptionRuleRef, EncryptionSelector, WalConfig,
     };
+    use collection::optimizers_builder::OptimizersConfig;
+    use segment::types::HnswConfig;
+    use serde_json::json;
+    use uuid::Uuid;
 
     use super::*;
+    use crate::settings::{CryptoInstanceConfig, CryptoMaterialConfig, CryptoSettings};
 
     #[test]
     fn timeout_is_deserialized() {
@@ -677,6 +981,140 @@ mod tests {
                 instance: "docs_payload_v1".to_string(),
                 binding: Some("payload-field/v1".to_string()),
             }],
+        }
+    }
+
+    fn config_with_encryption(encryption: CollectionEncryptionConfig) -> CollectionConfigInternal {
+        CollectionConfigInternal {
+            params: CollectionParams {
+                encryption: Some(encryption),
+                ..CollectionParams::empty()
+            },
+            hnsw_config: HnswConfig::default(),
+            optimizer_config: OptimizersConfig {
+                deleted_threshold: 0.1,
+                vacuum_min_vector_number: 1000,
+                default_segment_number: 0,
+                max_segment_size: None,
+                #[expect(deprecated)]
+                memmap_threshold: None,
+                indexing_threshold: Some(100_000),
+                flush_interval_sec: 60,
+                max_optimization_threads: Some(0),
+                prevent_unoptimized: None,
+            },
+            wal_config: WalConfig::default(),
+            quantization_config: None,
+            strict_mode_config: None,
+            uuid: Some(Uuid::from_u128(0x1234567890abcdef1234567890abcdef)),
+            metadata: None,
+        }
+    }
+
+    fn crypto_settings_for_manifest() -> Settings {
+        Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([
+                    (
+                        "docs_payload_v1".to_string(),
+                        CryptoInstanceConfig {
+                            provider: "payload/aes-256-gcm@v1".to_string(),
+                            materials: HashMap::from([(
+                                "sym_key".to_string(),
+                                "tenant-a/server-rk-v4".to_string(),
+                            )]),
+                            backend_ref: None,
+                            options: json!({
+                                "key_id": "tenant-a:docs",
+                                "material_fingerprint_id": "tenant-a/server-rk-v4@fp",
+                                "retired_materials": [{
+                                    "material": "tenant-a/server-rk-v3",
+                                    "material_fingerprint_id": "tenant-a/server-rk-v3@fp",
+                                }],
+                            }),
+                        },
+                    ),
+                    (
+                        "docs_client_v1".to_string(),
+                        CryptoInstanceConfig {
+                            provider: "payload/client-aead@v1".to_string(),
+                            materials: HashMap::new(),
+                            backend_ref: None,
+                            options: json!({
+                                "key_id": "tenant-a:docs",
+                                "key_id_required": true,
+                                "expected_rk_id": "tenant-a:docs",
+                                "min_rk_epoch": 4,
+                                "max_rk_epoch": 4,
+                                "signature_public_keys": {
+                                    "tenant-a/client-signing-v1": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+                                },
+                            }),
+                        },
+                    ),
+                ]),
+                materials: HashMap::from([
+                    (
+                        "tenant-a/server-rk-v4".to_string(),
+                        CryptoMaterialConfig {
+                            kind: "symmetric_key_32".to_string(),
+                            source: Some("inline".to_string()),
+                            value_b64: Some(
+                                "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE".to_string(),
+                            ),
+                            rk_epoch: Some(4),
+                            state: Some("active".to_string()),
+                            scope: Some("collection:docs".to_string()),
+                            ..CryptoMaterialConfig::default()
+                        },
+                    ),
+                    (
+                        "tenant-a/server-rk-v3".to_string(),
+                        CryptoMaterialConfig {
+                            kind: "symmetric_key_32".to_string(),
+                            source: Some("inline".to_string()),
+                            value_b64: Some(
+                                "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI".to_string(),
+                            ),
+                            rk_epoch: Some(3),
+                            state: Some("retired".to_string()),
+                            scope: Some("collection:docs".to_string()),
+                            ..CryptoMaterialConfig::default()
+                        },
+                    ),
+                ]),
+                backends: HashMap::new(),
+            },
+            ..Settings::new(None).unwrap()
+        }
+    }
+
+    fn manifest_encryption_config() -> CollectionEncryptionConfig {
+        CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a:docs".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 4,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![
+                EncryptionRuleRef {
+                    id: "body_server".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                },
+                EncryptionRuleRef {
+                    id: "body_client".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["client_body".to_string()],
+                    },
+                    instance: "docs_client_v1".to_string(),
+                    binding: Some("client-payload-envelope/v1".to_string()),
+                },
+            ],
         }
     }
 
@@ -792,5 +1230,78 @@ mod tests {
             &rotating,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn collection_crypto_manifest_reports_non_secret_runtime_key_manifest() {
+        let settings = crypto_settings_for_manifest();
+        let config = config_with_encryption(manifest_encryption_config());
+
+        let manifest = build_collection_crypto_manifest_response("docs", &config, &settings)
+            .expect("valid collection crypto runtime must build a manifest");
+
+        assert_eq!(manifest.collection_name, "docs");
+        assert_eq!(
+            manifest.stable_crypto_id,
+            "12345678-90ab-cdef-1234-567890abcdef"
+        );
+        assert_eq!(manifest.encryption_epoch, 4);
+        assert_eq!(manifest.rules.len(), 2);
+        assert_eq!(manifest.resource_keys.len(), 3);
+
+        let active = manifest
+            .resource_keys
+            .iter()
+            .find(|key| key.rk_id == "tenant-a/server-rk-v4")
+            .unwrap();
+        assert_eq!(
+            active.material_ref.as_deref(),
+            Some("tenant-a/server-rk-v4")
+        );
+        assert_eq!(active.epoch, 4);
+        assert_eq!(active.state, "active");
+        assert_eq!(active.scope.as_deref(), Some("collection:docs"));
+        assert_eq!(active.wrapped_by, None);
+        assert_eq!(active.used_by_rules, vec!["body_server".to_string()]);
+
+        let retired = manifest
+            .resource_keys
+            .iter()
+            .find(|key| key.rk_id == "tenant-a/server-rk-v3")
+            .unwrap();
+        assert_eq!(retired.epoch, 3);
+        assert_eq!(retired.state, "retired");
+
+        let client = manifest
+            .resource_keys
+            .iter()
+            .find(|key| key.rk_id == "tenant-a:docs")
+            .unwrap();
+        assert_eq!(client.material_ref, None);
+        assert_eq!(client.epoch, 4);
+        assert_eq!(client.scope.as_deref(), Some("client-envelope"));
+        assert_eq!(client.used_by_rules, vec!["body_client".to_string()]);
+    }
+
+    #[test]
+    fn collection_crypto_manifest_fails_closed_on_runtime_mismatch() {
+        let mut settings = crypto_settings_for_manifest();
+        settings
+            .crypto
+            .materials
+            .get_mut("tenant-a/server-rk-v4")
+            .unwrap()
+            .rk_epoch = None;
+        let config = config_with_encryption(manifest_encryption_config());
+
+        let err = build_collection_crypto_manifest_response("docs", &config, &settings)
+            .expect_err("manifest must not hide runtime RK metadata mismatch");
+
+        assert!(
+            err.to_string()
+                .contains("server-side AEAD material must set rk_epoch")
+                || err.to_string().contains("missing rk_epoch"),
+            "{err}",
+        );
     }
 }
