@@ -48,6 +48,11 @@ jobs:
       - name: Run qdrant-sec runtime tests
         run: cargo test --locked -p qdrant ckks
 
+      - name: Run collection crypto runtime validation tests
+        run: |
+          cargo test --locked -p qdrant validate_collection_crypto_runtime_
+          cargo test --locked -p qdrant validate_recovered_collection_crypto_
+
       - name: Run segment-native CKKS ciphertext index tests
         run: cargo test --locked -p segment ckks_ciphertext
 
