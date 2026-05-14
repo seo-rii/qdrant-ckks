@@ -45,6 +45,9 @@ jobs:
       - name: Run qdrant-sec runtime tests
         run: cargo test --locked -p qdrant ckks
 
+      - name: Run segment-native CKKS ciphertext index tests
+        run: cargo test --locked -p segment ckks_ciphertext
+
       - name: Run encrypted payload read and migration tests
         run: |
           cargo test --locked -p qdrant server_side_encrypted_payload_read_mode_decrypts_get_and_scroll
