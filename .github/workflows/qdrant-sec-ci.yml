@@ -61,7 +61,9 @@ jobs:
           cargo test --locked -p qdrant --features service_debug --bin segment_inspector payload_redaction_hides_server_client_and_vector_markers
 
       - name: Run encrypted data movement tests
-        run: cargo test --locked -p storage encrypted_
+        run: |
+          cargo test --locked -p storage encrypted_
+          cargo test --locked -p storage audit_error_redaction
 
       - name: Run encrypted leakage integration tests
         run: |
