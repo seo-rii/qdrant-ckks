@@ -223,7 +223,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::settings::{CryptoInstanceConfig, CryptoSettings};
+    use crate::settings::{CryptoInstanceConfig, CryptoMaterialConfig, CryptoSettings};
 
     #[test]
     fn app_telemetry_includes_crypto_runtime_capability_fingerprint() {
@@ -266,5 +266,67 @@ mod tests {
             &settings,
         );
         assert!(low_detail.crypto_runtime_capability_fingerprint.is_none());
+    }
+
+    #[test]
+    fn app_telemetry_does_not_serialize_crypto_key_material() {
+        let inline_secret = "qdrant-sec-telemetry-inline-key-sentinel";
+        let wrapped_secret = "qdrant-sec-telemetry-wrapped-key-sentinel";
+        let signature_public_key = "qdrant-sec-telemetry-signature-public-key-sentinel";
+        let mut settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_payload_client_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: "payload/client-aead@v1".to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a/client-rk-v1",
+                            "key_id_required": true,
+                            "expected_rk_id": "tenant-a/client-rk-v1",
+                            "min_rk_epoch": 3,
+                            "max_rk_epoch": 3,
+                            "signature_public_key_b64": signature_public_key,
+                            "signature_key_id": "tenant-a/client-signing-v1",
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([(
+                    "tenant-a/payload-rk-v1".to_string(),
+                    CryptoMaterialConfig {
+                        kind: "wrapped_symmetric_key_32".to_string(),
+                        wrapped_by: Some("tenant-a/mk-v1".to_string()),
+                        wrap_algorithm: Some("AES-256-GCM".to_string()),
+                        nonce: Some("qdrant-sec-telemetry-nonce-sentinel".to_string()),
+                        wrapped_key_b64: Some(wrapped_secret.to_string()),
+                        value_b64: Some(inline_secret.to_string()),
+                        rk_epoch: Some(3),
+                        scope: Some("collection:docs".to_string()),
+                        ..CryptoMaterialConfig::default()
+                    },
+                )]),
+                backends: HashMap::new(),
+            },
+            ..Settings::new(None).unwrap()
+        };
+        settings.crypto.allow_inline_key_material = true;
+        let collector = AppBuildTelemetryCollector::new();
+
+        let telemetry = AppBuildTelemetry::collect(
+            TelemetryDetail::new(DetailsLevel::Level1, false),
+            &collector,
+            &settings,
+        );
+        let serialized = serde_json::to_string(&telemetry).unwrap();
+
+        assert!(telemetry.crypto_runtime_capability_fingerprint.is_some());
+        for sentinel in [inline_secret, wrapped_secret, signature_public_key] {
+            assert!(
+                !serialized.contains(sentinel),
+                "app telemetry leaked crypto material sentinel {sentinel}",
+            );
+        }
     }
 }
