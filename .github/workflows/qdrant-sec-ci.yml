@@ -56,6 +56,7 @@ jobs:
           cargo test --locked -p qdrant payload_crypto_migration_run
           cargo test --locked -p qdrant client_nonce_replay_error_tells_clients_to_regenerate_envelope
           cargo test --locked -p qdrant runtime_rewrap_response_returns_applyable_material_patch_without_mutating_settings
+          cargo test --locked -p qdrant runtime_rewrap_response_rejects_malformed_material_identifiers
           cargo test --locked -p qdrant snapshot_export_encrypted_payload_mode_is_raw_only
 
       - name: Run encrypted inspector redaction tests
