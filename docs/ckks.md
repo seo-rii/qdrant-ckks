@@ -599,6 +599,13 @@ Payload AEAD AAD also binds the stable collection crypto identity, point id, and
 canonical field path. On public writes Qdrant uses the collection UUID and
 rejects encrypted collection configs that are missing that stable identity.
 
+Snapshot download and shard snapshot streaming APIs are storage-level exports.
+They only support raw encrypted marker export. `encrypted_payload=raw` is accepted
+as an explicit no-op, while `encrypted_payload=decrypted` and
+`encrypted_payload=redacted` fail during query parsing. Decrypted or redacted data
+export needs a separate audited data-export API rather than being folded into
+snapshot archive streams.
+
 The wrapped RK AES-GCM AAD is a length-prefixed tuple of `qdrant-sec`, `v1`,
 `resource-key-wrap`, the material reference, `rk_epoch`, `scope`, `wrapped_by`,
 and `AES-256-GCM`. Changing the material reference, epoch, scope, or wrapping MK

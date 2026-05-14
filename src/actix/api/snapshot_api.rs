@@ -68,6 +68,21 @@ pub struct SnapshottingParam {
     pub wait: Option<bool>,
 }
 
+#[derive(Deserialize, Serialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapshotEncryptedPayloadExportMode {
+    Raw,
+}
+
+#[derive(Deserialize, Serialize, JsonSchema, Validate, Default)]
+pub struct SnapshotExportParam {
+    /// Snapshot archives are storage-level exports. They can only stream raw
+    /// encrypted markers; decrypted/redacted payload export needs a separate
+    /// audited data-export API.
+    #[serde(default)]
+    pub encrypted_payload: Option<SnapshotEncryptedPayloadExportMode>,
+}
+
 #[derive(MultipartForm)]
 pub struct SnapshottingForm {
     snapshot: TempFile,
@@ -300,6 +315,7 @@ async fn recover_from_snapshot(
 async fn get_snapshot(
     dispatcher: web::Data<Dispatcher>,
     path: valid::Path<CollectionSnapshotPath>,
+    _query: valid::Query<SnapshotExportParam>,
     ActixAuth(auth): ActixAuth,
 ) -> impl Responder {
     // Nothing to verify.
@@ -343,6 +359,7 @@ async fn create_full_snapshot(
 async fn get_full_snapshot(
     dispatcher: web::Data<Dispatcher>,
     path: web::Path<String>,
+    _query: valid::Query<SnapshotExportParam>,
     ActixAuth(auth): ActixAuth,
 ) -> impl Responder {
     // nothing to verify.
@@ -443,6 +460,7 @@ async fn create_shard_snapshot(
 async fn stream_shard_snapshot(
     dispatcher: web::Data<Dispatcher>,
     path: valid::Path<CollectionShardPath>,
+    _query: valid::Query<SnapshotExportParam>,
     ActixAuth(auth): ActixAuth,
 ) -> Result<SnapshotStream, HttpError> {
     // nothing to verify.
@@ -581,6 +599,7 @@ async fn upload_shard_snapshot(
 async fn download_shard_snapshot(
     dispatcher: web::Data<Dispatcher>,
     path: valid::Path<CollectionShardSnapshotPath>,
+    _query: valid::Query<SnapshotExportParam>,
     ActixAuth(auth): ActixAuth,
 ) -> Result<impl Responder, HttpError> {
     // nothing to verify.
@@ -647,6 +666,7 @@ async fn delete_shard_snapshot(
 async fn create_partial_snapshot(
     dispatcher: web::Data<Dispatcher>,
     path: valid::Path<CollectionShardPath>,
+    _query: valid::Query<SnapshotExportParam>,
     manifest: web::Json<SnapshotManifest>,
     ActixAuth(auth): ActixAuth,
 ) -> Result<SnapshotStream, HttpError> {
@@ -962,6 +982,32 @@ async fn get_partial_snapshot_manifest(
     };
 
     helpers::time(future).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_export_encrypted_payload_mode_is_raw_only() {
+        let omitted: SnapshotExportParam = serde_urlencoded::from_str("").unwrap();
+        assert_eq!(omitted.encrypted_payload, None);
+
+        let raw: SnapshotExportParam = serde_urlencoded::from_str("encrypted_payload=raw").unwrap();
+        assert_eq!(
+            raw.encrypted_payload,
+            Some(SnapshotEncryptedPayloadExportMode::Raw)
+        );
+
+        assert!(
+            serde_urlencoded::from_str::<SnapshotExportParam>("encrypted_payload=decrypted")
+                .is_err()
+        );
+        assert!(
+            serde_urlencoded::from_str::<SnapshotExportParam>("encrypted_payload=redacted")
+                .is_err()
+        );
+    }
 }
 
 // Configure services
