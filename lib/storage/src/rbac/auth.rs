@@ -109,7 +109,10 @@ impl Auth {
 
         let (audit_result, error) = match result {
             Ok(_) => (AuditResult::Ok, None),
-            Err(e) => (AuditResult::Denied, Some(e.to_string())),
+            Err(e) => (
+                AuditResult::Denied,
+                Some(redact_audit_error(&e.to_string())),
+            ),
         };
 
         audit_log(AuditEvent {
@@ -123,5 +126,86 @@ impl Auth {
             result: audit_result,
             error,
         });
+    }
+}
+
+fn redact_audit_error(error: &str) -> String {
+    const REDACTED: &str = "[redacted: crypto material omitted from audit error]";
+    const MARKERS: &[&str] = &["$qdrant_sec", "$qdrant_client_aead", "$qdrant_sec_vectors"];
+    const COMPACT_KEYS: &[&str] = &[
+        "authorization",
+        "ciphertext",
+        "ciphertextb64",
+        "contextdigest",
+        "cryptocontext",
+        "encryptedquery",
+        "encryptedqueryb64",
+        "materialfingerprint",
+        "nonce",
+        "nonceb64",
+        "privatekey",
+        "publickey",
+        "secretkey",
+        "signature",
+        "signatureb64",
+        "sigb64",
+        "valueb64",
+        "vaulttoken",
+        "wrappedkey",
+        "wrappedkeyb64",
+        "xapikey",
+    ];
+
+    let lower = error.to_ascii_lowercase();
+    if MARKERS.iter().any(|marker| lower.contains(marker)) {
+        return REDACTED.to_string();
+    }
+
+    let compact = lower
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>();
+    if COMPACT_KEYS.iter().any(|key| compact.contains(key)) {
+        return REDACTED.to_string();
+    }
+
+    error.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redact_audit_error;
+
+    #[test]
+    fn audit_error_redaction_preserves_ordinary_errors() {
+        let error = "Forbidden: write access denied for collection docs";
+
+        assert_eq!(redact_audit_error(error), error);
+    }
+
+    #[test]
+    fn audit_error_redaction_hides_crypto_envelope_material() {
+        let error = r#"BadInput: {"$qdrant_client_aead":{"nonce":"nonce-sentinel","ciphertext":"ciphertext-sentinel","signature":{"sig":"signature-sentinel"}}}"#;
+        let redacted = redact_audit_error(error);
+
+        assert!(redacted.contains("redacted"));
+        assert!(!redacted.contains("nonce-sentinel"));
+        assert!(!redacted.contains("ciphertext-sentinel"));
+        assert!(!redacted.contains("signature-sentinel"));
+    }
+
+    #[test]
+    fn audit_error_redaction_hides_secret_like_fields() {
+        for error in [
+            "invalid wrappedKeyB64: wrapped-key-sentinel",
+            "bridge public-key-b64 mismatch: public-key-sentinel",
+            "vault x-vault-token rejected: vault-token-sentinel",
+            "Authorization header rejected: bearer-sentinel",
+        ] {
+            let redacted = redact_audit_error(error);
+
+            assert!(redacted.contains("redacted"), "{redacted}");
+            assert!(!redacted.contains("sentinel"), "{redacted}");
+        }
     }
 }
