@@ -194,9 +194,10 @@ client encrypts before insert and Qdrant only validates the envelope schema,
 AAD metadata, key policy, nonce/ciphertext encoding, and Ed25519 signature
 before storing the opaque ciphertext. By default every write must carry a valid
 `signature` object whose `key_id` selects one configured public key from
-`signature_public_keys`. The legacy single-key options `signature_key_id` and
-`signature_public_key_b64` are still accepted, but they cannot be mixed with
-`signature_public_keys`.
+`signature_public_keys`. Legacy single-key verifier options
+`signature_key_id` and `signature_public_key_b64` are rejected; use the
+registry form so key rotation and runtime parity checks cover the full verifier
+policy.
 
 Unsigned client envelopes are rejected. Qdrant cannot verify the client-side
 AES-GCM tag without the client data key, so the Ed25519 signature is the

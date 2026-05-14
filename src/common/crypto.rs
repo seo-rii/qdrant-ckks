@@ -132,9 +132,7 @@ const MIN_RK_EPOCH_OPTION: &str = "min_rk_epoch";
 const MAX_RK_EPOCH_OPTION: &str = "max_rk_epoch";
 const RETIRED_MATERIALS_OPTION: &str = "retired_materials";
 const RETIRED_MATERIAL_REF_OPTION: &str = "material";
-const SIGNATURE_PUBLIC_KEY_B64_OPTION: &str = "signature_public_key_b64";
 const SIGNATURE_PUBLIC_KEYS_OPTION: &str = "signature_public_keys";
-const SIGNATURE_KEY_ID_OPTION: &str = "signature_key_id";
 const CKKS_PROFILE_OPTION: &str = "profile";
 const CKKS_CRYPTO_CONTEXT_B64_OPTION: &str = "crypto_context_b64";
 const CKKS_PUBLIC_KEY_B64_OPTION: &str = "public_key_b64";
@@ -151,9 +149,7 @@ const CLIENT_AEAD_ALLOWED_OPTIONS: &[&str] = &[
     EXPECTED_RK_ID_OPTION,
     MIN_RK_EPOCH_OPTION,
     MAX_RK_EPOCH_OPTION,
-    SIGNATURE_PUBLIC_KEY_B64_OPTION,
     SIGNATURE_PUBLIC_KEYS_OPTION,
-    SIGNATURE_KEY_ID_OPTION,
 ];
 const VECTOR_OPENFHE_CKKS_ALLOWED_OPTIONS: &[&str] = &[
     "key_id",
@@ -263,28 +259,14 @@ pub enum PayloadWriteSetupError {
         "payload crypto instance {instance} must pin min_rk_epoch and max_rk_epoch to the same active client resource-key epoch"
     )]
     ClientResourceKeyEpochMustBePinned { instance: String },
-    #[error("payload crypto instance {instance} signature_key_id option must be a string")]
-    InvalidClientSignatureKeyId { instance: String },
     #[error(
-        "payload crypto instance {instance} signature_public_key_b64 option must be a base64url Ed25519 public key"
+        "payload crypto instance {instance} signature_public_keys option contains an invalid base64url Ed25519 public key"
     )]
     InvalidClientSignaturePublicKey { instance: String },
     #[error(
         "payload crypto instance {instance} signature_public_keys option must be an object mapping signature key ids to base64url Ed25519 public keys"
     )]
     InvalidClientSignaturePublicKeys { instance: String },
-    #[error(
-        "payload crypto instance {instance} must not mix signature_public_keys with signature_key_id/signature_public_key_b64"
-    )]
-    MixedClientSignatureKeyConfig { instance: String },
-    #[error(
-        "payload crypto instance {instance} must set signature_key_id when signature_public_key_b64 is set"
-    )]
-    MissingClientSignatureKeyId { instance: String },
-    #[error(
-        "payload crypto instance {instance} must set signature_public_key_b64 when signature_key_id is set"
-    )]
-    MissingClientSignaturePublicKey { instance: String },
     #[error("payload crypto instance {instance} must configure client signature verification")]
     MissingClientSignatureVerifier { instance: String },
     #[error("payload crypto instance {instance} material_fingerprint_id option must be a string")]
@@ -377,7 +359,6 @@ enum PayloadWriteRule {
 }
 
 enum ClientPayloadSignatureVerifier {
-    Single { key_id: String, public_key: Vec<u8> },
     Registry(std::collections::HashMap<String, Vec<u8>>),
 }
 
@@ -388,10 +369,6 @@ impl ClientPayloadSignatureVerifier {
         field: &str,
     ) -> Result<ClientPayloadSignatureVerification<'a>, PayloadWriteSetupError> {
         match self {
-            Self::Single { key_id, public_key } => Ok(ClientPayloadSignatureVerification {
-                expected_key_id: key_id,
-                public_key,
-            }),
             Self::Registry(public_keys) => {
                 let signature_key_id = client_payload_signature_key_id(value, field)?
                     .ok_or(PayloadEncryptionError::MissingClientSignature)?;
@@ -3220,113 +3197,53 @@ fn client_payload_signature_verifier(
     instance: &CryptoInstanceConfig,
     instance_id: &str,
 ) -> Result<ClientPayloadSignatureVerifier, PayloadWriteSetupError> {
-    let signature_key_id = match instance.options.get(SIGNATURE_KEY_ID_OPTION) {
-        None | Some(Value::Null) => None,
-        Some(Value::String(value)) if is_crypto_identifier(value) => Some(value.as_str()),
-        Some(Value::String(_)) => {
-            return Err(PayloadWriteSetupError::InvalidClientSignatureKeyId {
-                instance: instance_id.to_string(),
-            });
-        }
-        Some(_) => {
-            return Err(PayloadWriteSetupError::InvalidClientSignatureKeyId {
-                instance: instance_id.to_string(),
-            });
-        }
-    };
-    let signature_public_key = match instance.options.get(SIGNATURE_PUBLIC_KEY_B64_OPTION) {
-        None | Some(Value::Null) => None,
-        Some(Value::String(value)) => Some(value.as_str()),
-        Some(_) => {
-            return Err(PayloadWriteSetupError::InvalidClientSignaturePublicKey {
-                instance: instance_id.to_string(),
-            });
-        }
-    };
     let signature_public_keys = match instance.options.get(SIGNATURE_PUBLIC_KEYS_OPTION) {
-        None | Some(Value::Null) => None,
-        Some(Value::Object(value)) => Some(value),
+        Some(Value::Object(value)) => value,
+        None | Some(Value::Null) => {
+            return Err(PayloadWriteSetupError::MissingClientSignatureVerifier {
+                instance: instance_id.to_string(),
+            });
+        }
         Some(_) => {
             return Err(PayloadWriteSetupError::InvalidClientSignaturePublicKeys {
                 instance: instance_id.to_string(),
             });
         }
     };
-
-    if signature_public_keys.is_some()
-        && (signature_key_id.is_some() || signature_public_key.is_some())
-    {
-        return Err(PayloadWriteSetupError::MixedClientSignatureKeyConfig {
+    if signature_public_keys.is_empty() {
+        return Err(PayloadWriteSetupError::InvalidClientSignaturePublicKeys {
             instance: instance_id.to_string(),
         });
     }
 
-    if let Some(signature_public_keys) = signature_public_keys {
-        if signature_public_keys.is_empty() {
+    let mut public_keys = std::collections::HashMap::new();
+    for (key_id, public_key_b64) in signature_public_keys {
+        if !is_crypto_identifier(key_id) {
             return Err(PayloadWriteSetupError::InvalidClientSignaturePublicKeys {
                 instance: instance_id.to_string(),
             });
         }
-
-        let mut public_keys = std::collections::HashMap::new();
-        for (key_id, public_key_b64) in signature_public_keys {
-            if !is_crypto_identifier(key_id) {
-                return Err(PayloadWriteSetupError::InvalidClientSignaturePublicKeys {
+        let Some(public_key_b64) = public_key_b64.as_str() else {
+            return Err(PayloadWriteSetupError::InvalidClientSignaturePublicKeys {
+                instance: instance_id.to_string(),
+            });
+        };
+        let public_key = BASE64URL_NOPAD
+            .decode(public_key_b64.as_bytes())
+            .map_err(
+                |_| PayloadWriteSetupError::InvalidClientSignaturePublicKey {
                     instance: instance_id.to_string(),
-                });
-            }
-            let Some(public_key_b64) = public_key_b64.as_str() else {
-                return Err(PayloadWriteSetupError::InvalidClientSignaturePublicKeys {
-                    instance: instance_id.to_string(),
-                });
-            };
-            let public_key = BASE64URL_NOPAD
-                .decode(public_key_b64.as_bytes())
-                .map_err(
-                    |_| PayloadWriteSetupError::InvalidClientSignaturePublicKey {
-                        instance: instance_id.to_string(),
-                    },
-                )?;
-            if public_key.len() != 32 {
-                return Err(PayloadWriteSetupError::InvalidClientSignaturePublicKey {
-                    instance: instance_id.to_string(),
-                });
-            }
-            public_keys.insert(key_id.clone(), public_key);
+                },
+            )?;
+        if public_key.len() != 32 {
+            return Err(PayloadWriteSetupError::InvalidClientSignaturePublicKey {
+                instance: instance_id.to_string(),
+            });
         }
-
-        return Ok(ClientPayloadSignatureVerifier::Registry(public_keys));
+        public_keys.insert(key_id.clone(), public_key);
     }
 
-    match (signature_key_id, signature_public_key) {
-        (None, None) => Err(PayloadWriteSetupError::MissingClientSignatureVerifier {
-            instance: instance_id.to_string(),
-        }),
-        (Some(_), None) => Err(PayloadWriteSetupError::MissingClientSignaturePublicKey {
-            instance: instance_id.to_string(),
-        }),
-        (None, Some(_)) => Err(PayloadWriteSetupError::MissingClientSignatureKeyId {
-            instance: instance_id.to_string(),
-        }),
-        (Some(key_id), Some(public_key_b64)) => {
-            let public_key = BASE64URL_NOPAD
-                .decode(public_key_b64.as_bytes())
-                .map_err(
-                    |_| PayloadWriteSetupError::InvalidClientSignaturePublicKey {
-                        instance: instance_id.to_string(),
-                    },
-                )?;
-            if public_key.len() != 32 {
-                return Err(PayloadWriteSetupError::InvalidClientSignaturePublicKey {
-                    instance: instance_id.to_string(),
-                });
-            }
-            Ok(ClientPayloadSignatureVerifier::Single {
-                key_id: key_id.to_string(),
-                public_key,
-            })
-        }
-    }
+    Ok(ClientPayloadSignatureVerifier::Registry(public_keys))
 }
 
 fn is_crypto_identifier(value: &str) -> bool {
@@ -4741,6 +4658,12 @@ mod tests {
         options
     }
 
+    fn client_signature_registry(key_id: &str, public_key: &[u8]) -> serde_json::Value {
+        json!({
+            key_id: BASE64URL_NOPAD.encode(public_key),
+        })
+    }
+
     #[test]
     fn validate_crypto_settings_rejects_missing_material_and_backend_refs() {
         let mut settings = CryptoSettings {
@@ -6150,8 +6073,10 @@ mod tests {
                             EXPECTED_RK_ID_OPTION: "tenant-a:docs",
                             MIN_RK_EPOCH_OPTION: 3,
                             MAX_RK_EPOCH_OPTION: 3,
-                            SIGNATURE_KEY_ID_OPTION: "tenant-a:signing-v1",
-                            SIGNATURE_PUBLIC_KEY_B64_OPTION: BASE64URL_NOPAD.encode(&[11_u8; 32]),
+                            SIGNATURE_PUBLIC_KEYS_OPTION: client_signature_registry(
+                                "tenant-a:signing-v1",
+                                &[11_u8; 32],
+                            ),
                         }),
                     },
                 )]),
@@ -6171,8 +6096,8 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .insert(
-                SIGNATURE_PUBLIC_KEY_B64_OPTION.to_string(),
-                json!(BASE64URL_NOPAD.encode(&[12_u8; 32])),
+                SIGNATURE_PUBLIC_KEYS_OPTION.to_string(),
+                client_signature_registry("tenant-a:signing-v1", &[12_u8; 32]),
             );
         assert_ne!(
             fingerprint,
@@ -8203,8 +8128,10 @@ mod tests {
                         options: client_policy_options(json!({
                             "key_id": "tenant-a/client-rk-2026-04",
                             "key_id_required": true,
-                            "signature_key_id": "tenant-a/client-signing-v1",
-                            "signature_public_key_b64": BASE64URL_NOPAD.encode(&public_key),
+                            "signature_public_keys": client_signature_registry(
+                                "tenant-a/client-signing-v1",
+                                &public_key,
+                            ),
                         })),
                     },
                 )]),
@@ -8262,8 +8189,10 @@ mod tests {
                         options: client_policy_options(json!({
                             "key_id": "tenant-a/client-rk-2026-04",
                             "key_id_required": true,
-                            "signature_key_id": "tenant-a/client-signing-v1",
-                            "signature_public_key_b64": BASE64URL_NOPAD.encode(&public_key),
+                            "signature_public_keys": client_signature_registry(
+                                "tenant-a/client-signing-v1",
+                                &public_key,
+                            ),
                         })),
                     },
                 )]),
@@ -8332,8 +8261,10 @@ mod tests {
                         options: client_policy_options(json!({
                             "key_id": "tenant-a/client-rk-2026-04",
                             "key_id_required": true,
-                            "signature_key_id": "tenant-a/client-signing-v1",
-                            "signature_public_key_b64": BASE64URL_NOPAD.encode(&public_key),
+                            "signature_public_keys": client_signature_registry(
+                                "tenant-a/client-signing-v1",
+                                &public_key,
+                            ),
                         })),
                     },
                 )]),
@@ -8384,8 +8315,10 @@ mod tests {
                         options: client_policy_options(json!({
                             "key_id": "tenant-a/client-rk-2026-04",
                             "key_id_required": true,
-                            "signature_key_id": "tenant-a/client-signing-v1",
-                            "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                            "signature_public_keys": client_signature_registry(
+                                "tenant-a/client-signing-v1",
+                                &[11u8; 32],
+                            ),
                         })),
                     },
                 )]),
@@ -8460,8 +8393,10 @@ mod tests {
                         backend_ref: None,
                         options: client_policy_options(json!({
                             "key_id": "tenant-a/client-rk-2026-04",
-                            "signature_key_id": "tenant-a/client-signing-v1",
-                            "signature_public_key_b64": BASE64URL_NOPAD.encode(&public_key),
+                            "signature_public_keys": client_signature_registry(
+                                "tenant-a/client-signing-v1",
+                                &public_key,
+                            ),
                         })),
                     },
                 )]),
@@ -8518,8 +8453,10 @@ mod tests {
                         backend_ref: None,
                         options: client_policy_options(json!({
                             "key_id": "tenant-a/client-rk-2026-04",
-                            "signature_key_id": "tenant-a/client-signing-v1",
-                            "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                            "signature_public_keys": client_signature_registry(
+                                "tenant-a/client-signing-v1",
+                                &[11u8; 32],
+                            ),
                         })),
                     },
                 )]),
@@ -8600,8 +8537,10 @@ mod tests {
                             "expected_rk_id": "tenant-a/client-rk-2026-04",
                             "min_rk_epoch": 3,
                             "max_rk_epoch": 3,
-                            "signature_key_id": "tenant-a/client-signing-v1",
-                            "signature_public_key_b64": BASE64URL_NOPAD.encode(&public_key),
+                            "signature_public_keys": client_signature_registry(
+                                "tenant-a/client-signing-v1",
+                                &public_key,
+                            ),
                         }),
                     },
                 )]),
@@ -8898,8 +8837,10 @@ mod tests {
             payload_write_plan_for_collection_for_test(
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
-                    "signature_key_id": "tenant-a/client-signing-v1",
-                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                    "signature_public_keys": client_signature_registry(
+                        "tenant-a/client-signing-v1",
+                        &[11u8; 32],
+                    ),
                     "retired_materials": [],
                 })),
                 "docs",
@@ -8913,8 +8854,10 @@ mod tests {
             payload_write_plan_for_collection_for_test(
                 &raw_settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
-                    "signature_key_id": "tenant-a/client-signing-v1",
-                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                    "signature_public_keys": client_signature_registry(
+                        "tenant-a/client-signing-v1",
+                        &[11u8; 32],
+                    ),
                     "min_rk_epoch": 3,
                     "max_rk_epoch": 3,
                 })),
@@ -8929,8 +8872,10 @@ mod tests {
                 &raw_settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "expected_rk_id": "tenant-a/client-rk-2026-04",
-                    "signature_key_id": "tenant-a/client-signing-v1",
-                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                    "signature_public_keys": client_signature_registry(
+                        "tenant-a/client-signing-v1",
+                        &[11u8; 32],
+                    ),
                     "max_rk_epoch": 3,
                 })),
                 "docs",
@@ -8944,8 +8889,10 @@ mod tests {
                 &raw_settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "expected_rk_id": "tenant-a/client-rk-2026-04",
-                    "signature_key_id": "tenant-a/client-signing-v1",
-                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                    "signature_public_keys": client_signature_registry(
+                        "tenant-a/client-signing-v1",
+                        &[11u8; 32],
+                    ),
                     "min_rk_epoch": 3,
                 })),
                 "docs",
@@ -8959,8 +8906,10 @@ mod tests {
                 &raw_settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "expected_rk_id": "tenant-a/other-client-rk",
-                    "signature_key_id": "tenant-a/client-signing-v1",
-                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                    "signature_public_keys": client_signature_registry(
+                        "tenant-a/client-signing-v1",
+                        &[11u8; 32],
+                    ),
                     "min_rk_epoch": 3,
                     "max_rk_epoch": 3,
                 })),
@@ -8975,8 +8924,10 @@ mod tests {
                 &raw_settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "expected_rk_id": "tenant-a/client-rk-2026-04",
-                    "signature_key_id": "tenant-a/client-signing-v1",
-                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                    "signature_public_keys": client_signature_registry(
+                        "tenant-a/client-signing-v1",
+                        &[11u8; 32],
+                    ),
                     "min_rk_epoch": 4,
                     "max_rk_epoch": 3,
                 })),
@@ -8991,8 +8942,10 @@ mod tests {
                 &raw_settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "expected_rk_id": "tenant-a/client-rk-2026-04",
-                    "signature_key_id": "tenant-a/client-signing-v1",
-                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                    "signature_public_keys": client_signature_registry(
+                        "tenant-a/client-signing-v1",
+                        &[11u8; 32],
+                    ),
                     "min_rk_epoch": 3,
                     "max_rk_epoch": 4,
                 })),
@@ -9006,8 +8959,10 @@ mod tests {
             payload_write_plan_for_collection_for_test(
                 &settings_with_options(json!({
                     "key_id": "not valid",
-                    "signature_key_id": "tenant-a/client-signing-v1",
-                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                    "signature_public_keys": client_signature_registry(
+                        "tenant-a/client-signing-v1",
+                        &[11u8; 32],
+                    ),
                 })),
                 "docs",
                 &params,
@@ -9020,8 +8975,10 @@ mod tests {
                 &raw_settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "expected_rk_id": "not valid",
-                    "signature_key_id": "tenant-a/client-signing-v1",
-                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                    "signature_public_keys": client_signature_registry(
+                        "tenant-a/client-signing-v1",
+                        &[11u8; 32],
+                    ),
                     "min_rk_epoch": 3,
                     "max_rk_epoch": 3,
                 })),
@@ -9037,8 +8994,10 @@ mod tests {
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "key_id_required": false,
-                    "signature_key_id": "tenant-a/client-signing-v1",
-                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                    "signature_public_keys": client_signature_registry(
+                        "tenant-a/client-signing-v1",
+                        &[11u8; 32],
+                    ),
                 })),
                 "docs",
                 &params,
@@ -9061,26 +9020,13 @@ mod tests {
             payload_write_plan_for_collection_for_test(
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
-                    "signature_key_id": "not valid",
-                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
-                })),
-                "docs",
-                &params,
-            ),
-            Err(PayloadWriteSetupError::InvalidClientSignatureKeyId { instance })
-                if instance == "docs_payload_client_v1"
-        ));
-        assert!(matches!(
-            payload_write_plan_for_collection_for_test(
-                &settings_with_options(json!({
-                    "key_id": "tenant-a/client-rk-2026-04",
                     "signature_key_id": "tenant-a/client-signing-v1",
                 })),
                 "docs",
                 &params,
             ),
-            Err(PayloadWriteSetupError::MissingClientSignaturePublicKey { instance })
-                if instance == "docs_payload_client_v1"
+            Err(PayloadWriteSetupError::UnsupportedInstanceOption { instance, option })
+                if instance == "docs_payload_client_v1" && option == "signature_key_id"
         ));
         assert!(matches!(
             payload_write_plan_for_collection_for_test(
@@ -9091,15 +9037,16 @@ mod tests {
                 "docs",
                 &params,
             ),
-            Err(PayloadWriteSetupError::MissingClientSignatureKeyId { instance })
-                if instance == "docs_payload_client_v1"
+            Err(PayloadWriteSetupError::UnsupportedInstanceOption { instance, option })
+                if instance == "docs_payload_client_v1" && option == "signature_public_key_b64"
         ));
         assert!(matches!(
             payload_write_plan_for_collection_for_test(
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
-                    "signature_key_id": "tenant-a/client-signing-v1",
-                    "signature_public_key_b64": "not-base64",
+                    "signature_public_keys": {
+                        "tenant-a/client-signing-v1": "not-base64",
+                    },
                 })),
                 "docs",
                 &params,
@@ -9123,16 +9070,12 @@ mod tests {
             payload_write_plan_for_collection_for_test(
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
-                    "signature_key_id": "tenant-a/client-signing-v1",
-                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
-                    "signature_public_keys": {
-                        "tenant-a/client-signing-v2": BASE64URL_NOPAD.encode(&[12u8; 32]),
-                    },
+                    "signature_public_keys": [],
                 })),
                 "docs",
                 &params,
             ),
-            Err(PayloadWriteSetupError::MixedClientSignatureKeyConfig { instance })
+            Err(PayloadWriteSetupError::InvalidClientSignaturePublicKeys { instance })
                 if instance == "docs_payload_client_v1"
         ));
         assert!(matches!(
@@ -9179,8 +9122,10 @@ mod tests {
             payload_write_plan_for_collection_for_test(
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
-                    "signature_key_id": "tenant-a/client-signing-v1",
-                    "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                    "signature_public_keys": client_signature_registry(
+                        "tenant-a/client-signing-v1",
+                        &[11u8; 32],
+                    ),
                 })),
                 "docs",
                 &params,
@@ -9229,8 +9174,10 @@ mod tests {
             backend_ref: None,
             options: client_policy_options(json!({
                 "key_id": "tenant-a/client-rk-2026-04",
-                "signature_key_id": "tenant-a/client-signing-v1",
-                "signature_public_key_b64": BASE64URL_NOPAD.encode(&[11u8; 32]),
+                "signature_public_keys": client_signature_registry(
+                    "tenant-a/client-signing-v1",
+                    &[11u8; 32],
+                ),
             })),
         };
 
@@ -9352,9 +9299,10 @@ mod tests {
                         backend_ref: None,
                         options: client_policy_options(json!({
                             "key_id": "tenant-a/client-rk-2026-04",
-                            "signature_key_id": "tenant-a/client-signing-v1",
-                            "signature_public_key_b64": BASE64URL_NOPAD
-                                .encode(key_pair.public_key().as_ref()),
+                            "signature_public_keys": client_signature_registry(
+                                "tenant-a/client-signing-v1",
+                                key_pair.public_key().as_ref(),
+                            ),
                         })),
                     },
                 )]),

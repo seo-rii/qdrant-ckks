@@ -10726,9 +10726,10 @@ esac
                         "expected_rk_id": "tenant-a/client-rk-2026-04",
                         "min_rk_epoch": 3,
                         "max_rk_epoch": 3,
-                        "signature_key_id": "tenant-a/client-signing-v1",
-                        "signature_public_key_b64": BASE64URL_NOPAD
-                            .encode(signing_key.public_key().as_ref()),
+                        "signature_public_keys": {
+                            "tenant-a/client-signing-v1": BASE64URL_NOPAD
+                                .encode(signing_key.public_key().as_ref()),
+                        },
                     }),
                 },
             )]);
