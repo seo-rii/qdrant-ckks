@@ -51,6 +51,9 @@ jobs:
       - name: Run segment-native CKKS ciphertext index tests
         run: cargo test --locked -p segment ckks_ciphertext
 
+      - name: Run CKKS sidecar HNSW graph persistence tests
+        run: cargo test --locked -p qdrant ckks_sidecar_hnsw_
+
       - name: Run encrypted vector runtime boundary tests
         run: |
           cargo test --locked -p qdrant vector_write_plan_
