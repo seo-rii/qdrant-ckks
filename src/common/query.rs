@@ -2540,6 +2540,7 @@ fn ckks_sidecar_segment_snapshots_cover_records(
             snapshot.records.iter().map(|record| {
                 (
                     record.id,
+                    record.shard_key.clone(),
                     record.point_id.clone(),
                     record.encrypted.envelope.key_id.clone(),
                     record.encrypted.envelope.material_fingerprint.clone(),
@@ -2558,6 +2559,7 @@ fn ckks_sidecar_record_identity(
     record: &CkksSidecarSearchRecord,
 ) -> (
     PointIdType,
+    Option<ShardKey>,
     String,
     String,
     String,
@@ -2567,6 +2569,7 @@ fn ckks_sidecar_record_identity(
 ) {
     (
         record.id,
+        record.shard_key.clone(),
         record.point_id.clone(),
         record.encrypted.envelope.key_id.clone(),
         record.encrypted.envelope.material_fingerprint.clone(),
@@ -7563,6 +7566,16 @@ mod tests {
                 stale_ciphertext
             ],
         ));
+
+        let mut stale_shard_key = ckks_sidecar_test_record(2, "ciphertext-b");
+        stale_shard_key.shard_key = Some(ShardKey::from("tenant-b"));
+        assert!(
+            !ckks_sidecar_segment_snapshots_cover_records(
+                &snapshots,
+                &[ckks_sidecar_test_record(1, "ciphertext-a"), stale_shard_key],
+            ),
+            "segment-native CKKS index snapshots must not be reused across shard-key identity changes",
+        );
     }
 
     #[test]
