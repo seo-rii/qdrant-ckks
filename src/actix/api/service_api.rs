@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -394,6 +394,226 @@ async fn rewrap_runtime_resource_keys(
     helpers::process_response(future.await, timing, None)
 }
 
+fn validate_runtime_resource_key_retirement_target(value: &str) -> Result<(), ValidationError> {
+    match value {
+        "disabled" | "destroyed" => Ok(()),
+        _ => Err(ValidationError::new(
+            "invalid_crypto_resource_key_retirement_target",
+        )),
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Validate)]
+pub struct RuntimeResourceKeyRetireRequest {
+    #[validate(length(min = 1))]
+    pub materials: Vec<String>,
+    #[validate(custom(function = "validate_runtime_resource_key_retirement_target"))]
+    pub target_state: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Validate)]
+pub struct RuntimeResourceKeyRetireMaterialPatch {
+    pub kind: String,
+    pub rk_epoch: u64,
+    pub state: String,
+    pub scope: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wrapped_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wrap_algorithm: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wrapped_key_b64: Option<String>,
+}
+
+impl RuntimeResourceKeyRetireMaterialPatch {
+    fn from_retired_material(
+        material_ref: &str,
+        material: &CryptoMaterialConfig,
+        target_state: &str,
+    ) -> Result<Self, StorageError> {
+        let rk_epoch = material.rk_epoch.ok_or_else(|| {
+            StorageError::service_error(format!(
+                "retired material {material_ref} is missing rk_epoch"
+            ))
+        })?;
+        let scope = material.scope.clone().ok_or_else(|| {
+            StorageError::service_error(format!("retired material {material_ref} is missing scope"))
+        })?;
+
+        if target_state == "destroyed" {
+            return Ok(Self {
+                kind: material.kind.clone(),
+                rk_epoch,
+                state: target_state.to_string(),
+                scope,
+                wrapped_by: None,
+                wrap_algorithm: None,
+                nonce: None,
+                wrapped_key_b64: None,
+            });
+        }
+
+        Ok(Self {
+            kind: material.kind.clone(),
+            rk_epoch,
+            state: target_state.to_string(),
+            scope,
+            wrapped_by: Some(material.wrapped_by.clone().ok_or_else(|| {
+                StorageError::service_error(format!(
+                    "retired material {material_ref} is missing wrapped_by"
+                ))
+            })?),
+            wrap_algorithm: Some(material.wrap_algorithm.clone().ok_or_else(|| {
+                StorageError::service_error(format!(
+                    "retired material {material_ref} is missing wrap_algorithm"
+                ))
+            })?),
+            nonce: Some(material.nonce.clone().ok_or_else(|| {
+                StorageError::service_error(format!(
+                    "retired material {material_ref} is missing nonce"
+                ))
+            })?),
+            wrapped_key_b64: Some(material.wrapped_key_b64.clone().ok_or_else(|| {
+                StorageError::service_error(format!(
+                    "retired material {material_ref} is missing wrapped_key_b64"
+                ))
+            })?),
+        })
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Validate)]
+pub struct RuntimeResourceKeyRetireResponse {
+    pub target_state: String,
+    pub settings_mutated: bool,
+    pub materials: BTreeMap<String, RuntimeResourceKeyRetireMaterialPatch>,
+}
+
+fn runtime_resource_key_is_referenced(
+    settings: &Settings,
+    material_ref: &str,
+) -> Result<bool, StorageError> {
+    for (instance_name, instance) in &settings.crypto.instances {
+        if instance
+            .materials
+            .values()
+            .any(|referenced_material| referenced_material == material_ref)
+        {
+            return Ok(true);
+        }
+
+        let Some(retired_materials) = instance.options.get("retired_materials") else {
+            continue;
+        };
+        let Some(retired_materials) = retired_materials.as_array() else {
+            return Err(StorageError::bad_request(format!(
+                "runtime crypto instance {instance_name} has malformed retired_materials option"
+            )));
+        };
+        for retired_material in retired_materials {
+            let Some(retired_material) = retired_material.as_object() else {
+                return Err(StorageError::bad_request(format!(
+                    "runtime crypto instance {instance_name} has malformed retired_materials option"
+                )));
+            };
+            let Some(retired_material) = retired_material
+                .get("material")
+                .and_then(serde_json::Value::as_str)
+            else {
+                return Err(StorageError::bad_request(format!(
+                    "runtime crypto instance {instance_name} has malformed retired_materials option"
+                )));
+            };
+            if retired_material == material_ref {
+                return Ok(true);
+            }
+        }
+    }
+
+    Ok(false)
+}
+
+fn build_runtime_resource_key_retire_response(
+    settings: &Settings,
+    request: RuntimeResourceKeyRetireRequest,
+) -> Result<RuntimeResourceKeyRetireResponse, StorageError> {
+    request.validate().map_err(|err| {
+        StorageError::bad_request(format!(
+            "crypto resource-key retirement request is invalid: {err}"
+        ))
+    })?;
+
+    let mut seen_materials = HashSet::new();
+    let mut materials = BTreeMap::new();
+    for material_ref in &request.materials {
+        validate_runtime_resource_key_rewrap_identifier(material_ref).map_err(|err| {
+            StorageError::bad_request(format!(
+                "crypto resource-key retirement material id is invalid: {err}"
+            ))
+        })?;
+        if !seen_materials.insert(material_ref) {
+            return Err(StorageError::bad_request(format!(
+                "crypto resource-key retirement material {material_ref} is duplicated"
+            )));
+        }
+        let material = settings.crypto.materials.get(material_ref).ok_or_else(|| {
+            StorageError::bad_request(format!(
+                "crypto resource-key retirement material {material_ref} is unknown"
+            ))
+        })?;
+        if material.kind != "wrapped_symmetric_key_32" {
+            return Err(StorageError::bad_request(format!(
+                "crypto resource-key retirement material {material_ref} must be wrapped_symmetric_key_32",
+            )));
+        }
+        if material.state.as_deref() != Some("retired") {
+            return Err(StorageError::bad_request(format!(
+                "crypto resource-key retirement material {material_ref} must already have state retired",
+            )));
+        }
+        if runtime_resource_key_is_referenced(settings, material_ref)? {
+            return Err(StorageError::bad_request(format!(
+                "crypto resource-key retirement material {material_ref} is still referenced by a runtime crypto instance; remove active or retired_materials references after verified migration before retirement",
+            )));
+        }
+        materials.insert(
+            material_ref.clone(),
+            RuntimeResourceKeyRetireMaterialPatch::from_retired_material(
+                material_ref,
+                material,
+                &request.target_state,
+            )?,
+        );
+    }
+
+    Ok(RuntimeResourceKeyRetireResponse {
+        target_state: request.target_state,
+        settings_mutated: false,
+        materials,
+    })
+}
+
+#[post("/crypto/resource-keys/retire")]
+async fn retire_runtime_resource_keys(
+    settings: web::Data<Settings>,
+    operation: Json<RuntimeResourceKeyRetireRequest>,
+    ActixAuth(auth): ActixAuth,
+) -> impl Responder {
+    let timing = Instant::now();
+
+    let future = async {
+        auth.check_global_access(
+            AccessRequirements::new().manage(),
+            "retire_runtime_resource_keys",
+        )?;
+        build_runtime_resource_key_retire_response(settings.get_ref(), operation.into_inner())
+    };
+
+    helpers::process_response(future.await, timing, None)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -404,7 +624,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::settings::CryptoSettings;
+    use crate::settings::{CryptoInstanceConfig, CryptoSettings};
 
     fn resource_key_wrap_test_aad(
         material_name: &str,
@@ -588,6 +808,150 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn runtime_retire_response_requires_unreferenced_retired_materials() {
+        let mut settings = Settings::new(None).unwrap();
+        settings.crypto = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::from([(
+                "docs_payload_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: "payload/aes-256-gcm@v1".to_string(),
+                    materials: HashMap::from([(
+                        "sym_key".to_string(),
+                        "tenant-a/payload-rk-v3".to_string(),
+                    )]),
+                    backend_ref: None,
+                    options: serde_json::json!({
+                        "retired_materials": [{
+                            "material": "tenant-a/payload-rk-v2",
+                            "material_fingerprint_id": "tenant-a/payload@v2"
+                        }]
+                    }),
+                },
+            )]),
+            backends: HashMap::new(),
+            materials: HashMap::from([
+                (
+                    "tenant-a/payload-rk-v3".to_string(),
+                    wrapped_resource_key_material("tenant-a/payload-rk-v3", [93u8; 32], 3, None),
+                ),
+                (
+                    "tenant-a/payload-rk-v2".to_string(),
+                    wrapped_resource_key_material(
+                        "tenant-a/payload-rk-v2",
+                        [94u8; 32],
+                        2,
+                        Some("retired"),
+                    ),
+                ),
+            ]),
+        };
+
+        let referenced = build_runtime_resource_key_retire_response(
+            &settings,
+            RuntimeResourceKeyRetireRequest {
+                materials: vec!["tenant-a/payload-rk-v2".to_string()],
+                target_state: "disabled".to_string(),
+            },
+        )
+        .expect_err("referenced retired materials must not be retired by patch");
+        assert!(
+            referenced.to_string().contains("still referenced"),
+            "unexpected error: {referenced}",
+        );
+
+        settings
+            .crypto
+            .instances
+            .get_mut("docs_payload_v1")
+            .unwrap()
+            .options = serde_json::json!({});
+        let response = build_runtime_resource_key_retire_response(
+            &settings,
+            RuntimeResourceKeyRetireRequest {
+                materials: vec!["tenant-a/payload-rk-v2".to_string()],
+                target_state: "disabled".to_string(),
+            },
+        )
+        .unwrap();
+
+        assert!(!response.settings_mutated);
+        let patch = response.materials.get("tenant-a/payload-rk-v2").unwrap();
+        assert_eq!(patch.state, "disabled");
+        assert_eq!(patch.rk_epoch, 2);
+        assert_eq!(patch.scope, "collection:docs");
+        assert!(patch.wrapped_by.is_some());
+        assert_eq!(
+            settings
+                .crypto
+                .materials
+                .get("tenant-a/payload-rk-v2")
+                .unwrap()
+                .state
+                .as_deref(),
+            Some("retired"),
+            "the endpoint must return a patch artifact, not mutate runtime settings in place",
+        );
+    }
+
+    #[test]
+    fn runtime_retire_response_destroy_patch_shreds_wrapped_material() {
+        let mut settings = Settings::new(None).unwrap();
+        settings.crypto = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::new(),
+            backends: HashMap::new(),
+            materials: HashMap::from([
+                (
+                    "tenant-a/payload-rk-v3".to_string(),
+                    wrapped_resource_key_material("tenant-a/payload-rk-v3", [93u8; 32], 3, None),
+                ),
+                (
+                    "tenant-a/payload-rk-v2".to_string(),
+                    wrapped_resource_key_material(
+                        "tenant-a/payload-rk-v2",
+                        [94u8; 32],
+                        2,
+                        Some("retired"),
+                    ),
+                ),
+            ]),
+        };
+
+        let active_err = build_runtime_resource_key_retire_response(
+            &settings,
+            RuntimeResourceKeyRetireRequest {
+                materials: vec!["tenant-a/payload-rk-v3".to_string()],
+                target_state: "destroyed".to_string(),
+            },
+        )
+        .expect_err("active resource keys must not be destroyed through retirement");
+        assert!(
+            active_err
+                .to_string()
+                .contains("must already have state retired"),
+            "unexpected error: {active_err}",
+        );
+
+        let response = build_runtime_resource_key_retire_response(
+            &settings,
+            RuntimeResourceKeyRetireRequest {
+                materials: vec!["tenant-a/payload-rk-v2".to_string()],
+                target_state: "destroyed".to_string(),
+            },
+        )
+        .unwrap();
+        let patch = response.materials.get("tenant-a/payload-rk-v2").unwrap();
+        assert_eq!(patch.state, "destroyed");
+        assert_eq!(patch.rk_epoch, 2);
+        assert_eq!(patch.scope, "collection:docs");
+        assert!(patch.wrapped_by.is_none());
+        assert!(patch.wrap_algorithm.is_none());
+        assert!(patch.nonce.is_none());
+        assert!(patch.wrapped_key_b64.is_none());
+    }
 }
 
 // Configure services
@@ -601,6 +965,7 @@ pub fn config_service_api(cfg: &mut web::ServiceConfig) {
         .service(get_logger_config)
         .service(update_logger_config)
         .service(rewrap_runtime_resource_keys)
+        .service(retire_runtime_resource_keys)
         .service(truncate_unapplied_wal);
 }
 

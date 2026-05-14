@@ -587,6 +587,27 @@ runtime lookup, and they must reference different `wrapping_key_32` materials.
 The old and new MK material must both be available in the current runtime during
 the rewrap, and operators should roll out the resulting material patch
 atomically across nodes so runtime parity fingerprints stay aligned.
+
+After an RK rotation migration has been verified and the runtime provider no
+longer references the old RK in either `materials.sym_key` or
+`options.retired_materials`, operators can request a non-mutating retirement
+patch:
+
+```json
+POST /crypto/resource-keys/retire
+{
+  "materials": ["tenant-a/payload-rk-v3"],
+  "target_state": "destroyed"
+}
+```
+
+`target_state` may be `disabled` or `destroyed`. The endpoint rejects active RKs
+and any retired RK that is still referenced by a runtime crypto instance. A
+`disabled` patch preserves wrapped key material for a future explicit rollback
+or enable operation; a `destroyed` patch removes `wrapped_by`, `nonce`,
+`wrap_algorithm`, and `wrapped_key_b64` so only non-secret audit metadata
+remains.
+
 RK rotation still requires a data re-encryption job and should use the explicit
 re-encryption mode rather than normal write-path idempotency. The
 `rk_id`/`rk_epoch` fields are included in AEAD AAD for server-generated payload
