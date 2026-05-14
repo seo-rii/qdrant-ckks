@@ -1198,6 +1198,7 @@ impl CommandOpenFheBackend {
             .stderr(Stdio::piped());
         if self.checked_program {
             command.env_clear();
+            command.current_dir("/");
             // Preserve only a fixed search path for shebangs that use
             // `/usr/bin/env`. Production bridge binaries should not depend on
             // ambient service environment.

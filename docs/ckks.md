@@ -1077,7 +1077,8 @@ service account. On Linux, the checked bridge spawn path also sets
 so the plaintext-bearing bridge cannot gain extra privileges through
 setuid/file-capability execution, is killed if Qdrant exits, does not produce
 normal core dumps, and cannot write regular files. Checked bridge workers start
-with an empty inherited environment plus a fixed
+from `/` rather than inheriting Qdrant's working directory, with an empty
+inherited environment plus a fixed
 `/usr/sbin:/usr/bin:/sbin:/bin` `PATH` for `/usr/bin/env` shebang compatibility,
 so env-backed Qdrant settings, crypto material, `LD_PRELOAD`, `PYTHONPATH`, and
 other service environment values are not handed to the bridge process by
