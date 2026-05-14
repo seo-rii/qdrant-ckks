@@ -6121,6 +6121,14 @@ mod tests {
             crypto_runtime_capability_fingerprint(&peer_with_different_verifier),
             "client verifier public key drift must change the parity fingerprint",
         );
+        let peer_verifier_fingerprint =
+            crypto_runtime_capability_fingerprint(&peer_with_different_verifier);
+        let err = validate_crypto_runtime_capability_parity(
+            &settings,
+            [("peer-client-verifier", peer_verifier_fingerprint.as_str())],
+        )
+        .expect_err("client verifier policy drift must fail runtime parity validation");
+        assert!(err.to_string().contains("peer-client-verifier"));
 
         let mut peer_with_different_epoch = settings.clone();
         peer_with_different_epoch
