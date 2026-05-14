@@ -6195,6 +6195,13 @@ mod tests {
             crypto_runtime_capability_fingerprint(&peer_with_different_pin),
             "bridge binary pin drift must change the parity fingerprint",
         );
+        let peer_pin_fingerprint = crypto_runtime_capability_fingerprint(&peer_with_different_pin);
+        let err = validate_crypto_runtime_capability_parity(
+            &settings,
+            [("peer-backend-pin", peer_pin_fingerprint.as_str())],
+        )
+        .expect_err("bridge binary pin drift must fail runtime parity validation");
+        assert!(err.to_string().contains("peer-backend-pin"));
 
         let mut peer_with_different_pool = settings.clone();
         peer_with_different_pool
@@ -6208,6 +6215,14 @@ mod tests {
             crypto_runtime_capability_fingerprint(&peer_with_different_pool),
             "bridge pool sizing drift must change the parity fingerprint",
         );
+        let peer_pool_fingerprint =
+            crypto_runtime_capability_fingerprint(&peer_with_different_pool);
+        let err = validate_crypto_runtime_capability_parity(
+            &settings,
+            [("peer-backend-pool", peer_pool_fingerprint.as_str())],
+        )
+        .expect_err("bridge pool sizing drift must fail runtime parity validation");
+        assert!(err.to_string().contains("peer-backend-pool"));
     }
 
     #[test]
