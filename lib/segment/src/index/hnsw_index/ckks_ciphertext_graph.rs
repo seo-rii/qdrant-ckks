@@ -934,6 +934,15 @@ fn validate_private_graph_parent(path: &Path) -> io::Result<()> {
                     format!("graph file parent {directory:?} must be a directory"),
                 ));
             }
+            let owner = metadata.uid();
+            if owner != 0 && owner != effective_uid {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!(
+                        "graph file parent {directory:?} must be owned by root or the Qdrant process user"
+                    ),
+                ));
+            }
             let mode = metadata.permissions().mode();
             if mode & 0o022 != 0 {
                 let sticky_ancestor =
@@ -945,16 +954,6 @@ fn validate_private_graph_parent(path: &Path) -> io::Result<()> {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
                     format!("graph file parent {directory:?} must not be group/world writable"),
-                ));
-            }
-
-            let owner = metadata.uid();
-            if owner != 0 && owner != effective_uid {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    format!(
-                        "graph file parent {directory:?} must be owned by root or the Qdrant process user"
-                    ),
                 ));
             }
             parent = directory.parent();
