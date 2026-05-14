@@ -639,7 +639,11 @@ mod tests {
                 "valueB64": "qdrant-sec-camel-value-log-sentinel",
                 "nonceB64": "qdrant-sec-camel-nonce-b64-log-sentinel",
                 "ciphertextB64": "qdrant-sec-camel-ciphertext-b64-log-sentinel",
-                "signatureB64": "qdrant-sec-camel-signature-b64-log-sentinel"
+                "signatureB64": "qdrant-sec-camel-signature-b64-log-sentinel",
+                "signaturePublicKeys": [{
+                    "keyId": "tenant-a/client-signing-v1",
+                    "publicKeyB64": "qdrant-sec-camel-signature-public-keys-log-sentinel"
+                }]
             },
             "headers": {
                 "xApiKey": "qdrant-sec-camel-api-key-log-sentinel",
@@ -665,6 +669,7 @@ mod tests {
             "qdrant-sec-camel-nonce-b64-log-sentinel",
             "qdrant-sec-camel-ciphertext-b64-log-sentinel",
             "qdrant-sec-camel-signature-b64-log-sentinel",
+            "qdrant-sec-camel-signature-public-keys-log-sentinel",
             "qdrant-sec-camel-api-key-log-sentinel",
             "qdrant-sec-kebab-set-cookie-log-sentinel",
             "qdrant-sec-kebab-vault-token-log-sentinel",
