@@ -1896,6 +1896,37 @@ mod tests {
     }
 
     #[test]
+    fn ciphertext_vector_index_rejects_graph_unknown_fields_on_open() {
+        let directory = tempfile::tempdir().unwrap();
+        let graph_file = CkksCiphertextVectorIndex::graph_file_path(directory.path());
+        let graph = serde_json::json!({
+            "version": CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_VERSION,
+            "record_count": 2,
+            "records_digest": ckks_ciphertext_records_digest(&[
+                CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
+            ]),
+            "links": [[1], [0]],
+            "untrusted_cache_metadata": "must not be ignored",
+        });
+        write_graph_file(&graph_file, &serde_json::to_vec(&graph).unwrap()).unwrap();
+
+        let err = CkksCiphertextVectorIndex::open_graph_file(
+            vec![
+                CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
+            ],
+            &graph_file,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("failed to parse"),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
     fn ciphertext_vector_index_rejects_graph_records_digest_mismatch_on_open() {
         let directory = tempfile::tempdir().unwrap();
         let graph_file = CkksCiphertextVectorIndex::graph_file_path(directory.path());
