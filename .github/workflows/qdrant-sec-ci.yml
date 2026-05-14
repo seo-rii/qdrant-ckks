@@ -97,6 +97,7 @@ jobs:
 
       - name: Run crypto telemetry redaction and parity observability tests
         run: |
+          cargo test --locked -p collection log_value_redacts_
           cargo test --locked -p qdrant app_telemetry_does_not_serialize_crypto_key_material
           cargo test --locked -p qdrant crypto_runtime_fingerprint
 
