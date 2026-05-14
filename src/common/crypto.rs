@@ -8491,6 +8491,8 @@ mod tests {
 
     #[test]
     fn payload_write_plan_rejects_client_envelope_aad_mismatch() {
+        let (signed_envelope, public_key) =
+            signed_client_envelope("docs", "point-2", "body", "tenant-a/client-signing-v1");
         let settings = Settings {
             crypto: CryptoSettings {
                 instances: HashMap::from([(
@@ -8503,7 +8505,7 @@ mod tests {
                             "key_id": "tenant-a/client-rk-2026-04",
                             "signature_public_keys": client_signature_registry(
                                 "tenant-a/client-signing-v1",
-                                &[11u8; 32],
+                                &public_key,
                             ),
                         })),
                     },
@@ -8531,30 +8533,10 @@ mod tests {
             ..CollectionParams::empty()
         };
         let mut payload = segment::types::Payload(
-            json!({
-                "body": {
-                    CLIENT_ENCRYPTED_PAYLOAD_MARKER: {
-                        "version": 1,
-                        "kind": "payload_text",
-                        "algorithm": "AES-256-GCM",
-                        "key_id": "tenant-a/client-rk-2026-04",
-                        "rk_id": "tenant-a/client-rk-2026-04",
-                        "rk_epoch": 3,
-                        "kdf_domain": "qdrant-sec/client-payload-text/v1",
-                        "aad": {
-                            "collection_id": "docs",
-                            "point_id": "point-2",
-                            "field_path": "body",
-                            "schema_version": 1
-                        },
-                        "nonce": "AAAAAAAAAAAAAAAA",
-                        "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA"
-                    }
-                }
-            })
-            .as_object()
-            .unwrap()
-            .clone(),
+            json!({ "body": signed_envelope })
+                .as_object()
+                .unwrap()
+                .clone(),
         );
         let plan = payload_write_plan_for_collection_for_test(&settings, "docs", &params)
             .unwrap()
