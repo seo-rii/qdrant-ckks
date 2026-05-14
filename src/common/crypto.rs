@@ -5224,6 +5224,23 @@ mod tests {
                 if option == RETIRED_MATERIALS_OPTION
         ));
 
+        for legacy_option in ["signature_key_id", "signature_public_key_b64"] {
+            let mut legacy_signature_option = valid_client_settings.clone();
+            legacy_signature_option
+                .instances
+                .get_mut("docs_payload_client_v1")
+                .unwrap()
+                .options
+                .as_object_mut()
+                .unwrap()
+                .insert(legacy_option.to_string(), json!("legacy-value"));
+            assert!(matches!(
+                validate_crypto_settings(&legacy_signature_option),
+                Err(CryptoSetupError::InvalidInstanceOption { option, .. })
+                    if option == legacy_option
+            ));
+        }
+
         let mut missing_signature = valid_client_settings;
         missing_signature
             .instances
