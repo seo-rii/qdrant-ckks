@@ -161,13 +161,22 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "Mmr"
                         | "ciphertext"
                         | "ciphertexts"
+                        | "ciphertext_b64"
+                        | "ciphertexts_b64"
                         | "encrypted_query"
                         | "encrypted_queries"
+                        | "encrypted_query_b64"
+                        | "encrypted_queries_b64"
                         | "nonce"
                         | "nonces"
+                        | "nonce_b64"
+                        | "nonces_b64"
                         | "signature"
                         | "signatures"
+                        | "signature_b64"
+                        | "signatures_b64"
                         | "sig"
+                        | "sig_b64"
                         | "public_key"
                         | "public_keys"
                         | "public_key_b64"
@@ -238,6 +247,15 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "publickeys"
                         | "publickeyb64"
                         | "signaturepublickeyb64"
+                        | "ciphertextb64"
+                        | "ciphertextsb64"
+                        | "encryptedqueryb64"
+                        | "encryptedqueriesb64"
+                        | "nonceb64"
+                        | "noncesb64"
+                        | "signatureb64"
+                        | "signaturesb64"
+                        | "sigb64"
                         | "cryptocontext"
                         | "cryptocontexts"
                         | "contextdigest"
@@ -533,13 +551,20 @@ mod tests {
                     "qdrant-sec-ciphertexts-log-sentinel-a",
                     "qdrant-sec-ciphertexts-log-sentinel-b"
                 ],
+                "ciphertext_b64": "qdrant-sec-ciphertext-b64-log-sentinel",
+                "ciphertexts_b64": ["qdrant-sec-ciphertexts-b64-log-sentinel"],
                 "nonce": "qdrant-sec-nonce-log-sentinel",
                 "nonces": ["qdrant-sec-nonces-log-sentinel"],
+                "nonce_b64": "qdrant-sec-nonce-b64-log-sentinel",
+                "nonces_b64": ["qdrant-sec-nonces-b64-log-sentinel"],
                 "signature": {
                     "sig": "qdrant-sec-signature-log-sentinel",
+                    "sig_b64": "qdrant-sec-signature-sig-b64-log-sentinel",
                     "public_key": "qdrant-sec-public-key-log-sentinel"
                 },
                 "signatures": ["qdrant-sec-signatures-log-sentinel"],
+                "signature_b64": "qdrant-sec-signature-b64-log-sentinel",
+                "signatures_b64": ["qdrant-sec-signatures-b64-log-sentinel"],
                 "public_keys": ["qdrant-sec-public-keys-log-sentinel"],
                 "crypto_context": "qdrant-sec-context-log-sentinel",
                 "crypto_contexts": ["qdrant-sec-contexts-log-sentinel"],
@@ -547,6 +572,8 @@ mod tests {
                 "context_digests": ["qdrant-sec-context-digests-log-sentinel"],
                 "encrypted_query": "qdrant-sec-encrypted-query-log-sentinel",
                 "encrypted_queries": ["qdrant-sec-encrypted-queries-log-sentinel"],
+                "encrypted_query_b64": "qdrant-sec-encrypted-query-b64-log-sentinel",
+                "encrypted_queries_b64": ["qdrant-sec-encrypted-queries-b64-log-sentinel"],
                 "wrapped_key_b64": "qdrant-sec-wrapped-key-log-sentinel",
                 "wrapped_keys_b64": ["qdrant-sec-wrapped-keys-log-sentinel"],
                 "value_b64": "qdrant-sec-inline-key-log-sentinel",
@@ -561,10 +588,17 @@ mod tests {
             "qdrant-sec-ciphertext-log-sentinel",
             "qdrant-sec-ciphertexts-log-sentinel-a",
             "qdrant-sec-ciphertexts-log-sentinel-b",
+            "qdrant-sec-ciphertext-b64-log-sentinel",
+            "qdrant-sec-ciphertexts-b64-log-sentinel",
             "qdrant-sec-nonce-log-sentinel",
             "qdrant-sec-nonces-log-sentinel",
+            "qdrant-sec-nonce-b64-log-sentinel",
+            "qdrant-sec-nonces-b64-log-sentinel",
             "qdrant-sec-signature-log-sentinel",
+            "qdrant-sec-signature-sig-b64-log-sentinel",
             "qdrant-sec-signatures-log-sentinel",
+            "qdrant-sec-signature-b64-log-sentinel",
+            "qdrant-sec-signatures-b64-log-sentinel",
             "qdrant-sec-public-key-log-sentinel",
             "qdrant-sec-public-keys-log-sentinel",
             "qdrant-sec-context-log-sentinel",
@@ -573,6 +607,8 @@ mod tests {
             "qdrant-sec-context-digests-log-sentinel",
             "qdrant-sec-encrypted-query-log-sentinel",
             "qdrant-sec-encrypted-queries-log-sentinel",
+            "qdrant-sec-encrypted-query-b64-log-sentinel",
+            "qdrant-sec-encrypted-queries-b64-log-sentinel",
             "qdrant-sec-wrapped-key-log-sentinel",
             "qdrant-sec-wrapped-keys-log-sentinel",
             "qdrant-sec-inline-key-log-sentinel",
@@ -588,11 +624,15 @@ mod tests {
         let mut value = json!({
             "bridgeRequest": {
                 "encryptedQuery": "qdrant-sec-camel-encrypted-query-log-sentinel",
+                "encryptedQueryB64": "qdrant-sec-camel-encrypted-query-b64-log-sentinel",
                 "cryptoContext": "qdrant-sec-camel-crypto-context-log-sentinel",
                 "contextDigest": "qdrant-sec-camel-context-digest-log-sentinel",
                 "publicKeyB64": "qdrant-sec-camel-public-key-log-sentinel",
                 "wrappedKeyB64": "qdrant-sec-camel-wrapped-key-log-sentinel",
-                "valueB64": "qdrant-sec-camel-value-log-sentinel"
+                "valueB64": "qdrant-sec-camel-value-log-sentinel",
+                "nonceB64": "qdrant-sec-camel-nonce-b64-log-sentinel",
+                "ciphertextB64": "qdrant-sec-camel-ciphertext-b64-log-sentinel",
+                "signatureB64": "qdrant-sec-camel-signature-b64-log-sentinel"
             },
             "headers": {
                 "xApiKey": "qdrant-sec-camel-api-key-log-sentinel",
@@ -609,11 +649,15 @@ mod tests {
 
         for sentinel in [
             "qdrant-sec-camel-encrypted-query-log-sentinel",
+            "qdrant-sec-camel-encrypted-query-b64-log-sentinel",
             "qdrant-sec-camel-crypto-context-log-sentinel",
             "qdrant-sec-camel-context-digest-log-sentinel",
             "qdrant-sec-camel-public-key-log-sentinel",
             "qdrant-sec-camel-wrapped-key-log-sentinel",
             "qdrant-sec-camel-value-log-sentinel",
+            "qdrant-sec-camel-nonce-b64-log-sentinel",
+            "qdrant-sec-camel-ciphertext-b64-log-sentinel",
+            "qdrant-sec-camel-signature-b64-log-sentinel",
             "qdrant-sec-camel-api-key-log-sentinel",
             "qdrant-sec-kebab-set-cookie-log-sentinel",
             "qdrant-sec-kebab-vault-token-log-sentinel",
