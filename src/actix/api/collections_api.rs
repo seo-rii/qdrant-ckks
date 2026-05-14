@@ -3,17 +3,18 @@ use std::time::Duration;
 use actix_web::rt::time::Instant;
 use actix_web::{HttpResponse, Responder, delete, get, patch, post, put, web};
 use actix_web_validator::{Json, Path, Query};
-use collection::config::CryptoMigrationPlan;
+use collection::config::{CryptoMigrationCheckpoint, CryptoMigrationPlan, CryptoMigrationState};
 use collection::operations::cluster_ops::ClusterOperations;
 use collection::operations::types::CollectionError;
 use collection::operations::verification::new_unchecked_verification_pass;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use shard::operations::optimization::OptimizationsRequestOptions;
 use storage::content_manager::collection_meta_ops::{
     ApplyCryptoMigrationPlan, ChangeAliasesOperation, CollectionMetaOperations, CreateCollection,
     CreateCollectionOperation, DeleteCollectionOperation, UpdateCollection,
     UpdateCollectionOperation,
 };
+use storage::content_manager::errors::StorageError;
 use storage::dispatcher::Dispatcher;
 use storage::rbac::AccessRequirements;
 use validator::Validate;
@@ -191,6 +192,164 @@ async fn apply_crypto_migration_plan(
             query.timeout(),
         )
         .await;
+    process_response(response, timing, None)
+}
+
+#[derive(Debug, Deserialize, Serialize, Validate)]
+pub struct RunPayloadCryptoMigration {
+    pub active_rk_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired_rk_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RunPayloadCryptoMigrationResponse {
+    pub checkpoints: Vec<CryptoMigrationCheckpoint>,
+    pub completion_plan: CryptoMigrationPlan,
+    pub completed: bool,
+}
+
+fn payload_crypto_migration_completion_plan(
+    migration_state: CryptoMigrationState,
+    target_epoch: u64,
+    request: RunPayloadCryptoMigration,
+    checkpoints: Vec<CryptoMigrationCheckpoint>,
+) -> Result<CryptoMigrationPlan, CollectionError> {
+    if request.active_rk_id.is_empty() {
+        return Err(CollectionError::bad_input(
+            "payload crypto migration run requires active_rk_id",
+        ));
+    }
+
+    let to = match migration_state {
+        CryptoMigrationState::Encrypting | CryptoMigrationState::Rotating => {
+            CryptoMigrationState::Active
+        }
+        CryptoMigrationState::Decrypting => CryptoMigrationState::Disabled,
+        CryptoMigrationState::Disabled | CryptoMigrationState::Active => {
+            return Err(CollectionError::bad_input(format!(
+                "payload crypto migration run requires migration_state=encrypting, rotating, or decrypting; current state is {migration_state:?}",
+            )));
+        }
+    };
+
+    let retired_rk_id = if migration_state == CryptoMigrationState::Rotating {
+        Some(request.retired_rk_id.ok_or_else(|| {
+            CollectionError::bad_input(
+                "payload crypto rotation run requires retired_rk_id for completion",
+            )
+        })?)
+    } else {
+        if request.retired_rk_id.is_some() {
+            return Err(CollectionError::bad_input(
+                "retired_rk_id is only valid while completing rotating payload crypto migration",
+            ));
+        }
+        None
+    };
+
+    Ok(CryptoMigrationPlan {
+        from: migration_state,
+        to,
+        target_epoch,
+        active_rk_id: Some(request.active_rk_id),
+        retired_rk_id,
+        dry_run: false,
+        checkpoints,
+    })
+}
+
+#[post("/collections/{collection_name}/crypto/migration/run-payloads")]
+async fn run_payloads_for_crypto_migration(
+    dispatcher: web::Data<Dispatcher>,
+    collection: Path<CollectionPath>,
+    operation: Json<RunPayloadCryptoMigration>,
+    settings: web::Data<Settings>,
+    Query(query): Query<WaitTimeout>,
+    ActixAuth(auth): ActixAuth,
+) -> impl Responder {
+    let timing = Instant::now();
+    let pass = new_unchecked_verification_pass();
+    let collection_name = collection.collection_name.clone();
+
+    let response = async {
+        let collection_pass = auth.check_collection_access(
+            &collection_name,
+            AccessRequirements::new().manage(),
+            "run_payloads_for_crypto_migration",
+        )?;
+        let collection = dispatcher
+            .toc(&auth, &pass)
+            .get_collection(&collection_pass)
+            .await?;
+        let config = collection.config_snapshot().await;
+        let encryption = config.params.effective_encryption().ok_or_else(|| {
+            CollectionError::bad_input(format!(
+                "payload crypto migration for collection {collection_name} requires an encrypted collection",
+            ))
+        })?;
+        let migration_state = encryption.migration_state;
+        let target_epoch = encryption.encryption_epoch;
+
+        let checkpoints = match migration_state {
+            CryptoMigrationState::Encrypting | CryptoMigrationState::Rotating => {
+                do_reencrypt_stale_payloads_for_crypto_migration(
+                    dispatcher.toc(&auth, &pass),
+                    &collection_name,
+                    settings.get_ref(),
+                    &auth,
+                )
+                .await?
+            }
+            CryptoMigrationState::Decrypting => {
+                do_decrypt_payloads_for_crypto_migration(
+                    dispatcher.toc(&auth, &pass),
+                    &collection_name,
+                    settings.get_ref(),
+                    &auth,
+                )
+                .await?
+            }
+            CryptoMigrationState::Disabled | CryptoMigrationState::Active => {
+                return Err(StorageError::bad_input(format!(
+                    "payload crypto migration run for collection {collection_name} requires migration_state=encrypting, rotating, or decrypting; current state is {migration_state:?}",
+                )));
+            }
+        };
+
+        let completion_plan = payload_crypto_migration_completion_plan(
+            migration_state,
+            target_epoch,
+            operation.into_inner(),
+            checkpoints,
+        )
+        .map_err(StorageError::from)?;
+        completion_plan
+            .validate_admin_plan_for_config(&encryption)
+            .map_err(|err| {
+                StorageError::bad_input(format!(
+                    "payload crypto migration completion plan is invalid: {err}",
+                ))
+            })?;
+        let completed = dispatcher
+            .submit_collection_meta_op(
+                CollectionMetaOperations::ApplyCryptoMigration(ApplyCryptoMigrationPlan {
+                    collection_name: collection_name.clone(),
+                    plan: completion_plan.clone(),
+                }),
+                auth,
+                query.timeout(),
+            )
+            .await?;
+
+        Ok(RunPayloadCryptoMigrationResponse {
+            checkpoints: completion_plan.checkpoints.clone(),
+            completion_plan,
+            completed,
+        })
+    }
+    .await;
+
     process_response(response, timing, None)
 }
 
@@ -383,6 +542,7 @@ pub fn config_collections_api(cfg: &mut web::ServiceConfig) {
         .service(create_collection)
         .service(update_collection)
         .service(apply_crypto_migration_plan)
+        .service(run_payloads_for_crypto_migration)
         .service(rewrite_payloads_for_crypto_migration)
         .service(decrypt_payloads_for_crypto_migration)
         .service(delete_collection)
@@ -396,8 +556,9 @@ pub fn config_collections_api(cfg: &mut web::ServiceConfig) {
 #[cfg(test)]
 mod tests {
     use actix_web::web::Query;
+    use collection::config::CryptoMigrationCheckpointStatus;
 
-    use super::WaitTimeout;
+    use super::*;
 
     #[test]
     fn timeout_is_deserialized() {
@@ -405,5 +566,79 @@ mod tests {
         assert!(timeout.timeout.is_none());
         let timeout: WaitTimeout = Query::from_query("timeout=10").unwrap().0;
         assert_eq!(timeout.timeout, Some(10))
+    }
+
+    fn verified_checkpoint() -> CryptoMigrationCheckpoint {
+        CryptoMigrationCheckpoint {
+            shard_id: 0,
+            total_points: 3,
+            processed_points: 3,
+            rewritten_points: 3,
+            changed_points: 2,
+            status: CryptoMigrationCheckpointStatus::Verified,
+        }
+    }
+
+    #[test]
+    fn payload_crypto_migration_run_builds_completion_plan_for_rotation() {
+        let plan = payload_crypto_migration_completion_plan(
+            CryptoMigrationState::Rotating,
+            4,
+            RunPayloadCryptoMigration {
+                active_rk_id: "rk/docs/4".to_string(),
+                retired_rk_id: Some("rk/docs/3".to_string()),
+            },
+            vec![verified_checkpoint()],
+        )
+        .unwrap();
+
+        assert_eq!(plan.from, CryptoMigrationState::Rotating);
+        assert_eq!(plan.to, CryptoMigrationState::Active);
+        assert_eq!(plan.target_epoch, 4);
+        assert_eq!(plan.active_rk_id.as_deref(), Some("rk/docs/4"));
+        assert_eq!(plan.retired_rk_id.as_deref(), Some("rk/docs/3"));
+        plan.validate_admin_plan().unwrap();
+    }
+
+    #[test]
+    fn payload_crypto_migration_run_rejects_invalid_rk_ids_for_state() {
+        assert!(
+            payload_crypto_migration_completion_plan(
+                CryptoMigrationState::Rotating,
+                4,
+                RunPayloadCryptoMigration {
+                    active_rk_id: "rk/docs/4".to_string(),
+                    retired_rk_id: None,
+                },
+                vec![verified_checkpoint()],
+            )
+            .is_err()
+        );
+
+        assert!(
+            payload_crypto_migration_completion_plan(
+                CryptoMigrationState::Decrypting,
+                3,
+                RunPayloadCryptoMigration {
+                    active_rk_id: "rk/docs/3".to_string(),
+                    retired_rk_id: Some("rk/docs/2".to_string()),
+                },
+                vec![verified_checkpoint()],
+            )
+            .is_err()
+        );
+
+        assert!(
+            payload_crypto_migration_completion_plan(
+                CryptoMigrationState::Active,
+                3,
+                RunPayloadCryptoMigration {
+                    active_rk_id: "rk/docs/3".to_string(),
+                    retired_rk_id: None,
+                },
+                vec![verified_checkpoint()],
+            )
+            .is_err()
+        );
     }
 }

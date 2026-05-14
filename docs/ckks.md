@@ -729,6 +729,7 @@ The REST control plane is split into three admin-only steps:
 
 ```text
 POST /collections/{collection_name}/crypto/migration/plan
+POST /collections/{collection_name}/crypto/migration/run-payloads
 POST /collections/{collection_name}/crypto/migration/rewrite-payloads
 POST /collections/{collection_name}/crypto/migration/decrypt-payloads
 ```
@@ -754,6 +755,24 @@ Active`, `Rotating -> Active`, or `Decrypting -> Disabled` completion. If a
 rewrite request fails after nonce/key or payload validation, do not mark the
 plan complete; fix the runtime/material state and rerun the rewrite endpoint to
 produce fresh verified checkpoints.
+For server-side payload migrations, `run-payloads` combines the rewrite/decrypt
+scan with the completion transition. The request must name the active RK id and,
+when completing `Rotating -> Active`, the retired RK id:
+
+```json
+{
+  "active_rk_id": "rk/docs/4",
+  "retired_rk_id": "rk/docs/3"
+}
+```
+
+The endpoint first verifies the current collection state is `Encrypting`,
+`Rotating`, or `Decrypting`, runs the appropriate payload rewrite/decrypt scan,
+builds the completion `CryptoMigrationPlan` from the returned verified
+checkpoints, validates it against the current collection config, and submits the
+admin completion operation. It is still a foreground admin operation, not a
+cluster-wide background scheduler; interrupted or failed runs should be rerun to
+produce fresh checkpoints.
 After a verified `Decrypting -> Disabled` completion, the stored encryption
 section remains as audit/migration metadata, but it is not treated as effective
 encryption for write/read guards. Re-enabling encryption must start a new admin
