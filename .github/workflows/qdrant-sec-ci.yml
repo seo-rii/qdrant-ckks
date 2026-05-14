@@ -59,6 +59,11 @@ jobs:
           cargo test --locked -p qdrant runtime_rewrap_response_rejects_malformed_material_identifiers
           cargo test --locked -p qdrant snapshot_export_encrypted_payload_mode_is_raw_only
 
+      - name: Run runtime material source hardening tests
+        run: |
+          cargo test --locked -p qdrant validate_material_
+          cargo test --locked -p qdrant decode_direct_material_key_
+
       - name: Run encrypted inspector redaction tests
         run: |
           cargo test --locked -p qdrant --features service_debug --bin wal_inspector collection_wal_display_redacts
