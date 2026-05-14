@@ -1642,6 +1642,36 @@ mod tests {
         assert!(err.to_string().contains("group/world accessible"));
     }
 
+    #[test]
+    fn ciphertext_vector_index_rejects_oversized_graph_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let graph_file = CkksCiphertextVectorIndex::graph_file_path(directory.path());
+        let file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&graph_file)
+            .unwrap();
+        file.set_len(CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_MAX_BYTES + 1)
+            .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            std::fs::set_permissions(&graph_file, PermissionsExt::from_mode(0o600)).unwrap();
+        }
+
+        let err = CkksCiphertextVectorIndex::open_graph_file(
+            vec![
+                CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
+            ],
+            &graph_file,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("graph file is too large"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn ciphertext_vector_index_rejects_graph_symlink_on_open() {
