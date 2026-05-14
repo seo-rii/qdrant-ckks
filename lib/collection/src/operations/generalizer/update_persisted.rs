@@ -302,3 +302,67 @@ impl Generalizer for FieldIndexOperations {
         self.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use shard::operations::CollectionUpdateOperations;
+    use shard::operations::point_ops::{
+        PointInsertOperationsInternal, PointOperations, PointStructPersisted,
+    };
+
+    use super::*;
+
+    #[test]
+    fn update_operation_generalizer_strips_encrypted_payload_marker_values() {
+        let payload = Payload(
+            json!({
+                "body": {
+                    "$qdrant_sec": {
+                        "kind": "payload_text",
+                        "schema_version": 1,
+                        "encryption_epoch": 3,
+                        "envelope": {
+                            "ciphertext": "server-secret-log-sentinel",
+                        },
+                    },
+                },
+                "client_body": {
+                    "$qdrant_client_aead": {
+                        "ciphertext": "client-secret-log-sentinel",
+                        "signature": {
+                            "sig": "client-signature-log-sentinel",
+                        },
+                    },
+                },
+                "$qdrant_sec_vectors": {
+                    "embedding": {
+                        "ciphertext": "vector-secret-log-sentinel",
+                    },
+                },
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        let point = PointStructPersisted {
+            id: 42.into(),
+            vector: VectorStructPersisted::Single(vec![0.1, 0.2, 0.3]),
+            payload: Some(payload),
+        };
+        let operation = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::PointsList(vec![point]),
+        ));
+
+        let loggable_operation = operation.remove_details();
+        let serialized = serde_json::to_string(&loggable_operation).unwrap();
+
+        assert!(!serialized.contains("server-secret-log-sentinel"));
+        assert!(!serialized.contains("client-secret-log-sentinel"));
+        assert!(!serialized.contains("client-signature-log-sentinel"));
+        assert!(!serialized.contains("vector-secret-log-sentinel"));
+        assert!(serialized.contains("body"));
+        assert!(serialized.contains("client_body"));
+        assert!(serialized.contains("$qdrant_sec_vectors"));
+    }
+}
