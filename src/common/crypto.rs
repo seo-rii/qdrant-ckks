@@ -6380,6 +6380,14 @@ mod tests {
             crypto_runtime_capability_fingerprint(&peer_with_different_field),
             "Vault field drift must change the non-secret runtime parity fingerprint",
         );
+        let peer_field_fingerprint =
+            crypto_runtime_capability_fingerprint(&peer_with_different_field);
+        let err = validate_crypto_runtime_capability_parity(
+            &settings,
+            [("peer-vault-field", peer_field_fingerprint.as_str())],
+        )
+        .expect_err("Vault field drift must fail runtime parity validation");
+        assert!(err.to_string().contains("peer-vault-field"));
     }
 
     #[test]
