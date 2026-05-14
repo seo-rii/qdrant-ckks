@@ -1137,6 +1137,23 @@ async fn crypto_migration_plan_updates_collection_config_through_admin_path() {
     let collection =
         encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
 
+    collection
+        .update_from_client_simple(
+            CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+                PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                    id: 1.into(),
+                    vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                    payload: None,
+                }]),
+            )),
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+
     let start_rotation = CryptoMigrationPlan {
         from: CryptoMigrationState::Active,
         to: CryptoMigrationState::Rotating,
@@ -1317,6 +1334,33 @@ async fn crypto_migration_plan_updates_collection_config_through_admin_path() {
         err,
         CollectionError::BadInput { description }
             if description.contains("crypto_migration_current_state_mismatch")
+    ));
+
+    let mismatched_checkpoint = CryptoMigrationPlan {
+        from: CryptoMigrationState::Rotating,
+        to: CryptoMigrationState::Active,
+        target_epoch: 1,
+        active_rk_id: Some("tenant-a/payload-rk-v2".to_string()),
+        retired_rk_id: Some("tenant-a/payload-rk-v1".to_string()),
+        dry_run: false,
+        checkpoints: vec![CryptoMigrationCheckpoint {
+            shard_id: 0,
+            total_points: 0,
+            processed_points: 0,
+            rewritten_points: 0,
+            changed_points: 0,
+            status: CryptoMigrationCheckpointStatus::Verified,
+        }],
+    };
+    let err = collection
+        .apply_crypto_migration_plan(&mismatched_checkpoint)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("completion checkpoint")
+                && description.contains("local shard contains 1")
     ));
 
     let complete_rotation = CryptoMigrationPlan {
@@ -1704,9 +1748,9 @@ async fn crypto_migration_decrypt_completion_disables_effective_encryption() {
             dry_run: false,
             checkpoints: vec![CryptoMigrationCheckpoint {
                 shard_id: 0,
-                total_points: 1,
-                processed_points: 1,
-                rewritten_points: 1,
+                total_points: 0,
+                processed_points: 0,
+                rewritten_points: 0,
                 changed_points: 0,
                 status: CryptoMigrationCheckpointStatus::Verified,
             }],
@@ -1740,9 +1784,9 @@ async fn crypto_migration_decrypt_completion_disables_effective_encryption() {
             dry_run: false,
             checkpoints: vec![CryptoMigrationCheckpoint {
                 shard_id: 0,
-                total_points: 1,
-                processed_points: 1,
-                rewritten_points: 1,
+                total_points: 0,
+                processed_points: 0,
+                rewritten_points: 0,
                 changed_points: 0,
                 status: CryptoMigrationCheckpointStatus::Verified,
             }],
@@ -2496,9 +2540,9 @@ async fn crypto_migration_completion_requires_all_collection_shards() {
         dry_run: false,
         checkpoints: vec![CryptoMigrationCheckpoint {
             shard_id: 0,
-            total_points: 1,
-            processed_points: 1,
-            rewritten_points: 1,
+            total_points: 0,
+            processed_points: 0,
+            rewritten_points: 0,
             changed_points: 0,
             status: CryptoMigrationCheckpointStatus::Verified,
         }],
@@ -2516,9 +2560,9 @@ async fn crypto_migration_completion_requires_all_collection_shards() {
     let mut complete = incomplete_completion;
     complete.checkpoints.push(CryptoMigrationCheckpoint {
         shard_id: 1,
-        total_points: 1,
-        processed_points: 1,
-        rewritten_points: 1,
+        total_points: 0,
+        processed_points: 0,
+        rewritten_points: 0,
         changed_points: 0,
         status: CryptoMigrationCheckpointStatus::Verified,
     });

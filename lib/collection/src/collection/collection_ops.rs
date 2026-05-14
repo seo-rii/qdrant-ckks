@@ -56,10 +56,13 @@ impl Collection {
         plan: &CryptoMigrationPlan,
     ) -> CollectionResult<()> {
         if plan.requires_verified_completion() {
-            let expected_shards: std::collections::BTreeSet<_> = self
-                .shards_holder
-                .read()
-                .await
+            let checkpoint_by_shard: std::collections::BTreeMap<_, _> = plan
+                .checkpoints
+                .iter()
+                .map(|checkpoint| (checkpoint.shard_id, checkpoint))
+                .collect();
+            let shards_holder = self.shards_holder.read().await;
+            let expected_shards: std::collections::BTreeSet<_> = shards_holder
                 .get_shards()
                 .map(|(shard_id, _)| shard_id)
                 .collect();
@@ -72,6 +75,34 @@ impl Collection {
                 return Err(CollectionError::bad_input(
                     "crypto migration completion checkpoints must cover every collection shard",
                 ));
+            }
+
+            let count_request = Arc::new(CountRequestInternal {
+                filter: None,
+                exact: true,
+            });
+            for (shard_id, replica_set) in shards_holder.get_shards() {
+                let Some(local_count) = replica_set
+                    .count_local(
+                        count_request.clone(),
+                        None,
+                        HwMeasurementAcc::disposable(),
+                        DeferredBehavior::Exclude,
+                    )
+                    .await?
+                else {
+                    continue;
+                };
+                let checkpoint = checkpoint_by_shard
+                    .get(&shard_id)
+                    .expect("checkpoint shard set was validated above");
+                let local_total_points = u64::try_from(local_count.count).unwrap_or(u64::MAX);
+                if checkpoint.total_points != local_total_points {
+                    return Err(CollectionError::bad_input(format!(
+                        "crypto migration completion checkpoint for shard {shard_id} reports {} total points but local shard contains {}; rerun migration scan before completion",
+                        checkpoint.total_points, local_total_points,
+                    )));
+                }
             }
         }
 
