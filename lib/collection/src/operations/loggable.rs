@@ -152,18 +152,28 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "Vector"
                         | "Mmr"
                         | "ciphertext"
+                        | "ciphertexts"
                         | "encrypted_query"
+                        | "encrypted_queries"
                         | "nonce"
+                        | "nonces"
                         | "signature"
+                        | "signatures"
                         | "sig"
                         | "public_key"
+                        | "public_keys"
                         | "public_key_b64"
                         | "signature_public_key_b64"
                         | "crypto_context"
+                        | "crypto_contexts"
                         | "context_digest"
+                        | "context_digests"
                         | "wrapped_key"
+                        | "wrapped_keys"
                         | "wrapped_key_b64"
+                        | "wrapped_keys_b64"
                         | "value_b64"
+                        | "values_b64"
                         | "secret"
                         | "secret_b64"
                         | "key_material"
@@ -470,16 +480,28 @@ mod tests {
         let mut value = json!({
             "outer": {
                 "ciphertext": "qdrant-sec-ciphertext-log-sentinel",
+                "ciphertexts": [
+                    "qdrant-sec-ciphertexts-log-sentinel-a",
+                    "qdrant-sec-ciphertexts-log-sentinel-b"
+                ],
                 "nonce": "qdrant-sec-nonce-log-sentinel",
+                "nonces": ["qdrant-sec-nonces-log-sentinel"],
                 "signature": {
                     "sig": "qdrant-sec-signature-log-sentinel",
                     "public_key": "qdrant-sec-public-key-log-sentinel"
                 },
+                "signatures": ["qdrant-sec-signatures-log-sentinel"],
+                "public_keys": ["qdrant-sec-public-keys-log-sentinel"],
                 "crypto_context": "qdrant-sec-context-log-sentinel",
+                "crypto_contexts": ["qdrant-sec-contexts-log-sentinel"],
                 "context_digest": "qdrant-sec-context-digest-log-sentinel",
+                "context_digests": ["qdrant-sec-context-digests-log-sentinel"],
                 "encrypted_query": "qdrant-sec-encrypted-query-log-sentinel",
+                "encrypted_queries": ["qdrant-sec-encrypted-queries-log-sentinel"],
                 "wrapped_key_b64": "qdrant-sec-wrapped-key-log-sentinel",
-                "value_b64": "qdrant-sec-inline-key-log-sentinel"
+                "wrapped_keys_b64": ["qdrant-sec-wrapped-keys-log-sentinel"],
+                "value_b64": "qdrant-sec-inline-key-log-sentinel",
+                "values_b64": ["qdrant-sec-inline-keys-log-sentinel"]
             }
         });
 
@@ -488,14 +510,24 @@ mod tests {
 
         for sentinel in [
             "qdrant-sec-ciphertext-log-sentinel",
+            "qdrant-sec-ciphertexts-log-sentinel-a",
+            "qdrant-sec-ciphertexts-log-sentinel-b",
             "qdrant-sec-nonce-log-sentinel",
+            "qdrant-sec-nonces-log-sentinel",
             "qdrant-sec-signature-log-sentinel",
+            "qdrant-sec-signatures-log-sentinel",
             "qdrant-sec-public-key-log-sentinel",
+            "qdrant-sec-public-keys-log-sentinel",
             "qdrant-sec-context-log-sentinel",
+            "qdrant-sec-contexts-log-sentinel",
             "qdrant-sec-context-digest-log-sentinel",
+            "qdrant-sec-context-digests-log-sentinel",
             "qdrant-sec-encrypted-query-log-sentinel",
+            "qdrant-sec-encrypted-queries-log-sentinel",
             "qdrant-sec-wrapped-key-log-sentinel",
+            "qdrant-sec-wrapped-keys-log-sentinel",
             "qdrant-sec-inline-key-log-sentinel",
+            "qdrant-sec-inline-keys-log-sentinel",
         ] {
             assert!(!serialized.contains(sentinel));
         }
