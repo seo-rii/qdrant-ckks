@@ -52,6 +52,8 @@ jobs:
         run: |
           cargo test --locked -p qdrant validate_collection_crypto_runtime_
           cargo test --locked -p qdrant validate_recovered_collection_crypto_
+          cargo test --locked -p qdrant validate_backend_
+          cargo test --locked -p qdrant openfhe_backend_factory_
 
       - name: Run segment-native CKKS ciphertext index tests
         run: cargo test --locked -p segment ckks_ciphertext
