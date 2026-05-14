@@ -35,8 +35,8 @@ use segment::data_types::vectors::{
     DEFAULT_VECTOR_NAME, Named, NamedQuery, VectorInternal, VectorRef,
 };
 use segment::index::hnsw_index::ckks_ciphertext_graph::{
-    CkksCiphertextHnswGraph, CkksCiphertextIndexedRecord, CkksCiphertextVectorIndex,
-    CkksCiphertextVectorIndexBuildError, ckks_ciphertext_from_payload,
+    CkksCiphertextHnswGraph, CkksCiphertextIndexedRecord, CkksCiphertextScoreError,
+    CkksCiphertextVectorIndex, CkksCiphertextVectorIndexBuildError, ckks_ciphertext_from_payload,
 };
 use segment::json_path::JsonPath;
 use segment::types::{
@@ -2581,6 +2581,19 @@ fn ckks_sidecar_record_identity(
     )
 }
 
+fn ckks_ciphertext_score_error_to_storage_error(
+    err: CkksCiphertextScoreError<StorageError>,
+) -> StorageError {
+    match err {
+        CkksCiphertextScoreError::ScoreCountMismatch { expected, actual } => {
+            StorageError::service_error(format!(
+                "CKKS ciphertext HNSW scorer returned {actual} score(s) for {expected} candidate(s)"
+            ))
+        }
+        CkksCiphertextScoreError::Scoring(err) => err,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn ckks_sidecar_hnsw_search_segment_snapshots(
     collection_name: &str,
@@ -2620,35 +2633,37 @@ fn ckks_sidecar_hnsw_search_segment_snapshots(
             .iter()
             .map(|record| (record.indexed_record.point_offset, record))
             .collect::<HashMap<_, _>>();
-        let hits = index.search_ciphertext_records(
-            ef,
-            top,
-            score_order,
-            score_threshold,
-            |candidates| {
-                let encrypted_items = candidates
-                    .iter()
-                    .map(|candidate| {
-                        let record = records_by_offset
-                            .get(&candidate.point_offset)
-                            .ok_or_else(|| {
-                                StorageError::service_error(format!(
-                                    "segment CKKS ciphertext HNSW candidate {} is missing from snapshot records",
-                                    candidate.point_offset,
-                                ))
-                            })?;
-                        Ok((record.point_id.clone(), record.encrypted.clone()))
-                    })
-                    .collect::<Result<Vec<_>, StorageError>>()?;
-                ckks_sidecar_score_hnsw_query_batch(
-                    collection_name,
-                    vector_name,
-                    plan,
-                    query,
-                    &encrypted_items,
-                )
-            },
-        )?;
+        let hits = index
+            .search_ciphertext_records(
+                ef,
+                top,
+                score_order,
+                score_threshold,
+                |candidates| {
+                    let encrypted_items = candidates
+                        .iter()
+                        .map(|candidate| {
+                            let record = records_by_offset
+                                .get(&candidate.point_offset)
+                                .ok_or_else(|| {
+                                    StorageError::service_error(format!(
+                                        "segment CKKS ciphertext HNSW candidate {} is missing from snapshot records",
+                                        candidate.point_offset,
+                                    ))
+                                })?;
+                            Ok((record.point_id.clone(), record.encrypted.clone()))
+                        })
+                        .collect::<Result<Vec<_>, StorageError>>()?;
+                    ckks_sidecar_score_hnsw_query_batch(
+                        collection_name,
+                        vector_name,
+                        plan,
+                        query,
+                        &encrypted_items,
+                    )
+                },
+            )
+            .map_err(ckks_ciphertext_score_error_to_storage_error)?;
 
         for hit in hits {
             let Some(record) = records_by_offset.get(&hit.record.point_offset) else {
@@ -2832,6 +2847,12 @@ fn ckks_sidecar_hnsw_search_points(
                             "CKKS sidecar HNSW indexed records must have unique point offsets",
                         )
                     }
+                    CkksCiphertextVectorIndexBuildError::ScoreCountMismatch {
+                        expected,
+                        actual,
+                    } => StorageError::service_error(format!(
+                        "CKKS sidecar HNSW graph scorer returned {actual} score(s) for {expected} candidate(s)"
+                    )),
                     CkksCiphertextVectorIndexBuildError::Scoring(err) => err,
                 })?;
                 let graph = Arc::new(index.graph().clone());
@@ -2859,8 +2880,8 @@ fn ckks_sidecar_hnsw_search_points(
             "CKKS ciphertext HNSW graph did not match indexed records",
         ));
     };
-    let hits =
-        index.search_ciphertext_records(ef, top, score_order, score_threshold, |candidates| {
+    let hits = index
+        .search_ciphertext_records(ef, top, score_order, score_threshold, |candidates| {
             let encrypted_items = candidates
                 .iter()
                 .map(|candidate| {
@@ -2875,7 +2896,8 @@ fn ckks_sidecar_hnsw_search_points(
                 query,
                 &encrypted_items,
             )
-        })?;
+        })
+        .map_err(ckks_ciphertext_score_error_to_storage_error)?;
 
     Ok(hits
         .into_iter()

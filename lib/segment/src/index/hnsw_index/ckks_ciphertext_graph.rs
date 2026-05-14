@@ -63,6 +63,13 @@ pub struct CkksCiphertextVectorIndex {
 #[derive(Debug, PartialEq)]
 pub enum CkksCiphertextVectorIndexBuildError<E> {
     DuplicatePointOffset,
+    ScoreCountMismatch { expected: usize, actual: usize },
+    Scoring(E),
+}
+
+#[derive(Debug, PartialEq)]
+pub enum CkksCiphertextScoreError<E> {
+    ScoreCountMismatch { expected: usize, actual: usize },
     Scoring(E),
 }
 
@@ -119,7 +126,7 @@ impl CkksCiphertextHnswGraph {
         m: usize,
         score_order: Order,
         mut score_previous_points: impl FnMut(usize) -> Result<Vec<f32>, E>,
-    ) -> Result<Self, E> {
+    ) -> Result<Self, CkksCiphertextScoreError<E>> {
         let mut links = vec![Vec::<usize>::new(); points_len];
         if points_len == 0 {
             return Ok(Self {
@@ -129,8 +136,13 @@ impl CkksCiphertextHnswGraph {
 
         let max_degree = m.saturating_mul(2).max(1);
         for idx in 1..points_len {
-            let scores = score_previous_points(idx)?;
-            debug_assert_eq!(scores.len(), idx);
+            let scores = score_previous_points(idx).map_err(CkksCiphertextScoreError::Scoring)?;
+            if scores.len() != idx {
+                return Err(CkksCiphertextScoreError::ScoreCountMismatch {
+                    expected: idx,
+                    actual: scores.len(),
+                });
+            }
             let mut neighbors = scores
                 .into_iter()
                 .enumerate()
@@ -180,7 +192,7 @@ impl CkksCiphertextHnswGraph {
         score_order: Order,
         score_threshold: Option<f32>,
         mut score_candidates: impl FnMut(&[usize]) -> Result<Vec<f32>, E>,
-    ) -> Result<Vec<CkksCiphertextHnswHit>, E> {
+    ) -> Result<Vec<CkksCiphertextHnswHit>, CkksCiphertextScoreError<E>> {
         let links = self.links();
         if links.is_empty() || top == 0 {
             return Ok(Vec::new());
@@ -202,8 +214,13 @@ impl CkksCiphertextHnswGraph {
                 break;
             }
 
-            let scores = score_candidates(&frontier)?;
-            debug_assert_eq!(scores.len(), frontier.len());
+            let scores = score_candidates(&frontier).map_err(CkksCiphertextScoreError::Scoring)?;
+            if scores.len() != frontier.len() {
+                return Err(CkksCiphertextScoreError::ScoreCountMismatch {
+                    expected: frontier.len(),
+                    actual: scores.len(),
+                });
+            }
             let mut batch = frontier
                 .into_iter()
                 .zip(scores)
@@ -276,7 +293,14 @@ impl CkksCiphertextVectorIndex {
 
         Ok(Self {
             index: CkksCiphertextHnswIndex::build(records, m, score_order, score_previous_records)
-                .map_err(CkksCiphertextVectorIndexBuildError::Scoring)?,
+                .map_err(|err| match err {
+                    CkksCiphertextScoreError::ScoreCountMismatch { expected, actual } => {
+                        CkksCiphertextVectorIndexBuildError::ScoreCountMismatch { expected, actual }
+                    }
+                    CkksCiphertextScoreError::Scoring(err) => {
+                        CkksCiphertextVectorIndexBuildError::Scoring(err)
+                    }
+                })?,
             graph_file: None,
         })
     }
@@ -393,7 +417,7 @@ impl CkksCiphertextVectorIndex {
         score_order: Order,
         score_threshold: Option<f32>,
         score_records: impl FnMut(&[&CkksCiphertextIndexedRecord]) -> Result<Vec<f32>, E>,
-    ) -> Result<Vec<ScoredPointOffset>, E> {
+    ) -> Result<Vec<ScoredPointOffset>, CkksCiphertextScoreError<E>> {
         let hits =
             self.search_ciphertext_records(ef, top, score_order, score_threshold, score_records)?;
 
@@ -413,7 +437,10 @@ impl CkksCiphertextVectorIndex {
         score_order: Order,
         score_threshold: Option<f32>,
         score_records: impl FnMut(&[&CkksCiphertextIndexedRecord]) -> Result<Vec<f32>, E>,
-    ) -> Result<Vec<CkksCiphertextHnswRecordHit<'_, CkksCiphertextIndexedRecord>>, E> {
+    ) -> Result<
+        Vec<CkksCiphertextHnswRecordHit<'_, CkksCiphertextIndexedRecord>>,
+        CkksCiphertextScoreError<E>,
+    > {
         self.index
             .search(ef, top, score_order, score_threshold, score_records)
     }
@@ -603,7 +630,7 @@ impl<C> CkksCiphertextHnswIndex<C> {
         m: usize,
         score_order: Order,
         mut score_previous_records: impl FnMut(&C, &[&C]) -> Result<Vec<f32>, E>,
-    ) -> Result<Self, E> {
+    ) -> Result<Self, CkksCiphertextScoreError<E>> {
         let graph = CkksCiphertextHnswGraph::build(records.len(), m, score_order, |idx| {
             let candidates = records[..idx].iter().collect::<Vec<_>>();
             score_previous_records(&records[idx], &candidates)
@@ -630,7 +657,7 @@ impl<C> CkksCiphertextHnswIndex<C> {
         score_order: Order,
         score_threshold: Option<f32>,
         mut score_records: impl FnMut(&[&C]) -> Result<Vec<f32>, E>,
-    ) -> Result<Vec<CkksCiphertextHnswRecordHit<'_, C>>, E> {
+    ) -> Result<Vec<CkksCiphertextHnswRecordHit<'_, C>>, CkksCiphertextScoreError<E>> {
         let hits = self
             .graph
             .search(ef, top, score_order, score_threshold, |candidates| {
@@ -1430,6 +1457,28 @@ mod tests {
     }
 
     #[test]
+    fn ciphertext_vector_index_build_rejects_score_count_mismatch() {
+        let err = CkksCiphertextVectorIndex::build(
+            vec![
+                CkksCiphertextIndexedRecord::new(7, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(8, b"ciphertext-b".to_vec()),
+            ],
+            1,
+            Order::LargeBetter,
+            |_record, _candidates| -> Result<Vec<f32>, std::convert::Infallible> { Ok(Vec::new()) },
+        )
+        .expect_err("build must reject bridge score count mismatch");
+
+        assert_eq!(
+            err,
+            CkksCiphertextVectorIndexBuildError::ScoreCountMismatch {
+                expected: 1,
+                actual: 0,
+            },
+        );
+    }
+
+    #[test]
     fn ciphertext_vector_index_exposes_segment_record_hits() {
         let graph =
             CkksCiphertextHnswGraph::from_validated_links(vec![vec![1], vec![0, 2], vec![1]])
@@ -1471,6 +1520,42 @@ mod tests {
             vec![(1, 43, 0.9), (2, 44, 0.7)],
         );
         assert_eq!(hits[0].record.ciphertext, b"ciphertext-b");
+    }
+
+    #[test]
+    fn ciphertext_vector_index_search_rejects_score_count_mismatch() {
+        let graph =
+            CkksCiphertextHnswGraph::from_validated_links(vec![vec![1], vec![0, 2], vec![1]])
+                .expect("valid reciprocal graph");
+        let index = CkksCiphertextVectorIndex::from_graph(
+            vec![
+                CkksCiphertextIndexedRecord::new(42, b"ciphertext-a".to_vec()),
+                CkksCiphertextIndexedRecord::new(43, b"ciphertext-b".to_vec()),
+                CkksCiphertextIndexedRecord::new(44, b"ciphertext-c".to_vec()),
+            ],
+            graph,
+        )
+        .expect("record count matches graph nodes");
+
+        let err = index
+            .search_ciphertext_records(
+                3,
+                2,
+                Order::LargeBetter,
+                None,
+                |candidates| -> Result<Vec<f32>, std::convert::Infallible> {
+                    Ok(vec![1.0; candidates.len().saturating_sub(1)])
+                },
+            )
+            .expect_err("search must reject bridge score count mismatch");
+
+        assert_eq!(
+            err,
+            CkksCiphertextScoreError::ScoreCountMismatch {
+                expected: 1,
+                actual: 0,
+            },
+        );
     }
 
     #[test]
