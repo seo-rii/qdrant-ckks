@@ -180,6 +180,7 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "public_key"
                         | "public_keys"
                         | "public_key_b64"
+                        | "signature_public_keys"
                         | "signature_public_key_b64"
                         | "crypto_context"
                         | "crypto_contexts"
@@ -246,6 +247,7 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "publickey"
                         | "publickeys"
                         | "publickeyb64"
+                        | "signaturepublickeys"
                         | "signaturepublickeyb64"
                         | "ciphertextb64"
                         | "ciphertextsb64"
@@ -566,6 +568,10 @@ mod tests {
                 "signature_b64": "qdrant-sec-signature-b64-log-sentinel",
                 "signatures_b64": ["qdrant-sec-signatures-b64-log-sentinel"],
                 "public_keys": ["qdrant-sec-public-keys-log-sentinel"],
+                "signature_public_keys": [{
+                    "key_id": "tenant-a/client-signing-v1",
+                    "public_key_b64": "qdrant-sec-signature-public-keys-log-sentinel"
+                }],
                 "crypto_context": "qdrant-sec-context-log-sentinel",
                 "crypto_contexts": ["qdrant-sec-contexts-log-sentinel"],
                 "context_digest": "qdrant-sec-context-digest-log-sentinel",
@@ -601,6 +607,7 @@ mod tests {
             "qdrant-sec-signatures-b64-log-sentinel",
             "qdrant-sec-public-key-log-sentinel",
             "qdrant-sec-public-keys-log-sentinel",
+            "qdrant-sec-signature-public-keys-log-sentinel",
             "qdrant-sec-context-log-sentinel",
             "qdrant-sec-contexts-log-sentinel",
             "qdrant-sec-context-digest-log-sentinel",
