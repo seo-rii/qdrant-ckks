@@ -35,7 +35,7 @@
 남은 대형 작업:
 
 - CKKS encrypted vector production-grade indexing: sidecar storage/search, segment-level ciphertext HNSW graph primitive, and client-supplied encrypted query ciphertext scoring are implemented, but plaintext-vector `HNSWIndex` file-format reuse, score decryption, and broader distributed rebuild/recovery coverage are still not implemented.
-- Background migration/re-encrypt job: plan/state primitive는 있지만 point scan, checkpoint resume, verification, rollback, old-key disable/destroy job은 아직 없다.
+- Crypto migration workflow: admin plan/rewrite/decrypt endpoints, point scan, verified checkpoint, decrypt completion, and re-encrypt primitive are implemented. 남은 범위는 background orchestration, persisted resume scheduling, rollback automation, and old-key disable/destroy retirement gate다.
 - Cluster-wide client nonce replay ledger: request/process/collection-local/reload cache는 있지만 consensus-backed global ledger는 없다.
 - Metadata encryption: server-side metadata value AEAD와 client-generated exact-match blind-index token field provider/query integration은 들어갔다. Metadata value AEAD는 `encrypted_payload=decrypted` read mode와 `payload_decrypt` 권한을 공유한다. Server-computed tokens, range/geo/full-text searchable encryption, and dedicated metadata RBAC는 아직 없다.
 - Encrypted payload read policy: raw envelope 반환은 기본값이고, REST/gRPC redacted/decrypted modes와 collection-scoped `payload_decrypt` capability는 연결되어 있다. 남은 범위는 export/read dump 정책과 SDK-side client envelope decrypt flow다.
@@ -70,15 +70,17 @@
 - encrypted payload marker와 CKKS vector envelope에 schema/epoch를 기록한다.
 - migration 상태를 `Disabled`, `Encrypting`, `Active`, `Rotating`, `Decrypting`으로 정의한다.
 - 일반 collection update에서는 encryption enable/disable/rule 변경을 계속 거부한다.
-- 별도 admin-only migration command 또는 내부 operation type을 설계한다.
-- migration dry-run이 변경 대상 point 수, selector 충돌, key availability를 보고하도록 만든다.
-- disable/decrypt migration은 기본 거부로 두고 명시적 admin flag와 snapshot backup precondition을 요구한다.
+- admin-only migration plan/rewrite/decrypt command를 유지하고, point scan과 verified checkpoint를 completion gate로 사용한다.
+- migration dry-run이 변경 대상 point 수, selector 충돌, key availability를 보고하도록 유지한다.
+- disable/decrypt migration은 client-side opaque envelope와 blind-index token을 건드리지 않으며, server-side decrypt completion은 verified checkpoint를 요구한다.
+- 남은 작업은 migration run을 background task로 예약/재개하고, 실패 rollback과 old-key disable/destroy retirement gate를 운영 API로 묶는 것이다.
 
 테스트:
 
 - migration 없이 encryption config 변경 시 실패한다.
 - migration 시작 후 collection 상태가 `Encrypting` 또는 `Rotating`으로 저장된다.
-- 중단 후 재시작 시 checkpoint부터 재개된다.
+- rewrite/decrypt endpoint가 verified checkpoint를 반환하고 completion plan이 shard coverage를 검증한다.
+- 중단 후 재시작 시 background scheduler가 저장된 checkpoint부터 재개한다.
 - 잘못된 key/runtime instance가 있으면 migration 시작 전에 실패한다.
 
 완료 조건:
@@ -97,8 +99,8 @@
 - runtime crypto material에 `key_version` 또는 `material_fingerprint`를 추가한다.
 - AEAD envelope와 CKKS vector metadata에 `key_version` 또는 `material_fingerprint`를 기록한다.
 - decrypt path는 active key와 retired key를 허용하되, encrypt path는 active key만 사용한다.
-- re-encrypt job을 Phase 1 migration framework 위에 구현한다.
-- old key retirement 전 full scan verification을 요구한다.
+- re-encrypt primitive를 Phase 1 migration framework 위에 유지하고, endpoint가 stale envelope를 active RK로 reseal한다.
+- old key retirement 전 full scan verification과 verified checkpoint를 요구한다.
 - inline key material은 production/security mode에서 거부하거나 warning/audit event를 남긴다.
 - KMS/Vault key source는 interface만 먼저 고정하고 구현은 provider별로 분리한다. File descriptor, Unix socket, Vault KV v2 direct material source는 운영용 fallback으로 유지한다.
 
