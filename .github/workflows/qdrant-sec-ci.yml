@@ -48,6 +48,12 @@ jobs:
       - name: Run segment-native CKKS ciphertext index tests
         run: cargo test --locked -p segment ckks_ciphertext
 
+      - name: Run encrypted vector runtime boundary tests
+        run: |
+          cargo test --locked -p qdrant vector_write_plan_
+          cargo test --locked -p qdrant encrypted_vector_from_payload
+          cargo test --locked -p qdrant delete_payload_rejects_encrypted_vector_sidecar_paths
+
       - name: Run encrypted payload read and migration tests
         run: |
           cargo test --locked -p qdrant server_side_encrypted_payload_read_mode_decrypts_get_and_scroll
