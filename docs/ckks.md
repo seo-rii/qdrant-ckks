@@ -567,6 +567,24 @@ runtime `rewrap_runtime_resource_key_materials_by_master_key` helper batches
 that primitive for every `active` or `retired` wrapped RK that references the
 old MK, preserving each RK's epoch, scope, and lifecycle state. `disabled` and
 `destroyed` RK records are not implicitly unwrapped during MK rotation.
+Operators can expose this primitive through the manage-only
+`POST /crypto/resource-keys/rewrap` endpoint:
+
+```json
+{
+  "old_wrapped_by": "tenant-a/mk-v1",
+  "new_wrapped_by": "tenant-a/mk-v2"
+}
+```
+
+The endpoint does not mutate in-memory settings or collection config. It returns
+a config patch containing only the rewrapped `wrapped_symmetric_key_32` material
+records that should be applied to the deployment config or external secret
+backend. This keeps MK rotation scoped to O(number of wrapped RKs) and avoids
+rewriting payload/vector data envelopes. The old and new MK material must both be
+available in the current runtime during the rewrap, and operators should roll out
+the resulting material patch atomically across nodes so runtime parity
+fingerprints stay aligned.
 RK rotation still requires a data re-encryption job and should use the explicit
 re-encryption mode rather than normal write-path idempotency. The
 `rk_id`/`rk_epoch` fields are included in AEAD AAD for server-generated payload
