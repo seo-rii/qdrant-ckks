@@ -1521,6 +1521,25 @@ mod tests {
     }
 
     #[test]
+    fn client_payload_nonce_replay_cache_rejects_duplicate_pending_keys_in_same_batch() {
+        let cache = ClientPayloadNonceReplayCache::default();
+        let key =
+            "collection-uuid\x1ftenant-a-key\x1ftenant-a-rk\x1f1\x1fAAAAAAAAAAAAAAAA".to_string();
+
+        assert!(
+            cache
+                .pending_keys([key.clone(), key.clone()])
+                .unwrap()
+                .is_none()
+        );
+        let pending = cache
+            .pending_keys([key.clone()])
+            .unwrap()
+            .expect("rejected duplicate batches must not partially record nonce keys");
+        assert_eq!(pending, vec![key]);
+    }
+
+    #[test]
     fn encrypted_automatic_transfer_requires_matching_crypto_runtime_peer_metadata() {
         let mut metadata = HashMap::<PeerId, PeerMetadata>::new();
         let err =
