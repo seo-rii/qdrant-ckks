@@ -10743,6 +10743,64 @@ mod tests {
     }
 
     #[test]
+    fn validate_recovered_collection_crypto_config_rejects_missing_payload_material() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_payload_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_AES_GCM_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            "tenant-a/missing-payload-v1".to_string(),
+                        )]),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a:docs",
+                            "material_fingerprint_id": "tenant-a/payload@v1",
+                        }),
+                    },
+                )]),
+                materials: HashMap::new(),
+                backends: HashMap::new(),
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = validate_recovered_collection_crypto_config(
+            &settings,
+            "docs",
+            &recovered_config(params, Some(Uuid::new_v4())),
+        )
+        .expect_err("missing payload material must fail restore preflight");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("payload crypto runtime validation failed")
+                    && description.contains("must bind role sym_key to a symmetric key material")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
     fn validate_collection_crypto_runtime_rejects_snapshot_vector_rule_without_runtime_instance() {
         let settings = Settings::new(None).unwrap();
         let params = CollectionParams {
