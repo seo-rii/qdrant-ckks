@@ -111,6 +111,10 @@ fn collection_operation_for_display(operation: &CollectionUpdateOperations, raw:
 
 #[cfg(test)]
 mod tests {
+    use qdrant_sec::{
+        CLIENT_ENCRYPTED_PAYLOAD_MARKER, ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_PAYLOAD_MARKER,
+        ENCRYPTED_VECTOR_SIDECAR_FIELD,
+    };
     use segment::types::{Payload, PointIdType};
     use serde_json::json;
     use shard::operations::payload_ops::{PayloadOps, SetPayloadOp};
@@ -124,7 +128,7 @@ mod tests {
                 payload: Payload(
                     json!({
                         "body": {
-                            "$qdrant_client_aead": {
+                            CLIENT_ENCRYPTED_PAYLOAD_MARKER: {
                                 "nonce": "client-nonce",
                                 "ciphertext": "client-ciphertext"
                             }
@@ -147,5 +151,61 @@ mod tests {
         assert!(!redacted.contains("client-ciphertext"));
         assert!(raw.contains("client-nonce"));
         assert!(raw.contains("client-ciphertext"));
+    }
+
+    #[test]
+    fn collection_wal_display_redacts_server_and_vector_envelopes_by_default() {
+        let operation =
+            CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
+                payload: Payload(
+                    json!({
+                        "body": {
+                            ENCRYPTED_PAYLOAD_MARKER: {
+                                "envelope": {
+                                    "nonce": "server-nonce-sentinel",
+                                    "ciphertext": "server-ciphertext-sentinel"
+                                }
+                            }
+                        },
+                        ENCRYPTED_VECTOR_SIDECAR_FIELD: {
+                            "embedding": {
+                                ENCRYPTED_CKKS_VECTOR_MARKER: {
+                                    "metadata": {
+                                        "envelope": {
+                                            "nonce": "vector-metadata-nonce-sentinel",
+                                            "ciphertext": "vector-metadata-ciphertext-sentinel"
+                                        }
+                                    },
+                                    "ciphertext": "ckks-vector-ciphertext-sentinel"
+                                }
+                            }
+                        }
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                ),
+                points: Some(vec![PointIdType::NumId(7)]),
+                filter: None,
+                key: None,
+            }));
+
+        let redacted = collection_operation_for_display(&operation, false);
+        let raw = collection_operation_for_display(&operation, true);
+
+        for sentinel in [
+            "server-nonce-sentinel",
+            "server-ciphertext-sentinel",
+            "vector-metadata-nonce-sentinel",
+            "vector-metadata-ciphertext-sentinel",
+            "ckks-vector-ciphertext-sentinel",
+        ] {
+            assert!(
+                !redacted.contains(sentinel),
+                "default WAL display leaked {sentinel}",
+            );
+            assert!(raw.contains(sentinel), "raw WAL display lost {sentinel}");
+        }
+        assert!(redacted.contains("[redacted]"));
     }
 }
