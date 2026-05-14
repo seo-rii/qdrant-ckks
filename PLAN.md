@@ -235,7 +235,7 @@
 작업 순서:
 
 - `metadata/aes-256-gcm@v1` metadata value AEAD와 `metadata/blind-index-hmac@v1` exact-match token provider contract를 분리한다. Exact-match blind-index token field는 `metadata/blind-index-hmac@v1` + `metadata-exact-match-token/v1`로 구현되어 있고, Qdrant는 token을 계산하지 않는다.
-- metadata value envelope schema는 server-side `$qdrant_sec` AEAD marker를 사용하며 payload text와 동일한 write-provenance/fail-closed guard를 탄다.
+- metadata value envelope schema는 server-side `$qdrant_sec` AEAD marker를 사용하며 payload text와 동일한 write-provenance/fail-closed guard와 `encrypted_payload=decrypted` read policy를 탄다.
 - exact-match token은 client/SDK가 deterministic HMAC/HKDF subkey로 만들고 원문 값을 저장하지 않는다.
 - payload filter planner가 encrypted metadata field에 range/geo/full-text filter를 요청하면 거부한다.
 - exact-match filter는 별도 blind-index token field를 대상으로 할 때만 허용한다.
@@ -243,7 +243,7 @@
 
 테스트:
 
-- metadata value는 현재 retrieve/search/scroll에서 raw marker로 반환되고, future decrypt/RBAC read mode 전까지 서버 복호화 응답을 제공하지 않는다.
+- metadata value는 retrieve/search/scroll에서 기본 raw marker로 반환되고, `encrypted_payload=decrypted`와 collection `payload_decrypt` 권한이 함께 있을 때 서버가 복호화해 반환한다.
 - exact-match filter는 blind index token으로 동작한다.
 - range/geo/full-text filter는 실패한다.
 - metadata value selector는 `metadata-value/v1` binding과 `metadata/aes-256-gcm@v1` provider일 때만 허용하고, unsupported metadata bindings/providers는 계속 fail-closed 한다.
