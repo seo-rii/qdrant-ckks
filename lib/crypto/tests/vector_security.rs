@@ -928,6 +928,10 @@ if resource.getrlimit(resource.RLIMIT_CORE) != (0, 0):
     print("core dumps were not disabled", file=sys.stderr)
     raise SystemExit(19)
 
+if resource.getrlimit(resource.RLIMIT_FSIZE) != (0, 0):
+    print("regular file writes were not disabled", file=sys.stderr)
+    raise SystemExit(23)
+
 current_umask = os.umask(0o077)
 os.umask(current_umask)
 if current_umask != 0o077:

@@ -1213,7 +1213,7 @@ impl CommandOpenFheBackend {
         for name in &self.sensitive_env_names {
             command.env_remove(name);
         }
-        configure_bridge_command_sandbox(&mut command);
+        configure_bridge_command_sandbox(&mut command, self.checked_program);
 
         let mut child = command
             .spawn()
@@ -1354,16 +1354,17 @@ fn serialize_bridge_request_without_public_material<T: CommandOpenFheContextRequ
 }
 
 #[cfg(target_os = "linux")]
-fn configure_bridge_command_sandbox(command: &mut Command) {
+fn configure_bridge_command_sandbox(command: &mut Command, checked_program: bool) {
     // This is not a full sandbox, but it prevents the bridge process from
     // gaining privileges through setuid binaries or file capabilities after
     // Qdrant has already validated the executable path and ownership. It also
-    // disables core dumps for the plaintext-bearing bridge process and
-    // restricts default permissions for any bridge-created files. The
+    // disables core dumps for the plaintext-bearing bridge process, restricts
+    // default permissions for any bridge-created files, and blocks regular
+    // file writes for checked production bridge binaries. The
     // parent-death signal prevents a bridge from staying alive as an orphan if
     // Qdrant exits while the bridge is handling plaintext embeddings.
     unsafe {
-        command.pre_exec(|| {
+        command.pre_exec(move || {
             let result = nix::libc::prctl(nix::libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
             if result != 0 {
                 return Err(io::Error::last_os_error());
@@ -1372,13 +1373,19 @@ fn configure_bridge_command_sandbox(command: &mut Command) {
             if result != 0 {
                 return Err(io::Error::last_os_error());
             }
-            let core_limit = nix::libc::rlimit {
+            let zero_limit = nix::libc::rlimit {
                 rlim_cur: 0,
                 rlim_max: 0,
             };
-            let result = nix::libc::setrlimit(nix::libc::RLIMIT_CORE, &core_limit);
+            let result = nix::libc::setrlimit(nix::libc::RLIMIT_CORE, &zero_limit);
             if result != 0 {
                 return Err(io::Error::last_os_error());
+            }
+            if checked_program {
+                let result = nix::libc::setrlimit(nix::libc::RLIMIT_FSIZE, &zero_limit);
+                if result != 0 {
+                    return Err(io::Error::last_os_error());
+                }
             }
             nix::libc::umask(0o077);
             Ok(())
@@ -1387,7 +1394,7 @@ fn configure_bridge_command_sandbox(command: &mut Command) {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn configure_bridge_command_sandbox(_command: &mut Command) {}
+fn configure_bridge_command_sandbox(_command: &mut Command, _checked_program: bool) {}
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case")]

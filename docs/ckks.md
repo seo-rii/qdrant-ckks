@@ -652,11 +652,13 @@ crypto:
 
 Generic OpenFHE backends currently accept only `process` or `process_pool`.
 Any other backend `kind` is rejected during runtime settings validation.
-On Linux, Qdrant sets `no_new_privs` and a parent-death `SIGKILL` immediately
-before spawning the configured bridge process. This is not a complete sandbox,
-but it prevents privilege gain through setuid binaries or file capabilities and
-reduces orphaned plaintext-bearing bridge exposure after bridge path, ownership,
-mode, parent directory, and optional SHA-256 pin checks have passed. Treat these
+On Linux, Qdrant sets `no_new_privs`, a parent-death `SIGKILL`, `RLIMIT_CORE=0`,
+and, for checked bridge binaries, `RLIMIT_FSIZE=0` immediately before spawning
+the configured bridge process. This is not a complete sandbox, but it prevents
+privilege gain through setuid binaries or file capabilities, reduces orphaned
+plaintext-bearing bridge exposure, disables normal core dumps, and prevents the
+checked bridge from writing regular files after bridge path, ownership, mode,
+parent directory, and optional SHA-256 pin checks have passed. Treat these
 settings as pre-exec process hardening, not as a post-exec confinement boundary:
 kernel attributes such as dumpability can be reset by `exec`, and production
 deployments that need a strict bridge sandbox should still run the bridge under
@@ -1023,17 +1025,18 @@ on Unix. On Linux, checked bridge workers are spawned through a
 `/proc/self/fd/<fd>` path backed by the same no-follow validated bridge file
 descriptor held open through `spawn`, which narrows the path-swap window between
 validation, hashing, and execution.
-Treat any bridge path change as privileged code
-execution under the Qdrant service account. On Linux, the checked bridge spawn path also
-sets `no_new_privs`, parent-death `SIGKILL`, and `RLIMIT_CORE=0` so the
-plaintext-bearing bridge cannot gain extra privileges through
-setuid/file-capability execution, is killed if Qdrant exits, and does not
-produce normal core dumps. Checked bridge workers start with an empty inherited
-environment plus a fixed `/usr/sbin:/usr/bin:/sbin:/bin` `PATH` for
-`/usr/bin/env` shebang compatibility, so env-backed Qdrant settings, crypto
-material, `LD_PRELOAD`, `PYTHONPATH`, and other service environment values are
-not handed to the bridge process by default. Test-only unchecked bridge workers
-still remove `QDRANT`/`QDRANT_*` and explicitly configured sensitive env names.
+Treat any bridge path change as privileged code execution under the Qdrant
+service account. On Linux, the checked bridge spawn path also sets
+`no_new_privs`, parent-death `SIGKILL`, `RLIMIT_CORE=0`, and `RLIMIT_FSIZE=0`
+so the plaintext-bearing bridge cannot gain extra privileges through
+setuid/file-capability execution, is killed if Qdrant exits, does not produce
+normal core dumps, and cannot write regular files. Checked bridge workers start
+with an empty inherited environment plus a fixed
+`/usr/sbin:/usr/bin:/sbin:/bin` `PATH` for `/usr/bin/env` shebang compatibility,
+so env-backed Qdrant settings, crypto material, `LD_PRELOAD`, `PYTHONPATH`, and
+other service environment values are not handed to the bridge process by
+default. Test-only unchecked bridge workers still remove `QDRANT`/`QDRANT_*`
+and explicitly configured sensitive env names.
 
 Request fields:
 
