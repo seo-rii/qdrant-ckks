@@ -4796,7 +4796,7 @@ async fn payload_decrypt_plan_for_read(
     )
     .map_err(|err| {
         StorageError::service_error(format!(
-            "payload decrypt runtime for collection {collection_name} is invalid: {err}",
+            "payload/metadata decrypt runtime for collection {collection_name} is invalid: {err}",
         ))
     })?;
 
@@ -4805,8 +4805,8 @@ async fn payload_decrypt_plan_for_read(
     {
         return Err(StorageError::bad_input(format!(
             "encrypted payload read mode 'decrypted' for collection {collection_name} requires \
-             server-side payload encryption rules; client-side envelopes are opaque and must be \
-             decrypted by the client SDK",
+             server-side payload text or metadata value AEAD rules; client-side envelopes are \
+             opaque and must be decrypted by the client SDK",
         )));
     }
 
