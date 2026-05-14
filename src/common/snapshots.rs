@@ -710,4 +710,75 @@ mod tests {
             "unexpected error: {err:?}",
         );
     }
+
+    #[test]
+    fn shard_snapshot_recovery_rejects_missing_ckks_vector_metadata_material() {
+        let settings = Settings {
+            crypto: crate::settings::CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_vector_v1".to_string(),
+                    crate::settings::CryptoInstanceConfig {
+                        provider: VECTOR_OPENFHE_CKKS_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            "sym_key".to_string(),
+                            "tenant-a/missing-vector-v1".to_string(),
+                        )]),
+                        backend_ref: Some("openfhe_local".to_string()),
+                        options: serde_json::json!({
+                            "key_id": "tenant-a:docs",
+                            "material_fingerprint_id": "tenant-a/vector@v1",
+                            "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                            "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                            "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                        }),
+                    },
+                )]),
+                materials: HashMap::new(),
+                backends: HashMap::from([(
+                    "openfhe_local".to_string(),
+                    crate::settings::CryptoBackendConfig {
+                        kind: "process_pool".to_string(),
+                        program: Some("/usr/local/bin/openfhe-bridge".to_string()),
+                        sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
+                        size: Some(1),
+                        timeout_ms: Some(5_000),
+                    },
+                )]),
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let mut params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "embedding_conf".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["embedding".to_string()],
+                    },
+                    instance: "docs_vector_v1".to_string(),
+                    binding: Some(VECTOR_ENVELOPE_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        params.vectors = VectorsConfig::Multi(BTreeMap::from([(
+            "embedding".to_string(),
+            VectorParamsBuilder::new(2, Distance::Dot).build(),
+        )]));
+        let config = config_with_params(params);
+
+        let err = validate_shard_snapshot_recovery_crypto_runtime(Some(&settings), "docs", &config)
+            .expect_err("missing vector metadata material must fail shard recovery preflight");
+
+        assert!(
+            err.to_string()
+                .contains("references unknown metadata key material tenant-a/missing-vector-v1"),
+            "unexpected error: {err:?}",
+        );
+    }
 }
