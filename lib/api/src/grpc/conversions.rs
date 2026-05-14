@@ -3636,6 +3636,33 @@ mod tests {
     }
 
     #[test]
+    fn grpc_payload_selector_roundtrips_decrypted_read_policy() {
+        let selector: WithPayloadSelector = segment::types::WithPayloadInterface::Encrypted(
+            segment::types::PayloadEncryptedReadPolicy {
+                encrypted_payload: segment::types::EncryptedPayloadReadMode::Decrypted,
+            },
+        )
+        .into();
+
+        assert_eq!(
+            selector.selector_options,
+            Some(SelectorOptions::Encrypted(PayloadEncryptedSelector {
+                mode: GrpcEncryptedPayloadReadMode::EncryptedPayloadDecrypted as i32,
+            })),
+        );
+
+        let roundtrip = segment::types::WithPayloadInterface::try_from(selector).unwrap();
+        assert_eq!(
+            roundtrip,
+            segment::types::WithPayloadInterface::Encrypted(
+                segment::types::PayloadEncryptedReadPolicy {
+                    encrypted_payload: segment::types::EncryptedPayloadReadMode::Decrypted,
+                },
+            ),
+        );
+    }
+
+    #[test]
     fn grpc_payload_selector_rejects_invalid_encrypted_read_mode() {
         let selector = WithPayloadSelector {
             selector_options: Some(SelectorOptions::Encrypted(PayloadEncryptedSelector {

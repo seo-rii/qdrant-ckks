@@ -301,6 +301,20 @@ mod tests {
     }
 
     #[test]
+    fn point_read_params_support_decrypted_payload_query_mode() {
+        let params: PointReadParams =
+            serde_urlencoded::from_str("encrypted_payload=decrypted").unwrap();
+
+        assert_eq!(params.read, ReadParams::default());
+        assert_eq!(
+            params.with_payload(),
+            WithPayloadInterface::Encrypted(PayloadEncryptedReadPolicy {
+                encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+            }),
+        );
+    }
+
+    #[test]
     fn point_read_params_keep_default_payload_enabled() {
         let params: PointReadParams = serde_urlencoded::from_str("consistency=majority").unwrap();
 
