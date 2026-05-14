@@ -1123,6 +1123,65 @@ done
 
 #[cfg(unix)]
 #[test]
+fn command_openfhe_backend_reregisters_context_after_worker_restart() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("restarted-context-openfhe-bridge.sh");
+    let count_path = dir.path().join("bridge-process-count");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+count_file="$1"
+count=0
+if [[ -f "$count_file" ]]; then
+  count="$(cat "$count_file")"
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$count_file"
+
+IFS= read -r request
+case "$request" in
+  *'"operation":"encrypt"'*'"scheme":"openfhe-ckks"'*'"context_id"'*'"parameters"'*'"crypto_context"'*'"public_key"'*) ;;
+  *) exit 8 ;;
+esac
+
+if [[ "$count" -eq 1 ]]; then
+  printf 'not-json\n'
+else
+  printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
+fi
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash").with_args([
+        script_path.display().to_string(),
+        count_path.display().to_string(),
+    ]);
+    let encryptor = test_ckks_encryptor(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+
+    encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0, 2.0])
+        .unwrap_err();
+    encryptor
+        .encrypt("docs", "point-2", &public_material(), &[3.0, 4.0])
+        .unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn command_openfhe_backend_reuses_registered_context_for_score_and_query_requests() {
     use std::os::unix::fs::PermissionsExt;
 
