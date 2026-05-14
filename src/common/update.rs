@@ -6807,6 +6807,7 @@ esac
         let dispatcher = Dispatcher::new(toc.clone());
         let auth = Auth::new_internal(Access::full("For test"));
         let settings = metadata_value_runtime_settings();
+        let metadata_sentinel = "qdrant-sec-metadata-value-sentinel-6f2c9a31";
 
         runtime.block_on(async {
             dispatcher
@@ -6848,7 +6849,7 @@ esac
                         id: 1.into(),
                         vector: api::rest::VectorStruct::Single(vec![0.1, 0.2]),
                         payload: Some(segment::types::Payload(
-                            json!({ "tenant_id": "acme", "title": "public" })
+                            json!({ "tenant_id": metadata_sentinel, "title": "public" })
                                 .as_object()
                                 .unwrap()
                                 .clone(),
@@ -6960,7 +6961,7 @@ esac
             let decrypted_payload = decrypted_records[0].payload.as_ref().unwrap();
             assert_eq!(
                 decrypted_payload.0.get("tenant_id").and_then(Value::as_str),
-                Some("acme"),
+                Some(metadata_sentinel),
             );
             assert_eq!(
                 decrypted_payload.0.get("title").and_then(Value::as_str),
@@ -6997,7 +6998,7 @@ esac
                     .as_ref()
                     .and_then(|payload| payload.0.get("tenant_id"))
                     .and_then(Value::as_str),
-                Some("acme"),
+                Some(metadata_sentinel),
             );
 
             let decrypted_search = crate::common::query::do_search_points(
@@ -7032,9 +7033,35 @@ esac
                     .as_ref()
                     .and_then(|payload| payload.0.get("tenant_id"))
                     .and_then(Value::as_str),
-                Some("acme"),
+                Some(metadata_sentinel),
             );
         });
+
+        let sentinel = metadata_sentinel.as_bytes();
+        for root in [storage_dir.path(), temp_dir.path()] {
+            let mut pending = vec![root.to_path_buf()];
+            while let Some(path) = pending.pop() {
+                let metadata = std::fs::metadata(&path).unwrap();
+                if metadata.is_dir() {
+                    for entry in std::fs::read_dir(&path).unwrap() {
+                        pending.push(entry.unwrap().path());
+                    }
+                    continue;
+                }
+                if !metadata.is_file() {
+                    continue;
+                }
+
+                let bytes = std::fs::read(&path).unwrap();
+                assert!(
+                    !bytes
+                        .windows(sentinel.len())
+                        .any(|window| window == sentinel),
+                    "metadata value plaintext sentinel leaked into {}",
+                    path.display(),
+                );
+            }
+        }
     }
 
     #[test]
