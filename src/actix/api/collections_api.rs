@@ -200,6 +200,8 @@ pub struct RunPayloadCryptoMigration {
     pub active_rk_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retired_rk_id: Option<String>,
+    #[serde(default)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -207,6 +209,7 @@ pub struct RunPayloadCryptoMigrationResponse {
     pub checkpoints: Vec<CryptoMigrationCheckpoint>,
     pub completion_plan: CryptoMigrationPlan,
     pub completed: bool,
+    pub dry_run: bool,
 }
 
 fn payload_crypto_migration_completion_plan(
@@ -349,6 +352,7 @@ async fn run_payloads_for_crypto_migration(
         let migration_state = encryption.migration_state;
         let target_epoch = encryption.encryption_epoch;
         let request = operation.into_inner();
+        let dry_run = request.dry_run;
 
         validate_payload_crypto_migration_run_request_for_config(
             migration_state,
@@ -365,6 +369,7 @@ async fn run_payloads_for_crypto_migration(
                     &collection_name,
                     settings.get_ref(),
                     &auth,
+                    dry_run,
                 )
                 .await?
             }
@@ -374,6 +379,7 @@ async fn run_payloads_for_crypto_migration(
                     &collection_name,
                     settings.get_ref(),
                     &auth,
+                    dry_run,
                 )
                 .await?
             }
@@ -398,21 +404,26 @@ async fn run_payloads_for_crypto_migration(
                     "payload crypto migration completion plan is invalid: {err}",
                 ))
             })?;
-        let completed = dispatcher
-            .submit_collection_meta_op(
-                CollectionMetaOperations::ApplyCryptoMigration(ApplyCryptoMigrationPlan {
-                    collection_name: collection_name.clone(),
-                    plan: completion_plan.clone(),
-                }),
-                auth,
-                query.timeout(),
-            )
-            .await?;
+        let completed = if dry_run {
+            false
+        } else {
+            dispatcher
+                .submit_collection_meta_op(
+                    CollectionMetaOperations::ApplyCryptoMigration(ApplyCryptoMigrationPlan {
+                        collection_name: collection_name.clone(),
+                        plan: completion_plan.clone(),
+                    }),
+                    auth,
+                    query.timeout(),
+                )
+                .await?
+        };
 
         Ok(RunPayloadCryptoMigrationResponse {
             checkpoints: completion_plan.checkpoints.clone(),
             completion_plan,
             completed,
+            dry_run,
         })
     }
     .await;
@@ -434,6 +445,7 @@ async fn rewrite_payloads_for_crypto_migration(
         &collection.collection_name,
         settings.get_ref(),
         &auth,
+        false,
     )
     .await;
     process_response(response, timing, None)
@@ -453,6 +465,7 @@ async fn decrypt_payloads_for_crypto_migration(
         &collection.collection_name,
         settings.get_ref(),
         &auth,
+        false,
     )
     .await;
     process_response(response, timing, None)
@@ -675,6 +688,7 @@ mod tests {
             RunPayloadCryptoMigration {
                 active_rk_id: "rk/docs/4".to_string(),
                 retired_rk_id: Some("rk/docs/3".to_string()),
+                dry_run: false,
             },
             vec![verified_checkpoint()],
         )
@@ -697,6 +711,7 @@ mod tests {
                 RunPayloadCryptoMigration {
                     active_rk_id: "rk/docs/4".to_string(),
                     retired_rk_id: None,
+                    dry_run: false,
                 },
                 vec![verified_checkpoint()],
             )
@@ -710,6 +725,7 @@ mod tests {
                 RunPayloadCryptoMigration {
                     active_rk_id: "rk/docs/3".to_string(),
                     retired_rk_id: Some("rk/docs/2".to_string()),
+                    dry_run: false,
                 },
                 vec![verified_checkpoint()],
             )
@@ -723,6 +739,7 @@ mod tests {
                 RunPayloadCryptoMigration {
                     active_rk_id: "rk/docs/3".to_string(),
                     retired_rk_id: None,
+                    dry_run: false,
                 },
                 vec![verified_checkpoint()],
             )
@@ -740,6 +757,7 @@ mod tests {
             &RunPayloadCryptoMigration {
                 active_rk_id: "rk/docs/4".to_string(),
                 retired_rk_id: None,
+                dry_run: false,
             },
             &rotating,
         );
@@ -754,6 +772,7 @@ mod tests {
             &RunPayloadCryptoMigration {
                 active_rk_id: "rk docs 4".to_string(),
                 retired_rk_id: Some("rk/docs/3".to_string()),
+                dry_run: false,
             },
             &rotating,
         );
@@ -768,6 +787,7 @@ mod tests {
             &RunPayloadCryptoMigration {
                 active_rk_id: "rk/docs/4".to_string(),
                 retired_rk_id: Some("rk/docs/3".to_string()),
+                dry_run: false,
             },
             &rotating,
         )

@@ -1480,6 +1480,23 @@ async fn crypto_migration_rewrites_stale_payload_envelopes_and_returns_checkpoin
     )
     .unwrap();
 
+    let dry_run_checkpoints = collection
+        .dry_run_payloads_for_crypto_migration(|point_id, payload| {
+            rotating_encryptor
+                .encrypt_selected_fields_with_mode_for_runtime(
+                    &point_id.to_string(),
+                    &mut payload.0,
+                    &policy,
+                    &collection_crypto_id,
+                    ExistingPayloadMode::ReencryptIfStale,
+                )
+                .map_err(|err| CollectionError::bad_input(err.to_string()))
+        })
+        .await
+        .unwrap();
+    assert_eq!(dry_run_checkpoints.len(), 1);
+    assert_eq!(dry_run_checkpoints[0].changed_points, 1);
+
     let checkpoints = collection
         .rewrite_payloads_for_crypto_migration(|point_id, payload| {
             rotating_encryptor

@@ -211,6 +211,31 @@ impl Collection {
 
     pub async fn rewrite_payloads_for_crypto_migration<F, R>(
         &self,
+        rewrite_payload: F,
+    ) -> CollectionResult<Vec<CryptoMigrationCheckpoint>>
+    where
+        F: FnMut(&ExtendedPointId, &mut Payload) -> CollectionResult<R>,
+        R: Into<CryptoPayloadMigrationRewrite>,
+    {
+        self.rewrite_payloads_for_crypto_migration_inner(false, rewrite_payload)
+            .await
+    }
+
+    pub async fn dry_run_payloads_for_crypto_migration<F, R>(
+        &self,
+        rewrite_payload: F,
+    ) -> CollectionResult<Vec<CryptoMigrationCheckpoint>>
+    where
+        F: FnMut(&ExtendedPointId, &mut Payload) -> CollectionResult<R>,
+        R: Into<CryptoPayloadMigrationRewrite>,
+    {
+        self.rewrite_payloads_for_crypto_migration_inner(true, rewrite_payload)
+            .await
+    }
+
+    async fn rewrite_payloads_for_crypto_migration_inner<F, R>(
+        &self,
+        dry_run: bool,
         mut rewrite_payload: F,
     ) -> CollectionResult<Vec<CryptoMigrationCheckpoint>>
     where
@@ -497,6 +522,9 @@ impl Collection {
                         continue;
                     }
                     changed_points += 1;
+                    if dry_run {
+                        continue;
+                    }
 
                     let operation = CollectionUpdateOperations::PayloadOperation(
                         PayloadOps::OverwritePayload(SetPayloadOp {

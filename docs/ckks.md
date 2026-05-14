@@ -762,7 +762,8 @@ when completing `Rotating -> Active`, the retired RK id:
 ```json
 {
   "active_rk_id": "rk/docs/4",
-  "retired_rk_id": "rk/docs/3"
+  "retired_rk_id": "rk/docs/3",
+  "dry_run": false
 }
 ```
 
@@ -772,7 +773,10 @@ against the current collection config. Invalid completion requests fail before
 any payload rewrite/decrypt scan starts. Valid requests then run the appropriate
 payload rewrite/decrypt scan, build the completion `CryptoMigrationPlan` from
 the returned verified checkpoints, validate it again against the current
-collection config, and submit the admin completion operation. It is still a
+collection config, and submit the admin completion operation. If `dry_run` is
+`true`, the endpoint still validates runtime material and returns verified
+checkpoints plus the completion plan it would submit, but it does not write
+payload changes and does not apply the completion transition. It is still a
 foreground admin operation, not a cluster-wide background scheduler; interrupted
 or failed runs should be rerun to produce fresh checkpoints.
 After a verified `Decrypting -> Disabled` completion, the stored encryption

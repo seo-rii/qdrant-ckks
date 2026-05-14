@@ -27,7 +27,9 @@ use qdrant_sec::{
 use schemars::JsonSchema;
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
 use segment::json_path::{JsonPath, JsonPathItem};
-use segment::types::{Filter, Payload, PayloadFieldSchema, PayloadKeyType, StrictModeConfig};
+use segment::types::{
+    ExtendedPointId, Filter, Payload, PayloadFieldSchema, PayloadKeyType, StrictModeConfig,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::DurationSeconds;
@@ -1575,6 +1577,7 @@ pub async fn do_reencrypt_stale_payloads_for_crypto_migration(
     collection_name: &str,
     runtime_settings: &Settings,
     auth: &Auth,
+    dry_run: bool,
 ) -> Result<Vec<CryptoMigrationCheckpoint>, StorageError> {
     let collection_pass = auth.check_collection_access(
         collection_name,
@@ -1623,26 +1626,35 @@ pub async fn do_reencrypt_stale_payloads_for_crypto_migration(
         )));
     }
 
-    collection
-        .rewrite_payloads_for_crypto_migration(|point_id, payload| {
-            plan.reencrypt_payload_if_stale_for_crypto_migration(&point_id.to_string(), payload)
-                .map(|outcome| {
-                    (
-                        outcome.changed,
-                        outcome
-                            .verified_server_envelope_keys
-                            .into_iter()
-                            .collect::<Vec<_>>(),
-                    )
-                })
-                .map_err(|err| {
-                    CollectionError::bad_input(format!(
-                        "payload crypto migration rewrite failed for point {point_id}: {err}",
-                    ))
-                })
-        })
-        .await
-        .map_err(StorageError::from)
+    let rewrite_payload = |point_id: &ExtendedPointId,
+                           payload: &mut Payload|
+     -> CollectionResult<(usize, Vec<ServerPayloadVerifiedEnvelopeKey>)> {
+        plan.reencrypt_payload_if_stale_for_crypto_migration(&point_id.to_string(), payload)
+            .map(|outcome| {
+                (
+                    outcome.changed,
+                    outcome
+                        .verified_server_envelope_keys
+                        .into_iter()
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .map_err(|err| {
+                CollectionError::bad_input(format!(
+                    "payload crypto migration rewrite failed for point {point_id}: {err}",
+                ))
+            })
+    };
+    if dry_run {
+        collection
+            .dry_run_payloads_for_crypto_migration(rewrite_payload)
+            .await
+    } else {
+        collection
+            .rewrite_payloads_for_crypto_migration(rewrite_payload)
+            .await
+    }
+    .map_err(StorageError::from)
 }
 
 pub async fn do_decrypt_payloads_for_crypto_migration(
@@ -1650,6 +1662,7 @@ pub async fn do_decrypt_payloads_for_crypto_migration(
     collection_name: &str,
     runtime_settings: &Settings,
     auth: &Auth,
+    dry_run: bool,
 ) -> Result<Vec<CryptoMigrationCheckpoint>, StorageError> {
     let collection_pass = auth.check_collection_access(
         collection_name,
@@ -1695,17 +1708,25 @@ pub async fn do_decrypt_payloads_for_crypto_migration(
         )));
     }
 
-    collection
-        .rewrite_payloads_for_crypto_migration(|point_id, payload| {
+    let decrypt_payload =
+        |point_id: &ExtendedPointId, payload: &mut Payload| -> CollectionResult<usize> {
             plan.decrypt_payload_for_crypto_migration(&point_id.to_string(), payload)
                 .map_err(|err| {
                     CollectionError::bad_input(format!(
                         "payload crypto migration decrypt failed for point {point_id}: {err}",
                     ))
                 })
-        })
-        .await
-        .map_err(StorageError::from)
+        };
+    if dry_run {
+        collection
+            .dry_run_payloads_for_crypto_migration(decrypt_payload)
+            .await
+    } else {
+        collection
+            .rewrite_payloads_for_crypto_migration(decrypt_payload)
+            .await
+    }
+    .map_err(StorageError::from)
 }
 
 async fn maybe_encrypt_upsert_payloads(
