@@ -136,6 +136,14 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                 } else {
                     key
                 };
+                let compact_key;
+                let key_without_separators = if key.bytes().any(|byte| matches!(byte, b'_' | b'-'))
+                {
+                    compact_key = key.replace('_', "").replace('-', "");
+                    compact_key.as_str()
+                } else {
+                    key
+                };
                 if matches!(
                     key,
                     "payload"
@@ -210,6 +218,47 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "private_key_b64"
                         | "secret_key"
                         | "secret_key_b64"
+                ) || matches!(
+                    key_without_separators,
+                    "xapikey"
+                        | "setcookie"
+                        | "accesstoken"
+                        | "refreshtoken"
+                        | "bearertoken"
+                        | "idtoken"
+                        | "sessiontoken"
+                        | "vaulttoken"
+                        | "xvaulttoken"
+                        | "clientsecret"
+                        | "privatekey"
+                        | "privatekeyb64"
+                        | "secretkey"
+                        | "secretkeyb64"
+                        | "publickey"
+                        | "publickeys"
+                        | "publickeyb64"
+                        | "signaturepublickeyb64"
+                        | "cryptocontext"
+                        | "cryptocontexts"
+                        | "contextdigest"
+                        | "contextdigests"
+                        | "encryptedquery"
+                        | "encryptedqueries"
+                        | "wrappedkey"
+                        | "wrappedkeys"
+                        | "wrappedkeyb64"
+                        | "wrappedkeysb64"
+                        | "valueb64"
+                        | "valuesb64"
+                        | "secretb64"
+                        | "keymaterial"
+                        | "keymaterialb64"
+                        | "masterkey"
+                        | "masterkeyb64"
+                        | "resourcekey"
+                        | "resourcekeyb64"
+                        | "wrappingkey"
+                        | "wrappingkeyb64"
                 ) {
                     *value = Value::String("[redacted]".to_string());
                 } else {
@@ -528,6 +577,47 @@ mod tests {
             "qdrant-sec-wrapped-keys-log-sentinel",
             "qdrant-sec-inline-key-log-sentinel",
             "qdrant-sec-inline-keys-log-sentinel",
+        ] {
+            assert!(!serialized.contains(sentinel));
+        }
+        assert!(serialized.contains("[redacted]"));
+    }
+
+    #[test]
+    fn log_value_redacts_sensitive_camel_and_kebab_case_fields() {
+        let mut value = json!({
+            "bridgeRequest": {
+                "encryptedQuery": "qdrant-sec-camel-encrypted-query-log-sentinel",
+                "cryptoContext": "qdrant-sec-camel-crypto-context-log-sentinel",
+                "contextDigest": "qdrant-sec-camel-context-digest-log-sentinel",
+                "publicKeyB64": "qdrant-sec-camel-public-key-log-sentinel",
+                "wrappedKeyB64": "qdrant-sec-camel-wrapped-key-log-sentinel",
+                "valueB64": "qdrant-sec-camel-value-log-sentinel"
+            },
+            "headers": {
+                "xApiKey": "qdrant-sec-camel-api-key-log-sentinel",
+                "set-cookie": "qdrant-sec-kebab-set-cookie-log-sentinel",
+                "x-vault-token": "qdrant-sec-kebab-vault-token-log-sentinel"
+            },
+            "tls": {
+                "privateKeyB64": "qdrant-sec-camel-private-key-log-sentinel"
+            }
+        });
+
+        redact_sensitive_log_fields(&mut value);
+        let serialized = serde_json::to_string(&value).unwrap();
+
+        for sentinel in [
+            "qdrant-sec-camel-encrypted-query-log-sentinel",
+            "qdrant-sec-camel-crypto-context-log-sentinel",
+            "qdrant-sec-camel-context-digest-log-sentinel",
+            "qdrant-sec-camel-public-key-log-sentinel",
+            "qdrant-sec-camel-wrapped-key-log-sentinel",
+            "qdrant-sec-camel-value-log-sentinel",
+            "qdrant-sec-camel-api-key-log-sentinel",
+            "qdrant-sec-kebab-set-cookie-log-sentinel",
+            "qdrant-sec-kebab-vault-token-log-sentinel",
+            "qdrant-sec-camel-private-key-log-sentinel",
         ] {
             assert!(!serialized.contains(sentinel));
         }
