@@ -1401,6 +1401,41 @@ mod tests {
     }
 
     #[test]
+    fn ciphertext_vector_index_rejects_plaintext_vector_update_api() {
+        let mut index = CkksCiphertextVectorIndex::build_optimizer_candidate_graph(
+            vec![CkksCiphertextIndexedRecord::new(
+                10,
+                b"ciphertext-a".to_vec(),
+            )],
+            1,
+        )
+        .unwrap();
+        let vector = vec![1.0];
+
+        let err = index
+            .update_vector(
+                10,
+                Some(VectorRef::from(&vector)),
+                &HardwareCounterCell::disposable(),
+            )
+            .expect_err("ciphertext index must reject plaintext vector updates");
+        assert!(
+            err.to_string()
+                .contains("cannot be updated with plaintext vectors"),
+            "unexpected error: {err:?}",
+        );
+
+        let err = index
+            .update_vector(10, None, &HardwareCounterCell::disposable())
+            .expect_err("ciphertext index must reject plaintext vector deletions");
+        assert!(
+            err.to_string()
+                .contains("cannot be updated with plaintext vectors"),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
     fn ciphertext_vector_index_can_reopen_from_valid_graph() {
         let records = vec![
             CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
