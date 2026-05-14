@@ -954,7 +954,7 @@ mod ckks_tests {
 
     #[test]
     fn crypto_migration_plan_validates_against_current_config() {
-        use CryptoMigrationState::{Active, Rotating};
+        use CryptoMigrationState::{Active, Disabled, Rotating};
 
         let current = CollectionEncryptionConfig {
             version: 1,
@@ -1115,6 +1115,31 @@ mod ckks_tests {
             .unwrap();
         assert_eq!(applied_completion.migration_state, Active);
         assert_eq!(applied_completion.encryption_epoch, 4);
+
+        let mut decrypting_current = current.clone();
+        decrypting_current.migration_state = CryptoMigrationState::Decrypting;
+        decrypting_current.encryption_epoch = 3;
+        let complete_decryption = CryptoMigrationPlan {
+            from: CryptoMigrationState::Decrypting,
+            to: Disabled,
+            target_epoch: 3,
+            active_rk_id: Some("rk/docs/3".to_string()),
+            retired_rk_id: None,
+            dry_run: false,
+            checkpoints: vec![CryptoMigrationCheckpoint {
+                shard_id: 0,
+                total_points: 10,
+                processed_points: 10,
+                rewritten_points: 10,
+                changed_points: 0,
+                status: CryptoMigrationCheckpointStatus::Verified,
+            }],
+        };
+        let applied_decryption = complete_decryption
+            .apply_to_config(&decrypting_current)
+            .unwrap();
+        assert_eq!(applied_decryption.migration_state, Disabled);
+        assert_eq!(applied_decryption.encryption_epoch, 3);
 
         let wrong_current_state = CryptoMigrationPlan {
             from: Rotating,
