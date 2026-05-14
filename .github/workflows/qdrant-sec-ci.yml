@@ -81,6 +81,7 @@ jobs:
 
       - name: Run runtime material source hardening tests
         run: |
+          cargo test --locked -p qdrant validate_crypto_settings_
           cargo test --locked -p qdrant validate_material_
           cargo test --locked -p qdrant decode_direct_material_key_
 
