@@ -65,6 +65,7 @@ jobs:
 
       - name: Run encrypted leakage integration tests
         run: |
+          cargo test --locked -p qdrant do_upsert_points_encrypts_payload_before_storage
           cargo test --locked -p collection encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_files --test integration
           cargo test --locked -p collection encrypted_vector_rejects_plaintext_vector_writes --test integration
 
