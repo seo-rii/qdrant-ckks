@@ -10,8 +10,8 @@ use qdrant_sec::{
     CkksEncryptedQueryScoreBatchInput, CkksEncryptionInput, CkksError, CkksParameters,
     CkksPlaintextQueryScoreBatchInput, CkksPlaintextQueryScoreInput, CkksPublicMaterial,
     CkksVectorBackend, CkksVectorBatchItem, CkksVectorEncryptor, CommandOpenFheBackend,
-    EncryptedCkksVector, EncryptionContext, EncryptionError, SecretKey,
-    ckks_vector_sidecar_envelope_key,
+    ENCRYPTED_CKKS_VECTOR_MARKER, EncryptedCkksVector, EncryptionContext, EncryptionError,
+    SecretKey, ckks_vector_sidecar_envelope_key,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -232,6 +232,30 @@ fn encrypt_sidecar_payload_value_returns_runtime_verified_proof() {
             .unwrap()
             .unwrap();
     assert_ne!(proof.envelope_key(), &wrong_point_key);
+
+    let mut tampered_value = value.clone();
+    tampered_value
+        .get_mut(ENCRYPTED_CKKS_VECTOR_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut("envelope")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert(
+            "ciphertext".to_string(),
+            serde_json::Value::String(BASE64URL_NOPAD.encode(b"tampered-ckks-ciphertext")),
+        );
+    let tampered_key = ckks_vector_sidecar_envelope_key(
+        &tampered_value,
+        "collection-uuid-1",
+        "point-1",
+        "embedding",
+    )
+    .unwrap()
+    .unwrap();
+    assert_ne!(proof.envelope_key(), &tampered_key);
 }
 
 #[test]
