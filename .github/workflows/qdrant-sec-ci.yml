@@ -42,6 +42,9 @@ jobs:
       - name: Run crypto migration state-machine tests
         run: cargo test --locked -p collection crypto_migration --lib
 
+      - name: Run crypto migration integration tests
+        run: cargo test --locked -p collection crypto_migration_ --test integration
+
       - name: Run qdrant-sec runtime tests
         run: cargo test --locked -p qdrant ckks
 
