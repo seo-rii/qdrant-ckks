@@ -873,4 +873,17 @@ mod tests {
         assert!(cache.record([key.clone()]).unwrap());
         assert!(!cache.record([key]).unwrap());
     }
+
+    #[test]
+    fn client_payload_nonce_replay_cache_rejects_duplicate_scoped_keys_in_same_batch() {
+        let mut cache = ClientPayloadNonceReplayCache::default();
+        let key =
+            "collection-uuid\x1ftenant-a-key\x1ftenant-a-rk\x1f1\x1fAAAAAAAAAAAAAAAA".to_string();
+
+        assert!(!cache.record([key.clone(), key.clone()]).unwrap());
+        assert!(
+            cache.record([key]).unwrap(),
+            "rejected duplicate batches must not partially record nonce keys"
+        );
+    }
 }
