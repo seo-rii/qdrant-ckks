@@ -56,6 +56,7 @@ pub const ALIASES_PATH: &str = "aliases";
 pub const COLLECTIONS_DIR: &str = "collections";
 pub const FULL_SNAPSHOT_FILE_NAME: &str = "full-snapshot";
 const CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_CAPACITY: usize = 1_000_000;
+const CLIENT_PAYLOAD_NONCE_REPLAY_ERROR: &str = "client encrypted payload nonce was already used in this collection; regenerate the client-side envelope with a fresh nonce before retrying";
 
 /// How long to wait till deleted collection is released from previous operations
 pub const COLLECTION_DELETE_WAIT_TIMEOUT: Duration = Duration::from_secs(60 * 10); // 10 mins
@@ -334,7 +335,7 @@ impl TableOfContent {
         let mut cache = self.client_payload_nonce_replay_cache.lock().await;
         if !cache.record(scoped_keys)? {
             return Err(StorageError::bad_input(
-                "client encrypted payload nonce was already used in this collection".to_string(),
+                CLIENT_PAYLOAD_NONCE_REPLAY_ERROR.to_string(),
             ));
         }
 
@@ -885,5 +886,12 @@ mod tests {
             cache.record([key]).unwrap(),
             "rejected duplicate batches must not partially record nonce keys"
         );
+    }
+
+    #[test]
+    fn client_payload_nonce_replay_error_tells_clients_to_regenerate_envelopes() {
+        assert!(CLIENT_PAYLOAD_NONCE_REPLAY_ERROR.contains("nonce was already used"));
+        assert!(CLIENT_PAYLOAD_NONCE_REPLAY_ERROR.contains("regenerate the client-side envelope"));
+        assert!(CLIENT_PAYLOAD_NONCE_REPLAY_ERROR.contains("fresh nonce before retrying"));
     }
 }
