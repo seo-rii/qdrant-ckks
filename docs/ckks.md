@@ -723,13 +723,15 @@ crypto:
       env: QDRANT_VECTOR_METADATA_KEY_B64
   backends:
     openfhe_local:
-      kind: process_pool
+      kind: process_pool_landlock
       program: /usr/local/bin/openfhe-bridge
       sha256_b64: base64url-no-pad-sha256-of-bridge
 ```
 
-Generic OpenFHE backends currently accept only `process` or `process_pool`.
-Any other backend `kind` is rejected during runtime settings validation.
+Generic OpenFHE backends currently accept `process`, `process_pool`, and on
+Linux the Landlock-enforcing `process_landlock` / `process_pool_landlock`
+variants. Any other backend `kind` is rejected during runtime settings
+validation.
 On Linux, Qdrant sets `no_new_privs`, a parent-death `SIGKILL`, `RLIMIT_CORE=0`,
 and, for checked bridge binaries, `RLIMIT_FSIZE=0` immediately before spawning
 the configured bridge process. This is not a complete sandbox, but it prevents
@@ -737,11 +739,12 @@ privilege gain through setuid binaries or file capabilities, reduces orphaned
 plaintext-bearing bridge exposure, disables normal core dumps, and prevents the
 checked bridge from writing regular files after bridge path, ownership, mode,
 parent directory, and optional SHA-256 pin checks have passed. Treat these
-settings as pre-exec process hardening, not as a post-exec confinement boundary:
-kernel attributes such as dumpability can be reset by `exec`, and production
-deployments that need a strict bridge sandbox should still run the bridge under
-an external confinement layer such as seccomp, AppArmor, Landlock, or a
-dedicated container profile.
+settings as pre-exec process hardening. The Landlock variants additionally
+install a write-deny Landlock ruleset in the bridge child before `exec`, blocking
+regular file writes, file creation, removal, rename/link, and truncation
+operations for kernels that support the configured Landlock ABI. Production
+deployments that need broader confinement should still run the bridge under an
+external seccomp/AppArmor/container profile.
 
 Collection encryption rules and runtime instances must use the same explicit
 provider instance and `key_id`; runtime validation rejects missing instances,

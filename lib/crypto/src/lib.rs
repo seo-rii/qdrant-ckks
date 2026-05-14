@@ -26,6 +26,9 @@ pub use control_plane::{
     VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER, VectorProviderFactory,
 };
 pub use openfhe::CommandOpenFheBackend;
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub use openfhe::linux_landlock_write_deny_supported_for_tests;
 pub use payload::{
     CLIENT_ENCRYPTED_PAYLOAD_MARKER, ClientPayloadEnvelopeKey, ClientPayloadNonceReplayKey,
     ClientPayloadSignatureVerification, ClientPayloadValidationContext,

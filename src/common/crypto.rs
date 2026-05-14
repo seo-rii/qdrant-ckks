@@ -88,6 +88,8 @@ pub enum CryptoSetupError {
     InvalidBackendSize { backend: String, reason: String },
     #[error("crypto backend {backend} timeout is invalid: {reason}")]
     InvalidBackendTimeout { backend: String, reason: String },
+    #[error("crypto backend {backend} sandbox is invalid: {reason}")]
+    InvalidBackendSandbox { backend: String, reason: String },
     #[error(
         "crypto instance {instance} references unknown material {material_ref} for role {role}"
     )]
@@ -159,6 +161,10 @@ const VECTOR_OPENFHE_CKKS_ALLOWED_OPTIONS: &[&str] = &[
     CKKS_PUBLIC_KEY_B64_OPTION,
 ];
 const VECTOR_OPENFHE_CKKS_ALLOWED_MATERIAL_ROLES: &[&str] = &[PAYLOAD_SYM_KEY_ROLE];
+const OPENFHE_BACKEND_KIND_PROCESS: &str = "process";
+const OPENFHE_BACKEND_KIND_PROCESS_POOL: &str = "process_pool";
+const OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK: &str = "process_landlock";
+const OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK: &str = "process_pool_landlock";
 const METADATA_BLIND_INDEX_ALLOWED_OPTIONS: &[&str] = &[
     "key_id",
     EXPECTED_RK_ID_OPTION,
@@ -1141,6 +1147,12 @@ fn openfhe_backend_from_config(
     backend: &CryptoBackendConfig,
     settings: &CryptoSettings,
 ) -> Result<CommandOpenFheBackend, StorageError> {
+    if openfhe_backend_kind_uses_landlock(&backend.kind) && !cfg!(target_os = "linux") {
+        return Err(StorageError::bad_input(format!(
+            "crypto backend {backend_name} kind {} requires Linux Landlock support",
+            backend.kind,
+        )));
+    }
     let Some(program) = backend.program.as_deref() else {
         return Err(StorageError::bad_input(format!(
             "crypto backend {backend_name} requires program",
@@ -1163,9 +1175,14 @@ fn openfhe_backend_from_config(
         command_backend = command_backend.with_timeout(Duration::from_millis(timeout_ms));
     }
     command_backend = command_backend.with_sensitive_env_names(crypto_secret_env_names(settings));
+    if openfhe_backend_kind_uses_landlock(&backend.kind) {
+        command_backend = command_backend.with_linux_landlock_write_deny_sandbox();
+    }
     let pool_size = match backend.kind.as_str() {
-        "process_pool" => backend.size.unwrap_or(1),
-        "process" => 1,
+        OPENFHE_BACKEND_KIND_PROCESS_POOL | OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK => {
+            backend.size.unwrap_or(1)
+        }
+        OPENFHE_BACKEND_KIND_PROCESS | OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK => 1,
         kind => {
             return Err(StorageError::bad_input(format!(
                 "crypto backend {backend_name} has unsupported kind {kind}",
@@ -1178,6 +1195,13 @@ fn openfhe_backend_from_config(
         )));
     };
     Ok(command_backend.with_pool_size(pool_size))
+}
+
+fn openfhe_backend_kind_uses_landlock(kind: &str) -> bool {
+    matches!(
+        kind,
+        OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK | OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK
+    )
 }
 
 fn crypto_secret_env_names(settings: &CryptoSettings) -> Vec<String> {
@@ -2637,8 +2661,15 @@ fn validate_backend(
     backend_name: &str,
     backend: &CryptoBackendConfig,
 ) -> Result<(), CryptoSetupError> {
+    if openfhe_backend_kind_uses_landlock(&backend.kind) && !cfg!(target_os = "linux") {
+        return Err(CryptoSetupError::InvalidBackendSandbox {
+            backend: backend_name.to_string(),
+            reason: "Landlock bridge sandbox is only supported on Linux".to_string(),
+        });
+    }
+
     match backend.kind.as_str() {
-        "process_pool" => {
+        OPENFHE_BACKEND_KIND_PROCESS_POOL | OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK => {
             if backend.size == Some(0) {
                 return Err(CryptoSetupError::InvalidBackendSize {
                     backend: backend_name.to_string(),
@@ -2646,7 +2677,7 @@ fn validate_backend(
                 });
             }
         }
-        "process" => {
+        OPENFHE_BACKEND_KIND_PROCESS | OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK => {
             if backend.size.is_some_and(|size| size > 1) {
                 return Err(CryptoSetupError::InvalidBackendSize {
                     backend: backend_name.to_string(),
@@ -2691,15 +2722,22 @@ fn validate_collection_runtime_backend_metadata(
     backend_name: &str,
     backend: &CryptoBackendConfig,
 ) -> Result<(), StorageError> {
+    if openfhe_backend_kind_uses_landlock(&backend.kind) && !cfg!(target_os = "linux") {
+        return Err(StorageError::bad_input(format!(
+            "collection {collection_name} vector crypto instance {instance_name} backend {backend_name} kind {} requires Linux Landlock support",
+            backend.kind,
+        )));
+    }
+
     match backend.kind.as_str() {
-        "process_pool" => {
+        OPENFHE_BACKEND_KIND_PROCESS_POOL | OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK => {
             if backend.size == Some(0) {
                 return Err(StorageError::bad_input(format!(
                     "collection {collection_name} vector crypto instance {instance_name} backend {backend_name} process_pool size must be at least 1",
                 )));
             }
         }
-        "process" => {
+        OPENFHE_BACKEND_KIND_PROCESS | OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK => {
             if backend.size.is_some_and(|size| size > 1) {
                 return Err(StorageError::bad_input(format!(
                     "collection {collection_name} vector crypto instance {instance_name} backend {backend_name} process size must be omitted or 1",
@@ -7709,6 +7747,50 @@ mod tests {
     }
 
     #[test]
+    fn validate_backend_accepts_landlock_process_kinds() {
+        let program = std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let sha256_b64 = current_exe_sha256_b64();
+
+        let process_result = validate_backend(
+            "openfhe_local",
+            &CryptoBackendConfig {
+                kind: OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK.to_string(),
+                program: Some(program.clone()),
+                sha256_b64: Some(sha256_b64.clone()),
+                size: None,
+                timeout_ms: Some(5_000),
+            },
+        );
+        let pool_result = validate_backend(
+            "openfhe_local",
+            &CryptoBackendConfig {
+                kind: OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK.to_string(),
+                program: Some(program),
+                sha256_b64: Some(sha256_b64),
+                size: Some(2),
+                timeout_ms: Some(5_000),
+            },
+        );
+
+        if cfg!(target_os = "linux") {
+            assert_eq!(process_result, Ok(()));
+            assert_eq!(pool_result, Ok(()));
+        } else {
+            assert!(matches!(
+                process_result,
+                Err(CryptoSetupError::InvalidBackendSandbox { .. })
+            ));
+            assert!(matches!(
+                pool_result,
+                Err(CryptoSetupError::InvalidBackendSandbox { .. })
+            ));
+        }
+    }
+
+    #[test]
     fn openfhe_backend_factory_requires_bridge_sha256_pin() {
         let program = std::env::current_exe().unwrap();
         let err = openfhe_backend_from_config(
@@ -7773,6 +7855,29 @@ mod tests {
         .unwrap();
 
         assert!(format!("{backend:?}").contains("sensitive_env_names_count: 2"));
+    }
+
+    #[test]
+    fn openfhe_backend_factory_enables_landlock_sandbox_kind() {
+        let program = std::env::current_exe().unwrap();
+        let backend_result = openfhe_backend_from_config(
+            "openfhe_local",
+            &CryptoBackendConfig {
+                kind: OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK.to_string(),
+                program: Some(program.to_string_lossy().to_string()),
+                sha256_b64: Some(current_exe_sha256_b64()),
+                size: None,
+                timeout_ms: Some(5_000),
+            },
+            &CryptoSettings::default(),
+        );
+
+        if cfg!(target_os = "linux") {
+            let backend = backend_result.unwrap();
+            assert!(format!("{backend:?}").contains("LinuxLandlockWriteDeny"));
+        } else {
+            assert!(matches!(backend_result, Err(StorageError::BadInput { .. })));
+        }
     }
 
     #[test]

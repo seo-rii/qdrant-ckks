@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use data_encoding::BASE64URL_NOPAD;
+#[cfg(target_os = "linux")]
+use qdrant_sec::linux_landlock_write_deny_supported_for_tests;
 use qdrant_sec::{
     AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CkksBatchEncryptionInput,
     CkksEncryptedQueryScoreBatchInput, CkksEncryptionInput, CkksError, CkksParameters,
@@ -1018,6 +1020,70 @@ print('{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext"
     }
     let encrypted = encrypted.unwrap();
     assert_eq!(encrypted.version, 1);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn command_openfhe_backend_landlock_sandbox_denies_file_creation() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if !linux_landlock_write_deny_supported_for_tests() {
+        eprintln!("skipping Landlock bridge sandbox test: kernel does not support Landlock");
+        return;
+    }
+
+    let dir = tempfile::Builder::new()
+        .prefix("openfhe-landlock")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let denied_path = dir.path().join("bridge-created-file");
+    let script_path = dir.path().join("checked-openfhe-bridge.sh");
+    fs::write(
+        &script_path,
+        format!(
+            r#"#!/usr/bin/env python3
+import os
+import sys
+
+try:
+    open({denied_path:?}, "w", encoding="utf-8").close()
+except OSError:
+    pass
+else:
+    print("Landlock did not deny bridge file creation", file=sys.stderr)
+    raise SystemExit(31)
+
+sys.stdin.readline()
+print('{{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}}', flush=True)
+"#,
+            denied_path = denied_path.to_string_lossy(),
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new_checked(&script_path)
+        .unwrap()
+        .with_linux_landlock_write_deny_sandbox();
+    let encryptor = test_ckks_encryptor(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+
+    let encrypted = encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0])
+        .unwrap();
+    assert_eq!(encrypted.version, 1);
+    assert!(
+        !denied_path.exists(),
+        "Landlock sandbox must prevent bridge-created files"
+    );
 }
 
 #[cfg(unix)]

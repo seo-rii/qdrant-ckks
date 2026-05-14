@@ -25,6 +25,12 @@ const DEFAULT_BRIDGE_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 const MIN_OPENFHE_SECURITY_LEVEL_BITS: u16 = 128;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BridgeSandbox {
+    ProcessHardening,
+    LinuxLandlockWriteDeny,
+}
+
 #[derive(Clone)]
 pub struct CommandOpenFheBackend {
     program: PathBuf,
@@ -34,6 +40,7 @@ pub struct CommandOpenFheBackend {
     pool_size: NonZeroUsize,
     checked_program: bool,
     expected_sha256_b64: Option<String>,
+    sandbox: BridgeSandbox,
     sensitive_env_names: Vec<String>,
     workers: Arc<Mutex<Vec<Arc<WorkerProcess>>>>,
     next_worker: Arc<AtomicUsize>,
@@ -52,6 +59,7 @@ impl std::fmt::Debug for CommandOpenFheBackend {
                 "expected_sha256_b64",
                 &self.expected_sha256_b64.as_ref().map(|_| "<configured>"),
             )
+            .field("sandbox", &self.sandbox)
             .field("sensitive_env_names_count", &self.sensitive_env_names.len())
             .finish()
     }
@@ -66,6 +74,7 @@ impl PartialEq for CommandOpenFheBackend {
             && self.pool_size == other.pool_size
             && self.checked_program == other.checked_program
             && self.expected_sha256_b64 == other.expected_sha256_b64
+            && self.sandbox == other.sandbox
             && self.sensitive_env_names == other.sensitive_env_names
     }
 }
@@ -166,6 +175,7 @@ impl CommandOpenFheBackend {
             pool_size: NonZeroUsize::new(1).expect("pool size must be non-zero"),
             checked_program: false,
             expected_sha256_b64: None,
+            sandbox: BridgeSandbox::ProcessHardening,
             sensitive_env_names: Vec::new(),
             workers: Arc::new(Mutex::new(Vec::new())),
             next_worker: Arc::new(AtomicUsize::new(0)),
@@ -233,6 +243,13 @@ impl CommandOpenFheBackend {
 
     pub fn with_pool_size(mut self, pool_size: NonZeroUsize) -> Self {
         self.pool_size = pool_size;
+        self.workers = Arc::new(Mutex::new(Vec::new()));
+        self.next_worker = Arc::new(AtomicUsize::new(0));
+        self
+    }
+
+    pub fn with_linux_landlock_write_deny_sandbox(mut self) -> Self {
+        self.sandbox = BridgeSandbox::LinuxLandlockWriteDeny;
         self.workers = Arc::new(Mutex::new(Vec::new()));
         self.next_worker = Arc::new(AtomicUsize::new(0));
         self
@@ -1214,7 +1231,7 @@ impl CommandOpenFheBackend {
         for name in &self.sensitive_env_names {
             command.env_remove(name);
         }
-        configure_bridge_command_sandbox(&mut command, self.checked_program);
+        configure_bridge_command_sandbox(&mut command, self.checked_program, self.sandbox);
 
         let mut child = command
             .spawn()
@@ -1355,7 +1372,134 @@ fn serialize_bridge_request_without_public_material<T: CommandOpenFheContextRequ
 }
 
 #[cfg(target_os = "linux")]
-fn configure_bridge_command_sandbox(command: &mut Command, checked_program: bool) {
+#[repr(C)]
+struct LandlockRulesetAttr {
+    handled_access_fs: u64,
+}
+
+#[cfg(target_os = "linux")]
+const LANDLOCK_CREATE_RULESET_VERSION: u32 = 1;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_WRITE_FILE: u64 = 1 << 1;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_REMOVE_DIR: u64 = 1 << 4;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_REMOVE_FILE: u64 = 1 << 5;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_MAKE_CHAR: u64 = 1 << 6;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_MAKE_DIR: u64 = 1 << 7;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_MAKE_REG: u64 = 1 << 8;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_MAKE_SOCK: u64 = 1 << 9;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_MAKE_FIFO: u64 = 1 << 10;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_MAKE_BLOCK: u64 = 1 << 11;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_MAKE_SYM: u64 = 1 << 12;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_REFER: u64 = 1 << 13;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_TRUNCATE: u64 = 1 << 14;
+
+#[cfg(target_os = "linux")]
+fn linux_landlock_write_deny_supported() -> bool {
+    linux_landlock_abi_version().is_ok_and(|version| version >= 1)
+}
+
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub fn linux_landlock_write_deny_supported_for_tests() -> bool {
+    linux_landlock_write_deny_supported()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_landlock_abi_version() -> io::Result<i64> {
+    let version = unsafe {
+        nix::libc::syscall(
+            nix::libc::SYS_landlock_create_ruleset,
+            std::ptr::null::<LandlockRulesetAttr>(),
+            0usize,
+            LANDLOCK_CREATE_RULESET_VERSION,
+        )
+    };
+    if version < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(version)
+}
+
+#[cfg(target_os = "linux")]
+fn landlock_write_deny_access_for_abi(abi_version: i64) -> u64 {
+    let mut access = LANDLOCK_ACCESS_FS_WRITE_FILE
+        | LANDLOCK_ACCESS_FS_REMOVE_DIR
+        | LANDLOCK_ACCESS_FS_REMOVE_FILE
+        | LANDLOCK_ACCESS_FS_MAKE_CHAR
+        | LANDLOCK_ACCESS_FS_MAKE_DIR
+        | LANDLOCK_ACCESS_FS_MAKE_REG
+        | LANDLOCK_ACCESS_FS_MAKE_SOCK
+        | LANDLOCK_ACCESS_FS_MAKE_FIFO
+        | LANDLOCK_ACCESS_FS_MAKE_BLOCK
+        | LANDLOCK_ACCESS_FS_MAKE_SYM;
+    if abi_version >= 2 {
+        access |= LANDLOCK_ACCESS_FS_REFER;
+    }
+    if abi_version >= 3 {
+        access |= LANDLOCK_ACCESS_FS_TRUNCATE;
+    }
+    access
+}
+
+#[cfg(target_os = "linux")]
+fn apply_linux_landlock_write_deny() -> io::Result<()> {
+    let abi_version = linux_landlock_abi_version()?;
+    if abi_version < 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Linux Landlock ABI is unavailable",
+        ));
+    }
+
+    let attr = LandlockRulesetAttr {
+        handled_access_fs: landlock_write_deny_access_for_abi(abi_version),
+    };
+    let ruleset_fd = unsafe {
+        nix::libc::syscall(
+            nix::libc::SYS_landlock_create_ruleset,
+            &attr as *const LandlockRulesetAttr,
+            std::mem::size_of::<LandlockRulesetAttr>(),
+            0u32,
+        )
+    };
+    if ruleset_fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    let restrict_result =
+        unsafe { nix::libc::syscall(nix::libc::SYS_landlock_restrict_self, ruleset_fd, 0u32) };
+    let restrict_error = if restrict_result != 0 {
+        Some(io::Error::last_os_error())
+    } else {
+        None
+    };
+    let close_result = unsafe { nix::libc::close(ruleset_fd as nix::libc::c_int) };
+    if let Some(err) = restrict_error {
+        return Err(err);
+    }
+    if close_result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn configure_bridge_command_sandbox(
+    command: &mut Command,
+    checked_program: bool,
+    sandbox: BridgeSandbox,
+) {
     // This is not a full sandbox, but it prevents the bridge process from
     // gaining privileges through setuid binaries or file capabilities after
     // Qdrant has already validated the executable path and ownership. It also
@@ -1388,6 +1532,9 @@ fn configure_bridge_command_sandbox(command: &mut Command, checked_program: bool
                     return Err(io::Error::last_os_error());
                 }
             }
+            if sandbox == BridgeSandbox::LinuxLandlockWriteDeny {
+                apply_linux_landlock_write_deny()?;
+            }
             nix::libc::umask(0o077);
             Ok(())
         });
@@ -1395,7 +1542,12 @@ fn configure_bridge_command_sandbox(command: &mut Command, checked_program: bool
 }
 
 #[cfg(not(target_os = "linux"))]
-fn configure_bridge_command_sandbox(_command: &mut Command, _checked_program: bool) {}
+fn configure_bridge_command_sandbox(
+    _command: &mut Command,
+    _checked_program: bool,
+    _sandbox: BridgeSandbox,
+) {
+}
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
