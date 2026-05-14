@@ -1789,8 +1789,11 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
             PAYLOAD_AES_GCM_PROVIDER | METADATA_AES_GCM_PROVIDER | VECTOR_OPENFHE_CKKS_PROVIDER
         ) && let Some(active_material_ref) = instance.materials.get(PAYLOAD_SYM_KEY_ROLE)
             && let Some(active_material) = settings.materials.get(active_material_ref)
-            && active_material.kind == WRAPPED_SYMMETRIC_KEY_32_KIND
-            && wrapped_resource_key_state(active_material) != RESOURCE_KEY_STATE_ACTIVE
+            && matches!(
+                active_material.kind.as_str(),
+                SYMMETRIC_KEY_32_KIND | WRAPPED_SYMMETRIC_KEY_32_KIND
+            )
+            && resource_key_state(active_material) != RESOURCE_KEY_STATE_ACTIVE
         {
             return Err(CryptoSetupError::InvalidInstanceOption {
                 instance: instance_name.clone(),
@@ -1984,16 +1987,6 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                         material_ref: retired_material_ref.to_string(),
                     });
                 };
-                if retired_material_config.kind == WRAPPED_SYMMETRIC_KEY_32_KIND
-                    && wrapped_resource_key_state(retired_material_config)
-                        != RESOURCE_KEY_STATE_RETIRED
-                {
-                    return Err(CryptoSetupError::InvalidInstanceOption {
-                        instance: instance_name.clone(),
-                        option: RETIRED_MATERIALS_OPTION.to_string(),
-                        reason: "wrapped retired material must have state retired".to_string(),
-                    });
-                }
                 if retired_material_config.rk_epoch.is_none() {
                     return Err(CryptoSetupError::InvalidInstanceOption {
                         instance: instance_name.clone(),
@@ -2001,6 +1994,17 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                         reason: format!(
                             "retired material {retired_material_ref} must set rk_epoch"
                         ),
+                    });
+                }
+                if matches!(
+                    retired_material_config.kind.as_str(),
+                    SYMMETRIC_KEY_32_KIND | WRAPPED_SYMMETRIC_KEY_32_KIND
+                ) && resource_key_state(retired_material_config) != RESOURCE_KEY_STATE_RETIRED
+                {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: RETIRED_MATERIALS_OPTION.to_string(),
+                        reason: "retired material must have state retired".to_string(),
                     });
                 }
             }
@@ -2045,7 +2049,30 @@ fn validate_material(
         });
     }
 
-    if material.wrapped_by.is_some()
+    if material.kind == SYMMETRIC_KEY_32_KIND {
+        if material.wrapped_by.is_some()
+            || material.wrap_algorithm.is_some()
+            || material.nonce.is_some()
+            || material.wrapped_key_b64.is_some()
+        {
+            return Err(CryptoSetupError::InvalidWrappedMaterial {
+                material: material_name.to_string(),
+                reason: "wrapping fields are only valid for wrapped_symmetric_key_32 materials"
+                    .to_string(),
+            });
+        }
+        match resource_key_state(material) {
+            RESOURCE_KEY_STATE_ACTIVE | RESOURCE_KEY_STATE_RETIRED => {}
+            state => {
+                return Err(CryptoSetupError::InvalidWrappedMaterial {
+                    material: material_name.to_string(),
+                    reason: format!(
+                        "direct symmetric resource key state {state} is unsupported; use wrapped_symmetric_key_32 for disabled/destroyed lifecycle"
+                    ),
+                });
+            }
+        }
+    } else if material.wrapped_by.is_some()
         || material.wrap_algorithm.is_some()
         || material.nonce.is_some()
         || material.wrapped_key_b64.is_some()
@@ -2054,7 +2081,7 @@ fn validate_material(
     {
         return Err(CryptoSetupError::InvalidWrappedMaterial {
             material: material_name.to_string(),
-            reason: "wrapped key fields are only valid for wrapped_symmetric_key_32 materials"
+            reason: "resource-key lifecycle fields are only valid for symmetric_key_32 or wrapped_symmetric_key_32 materials"
                 .to_string(),
         });
     }
@@ -2596,6 +2623,10 @@ fn validate_wrapped_resource_key_material(
 }
 
 fn wrapped_resource_key_state(material: &CryptoMaterialConfig) -> &str {
+    resource_key_state(material)
+}
+
+fn resource_key_state(material: &CryptoMaterialConfig) -> &str {
     material
         .state
         .as_deref()
@@ -5620,6 +5651,21 @@ mod tests {
             .get_mut("tenant-a/payload-v1")
             .unwrap()
             .rk_epoch = Some(1);
+        assert!(matches!(
+            validate_crypto_settings(&settings),
+            Err(CryptoSetupError::InvalidInstanceOption {
+                instance,
+                option,
+                reason,
+            }) if instance == "docs_payload_v1"
+                && option == RETIRED_MATERIALS_OPTION
+                && reason == "retired material must have state retired"
+        ));
+        settings
+            .materials
+            .get_mut("tenant-a/payload-v1")
+            .unwrap()
+            .state = Some(RESOURCE_KEY_STATE_RETIRED.to_string());
         validate_crypto_settings(&settings).unwrap();
 
         let mut active_without_epoch_settings = settings.clone();
@@ -5637,6 +5683,36 @@ mod tests {
             }) if instance == "docs_payload_v1"
                 && option == "materials.sym_key"
                 && reason == "payload/aes-256-gcm@v1 sym_key material tenant-a/payload-v2 must set rk_epoch"
+        ));
+
+        let mut active_direct_retired_settings = settings.clone();
+        active_direct_retired_settings
+            .materials
+            .get_mut("tenant-a/payload-v2")
+            .unwrap()
+            .state = Some(RESOURCE_KEY_STATE_RETIRED.to_string());
+        assert!(matches!(
+            validate_crypto_settings(&active_direct_retired_settings),
+            Err(CryptoSetupError::InvalidInstanceOption {
+                instance,
+                option,
+                reason,
+            }) if instance == "docs_payload_v1"
+                && option == "materials"
+                && reason == "active sym_key material tenant-a/payload-v2 must have state active"
+        ));
+
+        let mut direct_destroyed_settings = settings.clone();
+        direct_destroyed_settings
+            .materials
+            .get_mut("tenant-a/payload-v1")
+            .unwrap()
+            .state = Some(RESOURCE_KEY_STATE_DESTROYED.to_string());
+        assert!(matches!(
+            validate_crypto_settings(&direct_destroyed_settings),
+            Err(CryptoSetupError::InvalidWrappedMaterial { material, reason })
+                if material == "tenant-a/payload-v1"
+                    && reason.contains("direct symmetric resource key state destroyed is unsupported")
         ));
 
         settings
