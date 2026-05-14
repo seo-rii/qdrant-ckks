@@ -16,10 +16,12 @@ impl ErrorReporter {
 
     /// Build serialized JSON payload for telemetry error reporting.
     fn build_report_payload(error: &str, reporting_id: &str, backtrace: Option<&str>) -> String {
+        let error = redact_crypto_material_for_report(error);
+        let backtrace = backtrace.map(redact_crypto_material_for_report);
         let report = json!({
             "id": reporting_id,
             "error": error,
-            "backtrace": backtrace,
+            "backtrace": backtrace.as_deref(),
         });
         report.to_string()
     }
@@ -50,6 +52,37 @@ impl ErrorReporter {
     }
 }
 
+fn redact_crypto_material_for_report(value: &str) -> String {
+    let compact = value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    let contains_crypto_material = [
+        "qdrantsec",
+        "qdrantclientaead",
+        "qdrantsecvectors",
+        "ciphertext",
+        "encryptedquery",
+        "wrappedkey",
+        "valueb64",
+        "nonceb64",
+        "signatureb64",
+        "privatekey",
+        "secretkey",
+        "vaulttoken",
+        "xapikey",
+    ]
+    .iter()
+    .any(|needle| compact.contains(needle));
+
+    if contains_crypto_material {
+        "[redacted: crypto material omitted from telemetry report]".to_string()
+    } else {
+        value.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::ErrorReporter;
@@ -72,5 +105,21 @@ mod tests {
         assert!(payload.contains("\"id\":\"node-2\""));
         assert!(payload.contains("\"error\":\"panic\""));
         assert!(payload.contains("\"backtrace\":null"));
+    }
+
+    #[test]
+    fn test_build_report_payload_redacts_crypto_material() {
+        let payload = ErrorReporter::build_report_payload(
+            r#"panic while handling {"$qdrant_sec":{"envelope":{"nonce":"nonce-sentinel","ciphertext":"ciphertext-sentinel"}}}"#,
+            "node-3",
+            Some("frame with wrappedKeyB64=wrapped-sentinel and x-vault-token=token"),
+        );
+
+        assert!(payload.contains("crypto material omitted"));
+        assert!(!payload.contains("$qdrant_sec"));
+        assert!(!payload.contains("nonce-sentinel"));
+        assert!(!payload.contains("ciphertext-sentinel"));
+        assert!(!payload.contains("wrapped-sentinel"));
+        assert!(!payload.contains("x-vault-token"));
     }
 }
