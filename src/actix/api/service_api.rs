@@ -23,7 +23,10 @@ use validator::{Validate, ValidationError};
 use super::CollectionPath;
 use crate::actix::auth::ActixAuth;
 use crate::actix::helpers::{self, process_response_error};
-use crate::common::crypto::rewrap_runtime_resource_key_materials_by_master_key;
+use crate::common::crypto::{
+    generate_wrapped_runtime_resource_key_material,
+    rewrap_runtime_resource_key_materials_by_master_key,
+};
 use crate::common::health;
 use crate::common::metrics::MetricsData;
 use crate::common::stacktrace::get_stack_trace;
@@ -272,6 +275,26 @@ fn validate_runtime_resource_key_rewrap_identifier(value: &str) -> Result<(), Va
     Ok(())
 }
 
+fn validate_runtime_resource_key_scope(value: &str) -> Result<(), ValidationError> {
+    if value.is_empty() || value.len() > 256 || value.contains('\0') {
+        return Err(ValidationError::new("invalid_crypto_resource_key_scope"));
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Validate)]
+pub struct RuntimeResourceKeyGenerateRequest {
+    #[validate(custom(function = "validate_runtime_resource_key_rewrap_identifier"))]
+    pub material: String,
+    #[validate(custom(function = "validate_runtime_resource_key_rewrap_identifier"))]
+    pub wrapped_by: String,
+    #[validate(range(min = 1))]
+    pub rk_epoch: u64,
+    #[validate(custom(function = "validate_runtime_resource_key_scope"))]
+    pub scope: String,
+}
+
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Validate)]
 pub struct RuntimeResourceKeyRewrapRequest {
     #[validate(custom(function = "validate_runtime_resource_key_rewrap_identifier"))]
@@ -333,6 +356,63 @@ impl RuntimeResourceKeyRewrapMaterialPatch {
             })?,
         })
     }
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Validate)]
+pub struct RuntimeResourceKeyGenerateResponse {
+    pub wrapped_by: String,
+    pub settings_mutated: bool,
+    pub materials: BTreeMap<String, RuntimeResourceKeyRewrapMaterialPatch>,
+}
+
+fn build_runtime_resource_key_generate_response(
+    settings: &Settings,
+    request: RuntimeResourceKeyGenerateRequest,
+) -> Result<RuntimeResourceKeyGenerateResponse, StorageError> {
+    request.validate().map_err(|err| {
+        StorageError::bad_request(format!(
+            "crypto resource-key generation request is invalid: {err}"
+        ))
+    })?;
+    let material = generate_wrapped_runtime_resource_key_material(
+        &settings.crypto,
+        &request.material,
+        &request.wrapped_by,
+        request.rk_epoch,
+        &request.scope,
+    )
+    .map_err(|err| {
+        StorageError::bad_request(format!("crypto resource-key generation failed: {err}"))
+    })?;
+    let materials = BTreeMap::from([(
+        request.material.clone(),
+        RuntimeResourceKeyRewrapMaterialPatch::from_material(&request.material, material)?,
+    )]);
+
+    Ok(RuntimeResourceKeyGenerateResponse {
+        wrapped_by: request.wrapped_by,
+        settings_mutated: false,
+        materials,
+    })
+}
+
+#[post("/crypto/resource-keys/generate")]
+async fn generate_runtime_resource_key(
+    settings: web::Data<Settings>,
+    operation: Json<RuntimeResourceKeyGenerateRequest>,
+    ActixAuth(auth): ActixAuth,
+) -> impl Responder {
+    let timing = Instant::now();
+
+    let future = async {
+        auth.check_global_access(
+            AccessRequirements::new().manage(),
+            "generate_runtime_resource_key",
+        )?;
+        build_runtime_resource_key_generate_response(settings.get_ref(), operation.into_inner())
+    };
+
+    helpers::process_response(future.await, timing, None)
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Validate)]
@@ -683,6 +763,113 @@ mod tests {
     }
 
     #[test]
+    fn runtime_generate_response_returns_applyable_new_resource_key_patch() {
+        let mut settings = Settings::new(None).unwrap();
+        settings.crypto = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::new(),
+            backends: HashMap::new(),
+            materials: HashMap::from([(
+                "tenant-a/mk-v1".to_string(),
+                CryptoMaterialConfig {
+                    kind: "wrapping_key_32".to_string(),
+                    source: Some("inline".to_string()),
+                    value_b64: Some(BASE64URL_NOPAD.encode(&[91u8; 32])),
+                    ..CryptoMaterialConfig::default()
+                },
+            )]),
+        };
+
+        let response = build_runtime_resource_key_generate_response(
+            &settings,
+            RuntimeResourceKeyGenerateRequest {
+                material: "tenant-a/payload-rk-v4".to_string(),
+                wrapped_by: "tenant-a/mk-v1".to_string(),
+                rk_epoch: 4,
+                scope: "collection:docs/payload:body".to_string(),
+            },
+        )
+        .unwrap();
+
+        assert!(!response.settings_mutated);
+        assert_eq!(response.wrapped_by, "tenant-a/mk-v1");
+        assert_eq!(
+            settings
+                .crypto
+                .materials
+                .contains_key("tenant-a/payload-rk-v4"),
+            false,
+            "generation endpoint must return a patch, not mutate runtime settings in place",
+        );
+        let patch = response.materials.get("tenant-a/payload-rk-v4").unwrap();
+        assert_eq!(patch.kind, "wrapped_symmetric_key_32");
+        assert_eq!(patch.wrapped_by, "tenant-a/mk-v1");
+        assert_eq!(patch.wrap_algorithm, RESOURCE_KEY_WRAP_ALGORITHM);
+        assert_eq!(patch.rk_epoch, 4);
+        assert_eq!(patch.state.as_deref(), Some("active"));
+        assert_eq!(patch.scope, "collection:docs/payload:body");
+        assert!(!patch.nonce.is_empty());
+        assert!(!patch.wrapped_key_b64.is_empty());
+    }
+
+    #[test]
+    fn runtime_generate_response_rejects_duplicate_material_and_bad_epoch() {
+        let mut settings = Settings::new(None).unwrap();
+        settings.crypto = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::new(),
+            backends: HashMap::new(),
+            materials: HashMap::from([
+                (
+                    "tenant-a/mk-v1".to_string(),
+                    CryptoMaterialConfig {
+                        kind: "wrapping_key_32".to_string(),
+                        source: Some("inline".to_string()),
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[91u8; 32])),
+                        ..CryptoMaterialConfig::default()
+                    },
+                ),
+                (
+                    "tenant-a/payload-rk-v4".to_string(),
+                    wrapped_resource_key_material("tenant-a/payload-rk-v4", [93u8; 32], 4, None),
+                ),
+            ]),
+        };
+
+        let duplicate = build_runtime_resource_key_generate_response(
+            &settings,
+            RuntimeResourceKeyGenerateRequest {
+                material: "tenant-a/payload-rk-v4".to_string(),
+                wrapped_by: "tenant-a/mk-v1".to_string(),
+                rk_epoch: 4,
+                scope: "collection:docs/payload:body".to_string(),
+            },
+        )
+        .expect_err("duplicate generated material id must fail");
+        assert!(
+            duplicate.to_string().contains("material already exists"),
+            "{duplicate}",
+        );
+
+        let bad_epoch = build_runtime_resource_key_generate_response(
+            &settings,
+            RuntimeResourceKeyGenerateRequest {
+                material: "tenant-a/payload-rk-v5".to_string(),
+                wrapped_by: "tenant-a/mk-v1".to_string(),
+                rk_epoch: 0,
+                scope: "collection:docs/payload:body".to_string(),
+            },
+        )
+        .expect_err("zero resource-key epoch must fail validation");
+        assert!(
+            bad_epoch
+                .to_string()
+                .contains("crypto resource-key generation request is invalid"),
+            "{bad_epoch}",
+        );
+    }
+
+    #[test]
     fn runtime_rewrap_response_returns_applyable_material_patch_without_mutating_settings() {
         let mut settings = Settings::new(None).unwrap();
         settings.crypto = CryptoSettings {
@@ -964,6 +1151,7 @@ pub fn config_service_api(cfg: &mut web::ServiceConfig) {
         .service(readyz)
         .service(get_logger_config)
         .service(update_logger_config)
+        .service(generate_runtime_resource_key)
         .service(rewrap_runtime_resource_keys)
         .service(retire_runtime_resource_keys)
         .service(truncate_unapplied_wal);

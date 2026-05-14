@@ -78,6 +78,7 @@ jobs:
           cargo test --locked -p qdrant payload_write_plan_decrypts_server_envelopes_for_crypto_migration
           cargo test --locked -p qdrant payload_crypto_migration_run
           cargo test --locked -p qdrant client_nonce_replay_error_tells_clients_to_regenerate_envelope
+          cargo test --locked -p qdrant runtime_generate_response_
           cargo test --locked -p qdrant runtime_resource_key_
           cargo test --locked -p qdrant runtime_rewrap_response_returns_applyable_material_patch_without_mutating_settings
           cargo test --locked -p qdrant runtime_rewrap_response_rejects_malformed_material_identifiers

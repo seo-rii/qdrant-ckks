@@ -4038,6 +4038,77 @@ pub fn rewrap_runtime_resource_key_material(
     Ok(rewrapped_material)
 }
 
+pub fn generate_wrapped_runtime_resource_key_material(
+    runtime_settings: &CryptoSettings,
+    material_name: &str,
+    wrapped_by: &str,
+    rk_epoch: u64,
+    scope: &str,
+) -> Result<CryptoMaterialConfig, PayloadWriteSetupError> {
+    if runtime_settings.materials.contains_key(material_name) {
+        return Err(PayloadWriteSetupError::InvalidWrappedMaterial {
+            material: material_name.to_string(),
+            reason: "material already exists".to_string(),
+        });
+    }
+    if rk_epoch == 0 {
+        return Err(PayloadWriteSetupError::InvalidWrappedMaterial {
+            material: material_name.to_string(),
+            reason: "rk_epoch must be non-zero".to_string(),
+        });
+    }
+    if scope.is_empty() {
+        return Err(PayloadWriteSetupError::InvalidWrappedMaterial {
+            material: material_name.to_string(),
+            reason: "scope must be non-empty".to_string(),
+        });
+    }
+
+    let wrapping_material = runtime_settings.materials.get(wrapped_by).ok_or_else(|| {
+        PayloadWriteSetupError::UnknownWrappingMaterial {
+            material: material_name.to_string(),
+            wrapped_by: wrapped_by.to_string(),
+        }
+    })?;
+    if wrapping_material.kind != WRAPPING_KEY_32_KIND {
+        return Err(PayloadWriteSetupError::UnsupportedWrappingMaterialKind {
+            material: material_name.to_string(),
+            wrapped_by: wrapped_by.to_string(),
+            kind: wrapping_material.kind.clone(),
+        });
+    }
+
+    let provider = LocalMasterKeyProvider::new(
+        wrapped_by,
+        decode_direct_material_key(wrapped_by, wrapping_material)?,
+    )
+    .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
+    let resource_key = SecretKey::generate()
+        .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
+    let mut material = CryptoMaterialConfig {
+        kind: WRAPPED_SYMMETRIC_KEY_32_KIND.to_string(),
+        wrapped_by: Some(wrapped_by.to_string()),
+        wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
+        rk_epoch: Some(rk_epoch),
+        state: Some(RESOURCE_KEY_STATE_ACTIVE.to_string()),
+        scope: Some(scope.to_string()),
+        ..CryptoMaterialConfig::default()
+    };
+    let aad = resource_key_wrap_aad(
+        material_name,
+        &material,
+        wrapped_by,
+        RESOURCE_KEY_WRAP_ALGORITHM,
+    );
+    let wrapped = provider
+        .wrap_resource_key(&resource_key, &aad)
+        .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
+    material.nonce = Some(wrapped.nonce);
+    material.wrapped_key_b64 = Some(wrapped.wrapped_key);
+
+    Ok(material)
+}
+
 #[allow(
     dead_code,
     reason = "reserved for the admin MK rotation operation that rewraps all active/retired resource keys for one wrapping key"
@@ -9998,6 +10069,88 @@ mod tests {
         assert_eq!(
             payload.0.get("body").and_then(Value::as_str),
             Some("mk rotation keeps data key"),
+        );
+    }
+
+    #[test]
+    fn runtime_resource_key_generation_creates_new_wrapped_active_key() {
+        let mk_material = "tenant-a/mk-v1";
+        let runtime_settings = CryptoSettings {
+            allow_inline_key_material: true,
+            materials: HashMap::from([(
+                mk_material.to_string(),
+                CryptoMaterialConfig {
+                    kind: WRAPPING_KEY_32_KIND.to_string(),
+                    source: Some("inline".to_string()),
+                    value_b64: Some(BASE64URL_NOPAD.encode(&[91u8; 32])),
+                    ..CryptoMaterialConfig::default()
+                },
+            )]),
+            ..CryptoSettings::default()
+        };
+
+        let generated = generate_wrapped_runtime_resource_key_material(
+            &runtime_settings,
+            "tenant-a/payload-rk-v4",
+            mk_material,
+            4,
+            "collection:docs/payload:body",
+        )
+        .unwrap();
+
+        assert_eq!(generated.kind, WRAPPED_SYMMETRIC_KEY_32_KIND);
+        assert_eq!(generated.wrapped_by.as_deref(), Some(mk_material));
+        assert_eq!(
+            generated.wrap_algorithm.as_deref(),
+            Some(RESOURCE_KEY_WRAP_ALGORITHM)
+        );
+        assert_eq!(generated.rk_epoch, Some(4));
+        assert_eq!(generated.state.as_deref(), Some(RESOURCE_KEY_STATE_ACTIVE));
+        assert_eq!(
+            generated.scope.as_deref(),
+            Some("collection:docs/payload:body")
+        );
+        assert!(generated.nonce.is_some());
+        assert!(generated.wrapped_key_b64.is_some());
+
+        let mut updated_settings = runtime_settings.clone();
+        updated_settings
+            .materials
+            .insert("tenant-a/payload-rk-v4".to_string(), generated);
+        let decoded = decode_wrapped_resource_key(
+            &updated_settings,
+            "tenant-a/payload-rk-v4",
+            updated_settings
+                .materials
+                .get("tenant-a/payload-rk-v4")
+                .unwrap(),
+        )
+        .unwrap();
+        let encryptor = PayloadTextEncryptor::new_from_resource_key_with_metadata(
+            "docs",
+            "tenant-a:docs",
+            &decoded,
+            "tenant-a/payload-rk@v4",
+            "tenant-a/payload-rk-v4",
+            4,
+        )
+        .unwrap();
+        let mut payload = segment::types::Payload(
+            json!({ "body": "generated rk secret" })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
+        encryptor
+            .encrypt_selected_fields("point-1", &mut payload.0, &policy)
+            .unwrap();
+        encryptor
+            .decrypt_selected_fields("point-1", &mut payload.0, &policy)
+            .unwrap();
+        assert_eq!(
+            payload.0.get("body").and_then(Value::as_str),
+            Some("generated rk secret"),
         );
     }
 

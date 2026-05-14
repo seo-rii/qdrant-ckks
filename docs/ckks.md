@@ -567,7 +567,25 @@ runtime `rewrap_runtime_resource_key_materials_by_master_key` helper batches
 that primitive for every `active` or `retired` wrapped RK that references the
 old MK, preserving each RK's epoch, scope, and lifecycle state. `disabled` and
 `destroyed` RK records are not implicitly unwrapped during MK rotation.
-Operators can expose this primitive through the manage-only
+Operators can generate a fresh random RK for RK rotation through the manage-only
+`POST /crypto/resource-keys/generate` endpoint:
+
+```json
+{
+  "material": "tenant-a/payload-rk-v4",
+  "wrapped_by": "tenant-a/mk-v2",
+  "rk_epoch": 4,
+  "scope": "collection:docs/payload:body"
+}
+```
+
+The endpoint returns a config patch for one new `wrapped_symmetric_key_32`
+material with `state=active`; it does not mutate runtime settings or collection
+config. Operators must apply the patch, update the provider's active
+`materials.sym_key`, move the old RK into `options.retired_materials`, and then
+run the payload/vector migration before disabling or destroying the old RK.
+
+Operators can expose the MK rotation primitive through the manage-only
 `POST /crypto/resource-keys/rewrap` endpoint:
 
 ```json
