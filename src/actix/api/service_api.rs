@@ -18,7 +18,7 @@ use storage::content_manager::errors::StorageError;
 use storage::dispatcher::Dispatcher;
 use storage::rbac::AccessRequirements;
 use tokio::sync::Mutex;
-use validator::Validate;
+use validator::{Validate, ValidationError};
 
 use super::CollectionPath;
 use crate::actix::auth::ActixAuth;
@@ -259,13 +259,28 @@ async fn truncate_unapplied_wal(
     helpers::time_or_accept(future, params.wait.unwrap_or(true)).await
 }
 
-#[derive(Deserialize, Serialize, JsonSchema, Validate)]
+fn validate_runtime_resource_key_rewrap_identifier(value: &str) -> Result<(), ValidationError> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-' | b'/' | b'@')
+        })
+    {
+        return Err(ValidationError::new("invalid_crypto_material_identifier"));
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Validate)]
 pub struct RuntimeResourceKeyRewrapRequest {
+    #[validate(custom(function = "validate_runtime_resource_key_rewrap_identifier"))]
     pub old_wrapped_by: String,
+    #[validate(custom(function = "validate_runtime_resource_key_rewrap_identifier"))]
     pub new_wrapped_by: String,
 }
 
-#[derive(Deserialize, Serialize, JsonSchema, Validate)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Validate)]
 pub struct RuntimeResourceKeyRewrapMaterialPatch {
     pub kind: String,
     pub wrapped_by: String,
@@ -320,7 +335,7 @@ impl RuntimeResourceKeyRewrapMaterialPatch {
     }
 }
 
-#[derive(Deserialize, Serialize, JsonSchema, Validate)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Validate)]
 pub struct RuntimeResourceKeyRewrapResponse {
     pub old_wrapped_by: String,
     pub new_wrapped_by: String,
@@ -332,6 +347,11 @@ fn build_runtime_resource_key_rewrap_response(
     settings: &Settings,
     request: RuntimeResourceKeyRewrapRequest,
 ) -> Result<RuntimeResourceKeyRewrapResponse, StorageError> {
+    request.validate().map_err(|err| {
+        StorageError::bad_request(format!(
+            "crypto resource-key rewrap request is invalid: {err}"
+        ))
+    })?;
     let materials = rewrap_runtime_resource_key_materials_by_master_key(
         &settings.crypto,
         &request.old_wrapped_by,
@@ -539,6 +559,34 @@ mod tests {
         assert_eq!(retired.state.as_deref(), Some("retired"));
         assert_eq!(retired.rk_epoch, 2);
         assert!(!response.materials.contains_key("tenant-a/destroyed-rk-v1"));
+    }
+
+    #[test]
+    fn runtime_rewrap_response_rejects_malformed_material_identifiers() {
+        let settings = Settings::new(None).unwrap();
+
+        for request in [
+            RuntimeResourceKeyRewrapRequest {
+                old_wrapped_by: "tenant a/mk-v1".to_string(),
+                new_wrapped_by: "tenant-a/mk-v2".to_string(),
+            },
+            RuntimeResourceKeyRewrapRequest {
+                old_wrapped_by: "tenant-a/mk-v1".to_string(),
+                new_wrapped_by: "tenant-a/mk?2".to_string(),
+            },
+            RuntimeResourceKeyRewrapRequest {
+                old_wrapped_by: String::new(),
+                new_wrapped_by: "tenant-a/mk-v2".to_string(),
+            },
+        ] {
+            let err = build_runtime_resource_key_rewrap_response(&settings, request)
+                .expect_err("malformed material identifiers must fail before runtime lookup");
+            assert!(
+                err.to_string()
+                    .contains("crypto resource-key rewrap request is invalid"),
+                "unexpected error: {err}"
+            );
+        }
     }
 }
 

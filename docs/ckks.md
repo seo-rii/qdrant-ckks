@@ -581,10 +581,12 @@ The endpoint does not mutate in-memory settings or collection config. It returns
 a config patch containing only the rewrapped `wrapped_symmetric_key_32` material
 records that should be applied to the deployment config or external secret
 backend. This keeps MK rotation scoped to O(number of wrapped RKs) and avoids
-rewriting payload/vector data envelopes. The old and new MK material must both be
-available in the current runtime during the rewrap, and operators should roll out
-the resulting material patch atomically across nodes so runtime parity
-fingerprints stay aligned.
+rewriting payload/vector data envelopes. The `old_wrapped_by` and
+`new_wrapped_by` values are validated as crypto material identifiers before any
+runtime lookup, and they must reference different `wrapping_key_32` materials.
+The old and new MK material must both be available in the current runtime during
+the rewrap, and operators should roll out the resulting material patch
+atomically across nodes so runtime parity fingerprints stay aligned.
 RK rotation still requires a data re-encryption job and should use the explicit
 re-encryption mode rather than normal write-path idempotency. The
 `rk_id`/`rk_epoch` fields are included in AEAD AAD for server-generated payload
