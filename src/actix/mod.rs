@@ -36,7 +36,9 @@ use crate::actix::api::local_shard_api::config_local_shard_api;
 use crate::actix::api::profiler_api::config_profiler_api;
 use crate::actix::api::query_api::config_query_api;
 use crate::actix::api::recommend_api::config_recommend_api;
-use crate::actix::api::retrieve_api::{get_point, get_points, scroll_points};
+use crate::actix::api::retrieve_api::{
+    export_payload_points, get_point, get_points, scroll_points,
+};
 use crate::actix::api::search_api::config_search_api;
 use crate::actix::api::service_api::config_service_api;
 use crate::actix::api::shards_api::config_shards_api;
@@ -166,6 +168,7 @@ pub fn init(
                 .configure(config_audit_api)
                 // Ordering of services is important for correct path pattern matching
                 // See: <https://github.com/qdrant/qdrant/issues/3543>
+                .service(export_payload_points)
                 .service(scroll_points)
                 .service(count_points)
                 .service(get_point)

@@ -642,8 +642,22 @@ Snapshot download and shard snapshot streaming APIs are storage-level exports.
 They only support raw encrypted marker export. `encrypted_payload=raw` is accepted
 as an explicit no-op, while `encrypted_payload=decrypted` and
 `encrypted_payload=redacted` fail during query parsing. Decrypted or redacted data
-export needs a separate audited data-export API rather than being folded into
-snapshot archive streams.
+export must use the audited payload export endpoint instead of snapshot archive
+streams:
+
+```text
+POST /collections/{collection_name}/points/export?encrypted_payload=raw
+POST /collections/{collection_name}/points/export?encrypted_payload=redacted
+POST /collections/{collection_name}/points/export?encrypted_payload=decrypted
+```
+
+The endpoint accepts the usual scroll body for pagination and filtering, but it
+overrides `with_payload` with the explicit encrypted payload policy from the
+query string and rejects `with_vector`. `decrypted` export requires the same
+collection-scoped `payload_decrypt` capability as decrypted reads and emits a
+separate audit method (`export_decrypted_payload`) before the underlying scroll.
+Client-side `$qdrant_client_aead` envelopes still cannot be decrypted by
+Qdrant; use `raw` or `redacted` for those collections.
 
 The wrapped RK AES-GCM AAD is a length-prefixed tuple of `qdrant-sec`, `v1`,
 `resource-key-wrap`, the material reference, `rk_epoch`, `scope`, `wrapped_by`,
@@ -853,11 +867,11 @@ JWT RBAC claims must grant the decrypt capability explicitly:
 }
 ```
 
-Decrypted export remains future work; slow request logs and request hashes use
-redacted request values, and collection telemetry has sentinel coverage so
-decrypted plaintext is not intentionally emitted there. Audit events never
-include request bodies; denied audit errors also redact qdrant-sec envelope
-markers and secret-like crypto fields before serialization.
+Decrypted snapshot export remains unsupported; slow request logs and request
+hashes use redacted request values, and collection telemetry has sentinel
+coverage so decrypted plaintext is not intentionally emitted there. Audit events
+never include request bodies; denied audit errors also redact qdrant-sec
+envelope markers and secret-like crypto fields before serialization.
 Client-side-only envelope collections must use `raw` or `redacted`; requesting
 `decrypted` fails closed because Qdrant has no client data key.
 The REST single-point `GET /collections/{collection}/points/{id}` endpoint has

@@ -10,6 +10,7 @@ use futures::TryFutureExt;
 use itertools::Itertools;
 use segment::types::{
     EncryptedPayloadReadMode, PayloadEncryptedReadPolicy, PointIdType, WithPayloadInterface,
+    WithVector,
 };
 use serde::Deserialize;
 use shard::retrieve::record_internal::RecordInternal;
@@ -19,7 +20,7 @@ use storage::content_manager::collection_verification::{
 use storage::content_manager::errors::StorageError;
 use storage::content_manager::toc::TableOfContent;
 use storage::dispatcher::Dispatcher;
-use storage::rbac::Auth;
+use storage::rbac::{AccessRequirements, Auth};
 use tokio::time::Instant;
 use validator::Validate;
 
@@ -68,6 +69,45 @@ impl PointReadParams {
             })
             .unwrap_or(WithPayloadInterface::Bool(true))
     }
+}
+
+#[derive(Deserialize, Validate)]
+struct PayloadExportParams {
+    #[serde(flatten)]
+    #[validate(nested)]
+    read: ReadParams,
+    /// Export endpoints require an explicit encrypted payload policy to avoid accidental plaintext dumps.
+    encrypted_payload: EncryptedPayloadReadMode,
+}
+
+impl PayloadExportParams {
+    fn timeout(&self) -> Option<Duration> {
+        self.read.timeout()
+    }
+
+    fn timeout_as_secs(&self) -> Option<usize> {
+        self.read.timeout_as_secs()
+    }
+
+    fn consistency(&self) -> Option<ReadConsistency> {
+        self.read.consistency
+    }
+}
+
+fn prepare_payload_export_scroll_request(
+    mut request: shard::scroll::ScrollRequestInternal,
+    encrypted_payload: EncryptedPayloadReadMode,
+) -> Result<shard::scroll::ScrollRequestInternal, StorageError> {
+    if request.with_vector.is_enabled() {
+        return Err(StorageError::bad_request(
+            "payload export does not support with_vector; use raw/redacted/decrypted payload policy and fetch vectors through the normal read API",
+        ));
+    }
+
+    request.with_payload = Some(WithPayloadInterface::Encrypted(
+        PayloadEncryptedReadPolicy { encrypted_payload },
+    ));
+    Ok(request)
 }
 
 async fn do_get_point(
@@ -282,6 +322,87 @@ async fn scroll_points(
     process_response(res, timing, request_hw_counter.to_rest_api())
 }
 
+#[post("/collections/{collection_name}/points/export")]
+async fn export_payload_points(
+    dispatcher: web::Data<Dispatcher>,
+    collection: Path<CollectionPath>,
+    request: Json<ScrollRequest>,
+    params: Query<PayloadExportParams>,
+    service_config: web::Data<ServiceConfig>,
+    settings: web::Data<Settings>,
+    ActixAuth(auth): ActixAuth,
+) -> impl Responder {
+    let ScrollRequest {
+        scroll_request,
+        shard_key,
+    } = request.into_inner();
+    let encrypted_payload = params.encrypted_payload;
+    let scroll_request =
+        match prepare_payload_export_scroll_request(scroll_request, encrypted_payload) {
+            Ok(request) => request,
+            Err(err) => return process_response_error(err, Instant::now(), None),
+        };
+
+    let audit_requirements = if encrypted_payload == EncryptedPayloadReadMode::Decrypted {
+        AccessRequirements::new().payload_decrypt()
+    } else {
+        AccessRequirements::new()
+    };
+    let audit_method = match encrypted_payload {
+        EncryptedPayloadReadMode::Raw => "export_raw_encrypted_payload",
+        EncryptedPayloadReadMode::Redacted => "export_redacted_payload",
+        EncryptedPayloadReadMode::Decrypted => "export_decrypted_payload",
+    };
+    if let Err(err) = auth.check_collection_access(
+        &collection.collection_name,
+        audit_requirements,
+        audit_method,
+    ) {
+        return process_response_error(err, Instant::now(), None);
+    }
+
+    let pass = match check_strict_mode(
+        &scroll_request,
+        params.timeout_as_secs(),
+        &collection.collection_name,
+        &dispatcher,
+        &auth,
+    )
+    .await
+    {
+        Ok(pass) => pass,
+        Err(err) => return process_response_error(err, Instant::now(), None),
+    };
+
+    let shard_selection = match shard_key {
+        None => ShardSelectorInternal::All,
+        Some(shard_keys) => ShardSelectorInternal::from(shard_keys),
+    };
+
+    let request_hw_counter = get_request_hardware_counter(
+        &dispatcher,
+        collection.collection_name.clone(),
+        service_config.hardware_reporting(),
+        None,
+    );
+    let timing = Instant::now();
+
+    let res = do_scroll_points(
+        dispatcher.toc(&auth, &pass),
+        &collection.collection_name,
+        scroll_request,
+        params.consistency(),
+        params.timeout(),
+        shard_selection,
+        auth,
+        request_hw_counter.get_counter(),
+        Some(settings.get_ref()),
+    )
+    .await;
+
+    process_response(res, timing, request_hw_counter.to_rest_api())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,5 +440,48 @@ mod tests {
         let params: PointReadParams = serde_urlencoded::from_str("consistency=majority").unwrap();
 
         assert_eq!(params.with_payload(), WithPayloadInterface::Bool(true));
+    }
+
+    #[test]
+    fn payload_export_params_require_explicit_encrypted_payload_policy() {
+        let missing = serde_urlencoded::from_str::<PayloadExportParams>("consistency=majority");
+        assert!(missing.is_err());
+
+        let params: PayloadExportParams =
+            serde_urlencoded::from_str("encrypted_payload=decrypted").unwrap();
+        assert_eq!(
+            params.encrypted_payload,
+            EncryptedPayloadReadMode::Decrypted
+        );
+    }
+
+    #[test]
+    fn payload_export_request_forces_encrypted_payload_policy_and_rejects_vectors() {
+        let mut request = shard::scroll::ScrollRequestInternal::default();
+        request.with_payload = Some(WithPayloadInterface::Bool(false));
+
+        let request =
+            prepare_payload_export_scroll_request(request, EncryptedPayloadReadMode::Redacted)
+                .unwrap();
+        assert_eq!(
+            request.with_payload,
+            Some(WithPayloadInterface::Encrypted(
+                PayloadEncryptedReadPolicy {
+                    encrypted_payload: EncryptedPayloadReadMode::Redacted,
+                }
+            )),
+        );
+        assert_eq!(request.with_vector, WithVector::Bool(false));
+
+        let mut vector_request = shard::scroll::ScrollRequestInternal::default();
+        vector_request.with_vector = WithVector::Bool(true);
+        let err =
+            prepare_payload_export_scroll_request(vector_request, EncryptedPayloadReadMode::Raw)
+                .expect_err("payload export must not include vector data");
+        assert!(
+            err.to_string()
+                .contains("payload export does not support with_vector"),
+            "{err}",
+        );
     }
 }
