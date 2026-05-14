@@ -82,6 +82,11 @@ jobs:
       - name: Run encrypted cluster data movement parity tests
         run: cargo test --locked -p qdrant encrypted_cluster_
 
+      - name: Run crypto telemetry redaction and parity observability tests
+        run: |
+          cargo test --locked -p qdrant app_telemetry_does_not_serialize_crypto_key_material
+          cargo test --locked -p qdrant crypto_runtime_fingerprint
+
       - name: Run encrypted inspector redaction tests
         run: |
           cargo test --locked -p qdrant --features service_debug --bin wal_inspector collection_wal_display_redacts
