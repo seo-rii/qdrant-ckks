@@ -1395,8 +1395,9 @@ async fn crypto_migration_plan_updates_collection_config_through_admin_path() {
 #[tokio::test(flavor = "multi_thread")]
 async fn crypto_migration_rewrites_stale_payload_envelopes_and_returns_checkpoints() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
-    let collection =
-        encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
+    let collection = Arc::new(
+        encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await,
+    );
     let collection_crypto_id = collection.config_snapshot().await.uuid.unwrap().to_string();
     let policy = PayloadEncryptionPolicy::new(["document.body"]).unwrap();
     let old_resource_key = SecretKey::from_bytes([41u8; 32]);
@@ -1479,6 +1480,71 @@ async fn crypto_migration_rewrites_stale_payload_envelopes_and_returns_checkpoin
         0,
     )
     .unwrap();
+
+    let blocking_collection = Arc::clone(&collection);
+    let blocking_collection_crypto_id = collection_crypto_id.clone();
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let blocking_migration = tokio::spawn(async move {
+        blocking_collection
+            .dry_run_payloads_for_crypto_migration(move |point_id, payload| {
+                let _ = entered_tx.send(());
+                release_rx
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .map_err(|err| {
+                        CollectionError::service_error(format!(
+                            "timed out waiting to release blocking crypto migration test: {err}",
+                        ))
+                    })?;
+
+                let policy = PayloadEncryptionPolicy::new(["document.body"]).unwrap();
+                let old_resource_key = SecretKey::from_bytes([41u8; 32]);
+                let new_resource_key = SecretKey::from_bytes([42u8; 32]);
+                let encryptor = PayloadTextEncryptor::new_from_resource_key_with_metadata(
+                    &blocking_collection_crypto_id,
+                    "tenant-a:docs",
+                    &new_resource_key,
+                    "tenant-a/docs@v1",
+                    "tenant-a/docs-rk-v1",
+                    1,
+                )
+                .unwrap()
+                .with_encryption_epoch(1)
+                .with_retired_resource_key_metadata(
+                    "tenant-a:docs",
+                    &old_resource_key,
+                    "tenant-a/docs@v0",
+                    "tenant-a/docs-rk-v0",
+                    0,
+                )
+                .unwrap();
+
+                encryptor
+                    .encrypt_selected_fields_with_mode_for_runtime(
+                        &point_id.to_string(),
+                        &mut payload.0,
+                        &policy,
+                        &blocking_collection_crypto_id,
+                        ExistingPayloadMode::ReencryptIfStale,
+                    )
+                    .map_err(|err| CollectionError::bad_input(err.to_string()))
+            })
+            .await
+    });
+    entered_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap();
+    let concurrent_err = collection
+        .dry_run_payloads_for_crypto_migration(|_, _| Ok(0))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(concurrent_err, CollectionError::BadInput { ref description }
+            if description.contains("already running")),
+        "unexpected concurrent migration error: {concurrent_err:?}",
+    );
+    release_tx.send(()).unwrap();
+    blocking_migration.await.unwrap().unwrap();
 
     let dry_run_checkpoints = collection
         .dry_run_payloads_for_crypto_migration(|point_id, payload| {

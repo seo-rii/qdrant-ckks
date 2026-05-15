@@ -242,6 +242,11 @@ impl Collection {
         F: FnMut(&ExtendedPointId, &mut Payload) -> CollectionResult<R>,
         R: Into<CryptoPayloadMigrationRewrite>,
     {
+        let _migration_guard = self.crypto_payload_migration_lock.try_lock().map_err(|_| {
+            CollectionError::bad_input(
+                "crypto payload migration is already running for this collection; retry after the current migration run finishes",
+            )
+        })?;
         let (
             migration_state,
             key_id,

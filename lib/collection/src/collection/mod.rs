@@ -100,6 +100,7 @@ pub struct Collection {
     // Cached statistics of collection size, may be outdated.
     collection_stats_cache: CollectionSizeStatsCache,
     client_payload_nonce_replay_cache: Mutex<ClientPayloadNonceReplayCache>,
+    crypto_payload_migration_lock: Mutex<()>,
     // Background tasks to clean shards
     shard_clean_tasks: ShardCleanTasks,
 }
@@ -378,6 +379,7 @@ impl Collection {
             optimizer_resource_budget,
             collection_stats_cache,
             client_payload_nonce_replay_cache: Mutex::new(ClientPayloadNonceReplayCache::default()),
+            crypto_payload_migration_lock: Mutex::new(()),
             shard_clean_tasks: Default::default(),
         })
     }
@@ -512,6 +514,7 @@ impl Collection {
             } else {
                 ClientPayloadNonceReplayCache::default()
             }),
+            crypto_payload_migration_lock: Mutex::new(()),
             shard_clean_tasks: Default::default(),
         };
 
