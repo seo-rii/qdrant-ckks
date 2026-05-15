@@ -56,7 +56,11 @@ jobs:
           cargo test --locked -p qdrant openfhe_backend_factory_
 
       - name: Run segment-native CKKS ciphertext index tests
-        run: cargo test --locked -p segment ckks_ciphertext
+        run: |
+          cargo test --locked -p segment ckks_ciphertext
+          cargo test --locked -p collection encrypted_vector_sidecar_triggers_ckks_indexing_optimizer --lib
+          cargo test --locked -p collection encrypted_vector_does_not_trigger_plaintext_config_mismatch_optimizer --lib
+          cargo test --locked -p collection encrypted_vector_forced_optimization_preserves_plain_storage_config --lib
 
       - name: Run CKKS sidecar HNSW graph persistence tests
         run: cargo test --locked -p qdrant ckks_sidecar_hnsw_
