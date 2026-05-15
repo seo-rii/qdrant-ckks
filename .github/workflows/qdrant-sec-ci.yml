@@ -104,7 +104,9 @@ jobs:
           cargo test --locked -p qdrant crypto_runtime_health_
 
       - name: Run encrypted cluster data movement parity tests
-        run: cargo test --locked -p qdrant encrypted_cluster_
+        run: |
+          cargo test --locked -p qdrant encrypted_cluster_
+          cargo test --locked -p collection encrypted_automatic_transfer_ --lib
 
       - name: Run crypto telemetry redaction and parity observability tests
         run: |
