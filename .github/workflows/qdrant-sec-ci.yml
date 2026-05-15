@@ -76,6 +76,7 @@ jobs:
           cargo test --locked -p qdrant server_side_encrypted_payload_read_mode_decrypts_get_and_scroll
           cargo test --locked -p qdrant metadata_value_encrypted_read_mode_decrypts_with_payload_decrypt_access
           cargo test --locked -p qdrant payload_decrypt_collection_access
+          cargo test --locked -p qdrant test_jwt_parser_preserves_payload_decrypt_collection_access
           cargo test --locked -p qdrant point_read_params_support_encrypted_payload_query_mode
           cargo test --locked -p qdrant payload_export_
           cargo test --locked -p qdrant payload_write_plan_
