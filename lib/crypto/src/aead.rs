@@ -101,7 +101,7 @@ impl SecretKey {
         Ok(Self { bytes })
     }
 
-    fn as_bytes(&self) -> &[u8; KEY_LEN] {
+    pub fn as_bytes(&self) -> &[u8; KEY_LEN] {
         &self.bytes
     }
 }

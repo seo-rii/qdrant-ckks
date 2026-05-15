@@ -9,7 +9,7 @@ use collection::config::{
     CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams, CryptoMigrationState,
     EncryptionSelector,
 };
-use data_encoding::BASE64URL_NOPAD;
+use data_encoding::{BASE64, BASE64URL_NOPAD};
 use qdrant_sec::{
     AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_VECTOR_KEY_DOMAIN,
     CLIENT_PAYLOAD_ENVELOPE_BINDING, CkksParameters, CkksPublicMaterial, CkksVectorEncryptor,
@@ -126,6 +126,9 @@ const PAYLOAD_SYM_KEY_ROLE: &str = "sym_key";
 const SYMMETRIC_KEY_32_KIND: &str = "symmetric_key_32";
 const WRAPPING_KEY_32_KIND: &str = "wrapping_key_32";
 const WRAPPED_SYMMETRIC_KEY_32_KIND: &str = "wrapped_symmetric_key_32";
+const VAULT_TRANSIT_SOURCE: &str = "vault_transit";
+const VAULT_TRANSIT_WRAP_ALGORITHM: &str = "vault-transit";
+const VAULT_TRANSIT_NONCE_SENTINEL_B64: &str = "dmF1bHQtdHJhbnNpdA";
 const RESOURCE_KEY_STATE_ACTIVE: &str = "active";
 const RESOURCE_KEY_STATE_RETIRED: &str = "retired";
 const RESOURCE_KEY_STATE_DISABLED: &str = "disabled";
@@ -142,6 +145,7 @@ const CKKS_PROFILE_OPTION: &str = "profile";
 const CKKS_CRYPTO_CONTEXT_B64_OPTION: &str = "crypto_context_b64";
 const CKKS_PUBLIC_KEY_B64_OPTION: &str = "public_key_b64";
 const VAULT_KV2_RESPONSE_MAX_BYTES: u64 = 64 * 1024;
+const VAULT_TRANSIT_RESPONSE_MAX_BYTES: u64 = 64 * 1024;
 const PAYLOAD_AES_GCM_ALLOWED_OPTIONS: &[&str] = &[
     "key_id",
     MATERIAL_FINGERPRINT_ID_OPTION,
@@ -2139,6 +2143,18 @@ fn validate_material(
                 material: material_name.to_string(),
             });
         }
+    } else if material.source.as_deref() == Some(VAULT_TRANSIT_SOURCE) {
+        if material.kind != WRAPPING_KEY_32_KIND
+            || material.env.is_none()
+            || material.path.is_none()
+            || material.fd.is_some()
+            || material.value_b64.is_some()
+            || material.vault_field.is_some()
+        {
+            return Err(CryptoSetupError::MaterialSourceMismatch {
+                material: material_name.to_string(),
+            });
+        }
     } else if configured_sources != 1 || material.vault_field.is_some() {
         return Err(CryptoSetupError::InvalidMaterialSourceCount {
             material: material_name.to_string(),
@@ -2198,6 +2214,21 @@ fn validate_material(
             )?;
             Ok(())
         }
+        Some(VAULT_TRANSIT_SOURCE)
+            if material.kind == WRAPPING_KEY_32_KIND
+                && material.env.is_some()
+                && material.path.is_some()
+                && material.vault_field.is_none()
+                && material.fd.is_none()
+                && material.value_b64.is_none() =>
+        {
+            validate_material_vault_transit_source(
+                material_name,
+                material.path.as_deref().unwrap(),
+                material.env.as_deref().unwrap(),
+            )?;
+            Ok(())
+        }
         Some("fd")
             if material.fd.is_some()
                 && material.env.is_none()
@@ -2235,11 +2266,11 @@ fn validate_material(
                 })
             }
         }
-        Some("env" | "file" | "unix_socket" | "vault_kv2" | "fd" | "inline") => {
-            Err(CryptoSetupError::MaterialSourceMismatch {
-                material: material_name.to_string(),
-            })
-        }
+        Some(
+            "env" | "file" | "unix_socket" | "vault_kv2" | VAULT_TRANSIT_SOURCE | "fd" | "inline",
+        ) => Err(CryptoSetupError::MaterialSourceMismatch {
+            material: material_name.to_string(),
+        }),
         Some(source) => Err(CryptoSetupError::UnsupportedMaterialSource {
             material: material_name.to_string(),
             material_source: source.to_string(),
@@ -2495,6 +2526,63 @@ fn validate_material_vault_kv2_source(
     Ok(())
 }
 
+fn validate_material_vault_transit_source(
+    material_name: &str,
+    url: &str,
+    token_env: &str,
+) -> Result<(), CryptoSetupError> {
+    let parsed =
+        reqwest::Url::parse(url).map_err(|err| CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: url.to_string(),
+            reason: format!("Vault Transit key URL is invalid: {err}"),
+        })?;
+    let is_loopback_http = parsed.scheme() == "http"
+        && parsed.host_str().is_some_and(|host| {
+            host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1"
+        });
+    if parsed.scheme() != "https" && !is_loopback_http {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: url.to_string(),
+            reason: "Vault Transit URL must use https, except loopback http for tests/dev"
+                .to_string(),
+        });
+    }
+    let vault_path = parsed.path();
+    if !vault_path.contains("/transit/keys/") || vault_path.ends_with("/transit/keys/") {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: url.to_string(),
+            reason: "Vault Transit URL must use the key metadata path /.../transit/keys/<key>"
+                .to_string(),
+        });
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: url.to_string(),
+            reason: "Vault Transit URL must not include credentials".to_string(),
+        });
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: url.to_string(),
+            reason: "Vault Transit URL must not include query or fragment components".to_string(),
+        });
+    }
+    if !is_material_env_name(token_env) {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: url.to_string(),
+            reason: "Vault token env name is invalid".to_string(),
+        });
+    }
+
+    Ok(())
+}
+
 fn is_material_env_name(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
@@ -2649,7 +2737,7 @@ fn validate_wrapped_resource_key_material(
         .wrap_algorithm
         .as_deref()
         .unwrap_or(RESOURCE_KEY_WRAP_ALGORITHM);
-    if algorithm != RESOURCE_KEY_WRAP_ALGORITHM {
+    if algorithm != RESOURCE_KEY_WRAP_ALGORITHM && algorithm != VAULT_TRANSIT_WRAP_ALGORITHM {
         return Err(CryptoSetupError::UnsupportedWrapAlgorithm {
             material: material_name.to_string(),
             algorithm: algorithm.to_string(),
@@ -3965,7 +4053,7 @@ fn decode_wrapped_resource_key_for_state(
         .wrap_algorithm
         .as_deref()
         .unwrap_or(RESOURCE_KEY_WRAP_ALGORITHM);
-    if algorithm != RESOURCE_KEY_WRAP_ALGORITHM {
+    if algorithm != RESOURCE_KEY_WRAP_ALGORITHM && algorithm != VAULT_TRANSIT_WRAP_ALGORITHM {
         return Err(PayloadWriteSetupError::UnsupportedWrapAlgorithm {
             material: material_name.to_string(),
             algorithm: algorithm.to_string(),
@@ -3986,9 +4074,7 @@ fn decode_wrapped_resource_key_for_state(
         }
     })?;
 
-    let master_key = decode_direct_material_key(wrapped_by, wrapping_material)?;
-    let provider = LocalMasterKeyProvider::new(wrapped_by, master_key)
-        .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
+    let provider = runtime_master_key_provider(wrapped_by, wrapping_material)?;
     let wrapped = WrappedKeyBlob {
         version: 1,
         algorithm: algorithm.to_string(),
@@ -4031,7 +4117,7 @@ pub fn rewrap_runtime_resource_key_material(
         .wrap_algorithm
         .as_deref()
         .unwrap_or(RESOURCE_KEY_WRAP_ALGORITHM);
-    if algorithm != RESOURCE_KEY_WRAP_ALGORITHM {
+    if algorithm != RESOURCE_KEY_WRAP_ALGORITHM && algorithm != VAULT_TRANSIT_WRAP_ALGORITHM {
         return Err(PayloadWriteSetupError::UnsupportedWrapAlgorithm {
             material: material_name.to_string(),
             algorithm: algorithm.to_string(),
@@ -4084,16 +4170,9 @@ pub fn rewrap_runtime_resource_key_material(
         }
     })?;
 
-    let old_provider = LocalMasterKeyProvider::new(
-        old_wrapped_by,
-        decode_direct_material_key(old_wrapped_by, old_wrapping_material)?,
-    )
-    .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
-    let new_provider = LocalMasterKeyProvider::new(
-        new_wrapped_by,
-        decode_direct_material_key(new_wrapped_by, new_wrapping_material)?,
-    )
-    .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
+    let old_provider = runtime_master_key_provider(old_wrapped_by, old_wrapping_material)?;
+    let new_provider = runtime_master_key_provider(new_wrapped_by, new_wrapping_material)?;
+    let new_algorithm = new_provider.wrap_algorithm();
 
     let old_wrapped = WrappedKeyBlob {
         version: 1,
@@ -4104,13 +4183,13 @@ pub fn rewrap_runtime_resource_key_material(
     };
     let mut rewrapped_material = material.clone();
     rewrapped_material.wrapped_by = Some(new_wrapped_by.to_string());
-    rewrapped_material.wrap_algorithm = Some(algorithm.to_string());
+    rewrapped_material.wrap_algorithm = Some(new_algorithm.to_string());
     let old_aad = resource_key_wrap_aad(material_name, material, old_wrapped_by, algorithm);
     let new_aad = resource_key_wrap_aad(
         material_name,
         &rewrapped_material,
         new_wrapped_by,
-        algorithm,
+        new_algorithm,
     );
     let rewrapped = rewrap_resource_key(
         &old_provider,
@@ -4166,28 +4245,20 @@ pub fn generate_wrapped_runtime_resource_key_material(
         });
     }
 
-    let provider = LocalMasterKeyProvider::new(
-        wrapped_by,
-        decode_direct_material_key(wrapped_by, wrapping_material)?,
-    )
-    .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
+    let provider = runtime_master_key_provider(wrapped_by, wrapping_material)?;
+    let wrap_algorithm = provider.wrap_algorithm();
     let resource_key = SecretKey::generate()
         .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
     let mut material = CryptoMaterialConfig {
         kind: WRAPPED_SYMMETRIC_KEY_32_KIND.to_string(),
         wrapped_by: Some(wrapped_by.to_string()),
-        wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
+        wrap_algorithm: Some(wrap_algorithm.to_string()),
         rk_epoch: Some(rk_epoch),
         state: Some(RESOURCE_KEY_STATE_ACTIVE.to_string()),
         scope: Some(scope.to_string()),
         ..CryptoMaterialConfig::default()
     };
-    let aad = resource_key_wrap_aad(
-        material_name,
-        &material,
-        wrapped_by,
-        RESOURCE_KEY_WRAP_ALGORITHM,
-    );
+    let aad = resource_key_wrap_aad(material_name, &material, wrapped_by, wrap_algorithm);
     let wrapped = provider
         .wrap_resource_key(&resource_key, &aad)
         .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))?;
@@ -4298,6 +4369,275 @@ fn resource_key_wrap_aad(
         aad.extend_from_slice(bytes);
     }
     aad
+}
+
+enum RuntimeMasterKeyProvider {
+    Local(LocalMasterKeyProvider),
+    VaultTransit(VaultTransitMasterKeyProvider),
+}
+
+impl RuntimeMasterKeyProvider {
+    fn wrap_algorithm(&self) -> &'static str {
+        match self {
+            Self::Local(_) => RESOURCE_KEY_WRAP_ALGORITHM,
+            Self::VaultTransit(_) => VAULT_TRANSIT_WRAP_ALGORITHM,
+        }
+    }
+}
+
+impl MasterKeyProvider for RuntimeMasterKeyProvider {
+    fn mk_id(&self) -> &str {
+        match self {
+            Self::Local(provider) => provider.mk_id(),
+            Self::VaultTransit(provider) => provider.mk_id(),
+        }
+    }
+
+    fn wrap_resource_key(
+        &self,
+        rk_plaintext: &SecretKey,
+        aad: &[u8],
+    ) -> Result<WrappedKeyBlob, qdrant_sec::EncryptionError> {
+        match self {
+            Self::Local(provider) => provider.wrap_resource_key(rk_plaintext, aad),
+            Self::VaultTransit(provider) => provider.wrap_resource_key(rk_plaintext, aad),
+        }
+    }
+
+    fn unwrap_resource_key(
+        &self,
+        wrapped: &WrappedKeyBlob,
+        aad: &[u8],
+    ) -> Result<SecretKey, qdrant_sec::EncryptionError> {
+        match self {
+            Self::Local(provider) => provider.unwrap_resource_key(wrapped, aad),
+            Self::VaultTransit(provider) => provider.unwrap_resource_key(wrapped, aad),
+        }
+    }
+}
+
+struct VaultTransitMasterKeyProvider {
+    mk_id: String,
+    encrypt_url: String,
+    decrypt_url: String,
+    token_env: String,
+}
+
+impl VaultTransitMasterKeyProvider {
+    fn new(mk_id: &str, key_url: &str, token_env: &str) -> Result<Self, PayloadWriteSetupError> {
+        validate_material_vault_transit_source(mk_id, key_url, token_env).map_err(
+            |err| match err {
+                CryptoSetupError::InvalidMaterialFileSource {
+                    material,
+                    path,
+                    reason,
+                } => PayloadWriteSetupError::InvalidMaterialFileSource {
+                    material,
+                    path,
+                    reason,
+                },
+                err => PayloadWriteSetupError::UnreadableMaterialFile {
+                    material: mk_id.to_string(),
+                    path: format!("{key_url}: {err}"),
+                },
+            },
+        )?;
+        Ok(Self {
+            mk_id: mk_id.to_string(),
+            encrypt_url: vault_transit_action_url(key_url, "encrypt")?,
+            decrypt_url: vault_transit_action_url(key_url, "decrypt")?,
+            token_env: token_env.to_string(),
+        })
+    }
+
+    fn client(&self) -> Result<reqwest::blocking::Client, qdrant_sec::EncryptionError> {
+        reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| qdrant_sec::EncryptionError::SealFailed)
+    }
+
+    fn token_header(&self) -> Result<reqwest::header::HeaderValue, qdrant_sec::EncryptionError> {
+        let token = Zeroizing::new(
+            std::env::var(&self.token_env).map_err(|_| qdrant_sec::EncryptionError::SealFailed)?,
+        );
+        if token.is_empty() {
+            return Err(qdrant_sec::EncryptionError::SealFailed);
+        }
+        let mut token_header = reqwest::header::HeaderValue::from_str(token.as_str())
+            .map_err(|_| qdrant_sec::EncryptionError::SealFailed)?;
+        token_header.set_sensitive(true);
+        Ok(token_header)
+    }
+
+    fn read_response(
+        response: reqwest::blocking::Response,
+        operation: &str,
+    ) -> Result<Value, qdrant_sec::EncryptionError> {
+        if !response.status().is_success() {
+            return Err(match operation {
+                "decrypt" => qdrant_sec::EncryptionError::OpenFailed,
+                _ => qdrant_sec::EncryptionError::SealFailed,
+            });
+        }
+        let mut limited_response = response.take(VAULT_TRANSIT_RESPONSE_MAX_BYTES + 1);
+        let mut body_bytes = Vec::new();
+        limited_response
+            .read_to_end(&mut body_bytes)
+            .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)?;
+        if body_bytes.len() as u64 > VAULT_TRANSIT_RESPONSE_MAX_BYTES {
+            return Err(qdrant_sec::EncryptionError::InvalidEncoding);
+        }
+        serde_json::from_slice::<Value>(&body_bytes)
+            .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)
+    }
+}
+
+impl MasterKeyProvider for VaultTransitMasterKeyProvider {
+    fn mk_id(&self) -> &str {
+        &self.mk_id
+    }
+
+    fn wrap_resource_key(
+        &self,
+        rk_plaintext: &SecretKey,
+        aad: &[u8],
+    ) -> Result<WrappedKeyBlob, qdrant_sec::EncryptionError> {
+        let response = self
+            .client()?
+            .post(&self.encrypt_url)
+            .header(
+                reqwest::header::HeaderName::from_static("x-vault-token"),
+                self.token_header()?,
+            )
+            .json(&json!({
+                "plaintext": BASE64.encode(rk_plaintext.as_bytes()),
+                "context": BASE64.encode(aad),
+            }))
+            .send()
+            .map_err(|_| qdrant_sec::EncryptionError::SealFailed)?;
+        let response = Self::read_response(response, "encrypt")?;
+        let ciphertext = response
+            .pointer("/data/ciphertext")
+            .and_then(Value::as_str)
+            .ok_or(qdrant_sec::EncryptionError::InvalidEncoding)?;
+        Ok(WrappedKeyBlob {
+            version: 1,
+            algorithm: VAULT_TRANSIT_WRAP_ALGORITHM.to_string(),
+            mk_id: self.mk_id.clone(),
+            nonce: VAULT_TRANSIT_NONCE_SENTINEL_B64.to_string(),
+            wrapped_key: BASE64URL_NOPAD.encode(ciphertext.as_bytes()),
+        })
+    }
+
+    fn unwrap_resource_key(
+        &self,
+        wrapped: &WrappedKeyBlob,
+        aad: &[u8],
+    ) -> Result<SecretKey, qdrant_sec::EncryptionError> {
+        if wrapped.version != 1 {
+            return Err(qdrant_sec::EncryptionError::UnsupportedVersion(
+                wrapped.version,
+            ));
+        }
+        if wrapped.algorithm != VAULT_TRANSIT_WRAP_ALGORITHM {
+            return Err(qdrant_sec::EncryptionError::UnsupportedAlgorithm(
+                wrapped.algorithm.clone(),
+            ));
+        }
+        if wrapped.mk_id != self.mk_id {
+            return Err(qdrant_sec::EncryptionError::MasterKeyMismatch);
+        }
+        let ciphertext_bytes = BASE64URL_NOPAD
+            .decode(wrapped.wrapped_key.as_bytes())
+            .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)?;
+        let ciphertext = std::str::from_utf8(&ciphertext_bytes)
+            .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)?;
+        let response = self
+            .client()?
+            .post(&self.decrypt_url)
+            .header(
+                reqwest::header::HeaderName::from_static("x-vault-token"),
+                self.token_header()?,
+            )
+            .json(&json!({
+                "ciphertext": ciphertext,
+                "context": BASE64.encode(aad),
+            }))
+            .send()
+            .map_err(|_| qdrant_sec::EncryptionError::OpenFailed)?;
+        let response = Self::read_response(response, "decrypt")?;
+        let plaintext = response
+            .pointer("/data/plaintext")
+            .and_then(Value::as_str)
+            .ok_or(qdrant_sec::EncryptionError::InvalidEncoding)?;
+        let plaintext = Zeroizing::new(
+            BASE64
+                .decode(plaintext.as_bytes())
+                .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)?,
+        );
+        SecretKey::try_from_slice(plaintext.as_slice())
+    }
+}
+
+fn vault_transit_action_url(key_url: &str, action: &str) -> Result<String, PayloadWriteSetupError> {
+    let mut url = reqwest::Url::parse(key_url).map_err(|err| {
+        PayloadWriteSetupError::InvalidMaterialFileSource {
+            material: "<vault-transit>".to_string(),
+            path: key_url.to_string(),
+            reason: format!("Vault Transit key URL is invalid: {err}"),
+        }
+    })?;
+    let path = url.path().to_string();
+    let action_path = path.replace("/transit/keys/", &format!("/transit/{action}/"));
+    if action_path == path {
+        return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
+            material: "<vault-transit>".to_string(),
+            path: key_url.to_string(),
+            reason: "Vault Transit key URL must contain /transit/keys/".to_string(),
+        });
+    }
+    url.set_path(&action_path);
+    Ok(url.to_string())
+}
+
+fn runtime_master_key_provider(
+    material_name: &str,
+    material: &CryptoMaterialConfig,
+) -> Result<RuntimeMasterKeyProvider, PayloadWriteSetupError> {
+    if material.kind != WRAPPING_KEY_32_KIND {
+        return Err(PayloadWriteSetupError::UnsupportedWrappingMaterialKind {
+            material: material_name.to_string(),
+            wrapped_by: material_name.to_string(),
+            kind: material.kind.clone(),
+        });
+    }
+    if material.source.as_deref() == Some(VAULT_TRANSIT_SOURCE) {
+        let key_url = material.path.as_deref().ok_or_else(|| {
+            PayloadWriteSetupError::MissingMaterialPath {
+                material: material_name.to_string(),
+            }
+        })?;
+        let token_env =
+            material
+                .env
+                .as_deref()
+                .ok_or_else(|| PayloadWriteSetupError::MissingMaterialEnv {
+                    material: material_name.to_string(),
+                    env: "<missing>".to_string(),
+                })?;
+        return Ok(RuntimeMasterKeyProvider::VaultTransit(
+            VaultTransitMasterKeyProvider::new(material_name, key_url, token_env)?,
+        ));
+    }
+
+    LocalMasterKeyProvider::new(
+        material_name,
+        decode_direct_material_key(material_name, material)?,
+    )
+    .map(RuntimeMasterKeyProvider::Local)
+    .map_err(|err| PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(err)))
 }
 
 fn decode_direct_material_key(
@@ -7463,6 +7803,161 @@ mod tests {
             payload.get("body").and_then(Value::as_str),
             Some("vault-backed secret"),
         );
+    }
+
+    #[test]
+    fn generate_wrapped_resource_key_uses_vault_transit_without_local_mk_material() {
+        let mut server = mockito::Server::new();
+        let _mock = server
+            .mock("POST", "/v1/transit/encrypt/docs")
+            .match_header("x-vault-token", "test-token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!({ "data": { "ciphertext": "vault:v1:test-ciphertext" } }).to_string())
+            .create();
+        unsafe {
+            std::env::set_var("QDRANT_TEST_VAULT_TRANSIT_TOKEN", "test-token");
+        }
+
+        let mut settings = Settings::new(None).unwrap();
+        settings.crypto.materials.insert(
+            "tenant-a/mk-vault".to_string(),
+            CryptoMaterialConfig {
+                kind: "wrapping_key_32".to_string(),
+                source: Some(VAULT_TRANSIT_SOURCE.to_string()),
+                env: Some("QDRANT_TEST_VAULT_TRANSIT_TOKEN".to_string()),
+                path: Some(format!("{}/v1/transit/keys/docs", server.url())),
+                ..CryptoMaterialConfig::default()
+            },
+        );
+
+        let material = generate_wrapped_runtime_resource_key_material(
+            &settings.crypto,
+            "tenant-a/payload-rk-v5",
+            "tenant-a/mk-vault",
+            5,
+            "collection:docs/payload:body",
+        )
+        .unwrap();
+        unsafe {
+            std::env::remove_var("QDRANT_TEST_VAULT_TRANSIT_TOKEN");
+        }
+
+        assert_eq!(material.kind, "wrapped_symmetric_key_32");
+        assert_eq!(material.wrapped_by.as_deref(), Some("tenant-a/mk-vault"));
+        assert_eq!(
+            material.wrap_algorithm.as_deref(),
+            Some(VAULT_TRANSIT_WRAP_ALGORITHM)
+        );
+        assert_eq!(
+            material.nonce.as_deref(),
+            Some(VAULT_TRANSIT_NONCE_SENTINEL_B64)
+        );
+        assert_eq!(
+            String::from_utf8(
+                BASE64URL_NOPAD
+                    .decode(material.wrapped_key_b64.unwrap().as_bytes())
+                    .unwrap()
+            )
+            .unwrap(),
+            "vault:v1:test-ciphertext"
+        );
+    }
+
+    #[test]
+    fn validate_material_vault_transit_source_is_wrapping_key_only() {
+        let vault_wrapping_material = CryptoMaterialConfig {
+            kind: "wrapping_key_32".to_string(),
+            source: Some(VAULT_TRANSIT_SOURCE.to_string()),
+            env: Some("QDRANT_TEST_VAULT_TRANSIT_TOKEN".to_string()),
+            path: Some("https://vault.example.com/v1/transit/keys/docs".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        assert_eq!(
+            validate_material("tenant-a/mk-vault", &vault_wrapping_material, false),
+            Ok(())
+        );
+
+        let direct_resource_key = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some(VAULT_TRANSIT_SOURCE.to_string()),
+            env: Some("QDRANT_TEST_VAULT_TRANSIT_TOKEN".to_string()),
+            path: Some("https://vault.example.com/v1/transit/keys/docs".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        assert!(matches!(
+            validate_material("tenant-a/payload-rk", &direct_resource_key, false),
+            Err(CryptoSetupError::MaterialSourceMismatch { .. })
+        ));
+
+        let metadata_endpoint = CryptoMaterialConfig {
+            kind: "wrapping_key_32".to_string(),
+            source: Some(VAULT_TRANSIT_SOURCE.to_string()),
+            env: Some("QDRANT_TEST_VAULT_TRANSIT_TOKEN".to_string()),
+            path: Some("https://vault.example.com/v1/transit/encrypt/docs".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        assert!(matches!(
+            validate_material("tenant-a/mk-vault", &metadata_endpoint, false),
+            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("transit/keys")
+        ));
+    }
+
+    #[test]
+    fn decode_wrapped_resource_key_uses_vault_transit_decrypt() {
+        let mut server = mockito::Server::new();
+        let plaintext = BASE64.encode(&[37u8; 32]);
+        let _mock = server
+            .mock("POST", "/v1/transit/decrypt/docs")
+            .match_header("x-vault-token", "test-token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!({ "data": { "plaintext": plaintext } }).to_string())
+            .create();
+        unsafe {
+            std::env::set_var("QDRANT_TEST_VAULT_TRANSIT_DECRYPT_TOKEN", "test-token");
+        }
+
+        let wrapping_material = CryptoMaterialConfig {
+            kind: "wrapping_key_32".to_string(),
+            source: Some(VAULT_TRANSIT_SOURCE.to_string()),
+            env: Some("QDRANT_TEST_VAULT_TRANSIT_DECRYPT_TOKEN".to_string()),
+            path: Some(format!("{}/v1/transit/keys/docs", server.url())),
+            ..CryptoMaterialConfig::default()
+        };
+        let wrapped_material = CryptoMaterialConfig {
+            kind: "wrapped_symmetric_key_32".to_string(),
+            wrapped_by: Some("tenant-a/mk-vault".to_string()),
+            wrap_algorithm: Some(VAULT_TRANSIT_WRAP_ALGORITHM.to_string()),
+            nonce: Some(VAULT_TRANSIT_NONCE_SENTINEL_B64.to_string()),
+            wrapped_key_b64: Some(BASE64URL_NOPAD.encode(b"vault:v1:test-ciphertext")),
+            rk_epoch: Some(5),
+            state: Some("active".to_string()),
+            scope: Some("collection:docs/payload:body".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        let settings = CryptoSettings {
+            allow_inline_key_material: false,
+            instances: HashMap::new(),
+            backends: HashMap::new(),
+            materials: HashMap::from([
+                ("tenant-a/mk-vault".to_string(), wrapping_material),
+                (
+                    "tenant-a/payload-rk-v5".to_string(),
+                    wrapped_material.clone(),
+                ),
+            ]),
+        };
+
+        let decoded =
+            decode_wrapped_resource_key(&settings, "tenant-a/payload-rk-v5", &wrapped_material)
+                .unwrap();
+        unsafe {
+            std::env::remove_var("QDRANT_TEST_VAULT_TRANSIT_DECRYPT_TOKEN");
+        }
+
+        assert_eq!(decoded.as_bytes(), &[37u8; 32]);
     }
 
     #[test]

@@ -451,9 +451,9 @@ crypto:
 
 The generic `crypto` control plane supports a safer MK/RK hierarchy:
 
-- `wrapping_key_32` is an MK/KEK loaded from env/file/`unix_socket`/`vault_kv2`/fd/inline material.
+- `wrapping_key_32` is an MK/KEK loaded from env/file/`unix_socket`/`vault_kv2`/fd/inline material, or an external Vault Transit key reference.
 - `wrapped_symmetric_key_32` is a random collection or rule RK wrapped by that
-  MK using AES-256-GCM.
+  MK using AES-256-GCM or Vault Transit.
 - Payload text and CKKS vector envelope AEAD keys are still purpose-specific
   HKDF subkeys derived from the unwrapped RK.
 
@@ -533,6 +533,17 @@ redirects; redirects must be resolved in the configured, validated URL.
 Vault-backed material keeps the MK/RK out of config files, but the Vault token
 source, Vault policy, and Vault availability become part of the key-management
 TCB and must be identical across nodes that can write encrypted collections.
+When a wrapping material uses `source: vault_transit`, it must be
+`kind: wrapping_key_32`, and `path` must be the Vault Transit key metadata URL,
+for example `/v1/<mount>/transit/keys/<key>`. qdrant-sec derives the
+corresponding `/encrypt/<key>` and `/decrypt/<key>` endpoints and sends the RK
+plaintext only to Vault Transit for wrap/unwrap. The config never contains the
+MK bytes, and `wrapped_symmetric_key_32.wrap_algorithm` becomes
+`vault-transit`. As with Vault KV v2, the URL must use HTTPS except loopback
+HTTP for tests/dev, credentials/query/fragment components are rejected, and
+`env` must name the Vault token environment variable. Vault Transit material is
+only valid for MK/KEK wrapping; it cannot be used as a direct server-side
+payload/vector RK source.
 When a material uses `source: fd`, the `fd` must reference an already-open Unix
 file descriptor containing the base64url-no-pad 32-byte material. Qdrant
 marks the descriptor close-on-exec during validation and duplicates it with
