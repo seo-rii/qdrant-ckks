@@ -788,7 +788,9 @@ install a write-deny Landlock ruleset in the bridge child before `exec`, blockin
 regular file writes, file creation, removal, rename/link, and truncation
 operations for kernels that support the configured Landlock ABI. Production
 deployments that need broader confinement should still run the bridge under an
-external seccomp/AppArmor/container profile.
+external seccomp/AppArmor/container profile. See
+[`openfhe-bridge-sandbox.md`](openfhe-bridge-sandbox.md) for a hardened
+deployment checklist and starter AppArmor/seccomp examples.
 
 Collection encryption rules and runtime instances must use the same explicit
 provider instance and `key_id`; runtime validation rejects missing instances,
