@@ -6408,6 +6408,27 @@ mod tests {
         )
         .expect_err("bridge pool sizing drift must fail runtime parity validation");
         assert!(err.to_string().contains("peer-backend-pool"));
+
+        let mut peer_with_different_sandbox = settings.clone();
+        peer_with_different_sandbox
+            .crypto
+            .backends
+            .get_mut("openfhe_bridge_v1")
+            .unwrap()
+            .kind = "process_pool_landlock".to_string();
+        assert_ne!(
+            fingerprint,
+            crypto_runtime_capability_fingerprint(&peer_with_different_sandbox),
+            "bridge sandbox policy drift must change the parity fingerprint",
+        );
+        let peer_sandbox_fingerprint =
+            crypto_runtime_capability_fingerprint(&peer_with_different_sandbox);
+        let err = validate_crypto_runtime_capability_parity(
+            &settings,
+            [("peer-backend-sandbox", peer_sandbox_fingerprint.as_str())],
+        )
+        .expect_err("bridge sandbox policy drift must fail runtime parity validation");
+        assert!(err.to_string().contains("peer-backend-sandbox"));
     }
 
     #[test]
