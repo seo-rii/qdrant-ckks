@@ -103,6 +103,7 @@ jobs:
           cargo test --locked -p qdrant validate_crypto_settings_
           cargo test --locked -p qdrant validate_material_
           cargo test --locked -p qdrant decode_direct_material_key_
+          cargo test --locked -p qdrant vault_transit
 
       - name: Run runtime crypto parity tests
         run: |
