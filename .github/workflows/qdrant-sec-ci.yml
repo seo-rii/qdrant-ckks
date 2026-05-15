@@ -41,6 +41,7 @@ jobs:
           cargo test --locked -p collection ckks --lib
           cargo test --locked -p collection encryption_config_rejects_quantized_or_multi_vector_encrypted_vectors --lib
           cargo test --locked -p collection collection_config_rejects_global_quantization_for_encrypted_vectors --lib
+          cargo test --locked -p collection segment_optimizer_config_tracks_encrypted_vector_names --lib
 
       - name: Run crypto migration state-machine tests
         run: cargo test --locked -p collection crypto_migration --lib
