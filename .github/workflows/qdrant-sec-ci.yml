@@ -127,6 +127,7 @@ jobs:
       - name: Run encrypted data movement tests
         run: |
           cargo test --locked -p storage encrypted_
+          cargo test --locked -p storage payload_decrypt
           cargo test --locked -p storage audit_error_redaction
 
       - name: Run encrypted leakage integration tests
