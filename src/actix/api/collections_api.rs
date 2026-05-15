@@ -1,4 +1,7 @@
 use std::collections::BTreeMap;
+use std::fs;
+use std::io::Write;
+use std::path::Path as FsPath;
 use std::time::Duration;
 
 use actix_web::rt::time::Instant;
@@ -244,6 +247,18 @@ pub struct RunPayloadCryptoMigrationResponse {
     pub completion_plan: CryptoMigrationPlan,
     pub completed: bool,
     pub dry_run: bool,
+}
+
+const PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_FILE: &str = "payload_crypto_migration_last_run.json";
+
+#[derive(Debug, Serialize)]
+struct PayloadCryptoMigrationRunRecord {
+    collection_name: String,
+    stable_crypto_id: String,
+    checkpoints: Vec<CryptoMigrationCheckpoint>,
+    completion_plan: CryptoMigrationPlan,
+    completed: bool,
+    dry_run: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -616,6 +631,57 @@ fn validate_payload_crypto_migration_run_request_for_config(
         })
 }
 
+fn persist_payload_crypto_migration_run_record(
+    collection_path: &FsPath,
+    record: &PayloadCryptoMigrationRunRecord,
+) -> Result<(), StorageError> {
+    let record_path = collection_path.join(PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_FILE);
+    let temp_path = collection_path.join(format!(
+        ".{PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_FILE}.{}.tmp",
+        std::process::id()
+    ));
+    let bytes = serde_json::to_vec_pretty(record).map_err(|err| {
+        StorageError::service_error(format!(
+            "failed to serialize payload crypto migration run record: {err}"
+        ))
+    })?;
+    {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&temp_path)
+            .map_err(|err| {
+                StorageError::service_error(format!(
+                    "failed to create payload crypto migration run record {temp_path:?}: {err}"
+                ))
+            })?;
+        file.write_all(&bytes).map_err(|err| {
+            StorageError::service_error(format!(
+                "failed to write payload crypto migration run record {temp_path:?}: {err}"
+            ))
+        })?;
+        file.sync_all().map_err(|err| {
+            StorageError::service_error(format!(
+                "failed to sync payload crypto migration run record {temp_path:?}: {err}"
+            ))
+        })?;
+    }
+    fs::rename(&temp_path, &record_path).map_err(|err| {
+        StorageError::service_error(format!(
+            "failed to replace payload crypto migration run record {record_path:?}: {err}"
+        ))
+    })?;
+    if let Ok(parent) = fs::File::open(collection_path) {
+        parent.sync_all().map_err(|err| {
+            StorageError::service_error(format!(
+                "failed to sync payload crypto migration run record parent {collection_path:?}: {err}"
+            ))
+        })?;
+    }
+    Ok(())
+}
+
 #[post("/collections/{collection_name}/crypto/migration/run-payloads")]
 async fn run_payloads_for_crypto_migration(
     dispatcher: web::Data<Dispatcher>,
@@ -714,6 +780,17 @@ async fn run_payloads_for_crypto_migration(
                 )
                 .await?
         };
+        persist_payload_crypto_migration_run_record(
+            collection.path(),
+            &PayloadCryptoMigrationRunRecord {
+                collection_name: collection_name.clone(),
+                stable_crypto_id: config.stable_crypto_id(&collection_name).map_err(StorageError::from)?,
+                checkpoints: completion_plan.checkpoints.clone(),
+                completion_plan: completion_plan.clone(),
+                completed,
+                dry_run,
+            },
+        )?;
 
         Ok(RunPayloadCryptoMigrationResponse {
             checkpoints: completion_plan.checkpoints.clone(),
@@ -899,7 +976,7 @@ mod tests {
     };
     use collection::optimizers_builder::OptimizersConfig;
     use segment::types::HnswConfig;
-    use serde_json::json;
+    use serde_json::{Value, json};
     use uuid::Uuid;
 
     use super::*;
@@ -1208,6 +1285,50 @@ mod tests {
             &rotating,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn payload_crypto_migration_run_record_persists_completion_plan_for_resume() {
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-payload-migration-record-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let completion_plan = payload_crypto_migration_completion_plan(
+            CryptoMigrationState::Rotating,
+            4,
+            RunPayloadCryptoMigration {
+                active_rk_id: "rk/docs/4".to_string(),
+                retired_rk_id: Some("rk/docs/3".to_string()),
+                dry_run: false,
+            },
+            vec![verified_checkpoint()],
+        )
+        .unwrap();
+        let record = PayloadCryptoMigrationRunRecord {
+            collection_name: "docs".to_string(),
+            stable_crypto_id: "12345678-90ab-cdef-1234-567890abcdef".to_string(),
+            checkpoints: completion_plan.checkpoints.clone(),
+            completion_plan,
+            completed: true,
+            dry_run: false,
+        };
+
+        persist_payload_crypto_migration_run_record(dir.path(), &record).unwrap();
+
+        let persisted: Value = serde_json::from_slice(
+            &std::fs::read(dir.path().join(PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_FILE)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(persisted["collection_name"], "docs");
+        assert_eq!(
+            persisted["stable_crypto_id"],
+            "12345678-90ab-cdef-1234-567890abcdef"
+        );
+        assert_eq!(persisted["completed"], true);
+        assert_eq!(persisted["dry_run"], false);
+        assert_eq!(persisted["completion_plan"]["from"], "rotating");
+        assert_eq!(persisted["completion_plan"]["to"], "active");
+        assert_eq!(persisted["checkpoints"][0]["status"], "verified");
     }
 
     #[test]
