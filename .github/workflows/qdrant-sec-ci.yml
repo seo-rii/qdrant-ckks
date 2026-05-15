@@ -118,6 +118,7 @@ jobs:
         run: |
           cargo test --locked -p collection log_value_redacts_
           cargo test --locked -p collection update_operation_generalizer_strips_encrypted_payload_marker_values --lib
+          cargo test --locked -p qdrant app_telemetry_includes_crypto_runtime_capability_fingerprint
           cargo test --locked -p qdrant app_telemetry_does_not_serialize_crypto_key_material
           cargo test --locked -p qdrant grpc_app_telemetry_preserves_crypto_runtime_fingerprint
           cargo test --locked -p qdrant crypto_runtime_fingerprint
