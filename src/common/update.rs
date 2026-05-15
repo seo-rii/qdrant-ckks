@@ -2917,6 +2917,8 @@ esac
                     kind: "process".to_string(),
                     program: Some(bridge_path.display().to_string()),
                     sha256_b64: Some(BASE64URL_NOPAD.encode(&bridge_digest)),
+                    signature_public_key_b64: None,
+                    signature_b64: None,
                     size: None,
                     timeout_ms: Some(5_000),
                 },

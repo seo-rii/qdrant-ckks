@@ -483,6 +483,8 @@ crypto:
       kind: process
       program: /usr/local/bin/openfhe-bridge
       sha256_b64: base64url-no-pad-sha256-of-bridge
+      signature_public_key_b64: base64url-no-pad-ed25519-public-key
+      signature_b64: base64url-no-pad-ed25519-signature-over-domain-and-sha256
   instances:
     docs_vector_v1:
       provider: vector/openfhe-ckks@v1
@@ -1137,7 +1139,12 @@ on Unix, and requires the binary plus every parent directory to be owned by root
 or the Qdrant process user. Generic process backends must set `sha256_b64` to
 pin the expected bridge binary digest; generic runtime validation and checked
 backend construction both hash the bridge through a no-follow file descriptor
-on Unix. On Linux, checked bridge workers are spawned through a
+on Unix. Operators can additionally set `signature_public_key_b64` and
+`signature_b64` to require an Ed25519 signature over the domain-separated
+bridge digest (`qdrant-sec/openfhe-bridge-binary-signature/v1 || sha256`).
+The signature fields must be configured together, are included in the runtime
+capability fingerprint, and therefore participate in cluster parity checks.
+On Linux, checked bridge workers are spawned through a
 `/proc/self/fd/<fd>` path backed by the same no-follow validated bridge file
 descriptor held open through `spawn`, which narrows the path-swap window between
 validation, hashing, and execution.

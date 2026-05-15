@@ -1274,6 +1274,8 @@ mod tests {
                         kind: "process_pool".to_string(),
                         program: Some("/usr/local/bin/qdrant-sec-openfhe".to_string()),
                         sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
+                        signature_public_key_b64: None,
+                        signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
                     },

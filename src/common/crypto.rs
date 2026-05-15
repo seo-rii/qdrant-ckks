@@ -24,6 +24,7 @@ use qdrant_sec::{
     client_payload_nonce_replay_key, client_payload_signature_key_id, rewrap_resource_key,
     validate_client_payload_value_for_runtime,
 };
+use ring::signature::{ED25519, UnparsedPublicKey};
 use segment::json_path::JsonPath;
 use segment::types::{Distance, Payload};
 use serde_json::{Value, json};
@@ -84,6 +85,8 @@ pub enum CryptoSetupError {
     MissingBackendSha256Pin { backend: String },
     #[error("crypto backend {backend} program path is invalid: {program}")]
     InvalidBackendProgram { backend: String, program: String },
+    #[error("crypto backend {backend} program signature is invalid: {reason}")]
+    InvalidBackendSignature { backend: String, reason: String },
     #[error("crypto backend {backend} size is invalid: {reason}")]
     InvalidBackendSize { backend: String, reason: String },
     #[error("crypto backend {backend} timeout is invalid: {reason}")]
@@ -165,6 +168,7 @@ const OPENFHE_BACKEND_KIND_PROCESS: &str = "process";
 const OPENFHE_BACKEND_KIND_PROCESS_POOL: &str = "process_pool";
 const OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK: &str = "process_landlock";
 const OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK: &str = "process_pool_landlock";
+const OPENFHE_BACKEND_SIGNATURE_DOMAIN: &[u8] = b"qdrant-sec/openfhe-bridge-binary-signature/v1\0";
 const METADATA_BLIND_INDEX_ALLOWED_OPTIONS: &[&str] = &[
     "key_id",
     EXPECTED_RK_ID_OPTION,
@@ -1171,6 +1175,13 @@ fn openfhe_backend_from_config(
                 ))
             },
         )?;
+    validate_backend_signature_config(
+        backend_name,
+        expected_sha256_b64,
+        backend.signature_public_key_b64.as_deref(),
+        backend.signature_b64.as_deref(),
+    )
+    .map_err(|err| StorageError::bad_input(format!("crypto backend {backend_name}: {err}")))?;
     if let Some(timeout_ms) = backend.timeout_ms {
         command_backend = command_backend.with_timeout(Duration::from_millis(timeout_ms));
     }
@@ -1362,6 +1373,8 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
                 "kind": backend.kind,
                 "program": backend.program,
                 "sha256_b64": backend.sha256_b64,
+                "signature_public_key_b64": backend.signature_public_key_b64,
+                "signature_b64": backend.signature_b64,
                 "size": backend.size,
                 "timeout_ms": backend.timeout_ms,
             }),
@@ -2705,6 +2718,12 @@ fn validate_backend(
         });
     };
     validate_backend_program_path_with_sha256(backend_name, program, Some(expected_sha256_b64))?;
+    validate_backend_signature_config(
+        backend_name,
+        expected_sha256_b64,
+        backend.signature_public_key_b64.as_deref(),
+        backend.signature_b64.as_deref(),
+    )?;
 
     if backend.timeout_ms == Some(0) {
         return Err(CryptoSetupError::InvalidBackendTimeout {
@@ -2783,6 +2802,17 @@ fn validate_collection_runtime_backend_metadata(
             "collection {collection_name} vector crypto instance {instance_name} backend {backend_name} sha256_b64 must decode to 32 bytes",
         )));
     }
+    validate_backend_signature_config(
+        backend_name,
+        expected_sha256_b64,
+        backend.signature_public_key_b64.as_deref(),
+        backend.signature_b64.as_deref(),
+    )
+    .map_err(|err| {
+        StorageError::bad_input(format!(
+            "collection {collection_name} vector crypto instance {instance_name} backend {backend_name} signature policy is invalid: {err}",
+        ))
+    })?;
 
     if backend.timeout_ms == Some(0) {
         return Err(StorageError::bad_input(format!(
@@ -2790,6 +2820,64 @@ fn validate_collection_runtime_backend_metadata(
         )));
     }
 
+    Ok(())
+}
+
+fn backend_signature_message(program_sha256: &[u8]) -> Vec<u8> {
+    let mut message = Vec::with_capacity(OPENFHE_BACKEND_SIGNATURE_DOMAIN.len() + 32);
+    message.extend_from_slice(OPENFHE_BACKEND_SIGNATURE_DOMAIN);
+    message.extend_from_slice(program_sha256);
+    message
+}
+
+fn validate_backend_signature_config(
+    backend_name: &str,
+    expected_sha256_b64: &str,
+    signature_public_key_b64: Option<&str>,
+    signature_b64: Option<&str>,
+) -> Result<(), CryptoSetupError> {
+    let invalid_signature = |reason: &str| CryptoSetupError::InvalidBackendSignature {
+        backend: backend_name.to_string(),
+        reason: reason.to_string(),
+    };
+    let (Some(signature_public_key_b64), Some(signature_b64)) =
+        (signature_public_key_b64, signature_b64)
+    else {
+        if signature_public_key_b64.is_some() || signature_b64.is_some() {
+            return Err(invalid_signature(
+                "signature_public_key_b64 and signature_b64 must be configured together",
+            ));
+        }
+        return Ok(());
+    };
+
+    let expected_sha256 = BASE64URL_NOPAD
+        .decode(expected_sha256_b64.as_bytes())
+        .map_err(|_| invalid_signature("sha256_b64 must be base64url without padding"))?;
+    if expected_sha256.len() != 32 {
+        return Err(invalid_signature("sha256_b64 must decode to 32 bytes"));
+    }
+    let public_key = BASE64URL_NOPAD
+        .decode(signature_public_key_b64.as_bytes())
+        .map_err(|_| {
+            invalid_signature("signature_public_key_b64 must be base64url without padding")
+        })?;
+    if public_key.len() != 32 {
+        return Err(invalid_signature(
+            "signature_public_key_b64 must decode to 32 bytes",
+        ));
+    }
+    let signature = BASE64URL_NOPAD
+        .decode(signature_b64.as_bytes())
+        .map_err(|_| invalid_signature("signature_b64 must be base64url without padding"))?;
+    if signature.len() != 64 {
+        return Err(invalid_signature("signature_b64 must decode to 64 bytes"));
+    }
+
+    let message = backend_signature_message(&expected_sha256);
+    UnparsedPublicKey::new(&ED25519, public_key)
+        .verify(&message, &signature)
+        .map_err(|_| invalid_signature("Ed25519 verification failed"))?;
     Ok(())
 }
 
@@ -4893,6 +4981,8 @@ mod tests {
                     kind: "process_pool".to_string(),
                     program: None,
                     sha256_b64: None,
+                    signature_public_key_b64: None,
+                    signature_b64: None,
                     size: Some(1),
                     timeout_ms: Some(5_000),
                 },
@@ -5546,6 +5636,8 @@ mod tests {
                     kind: "process".to_string(),
                     program: Some(bridge_program),
                     sha256_b64: Some(current_exe_sha256_b64()),
+                    signature_public_key_b64: None,
+                    signature_b64: None,
                     size: None,
                     timeout_ms: Some(1000),
                 },
@@ -5666,6 +5758,8 @@ mod tests {
                     kind: "process".to_string(),
                     program: Some(bridge_program),
                     sha256_b64: Some(current_exe_sha256_b64()),
+                    signature_public_key_b64: None,
+                    signature_b64: None,
                     size: None,
                     timeout_ms: Some(1000),
                 },
@@ -6358,6 +6452,8 @@ mod tests {
                         kind: "process_pool".to_string(),
                         program: Some("/usr/local/bin/qdrant-sec-openfhe".to_string()),
                         sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
+                        signature_public_key_b64: None,
+                        signature_b64: None,
                         size: Some(2),
                         timeout_ms: Some(5_000),
                     },
@@ -6429,6 +6525,31 @@ mod tests {
         )
         .expect_err("bridge sandbox policy drift must fail runtime parity validation");
         assert!(err.to_string().contains("peer-backend-sandbox"));
+
+        let mut peer_with_signature_policy = settings.clone();
+        let backend = peer_with_signature_policy
+            .crypto
+            .backends
+            .get_mut("openfhe_bridge_v1")
+            .unwrap();
+        backend.signature_public_key_b64 = Some(BASE64URL_NOPAD.encode(&[19_u8; 32]));
+        backend.signature_b64 = Some(BASE64URL_NOPAD.encode(&[20_u8; 64]));
+        assert_ne!(
+            fingerprint,
+            crypto_runtime_capability_fingerprint(&peer_with_signature_policy),
+            "bridge signature policy drift must change the parity fingerprint",
+        );
+        let peer_signature_fingerprint =
+            crypto_runtime_capability_fingerprint(&peer_with_signature_policy);
+        let err = validate_crypto_runtime_capability_parity(
+            &settings,
+            [(
+                "peer-backend-signature",
+                peer_signature_fingerprint.as_str(),
+            )],
+        )
+        .expect_err("bridge signature policy drift must fail runtime parity validation");
+        assert!(err.to_string().contains("peer-backend-signature"));
     }
 
     #[test]
@@ -6469,6 +6590,8 @@ mod tests {
                         kind: "process_pool".to_string(),
                         program: Some("/usr/local/bin/qdrant-sec-openfhe".to_string()),
                         sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
+                        signature_public_key_b64: None,
+                        signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
                     },
@@ -7721,6 +7844,8 @@ mod tests {
                     kind: "process_pool".to_string(),
                     program: None,
                     sha256_b64: None,
+                    signature_public_key_b64: None,
+                    signature_b64: None,
                     size: Some(4),
                     timeout_ms: Some(5_000),
                 },
@@ -7738,6 +7863,8 @@ mod tests {
                     kind: "process_pool".to_string(),
                     program: Some("relative-openfhe-bridge".to_string()),
                     sha256_b64: Some(BASE64URL_NOPAD.encode(&[0_u8; 32])),
+                    signature_public_key_b64: None,
+                    signature_b64: None,
                     size: Some(4),
                     timeout_ms: Some(5_000),
                 },
@@ -7755,6 +7882,8 @@ mod tests {
                     kind: "shell".to_string(),
                     program: Some("/usr/local/bin/openfhe-bridge".to_string()),
                     sha256_b64: None,
+                    signature_public_key_b64: None,
+                    signature_b64: None,
                     size: None,
                     timeout_ms: Some(5_000),
                 },
@@ -7769,6 +7898,18 @@ mod tests {
     fn current_exe_sha256_b64() -> String {
         let program = std::env::current_exe().unwrap();
         BASE64URL_NOPAD.encode(&Sha256::digest(std::fs::read(program).unwrap()))
+    }
+
+    fn backend_signature_for_sha256(sha256_b64: &str) -> (String, String) {
+        let rng = SystemRandom::new();
+        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+        let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+        let digest = BASE64URL_NOPAD.decode(sha256_b64.as_bytes()).unwrap();
+        let signature = key_pair.sign(&backend_signature_message(&digest));
+        (
+            BASE64URL_NOPAD.encode(key_pair.public_key().as_ref()),
+            BASE64URL_NOPAD.encode(signature.as_ref()),
+        )
     }
 
     #[test]
@@ -7800,6 +7941,8 @@ mod tests {
                     kind: "process_pool".to_string(),
                     program: Some(bridge_path.to_string_lossy().to_string()),
                     sha256_b64: Some(expected_digest),
+                    signature_public_key_b64: None,
+                    signature_b64: None,
                     size: Some(1),
                     timeout_ms: Some(5_000),
                 },
@@ -7814,6 +7957,8 @@ mod tests {
                     kind: "process_pool".to_string(),
                     program: Some(bridge_path.to_string_lossy().to_string()),
                     sha256_b64: None,
+                    signature_public_key_b64: None,
+                    signature_b64: None,
                     size: Some(1),
                     timeout_ms: Some(5_000),
                 },
@@ -7830,11 +7975,80 @@ mod tests {
                     kind: "process_pool".to_string(),
                     program: Some(bridge_path.to_string_lossy().to_string()),
                     sha256_b64: Some(BASE64URL_NOPAD.encode(&[0_u8; 32])),
+                    signature_public_key_b64: None,
+                    signature_b64: None,
                     size: Some(1),
                     timeout_ms: Some(5_000),
                 },
             ),
             Err(CryptoSetupError::InvalidBackendProgram { .. }),
+        ));
+    }
+
+    #[test]
+    fn validate_backend_verifies_bridge_signature_policy() {
+        let program = std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let sha256_b64 = current_exe_sha256_b64();
+        let (signature_public_key_b64, signature_b64) = backend_signature_for_sha256(&sha256_b64);
+
+        validate_backend(
+            "openfhe_local",
+            &CryptoBackendConfig {
+                kind: "process".to_string(),
+                program: Some(program.clone()),
+                sha256_b64: Some(sha256_b64.clone()),
+                signature_public_key_b64: Some(signature_public_key_b64.clone()),
+                signature_b64: Some(signature_b64.clone()),
+                size: None,
+                timeout_ms: Some(5_000),
+            },
+        )
+        .expect("matching Ed25519 bridge signature must validate");
+
+        let err = validate_backend_signature_config(
+            "openfhe_local",
+            &BASE64URL_NOPAD.encode(&[7_u8; 32]),
+            Some(&signature_public_key_b64),
+            Some(&signature_b64),
+        )
+        .expect_err("bridge signature must be bound to the configured sha256 pin");
+        assert!(matches!(
+            err,
+            CryptoSetupError::InvalidBackendSignature { .. }
+        ));
+
+        let err = validate_backend(
+            "openfhe_local",
+            &CryptoBackendConfig {
+                kind: "process".to_string(),
+                program: Some(program),
+                sha256_b64: Some(BASE64URL_NOPAD.encode(&[7_u8; 32])),
+                signature_public_key_b64: Some(signature_public_key_b64),
+                signature_b64: Some(signature_b64),
+                size: None,
+                timeout_ms: Some(5_000),
+            },
+        )
+        .expect_err("bridge signature validation must not bypass the sha256 program pin");
+        assert!(matches!(
+            err,
+            CryptoSetupError::InvalidBackendProgram { .. }
+                | CryptoSetupError::InvalidBackendSignature { .. }
+        ));
+
+        let err = validate_backend_signature_config(
+            "openfhe_local",
+            &sha256_b64,
+            Some(&BASE64URL_NOPAD.encode(&[1_u8; 32])),
+            None,
+        )
+        .expect_err("partial bridge signature config must fail closed");
+        assert!(matches!(
+            err,
+            CryptoSetupError::InvalidBackendSignature { .. }
         ));
     }
 
@@ -7852,6 +8066,8 @@ mod tests {
                 kind: OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK.to_string(),
                 program: Some(program.clone()),
                 sha256_b64: Some(sha256_b64.clone()),
+                signature_public_key_b64: None,
+                signature_b64: None,
                 size: None,
                 timeout_ms: Some(5_000),
             },
@@ -7862,6 +8078,8 @@ mod tests {
                 kind: OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK.to_string(),
                 program: Some(program),
                 sha256_b64: Some(sha256_b64),
+                signature_public_key_b64: None,
+                signature_b64: None,
                 size: Some(2),
                 timeout_ms: Some(5_000),
             },
@@ -7891,6 +8109,8 @@ mod tests {
                 kind: "process".to_string(),
                 program: Some(program.to_string_lossy().to_string()),
                 sha256_b64: None,
+                signature_public_key_b64: None,
+                signature_b64: None,
                 size: None,
                 timeout_ms: Some(5_000),
             },
@@ -7939,6 +8159,8 @@ mod tests {
                 kind: "process".to_string(),
                 program: Some(program.to_string_lossy().to_string()),
                 sha256_b64: Some(current_exe_sha256_b64()),
+                signature_public_key_b64: None,
+                signature_b64: None,
                 size: None,
                 timeout_ms: Some(5_000),
             },
@@ -7958,6 +8180,8 @@ mod tests {
                 kind: OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK.to_string(),
                 program: Some(program.to_string_lossy().to_string()),
                 sha256_b64: Some(current_exe_sha256_b64()),
+                signature_public_key_b64: None,
+                signature_b64: None,
                 size: None,
                 timeout_ms: Some(5_000),
             },
@@ -7981,6 +8205,8 @@ mod tests {
                     kind: "process_pool".to_string(),
                     program: Some("/usr/local/bin/openfhe-bridge".to_string()),
                     sha256_b64: None,
+                    signature_public_key_b64: None,
+                    signature_b64: None,
                     size: Some(0),
                     timeout_ms: Some(5_000),
                 },
@@ -7998,6 +8224,8 @@ mod tests {
                     kind: "process".to_string(),
                     program: Some("/usr/local/bin/openfhe-bridge".to_string()),
                     sha256_b64: None,
+                    signature_public_key_b64: None,
+                    signature_b64: None,
                     size: Some(2),
                     timeout_ms: Some(5_000),
                 },
@@ -8023,6 +8251,8 @@ mod tests {
                     kind: "process".to_string(),
                     program: Some(program),
                     sha256_b64: Some(current_exe_sha256_b64()),
+                    signature_public_key_b64: None,
+                    signature_b64: None,
                     size: None,
                     timeout_ms: Some(0),
                 },
@@ -9504,6 +9734,8 @@ mod tests {
                         kind: "noop".to_string(),
                         program: None,
                         sha256_b64: None,
+                        signature_public_key_b64: None,
+                        signature_b64: None,
                         size: None,
                         timeout_ms: None,
                     },
@@ -10567,6 +10799,8 @@ mod tests {
                         kind: "process_pool".to_string(),
                         program: Some("/usr/local/bin/openfhe-bridge".to_string()),
                         sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
+                        signature_public_key_b64: None,
+                        signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
                     },
@@ -11198,6 +11432,8 @@ mod tests {
                         kind: "process_pool".to_string(),
                         program: Some("/usr/local/bin/openfhe-bridge".to_string()),
                         sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
+                        signature_public_key_b64: None,
+                        signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
                     },
@@ -11363,6 +11599,8 @@ mod tests {
                         kind: "process_pool".to_string(),
                         program: Some("/usr/local/bin/openfhe-bridge".to_string()),
                         sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
+                        signature_public_key_b64: None,
+                        signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
                     },
@@ -11436,6 +11674,8 @@ mod tests {
                         kind: "process_pool".to_string(),
                         program: Some("/usr/local/bin/openfhe-bridge".to_string()),
                         sha256_b64: None,
+                        signature_public_key_b64: None,
+                        signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
                     },
@@ -11623,6 +11863,8 @@ mod tests {
                         kind: "process_pool".to_string(),
                         program: Some("/usr/local/bin/openfhe-bridge".to_string()),
                         sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
+                        signature_public_key_b64: None,
+                        signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
                     },
@@ -11693,6 +11935,8 @@ mod tests {
                         kind: "process_pool".to_string(),
                         program: Some("/usr/local/bin/openfhe-bridge".to_string()),
                         sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
+                        signature_public_key_b64: None,
+                        signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
                     },
@@ -11765,6 +12009,8 @@ mod tests {
                         kind: "process_pool".to_string(),
                         program: Some("/usr/local/bin/openfhe-bridge".to_string()),
                         sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
+                        signature_public_key_b64: None,
+                        signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
                     },
@@ -11837,6 +12083,8 @@ mod tests {
                         kind: "process_pool".to_string(),
                         program: Some("/usr/local/bin/openfhe-bridge".to_string()),
                         sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
+                        signature_public_key_b64: None,
+                        signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
                     },
@@ -11895,6 +12143,8 @@ mod tests {
                         kind: "process_pool".to_string(),
                         program: Some("/usr/local/bin/openfhe-bridge".to_string()),
                         sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
+                        signature_public_key_b64: None,
+                        signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
                     },

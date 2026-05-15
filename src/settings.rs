@@ -328,6 +328,10 @@ pub struct CryptoBackendConfig {
     #[serde(default)]
     pub sha256_b64: Option<String>,
     #[serde(default)]
+    pub signature_public_key_b64: Option<String>,
+    #[serde(default)]
+    pub signature_b64: Option<String>,
+    #[serde(default)]
     pub size: Option<usize>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
