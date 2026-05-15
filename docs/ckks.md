@@ -799,38 +799,17 @@ rotation must introduce a distinct active RK before the old RK becomes
 read-only. `retired_rk_id` is only valid on rotation transitions. Completion
 transitions cannot be marked as `dry_run`, so a dry-run preflight cannot be
 reused as the operation that marks encrypted data verified or decrypted.
-The REST control plane is split into three admin-only steps:
+The REST control plane is split into two admin-only steps:
 
 ```text
 POST /collections/{collection_name}/crypto/migration/plan
 POST /collections/{collection_name}/crypto/migration/run-payloads
-POST /collections/{collection_name}/crypto/migration/rewrite-payloads
-POST /collections/{collection_name}/crypto/migration/decrypt-payloads
 ```
 
 Use `plan` to start `Disabled -> Encrypting`, `Active -> Rotating`, or
-`Active -> Decrypting`. While a collection is in `Encrypting` or `Rotating`,
-`rewrite-payloads` scans local shards, opens stale server-side payload
-envelopes with the active plus retired runtime keyring, and reseals them under
-the active RK/epoch. While a collection is in `Decrypting`, `decrypt-payloads`
-opens server-side payload envelopes and writes plaintext payload values back.
-Client-side `$qdrant_client_aead` envelopes are store-only and cannot be
-decrypted by Qdrant, so decrypt migration rejects collections that still bind a
-client-side payload provider.
-
-Both rewrite endpoints return `CryptoMigrationCheckpoint` values. A verified
-checkpoint represents shard coverage, not only bytes changed: rerunning a
-migration over already-current payloads still returns `rewritten_points ==
-total_points` so the checkpoint can close the migration safely. The separate
-`changed_points` counter reports how many payload records actually changed on
-that run, so operators can distinguish first-pass rewrites from idempotent
-verification reruns. Submit those checkpoints back to `plan` for `Encrypting ->
-Active`, `Rotating -> Active`, or `Decrypting -> Disabled` completion. If a
-rewrite request fails after nonce/key or payload validation, do not mark the
-plan complete; fix the runtime/material state and rerun the rewrite endpoint to
-produce fresh verified checkpoints.
-For server-side payload migrations, `run-payloads` combines the rewrite/decrypt
-scan with the completion transition. The request must name the active RK id and,
+`Active -> Decrypting`. `run-payloads` is the only public payload rewrite entry
+point: it combines the server-side payload rewrite/decrypt scan with completion
+plan construction and submission. The request must name the active RK id and,
 when completing `Rotating -> Active`, the retired RK id:
 
 ```json
@@ -850,9 +829,20 @@ the returned verified checkpoints, validate it again against the current
 collection config, and submit the admin completion operation. If `dry_run` is
 `true`, the endpoint still validates runtime material and returns verified
 checkpoints plus the completion plan it would submit, but it does not write
-payload changes and does not apply the completion transition. It is still a
-foreground admin operation, not a cluster-wide background scheduler; interrupted
-or failed runs should be rerun to produce fresh checkpoints.
+payload changes and does not apply the completion transition.
+`CryptoMigrationCheckpoint` values represent shard coverage, not only bytes
+changed: rerunning a migration over already-current payloads still returns
+`rewritten_points == total_points` so the checkpoint can close the migration
+safely. The separate `changed_points` counter reports how many payload records
+actually changed on that run, so operators can distinguish first-pass rewrites
+from idempotent verification reruns. Client-side `$qdrant_client_aead`
+envelopes are store-only and cannot be decrypted by Qdrant, so decrypt
+migration rejects collections that still bind a client-side payload provider.
+This is still a foreground admin operation, not a cluster-wide background
+scheduler; interrupted or failed runs should be rerun to produce fresh
+checkpoints. The older standalone rewrite/decrypt endpoints were intentionally
+removed so operators cannot mutate payload bytes without also validating and
+submitting the matching completion plan.
 After a verified `Decrypting -> Disabled` completion, the stored encryption
 section remains as audit/migration metadata, but it is not treated as effective
 encryption for write/read guards. Re-enabling encryption must start a new admin

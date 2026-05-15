@@ -727,46 +727,6 @@ async fn run_payloads_for_crypto_migration(
     process_response(response, timing, None)
 }
 
-#[post("/collections/{collection_name}/crypto/migration/rewrite-payloads")]
-async fn rewrite_payloads_for_crypto_migration(
-    dispatcher: web::Data<Dispatcher>,
-    collection: Path<CollectionPath>,
-    settings: web::Data<Settings>,
-    ActixAuth(auth): ActixAuth,
-) -> impl Responder {
-    let timing = Instant::now();
-    let pass = new_unchecked_verification_pass();
-    let response = do_reencrypt_stale_payloads_for_crypto_migration(
-        dispatcher.toc(&auth, &pass),
-        &collection.collection_name,
-        settings.get_ref(),
-        &auth,
-        false,
-    )
-    .await;
-    process_response(response, timing, None)
-}
-
-#[post("/collections/{collection_name}/crypto/migration/decrypt-payloads")]
-async fn decrypt_payloads_for_crypto_migration(
-    dispatcher: web::Data<Dispatcher>,
-    collection: Path<CollectionPath>,
-    settings: web::Data<Settings>,
-    ActixAuth(auth): ActixAuth,
-) -> impl Responder {
-    let timing = Instant::now();
-    let pass = new_unchecked_verification_pass();
-    let response = do_decrypt_payloads_for_crypto_migration(
-        dispatcher.toc(&auth, &pass),
-        &collection.collection_name,
-        settings.get_ref(),
-        &auth,
-        false,
-    )
-    .await;
-    process_response(response, timing, None)
-}
-
 #[delete("/collections/{collection_name}")]
 async fn delete_collection(
     dispatcher: web::Data<Dispatcher>,
@@ -920,8 +880,6 @@ pub fn config_collections_api(cfg: &mut web::ServiceConfig) {
         .service(update_collection)
         .service(apply_crypto_migration_plan)
         .service(run_payloads_for_crypto_migration)
-        .service(rewrite_payloads_for_crypto_migration)
-        .service(decrypt_payloads_for_crypto_migration)
         .service(delete_collection)
         .service(get_aliases)
         .service(get_collection_aliases)
@@ -953,6 +911,26 @@ mod tests {
         assert!(timeout.timeout.is_none());
         let timeout: WaitTimeout = Query::from_query("timeout=10").unwrap().0;
         assert_eq!(timeout.timeout, Some(10))
+    }
+
+    #[actix_web::test]
+    async fn legacy_partial_payload_migration_endpoints_are_not_registered() {
+        let app =
+            actix_web::test::init_service(actix_web::App::new().configure(config_collections_api))
+                .await;
+
+        for path in [
+            "/collections/docs/crypto/migration/rewrite-payloads",
+            "/collections/docs/crypto/migration/decrypt-payloads",
+        ] {
+            let request = actix_web::test::TestRequest::post().uri(path).to_request();
+            let response = actix_web::test::call_service(&app, request).await;
+            assert_eq!(
+                response.status(),
+                actix_web::http::StatusCode::NOT_FOUND,
+                "{path} must not remain as a partial migration mutation endpoint",
+            );
+        }
     }
 
     fn verified_checkpoint() -> CryptoMigrationCheckpoint {
