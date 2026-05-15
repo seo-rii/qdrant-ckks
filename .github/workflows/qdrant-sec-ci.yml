@@ -77,6 +77,7 @@ jobs:
           cargo test --locked -p qdrant payload_write_plan_
           cargo test --locked -p qdrant payload_write_plan_decrypts_server_envelopes_for_crypto_migration
           cargo test --locked -p qdrant payload_crypto_migration_run
+          cargo test --locked -p qdrant legacy_partial_payload_migration_endpoints_are_not_registered
           cargo test --locked -p qdrant client_nonce_replay_error_tells_clients_to_regenerate_envelope
           cargo test --locked -p qdrant runtime_generate_response_
           cargo test --locked -p qdrant runtime_resource_key_
