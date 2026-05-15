@@ -5,6 +5,7 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::time::Duration;
 
+use chrono::Utc;
 use collection::config::{
     CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams, CryptoMigrationState,
     EncryptionSelector,
@@ -24,6 +25,7 @@ use qdrant_sec::{
     client_payload_nonce_replay_key, client_payload_signature_key_id, rewrap_resource_key,
     validate_client_payload_value_for_runtime,
 };
+use ring::hmac;
 use ring::signature::{ED25519, UnparsedPublicKey};
 use segment::json_path::JsonPath;
 use segment::types::{Distance, Payload};
@@ -126,6 +128,9 @@ const PAYLOAD_SYM_KEY_ROLE: &str = "sym_key";
 const SYMMETRIC_KEY_32_KIND: &str = "symmetric_key_32";
 const WRAPPING_KEY_32_KIND: &str = "wrapping_key_32";
 const WRAPPED_SYMMETRIC_KEY_32_KIND: &str = "wrapped_symmetric_key_32";
+const AWS_KMS_SOURCE: &str = "aws_kms";
+const AWS_KMS_WRAP_ALGORITHM: &str = "aws-kms";
+const AWS_KMS_NONCE_SENTINEL_B64: &str = "YXdzLWttcw";
 const VAULT_TRANSIT_SOURCE: &str = "vault_transit";
 const VAULT_TRANSIT_WRAP_ALGORITHM: &str = "vault-transit";
 const VAULT_TRANSIT_NONCE_SENTINEL_B64: &str = "dmF1bHQtdHJhbnNpdA";
@@ -2132,7 +2137,19 @@ fn validate_material(
         + usize::from(material.fd.is_some())
         + usize::from(material.value_b64.is_some());
 
-    if material.source.as_deref() == Some("vault_kv2") {
+    if material.source.as_deref() == Some(AWS_KMS_SOURCE) {
+        if material.kind != WRAPPING_KEY_32_KIND
+            || material.env.is_none()
+            || material.path.is_none()
+            || material.fd.is_some()
+            || material.value_b64.is_some()
+            || material.vault_field.is_some()
+        {
+            return Err(CryptoSetupError::MaterialSourceMismatch {
+                material: material_name.to_string(),
+            });
+        }
+    } else if material.source.as_deref() == Some("vault_kv2") {
         if material.env.is_none()
             || material.path.is_none()
             || material.vault_field.is_none()
@@ -2165,6 +2182,21 @@ fn validate_material(
         None => Err(CryptoSetupError::MissingMaterialSource {
             material: material_name.to_string(),
         }),
+        Some(AWS_KMS_SOURCE)
+            if material.kind == WRAPPING_KEY_32_KIND
+                && material.env.is_some()
+                && material.path.is_some()
+                && material.vault_field.is_none()
+                && material.fd.is_none()
+                && material.value_b64.is_none() =>
+        {
+            validate_material_aws_kms_source(
+                material_name,
+                material.path.as_deref().unwrap(),
+                material.env.as_deref().unwrap(),
+            )?;
+            Ok(())
+        }
         Some("env")
             if material.env.is_some()
                 && material.path.is_none()
@@ -2267,7 +2299,8 @@ fn validate_material(
             }
         }
         Some(
-            "env" | "file" | "unix_socket" | "vault_kv2" | VAULT_TRANSIT_SOURCE | "fd" | "inline",
+            "env" | "file" | "unix_socket" | "vault_kv2" | AWS_KMS_SOURCE | VAULT_TRANSIT_SOURCE
+            | "fd" | "inline",
         ) => Err(CryptoSetupError::MaterialSourceMismatch {
             material: material_name.to_string(),
         }),
@@ -2526,6 +2559,43 @@ fn validate_material_vault_kv2_source(
     Ok(())
 }
 
+fn validate_material_aws_kms_source(
+    material_name: &str,
+    key_id: &str,
+    env_prefix: &str,
+) -> Result<(), CryptoSetupError> {
+    let trimmed_key_id = key_id.trim();
+    if trimmed_key_id.is_empty()
+        || trimmed_key_id.len() > 2048
+        || trimmed_key_id
+            .chars()
+            .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: key_id.to_string(),
+            reason: "AWS KMS key id must be a non-empty key id, alias, or ARN without whitespace"
+                .to_string(),
+        });
+    }
+    if trimmed_key_id.starts_with("arn:") && !trimmed_key_id.contains(":kms:") {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: key_id.to_string(),
+            reason: "AWS KMS ARN must be a kms key ARN".to_string(),
+        });
+    }
+    if !is_material_env_name(env_prefix) {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: format!("aws-kms-env-prefix:{env_prefix}"),
+            reason: "AWS KMS env prefix is invalid".to_string(),
+        });
+    }
+
+    Ok(())
+}
+
 fn validate_material_vault_transit_source(
     material_name: &str,
     url: &str,
@@ -2737,7 +2807,10 @@ fn validate_wrapped_resource_key_material(
         .wrap_algorithm
         .as_deref()
         .unwrap_or(RESOURCE_KEY_WRAP_ALGORITHM);
-    if algorithm != RESOURCE_KEY_WRAP_ALGORITHM && algorithm != VAULT_TRANSIT_WRAP_ALGORITHM {
+    if algorithm != RESOURCE_KEY_WRAP_ALGORITHM
+        && algorithm != AWS_KMS_WRAP_ALGORITHM
+        && algorithm != VAULT_TRANSIT_WRAP_ALGORITHM
+    {
         return Err(CryptoSetupError::UnsupportedWrapAlgorithm {
             material: material_name.to_string(),
             algorithm: algorithm.to_string(),
@@ -4053,7 +4126,10 @@ fn decode_wrapped_resource_key_for_state(
         .wrap_algorithm
         .as_deref()
         .unwrap_or(RESOURCE_KEY_WRAP_ALGORITHM);
-    if algorithm != RESOURCE_KEY_WRAP_ALGORITHM && algorithm != VAULT_TRANSIT_WRAP_ALGORITHM {
+    if algorithm != RESOURCE_KEY_WRAP_ALGORITHM
+        && algorithm != AWS_KMS_WRAP_ALGORITHM
+        && algorithm != VAULT_TRANSIT_WRAP_ALGORITHM
+    {
         return Err(PayloadWriteSetupError::UnsupportedWrapAlgorithm {
             material: material_name.to_string(),
             algorithm: algorithm.to_string(),
@@ -4117,7 +4193,10 @@ pub fn rewrap_runtime_resource_key_material(
         .wrap_algorithm
         .as_deref()
         .unwrap_or(RESOURCE_KEY_WRAP_ALGORITHM);
-    if algorithm != RESOURCE_KEY_WRAP_ALGORITHM && algorithm != VAULT_TRANSIT_WRAP_ALGORITHM {
+    if algorithm != RESOURCE_KEY_WRAP_ALGORITHM
+        && algorithm != AWS_KMS_WRAP_ALGORITHM
+        && algorithm != VAULT_TRANSIT_WRAP_ALGORITHM
+    {
         return Err(PayloadWriteSetupError::UnsupportedWrapAlgorithm {
             material: material_name.to_string(),
             algorithm: algorithm.to_string(),
@@ -4372,6 +4451,7 @@ fn resource_key_wrap_aad(
 }
 
 enum RuntimeMasterKeyProvider {
+    AwsKms(AwsKmsMasterKeyProvider),
     Local(LocalMasterKeyProvider),
     VaultTransit(VaultTransitMasterKeyProvider),
 }
@@ -4379,6 +4459,7 @@ enum RuntimeMasterKeyProvider {
 impl RuntimeMasterKeyProvider {
     fn wrap_algorithm(&self) -> &'static str {
         match self {
+            Self::AwsKms(_) => AWS_KMS_WRAP_ALGORITHM,
             Self::Local(_) => RESOURCE_KEY_WRAP_ALGORITHM,
             Self::VaultTransit(_) => VAULT_TRANSIT_WRAP_ALGORITHM,
         }
@@ -4388,6 +4469,7 @@ impl RuntimeMasterKeyProvider {
 impl MasterKeyProvider for RuntimeMasterKeyProvider {
     fn mk_id(&self) -> &str {
         match self {
+            Self::AwsKms(provider) => provider.mk_id(),
             Self::Local(provider) => provider.mk_id(),
             Self::VaultTransit(provider) => provider.mk_id(),
         }
@@ -4399,6 +4481,7 @@ impl MasterKeyProvider for RuntimeMasterKeyProvider {
         aad: &[u8],
     ) -> Result<WrappedKeyBlob, qdrant_sec::EncryptionError> {
         match self {
+            Self::AwsKms(provider) => provider.wrap_resource_key(rk_plaintext, aad),
             Self::Local(provider) => provider.wrap_resource_key(rk_plaintext, aad),
             Self::VaultTransit(provider) => provider.wrap_resource_key(rk_plaintext, aad),
         }
@@ -4410,10 +4493,317 @@ impl MasterKeyProvider for RuntimeMasterKeyProvider {
         aad: &[u8],
     ) -> Result<SecretKey, qdrant_sec::EncryptionError> {
         match self {
+            Self::AwsKms(provider) => provider.unwrap_resource_key(wrapped, aad),
             Self::Local(provider) => provider.unwrap_resource_key(wrapped, aad),
             Self::VaultTransit(provider) => provider.unwrap_resource_key(wrapped, aad),
         }
     }
+}
+
+struct AwsKmsMasterKeyProvider {
+    mk_id: String,
+    key_id: String,
+    env_prefix: String,
+}
+
+struct AwsKmsCredentials {
+    access_key_id: String,
+    secret_access_key: Zeroizing<String>,
+    session_token: Option<String>,
+    region: String,
+    endpoint_url: String,
+}
+
+impl AwsKmsMasterKeyProvider {
+    fn new(mk_id: &str, key_id: &str, env_prefix: &str) -> Result<Self, PayloadWriteSetupError> {
+        validate_material_aws_kms_source(mk_id, key_id, env_prefix).map_err(|err| match err {
+            CryptoSetupError::InvalidMaterialFileSource {
+                material,
+                path,
+                reason,
+            } => PayloadWriteSetupError::InvalidMaterialFileSource {
+                material,
+                path,
+                reason,
+            },
+            err => PayloadWriteSetupError::UnreadableMaterialFile {
+                material: mk_id.to_string(),
+                path: format!("{key_id}: {err}"),
+            },
+        })?;
+        Ok(Self {
+            mk_id: mk_id.to_string(),
+            key_id: key_id.to_string(),
+            env_prefix: env_prefix.to_string(),
+        })
+    }
+
+    fn client(&self) -> Result<reqwest::blocking::Client, qdrant_sec::EncryptionError> {
+        reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| qdrant_sec::EncryptionError::SealFailed)
+    }
+
+    fn credentials(&self) -> Result<AwsKmsCredentials, qdrant_sec::EncryptionError> {
+        let access_key_id = aws_kms_env(&self.env_prefix, "ACCESS_KEY_ID")
+            .map_err(|_| qdrant_sec::EncryptionError::SealFailed)?;
+        let secret_access_key = Zeroizing::new(
+            aws_kms_env(&self.env_prefix, "SECRET_ACCESS_KEY")
+                .map_err(|_| qdrant_sec::EncryptionError::SealFailed)?,
+        );
+        let region = aws_kms_env(&self.env_prefix, "REGION")
+            .map_err(|_| qdrant_sec::EncryptionError::SealFailed)?;
+        if access_key_id.is_empty() || secret_access_key.is_empty() || region.is_empty() {
+            return Err(qdrant_sec::EncryptionError::SealFailed);
+        }
+        let endpoint_url = match aws_kms_env(&self.env_prefix, "ENDPOINT_URL") {
+            Ok(endpoint_url) => validate_aws_kms_endpoint_url(&endpoint_url)
+                .map_err(|_| qdrant_sec::EncryptionError::SealFailed)?,
+            Err(_) => format!("https://kms.{region}.amazonaws.com/"),
+        };
+        Ok(AwsKmsCredentials {
+            access_key_id,
+            secret_access_key,
+            session_token: aws_kms_env(&self.env_prefix, "SESSION_TOKEN").ok(),
+            region,
+            endpoint_url,
+        })
+    }
+
+    fn call(
+        &self,
+        target: &str,
+        body: Value,
+        operation: &str,
+    ) -> Result<Value, qdrant_sec::EncryptionError> {
+        let credentials = self.credentials()?;
+        let body =
+            serde_json::to_vec(&body).map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)?;
+        let date_time = Utc::now();
+        let amz_date = date_time.format("%Y%m%dT%H%M%SZ").to_string();
+        let date = date_time.format("%Y%m%d").to_string();
+        let authorization =
+            aws_kms_authorization_header(target, &body, &credentials, &amz_date, &date)?;
+        let mut request = self
+            .client()?
+            .post(&credentials.endpoint_url)
+            .header("content-type", "application/x-amz-json-1.1")
+            .header("x-amz-date", amz_date)
+            .header("x-amz-target", target)
+            .header("authorization", authorization)
+            .body(body);
+        if let Some(session_token) = credentials.session_token {
+            request = request.header("x-amz-security-token", session_token);
+        }
+        let response = request
+            .send()
+            .map_err(|_| aws_kms_operation_error(operation))?;
+        if !response.status().is_success() {
+            return Err(aws_kms_operation_error(operation));
+        }
+        let mut limited_response = response.take(VAULT_TRANSIT_RESPONSE_MAX_BYTES + 1);
+        let mut body_bytes = Vec::new();
+        limited_response
+            .read_to_end(&mut body_bytes)
+            .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)?;
+        if body_bytes.len() as u64 > VAULT_TRANSIT_RESPONSE_MAX_BYTES {
+            return Err(qdrant_sec::EncryptionError::InvalidEncoding);
+        }
+        serde_json::from_slice::<Value>(&body_bytes)
+            .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)
+    }
+}
+
+impl MasterKeyProvider for AwsKmsMasterKeyProvider {
+    fn mk_id(&self) -> &str {
+        &self.mk_id
+    }
+
+    fn wrap_resource_key(
+        &self,
+        rk_plaintext: &SecretKey,
+        aad: &[u8],
+    ) -> Result<WrappedKeyBlob, qdrant_sec::EncryptionError> {
+        let response = self.call(
+            "TrentService.Encrypt",
+            json!({
+                "KeyId": self.key_id,
+                "Plaintext": BASE64.encode(rk_plaintext.as_bytes()),
+                "EncryptionContext": {
+                    "qdrant_sec_aad": BASE64.encode(aad),
+                },
+            }),
+            "encrypt",
+        )?;
+        let ciphertext = response
+            .pointer("/CiphertextBlob")
+            .and_then(Value::as_str)
+            .ok_or(qdrant_sec::EncryptionError::InvalidEncoding)?;
+        let ciphertext = BASE64
+            .decode(ciphertext.as_bytes())
+            .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)?;
+        Ok(WrappedKeyBlob {
+            version: 1,
+            algorithm: AWS_KMS_WRAP_ALGORITHM.to_string(),
+            mk_id: self.mk_id.clone(),
+            nonce: AWS_KMS_NONCE_SENTINEL_B64.to_string(),
+            wrapped_key: BASE64URL_NOPAD.encode(&ciphertext),
+        })
+    }
+
+    fn unwrap_resource_key(
+        &self,
+        wrapped: &WrappedKeyBlob,
+        aad: &[u8],
+    ) -> Result<SecretKey, qdrant_sec::EncryptionError> {
+        if wrapped.version != 1 {
+            return Err(qdrant_sec::EncryptionError::UnsupportedVersion(
+                wrapped.version,
+            ));
+        }
+        if wrapped.algorithm != AWS_KMS_WRAP_ALGORITHM {
+            return Err(qdrant_sec::EncryptionError::UnsupportedAlgorithm(
+                wrapped.algorithm.clone(),
+            ));
+        }
+        if wrapped.mk_id != self.mk_id {
+            return Err(qdrant_sec::EncryptionError::MasterKeyMismatch);
+        }
+        let ciphertext = BASE64URL_NOPAD
+            .decode(wrapped.wrapped_key.as_bytes())
+            .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)?;
+        let response = self.call(
+            "TrentService.Decrypt",
+            json!({
+                "CiphertextBlob": BASE64.encode(&ciphertext),
+                "EncryptionContext": {
+                    "qdrant_sec_aad": BASE64.encode(aad),
+                },
+            }),
+            "decrypt",
+        )?;
+        let plaintext = response
+            .pointer("/Plaintext")
+            .and_then(Value::as_str)
+            .ok_or(qdrant_sec::EncryptionError::InvalidEncoding)?;
+        let plaintext = Zeroizing::new(
+            BASE64
+                .decode(plaintext.as_bytes())
+                .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)?,
+        );
+        SecretKey::try_from_slice(plaintext.as_slice())
+    }
+}
+
+fn aws_kms_operation_error(operation: &str) -> qdrant_sec::EncryptionError {
+    match operation {
+        "decrypt" => qdrant_sec::EncryptionError::OpenFailed,
+        _ => qdrant_sec::EncryptionError::SealFailed,
+    }
+}
+
+fn aws_kms_env(prefix: &str, suffix: &str) -> Result<String, std::env::VarError> {
+    std::env::var(format!("{prefix}_{suffix}")).map(|value| value.trim().to_string())
+}
+
+fn validate_aws_kms_endpoint_url(url: &str) -> Result<String, PayloadWriteSetupError> {
+    let parsed = reqwest::Url::parse(url).map_err(|err| {
+        PayloadWriteSetupError::InvalidMaterialFileSource {
+            material: "<aws-kms>".to_string(),
+            path: url.to_string(),
+            reason: format!("AWS KMS endpoint URL is invalid: {err}"),
+        }
+    })?;
+    let is_loopback_http = parsed.scheme() == "http"
+        && parsed.host_str().is_some_and(|host| {
+            host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1"
+        });
+    if parsed.scheme() != "https" && !is_loopback_http {
+        return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
+            material: "<aws-kms>".to_string(),
+            path: url.to_string(),
+            reason: "AWS KMS endpoint URL must use https, except loopback http for tests/dev"
+                .to_string(),
+        });
+    }
+    if !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || !matches!(parsed.path(), "" | "/")
+    {
+        return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
+            material: "<aws-kms>".to_string(),
+            path: url.to_string(),
+            reason: "AWS KMS endpoint URL must not include credentials, path, query, or fragment"
+                .to_string(),
+        });
+    }
+    Ok(url.to_string())
+}
+
+fn aws_kms_authorization_header(
+    target: &str,
+    payload: &[u8],
+    credentials: &AwsKmsCredentials,
+    amz_date: &str,
+    date: &str,
+) -> Result<String, qdrant_sec::EncryptionError> {
+    let endpoint = reqwest::Url::parse(&credentials.endpoint_url)
+        .map_err(|_| qdrant_sec::EncryptionError::SealFailed)?;
+    let host = endpoint
+        .host_str()
+        .ok_or(qdrant_sec::EncryptionError::SealFailed)?;
+    let host = match endpoint.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_string(),
+    };
+    let payload_hash = hex_lower(&Sha256::digest(payload));
+    let mut canonical_headers =
+        format!("content-type:application/x-amz-json-1.1\nhost:{host}\nx-amz-date:{amz_date}\n");
+    let mut signed_headers = "content-type;host;x-amz-date".to_string();
+    if let Some(session_token) = &credentials.session_token {
+        canonical_headers.push_str(&format!("x-amz-security-token:{session_token}\n"));
+        signed_headers.push_str(";x-amz-security-token");
+    }
+    canonical_headers.push_str(&format!("x-amz-target:{target}\n"));
+    signed_headers.push_str(";x-amz-target");
+    let canonical_request =
+        format!("POST\n/\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}");
+    let credential_scope = format!("{date}/{}/kms/aws4_request", credentials.region);
+    let string_to_sign = format!(
+        "AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n{}",
+        hex_lower(&Sha256::digest(canonical_request.as_bytes()))
+    );
+    let k_date = hmac_sha256(
+        format!("AWS4{}", credentials.secret_access_key.as_str()).as_bytes(),
+        date.as_bytes(),
+    );
+    let k_region = hmac_sha256(&k_date, credentials.region.as_bytes());
+    let k_service = hmac_sha256(&k_region, b"kms");
+    let k_signing = hmac_sha256(&k_service, b"aws4_request");
+    let signature = hex_lower(&hmac_sha256(&k_signing, string_to_sign.as_bytes()));
+    Ok(format!(
+        "AWS4-HMAC-SHA256 Credential={}/{credential_scope}, SignedHeaders={signed_headers}, Signature={signature}",
+        credentials.access_key_id
+    ))
+}
+
+fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
+    let key = hmac::Key::new(hmac::HMAC_SHA256, key);
+    hmac::sign(&key, data).as_ref().to_vec()
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 struct VaultTransitMasterKeyProvider {
@@ -4612,6 +5002,24 @@ fn runtime_master_key_provider(
             wrapped_by: material_name.to_string(),
             kind: material.kind.clone(),
         });
+    }
+    if material.source.as_deref() == Some(AWS_KMS_SOURCE) {
+        let key_id = material.path.as_deref().ok_or_else(|| {
+            PayloadWriteSetupError::MissingMaterialPath {
+                material: material_name.to_string(),
+            }
+        })?;
+        let env_prefix =
+            material
+                .env
+                .as_deref()
+                .ok_or_else(|| PayloadWriteSetupError::MissingMaterialEnv {
+                    material: material_name.to_string(),
+                    env: "<missing>".to_string(),
+                })?;
+        return Ok(RuntimeMasterKeyProvider::AwsKms(
+            AwsKmsMasterKeyProvider::new(material_name, key_id, env_prefix)?,
+        ));
     }
     if material.source.as_deref() == Some(VAULT_TRANSIT_SOURCE) {
         let key_url = material.path.as_deref().ok_or_else(|| {
@@ -7958,6 +8366,170 @@ mod tests {
         }
 
         assert_eq!(decoded.as_bytes(), &[37u8; 32]);
+    }
+
+    fn set_aws_kms_test_env(prefix: &str, endpoint_url: &str) {
+        unsafe {
+            std::env::set_var(format!("{prefix}_ACCESS_KEY_ID"), "AKIATEST");
+            std::env::set_var(format!("{prefix}_SECRET_ACCESS_KEY"), "test-secret");
+            std::env::set_var(format!("{prefix}_REGION"), "us-east-1");
+            std::env::set_var(format!("{prefix}_ENDPOINT_URL"), endpoint_url);
+        }
+    }
+
+    fn clear_aws_kms_test_env(prefix: &str) {
+        unsafe {
+            std::env::remove_var(format!("{prefix}_ACCESS_KEY_ID"));
+            std::env::remove_var(format!("{prefix}_SECRET_ACCESS_KEY"));
+            std::env::remove_var(format!("{prefix}_REGION"));
+            std::env::remove_var(format!("{prefix}_ENDPOINT_URL"));
+            std::env::remove_var(format!("{prefix}_SESSION_TOKEN"));
+        }
+    }
+
+    #[test]
+    fn generate_wrapped_resource_key_uses_aws_kms_without_local_mk_material() {
+        let mut server = mockito::Server::new();
+        let _mock = server
+            .mock("POST", "/")
+            .match_header("x-amz-target", "TrentService.Encrypt")
+            .match_header("content-type", "application/x-amz-json-1.1")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                json!({ "CiphertextBlob": BASE64.encode(b"aws-kms-ciphertext-blob") }).to_string(),
+            )
+            .create();
+        set_aws_kms_test_env("QDRANT_TEST_AWS_KMS_WRAP", &server.url());
+
+        let mut settings = Settings::new(None).unwrap();
+        settings.crypto.materials.insert(
+            "tenant-a/mk-aws".to_string(),
+            CryptoMaterialConfig {
+                kind: "wrapping_key_32".to_string(),
+                source: Some(AWS_KMS_SOURCE.to_string()),
+                env: Some("QDRANT_TEST_AWS_KMS_WRAP".to_string()),
+                path: Some("alias/qdrant-sec-docs".to_string()),
+                ..CryptoMaterialConfig::default()
+            },
+        );
+
+        let material = generate_wrapped_runtime_resource_key_material(
+            &settings.crypto,
+            "tenant-a/payload-rk-v6",
+            "tenant-a/mk-aws",
+            6,
+            "collection:docs/payload:body",
+        )
+        .unwrap();
+        clear_aws_kms_test_env("QDRANT_TEST_AWS_KMS_WRAP");
+
+        assert_eq!(material.kind, "wrapped_symmetric_key_32");
+        assert_eq!(material.wrapped_by.as_deref(), Some("tenant-a/mk-aws"));
+        assert_eq!(
+            material.wrap_algorithm.as_deref(),
+            Some(AWS_KMS_WRAP_ALGORITHM)
+        );
+        assert_eq!(material.nonce.as_deref(), Some(AWS_KMS_NONCE_SENTINEL_B64));
+        assert_eq!(
+            BASE64URL_NOPAD
+                .decode(material.wrapped_key_b64.unwrap().as_bytes())
+                .unwrap(),
+            b"aws-kms-ciphertext-blob"
+        );
+    }
+
+    #[test]
+    fn validate_material_aws_kms_source_is_wrapping_key_only() {
+        let aws_wrapping_material = CryptoMaterialConfig {
+            kind: "wrapping_key_32".to_string(),
+            source: Some(AWS_KMS_SOURCE.to_string()),
+            env: Some("QDRANT_TEST_AWS_KMS_WRAP".to_string()),
+            path: Some("arn:aws:kms:us-east-1:123456789012:key/test".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        assert_eq!(
+            validate_material("tenant-a/mk-aws", &aws_wrapping_material, false),
+            Ok(())
+        );
+
+        let direct_resource_key = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some(AWS_KMS_SOURCE.to_string()),
+            env: Some("QDRANT_TEST_AWS_KMS_WRAP".to_string()),
+            path: Some("alias/qdrant-sec-docs".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        assert!(matches!(
+            validate_material("tenant-a/payload-rk", &direct_resource_key, false),
+            Err(CryptoSetupError::MaterialSourceMismatch { .. })
+        ));
+
+        let invalid_env_prefix = CryptoMaterialConfig {
+            kind: "wrapping_key_32".to_string(),
+            source: Some(AWS_KMS_SOURCE.to_string()),
+            env: Some("QDRANT-TEST-AWS-KMS".to_string()),
+            path: Some("alias/qdrant-sec-docs".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        assert!(matches!(
+            validate_material("tenant-a/mk-aws", &invalid_env_prefix, false),
+            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("env prefix")
+        ));
+    }
+
+    #[test]
+    fn decode_wrapped_resource_key_uses_aws_kms_decrypt() {
+        let mut server = mockito::Server::new();
+        let plaintext = BASE64.encode(&[41u8; 32]);
+        let _mock = server
+            .mock("POST", "/")
+            .match_header("x-amz-target", "TrentService.Decrypt")
+            .match_header("content-type", "application/x-amz-json-1.1")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!({ "Plaintext": plaintext }).to_string())
+            .create();
+        set_aws_kms_test_env("QDRANT_TEST_AWS_KMS_DECRYPT", &server.url());
+
+        let wrapping_material = CryptoMaterialConfig {
+            kind: "wrapping_key_32".to_string(),
+            source: Some(AWS_KMS_SOURCE.to_string()),
+            env: Some("QDRANT_TEST_AWS_KMS_DECRYPT".to_string()),
+            path: Some("alias/qdrant-sec-docs".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        let wrapped_material = CryptoMaterialConfig {
+            kind: "wrapped_symmetric_key_32".to_string(),
+            wrapped_by: Some("tenant-a/mk-aws".to_string()),
+            wrap_algorithm: Some(AWS_KMS_WRAP_ALGORITHM.to_string()),
+            nonce: Some(AWS_KMS_NONCE_SENTINEL_B64.to_string()),
+            wrapped_key_b64: Some(BASE64URL_NOPAD.encode(b"aws-kms-ciphertext-blob")),
+            rk_epoch: Some(6),
+            state: Some("active".to_string()),
+            scope: Some("collection:docs/payload:body".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        let settings = CryptoSettings {
+            allow_inline_key_material: false,
+            instances: HashMap::new(),
+            backends: HashMap::new(),
+            materials: HashMap::from([
+                ("tenant-a/mk-aws".to_string(), wrapping_material),
+                (
+                    "tenant-a/payload-rk-v6".to_string(),
+                    wrapped_material.clone(),
+                ),
+            ]),
+        };
+
+        let decoded =
+            decode_wrapped_resource_key(&settings, "tenant-a/payload-rk-v6", &wrapped_material)
+                .unwrap();
+        clear_aws_kms_test_env("QDRANT_TEST_AWS_KMS_DECRYPT");
+
+        assert_eq!(decoded.as_bytes(), &[41u8; 32]);
     }
 
     #[test]

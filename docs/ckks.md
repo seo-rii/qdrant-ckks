@@ -451,9 +451,9 @@ crypto:
 
 The generic `crypto` control plane supports a safer MK/RK hierarchy:
 
-- `wrapping_key_32` is an MK/KEK loaded from env/file/`unix_socket`/`vault_kv2`/fd/inline material, or an external Vault Transit key reference.
+- `wrapping_key_32` is an MK/KEK loaded from env/file/`unix_socket`/`vault_kv2`/fd/inline material, or an external AWS KMS / Vault Transit key reference.
 - `wrapped_symmetric_key_32` is a random collection or rule RK wrapped by that
-  MK using AES-256-GCM or Vault Transit.
+  MK using AES-256-GCM, AWS KMS, or Vault Transit.
 - Payload text and CKKS vector envelope AEAD keys are still purpose-specific
   HKDF subkeys derived from the unwrapped RK.
 
@@ -533,6 +533,19 @@ redirects; redirects must be resolved in the configured, validated URL.
 Vault-backed material keeps the MK/RK out of config files, but the Vault token
 source, Vault policy, and Vault availability become part of the key-management
 TCB and must be identical across nodes that can write encrypted collections.
+When a wrapping material uses `source: aws_kms`, it must be
+`kind: wrapping_key_32`, `path` must be the AWS KMS key id, alias, or ARN, and
+`env` must be an environment-variable prefix. Qdrant reads
+`${env}_ACCESS_KEY_ID`, `${env}_SECRET_ACCESS_KEY`, `${env}_REGION`, optional
+`${env}_SESSION_TOKEN`, and optional `${env}_ENDPOINT_URL`. The endpoint
+defaults to `https://kms.${region}.amazonaws.com/`; custom endpoints must use
+HTTPS except loopback HTTP for tests/dev and must not include credentials, path,
+query, or fragment components. Qdrant signs AWS KMS `Encrypt`/`Decrypt`
+requests with SigV4, sends RK plaintext only inside those KMS calls, records
+`wrapped_symmetric_key_32.wrap_algorithm: aws-kms`, and stores the returned KMS
+ciphertext blob as `wrapped_key_b64`. AWS KMS material is only valid for
+MK/KEK wrapping; it cannot be used as a direct server-side payload/vector RK
+source.
 When a wrapping material uses `source: vault_transit`, it must be
 `kind: wrapping_key_32`, and `path` must be the Vault Transit key metadata URL,
 for example `/v1/<mount>/transit/keys/<key>`. qdrant-sec derives the
