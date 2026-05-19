@@ -125,15 +125,24 @@ impl Dispatcher {
                     }
 
                     if let Some(uuid) = &op.create_collection.uuid {
-                        log::warn!(
-                            "Collection UUID {uuid} explicitly specified, \
-                             when proposing create collection {} operation, \
-                             new random UUID will be generated instead",
-                            op.collection_name,
-                        );
+                        if op.should_preserve_explicit_uuid() {
+                            log::info!(
+                                "Preserving collection UUID {uuid} for internal create collection {} operation",
+                                op.collection_name,
+                            );
+                        } else {
+                            log::warn!(
+                                "Collection UUID {uuid} explicitly specified, \
+                                 when proposing create collection {} operation, \
+                                 new random UUID will be generated instead",
+                                op.collection_name,
+                            );
+                        }
                     }
 
-                    op.create_collection.uuid = Some(uuid::Uuid::new_v4());
+                    if !op.should_preserve_explicit_uuid() || op.create_collection.uuid.is_none() {
+                        op.create_collection.uuid = Some(uuid::Uuid::new_v4());
+                    }
 
                     CollectionMetaOperations::CreateCollection(op)
                 }

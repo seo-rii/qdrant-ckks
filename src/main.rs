@@ -524,7 +524,7 @@ fn main() -> anyhow::Result<()> {
                 dispatcher_arc.clone(),
                 consensus_state.this_peer_id(),
                 collections_to_recover_in_consensus,
-            ));
+            ))?;
         }
     } else {
         log::info!("Distributed mode disabled");

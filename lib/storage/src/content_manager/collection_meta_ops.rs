@@ -193,6 +193,8 @@ pub struct CreateCollectionOperation {
     pub collection_name: String,
     pub create_collection: CreateCollection,
     distribution: Option<ShardDistributionProposal>,
+    #[serde(default)]
+    preserve_explicit_uuid: bool,
 }
 
 impl CreateCollectionOperation {
@@ -222,7 +224,16 @@ impl CreateCollectionOperation {
             collection_name,
             create_collection,
             distribution: None,
+            preserve_explicit_uuid: false,
         })
+    }
+
+    pub fn preserve_explicit_uuid_for_internal_migration(&mut self) {
+        self.preserve_explicit_uuid = true;
+    }
+
+    pub fn should_preserve_explicit_uuid(&self) -> bool {
+        self.preserve_explicit_uuid
     }
 
     pub fn is_distribution_set(&self) -> bool {
@@ -567,6 +578,22 @@ mod tests {
         let operation =
             CreateCollectionOperation::new("docs".to_string(), create_collection).unwrap();
 
+        assert_eq!(operation.create_collection.uuid, Some(uuid));
+        assert!(!operation.should_preserve_explicit_uuid());
+    }
+
+    #[test]
+    fn explicit_uuid_preservation_requires_internal_migration_opt_in() {
+        let uuid = Uuid::from_u128(7);
+        let mut create_collection = create_collection(Some(encrypted_config()));
+        create_collection.uuid = Some(uuid);
+
+        let mut operation =
+            CreateCollectionOperation::new("docs".to_string(), create_collection).unwrap();
+
+        assert!(!operation.should_preserve_explicit_uuid());
+        operation.preserve_explicit_uuid_for_internal_migration();
+        assert!(operation.should_preserve_explicit_uuid());
         assert_eq!(operation.create_collection.uuid, Some(uuid));
     }
 

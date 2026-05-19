@@ -9,6 +9,7 @@ use storage::content_manager::collection_meta_ops::{
     SetShardReplicaState,
 };
 use storage::content_manager::consensus_manager::ConsensusStateRef;
+use storage::content_manager::errors::StorageError;
 use storage::content_manager::shard_distribution::ShardDistributionProposal;
 use storage::content_manager::toc::TableOfContent;
 use storage::dispatcher::Dispatcher;
@@ -23,7 +24,7 @@ pub async fn handle_existing_collections(
     dispatcher_arc: Arc<Dispatcher>,
     this_peer_id: PeerId,
     collections: Vec<String>,
-) {
+) -> Result<(), StorageError> {
     let full_access = Access::full("Migration from single to cluster");
     let full_auth = Auth::new_internal(full_access.clone());
     let multipass = full_auth
@@ -32,12 +33,9 @@ pub async fn handle_existing_collections(
 
     consensus_state.is_leader_established.await_ready();
     for collection_name in collections {
-        let Ok(collection_obj) = toc_arc
+        let collection_obj = toc_arc
             .get_collection(&multipass.issue_pass(&collection_name))
-            .await
-        else {
-            break;
-        };
+            .await?;
 
         let State {
             config,
@@ -61,6 +59,7 @@ pub async fn handle_existing_collections(
 
         let shards_number = params.shard_number.get();
         let sharding_method = params.sharding_method;
+        let encrypted_collection = params.effective_encryption().is_some();
 
         let mut collection_create_operation = CreateCollectionOperation::new(
             collection_name.clone(),
@@ -83,6 +82,9 @@ pub async fn handle_existing_collections(
             },
         )
         .expect("Failed to create collection operation");
+        if encrypted_collection {
+            collection_create_operation.preserve_explicit_uuid_for_internal_migration();
+        }
 
         let mut consensus_operations = Vec::new();
 
@@ -133,14 +135,14 @@ pub async fn handle_existing_collections(
         }
 
         for operation in consensus_operations {
-            let _res = dispatcher_arc
+            dispatcher_arc
                 .submit_collection_meta_op(operation, full_auth.clone(), None)
-                .await;
+                .await?;
         }
 
         for (shard_id, shard_info) in shards {
             if shard_info.replicas.contains_key(&this_peer_id) {
-                let _res = dispatcher_arc
+                dispatcher_arc
                     .submit_collection_meta_op(
                         CollectionMetaOperations::SetShardReplicaState(SetShardReplicaState {
                             collection_name: collection_name.clone(),
@@ -152,8 +154,10 @@ pub async fn handle_existing_collections(
                         full_auth.clone(),
                         None,
                     )
-                    .await;
+                    .await?;
             }
         }
     }
+
+    Ok(())
 }
