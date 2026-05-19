@@ -88,9 +88,15 @@ struct WorkerProcess {
     stderr_truncated: Arc<AtomicBool>,
     registered_contexts: Mutex<HashSet<String>>,
     terminated: AtomicBool,
+    reserved: AtomicBool,
     request_lock: Mutex<()>,
     stdout_thread: Mutex<Option<JoinHandle<()>>>,
     stderr_thread: Mutex<Option<JoinHandle<io::Result<()>>>>,
+}
+
+struct WorkerReservation {
+    worker_process: Arc<WorkerProcess>,
+    reserved: bool,
 }
 
 enum BridgeStdoutEvent {
@@ -101,6 +107,16 @@ enum BridgeStdoutEvent {
 }
 
 impl WorkerProcess {
+    fn try_reserve_request(&self) -> bool {
+        self.reserved
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    fn release_request(&self) {
+        self.reserved.store(false, Ordering::Release);
+    }
+
     fn try_wait(&self) -> Result<Option<ExitStatus>, CkksError> {
         self.child
             .lock()
@@ -162,6 +178,34 @@ impl WorkerProcess {
         }
 
         Ok(())
+    }
+}
+
+impl WorkerReservation {
+    fn reserved(worker_process: Arc<WorkerProcess>) -> Self {
+        Self {
+            worker_process,
+            reserved: true,
+        }
+    }
+
+    fn unreserved(worker_process: Arc<WorkerProcess>) -> Self {
+        Self {
+            worker_process,
+            reserved: false,
+        }
+    }
+
+    fn worker(&self) -> &Arc<WorkerProcess> {
+        &self.worker_process
+    }
+}
+
+impl Drop for WorkerReservation {
+    fn drop(&mut self) {
+        if self.reserved {
+            self.worker_process.release_request();
+        }
     }
 }
 
@@ -960,7 +1004,8 @@ impl CommandOpenFheBackend {
         decode_response: impl Fn(&[u8]) -> Result<T, CkksError>,
     ) -> Result<T, CkksError> {
         for attempt in 0..=1 {
-            let worker_process = self.worker_process()?;
+            let worker_reservation = self.worker_process()?;
+            let worker_process = Arc::clone(worker_reservation.worker());
             let _request_guard = worker_process.request_lock.lock().map_err(|_| {
                 CkksError::Backend("OpenFHE bridge request mutex was poisoned".to_string())
             })?;
@@ -1167,7 +1212,7 @@ impl CommandOpenFheBackend {
         ))
     }
 
-    fn worker_process(&self) -> Result<Arc<WorkerProcess>, CkksError> {
+    fn worker_process(&self) -> Result<WorkerReservation, CkksError> {
         let mut workers = self.workers.lock().map_err(|_| {
             CkksError::Backend("OpenFHE bridge workers mutex was poisoned".to_string())
         })?;
@@ -1189,8 +1234,8 @@ impl CommandOpenFheBackend {
         }
 
         for worker_process in workers.iter() {
-            if worker_process.request_lock.try_lock().is_ok() {
-                return Ok(Arc::clone(worker_process));
+            if worker_process.try_reserve_request() {
+                return Ok(WorkerReservation::reserved(Arc::clone(worker_process)));
             }
         }
 
@@ -1198,7 +1243,7 @@ impl CommandOpenFheBackend {
             && let Some(worker_process) =
                 workers.get(self.next_worker.fetch_add(1, Ordering::Relaxed) % self.pool_size.get())
         {
-            return Ok(Arc::clone(worker_process));
+            return Ok(WorkerReservation::unreserved(Arc::clone(worker_process)));
         }
 
         let spawn_program = bridge_spawn_program(
@@ -1319,12 +1364,13 @@ impl CommandOpenFheBackend {
             stderr_truncated,
             registered_contexts: Mutex::new(HashSet::new()),
             terminated: AtomicBool::new(false),
+            reserved: AtomicBool::new(true),
             request_lock: Mutex::new(()),
             stdout_thread: Mutex::new(Some(stdout_thread)),
             stderr_thread: Mutex::new(Some(stderr_thread)),
         });
         workers.push(Arc::clone(&worker_process));
-        Ok(worker_process)
+        Ok(WorkerReservation::reserved(worker_process))
     }
 
     fn discard_worker(
@@ -2117,6 +2163,25 @@ mod tests {
             assert!(request.get("crypto_context").is_none());
             assert!(request.get("public_key").is_none());
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_process_reserves_idle_worker_until_reservation_drops() {
+        let backend = CommandOpenFheBackend::new_unchecked_for_tests("cat")
+            .with_pool_size(NonZeroUsize::new(2).unwrap());
+
+        let first = backend.worker_process().unwrap();
+        let first_worker = Arc::clone(first.worker());
+        let second = backend.worker_process().unwrap();
+        let second_worker = Arc::clone(second.worker());
+
+        assert!(!Arc::ptr_eq(&first_worker, &second_worker));
+
+        drop(first);
+        let third = backend.worker_process().unwrap();
+
+        assert!(Arc::ptr_eq(third.worker(), &first_worker));
     }
 
     #[cfg(target_os = "linux")]
