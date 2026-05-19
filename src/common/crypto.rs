@@ -1237,15 +1237,27 @@ pub fn validate_create_collection_crypto_runtime(
     collection_name: &str,
     create_collection: &CreateCollection,
 ) -> Result<(), StorageError> {
-    let params = CollectionParams {
-        encryption: create_collection.encryption.clone(),
-        ..CollectionParams::empty()
-    };
+    let mut params = CollectionParams::empty();
+    params.vectors = create_collection.vectors.clone();
+    params.sparse_vectors = create_collection.sparse_vectors.clone();
+    params.encryption = create_collection.encryption.clone();
     params.validate().map_err(|err| {
         StorageError::bad_input(format!(
             "collection {collection_name} crypto config is invalid: {err}"
         ))
     })?;
+    if create_collection.quantization_config.is_some()
+        && params.encryption.as_ref().is_some_and(|encryption| {
+            encryption
+                .rules
+                .iter()
+                .any(|rule| matches!(rule.selector, EncryptionSelector::VectorNames { .. }))
+        })
+    {
+        return Err(StorageError::bad_input(format!(
+            "collection {collection_name} crypto config is invalid: encrypted vector collection quantization is unsupported",
+        )));
+    }
     validate_collection_crypto_runtime_inner(settings, collection_name, &params)
 }
 
@@ -5563,6 +5575,27 @@ mod tests {
             strict_mode_config: None,
             uuid: None,
             metadata: None,
+        }
+    }
+
+    fn encrypted_vector_params() -> CollectionParams {
+        CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "embedding_conf".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["embedding".to_string()],
+                    },
+                    instance: "docs_vector_v1".to_string(),
+                    binding: Some("vector-envelope/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
         }
     }
 
@@ -11964,6 +11997,68 @@ mod tests {
         let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
         assert!(
             matches!(err, StorageError::BadInput { ref description } if description.contains("unknown payload crypto instance docs_payload_v1")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
+    fn validate_create_collection_crypto_runtime_uses_actual_vector_params() {
+        let settings = Settings::new(None).unwrap();
+        let err = validate_create_collection_crypto_runtime(
+            &settings,
+            "docs",
+            &create_collection_with_params(encrypted_vector_params()),
+        )
+        .expect_err("create-time encrypted vector selector must require dense vector params");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("collection docs crypto config is invalid")
+                    && description.contains("encrypted_vector_dense_vector_required")),
+            "unexpected error: {err:?}",
+        );
+
+        let mut sparse_only = encrypted_vector_params();
+        sparse_only.sparse_vectors = Some(BTreeMap::from([(
+            "embedding".to_string(),
+            collection::operations::types::SparseVectorParams {
+                index: None,
+                modifier: None,
+            },
+        )]));
+        let err = validate_create_collection_crypto_runtime(
+            &settings,
+            "docs",
+            &create_collection_with_params(sparse_only),
+        )
+        .expect_err("create-time encrypted vector selector must reject sparse-only params");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("collection docs crypto config is invalid")
+                    && description.contains("encrypted_vector_sparse_unsupported")),
+            "unexpected error: {err:?}",
+        );
+
+        let mut with_global_quantization = create_collection_with_params(with_embedding_vector(
+            encrypted_vector_params(),
+            Distance::Dot,
+        ));
+        with_global_quantization.quantization_config = Some(
+            segment::types::QuantizationConfig::Scalar(segment::types::ScalarQuantization {
+                scalar: segment::types::ScalarQuantizationConfig {
+                    r#type: segment::types::ScalarType::Int8,
+                    quantile: Some(0.99),
+                    always_ram: Some(true),
+                },
+            }),
+        );
+        let err =
+            validate_create_collection_crypto_runtime(&settings, "docs", &with_global_quantization)
+                .expect_err(
+                    "create-time encrypted vector selector must reject global quantization",
+                );
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("encrypted vector collection quantization is unsupported")),
             "unexpected error: {err:?}",
         );
     }
