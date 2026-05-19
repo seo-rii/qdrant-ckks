@@ -103,27 +103,45 @@ pub fn process_payload_operation(
     match payload_operation {
         PayloadOps::SetPayload(sp) => {
             let payload: Payload = sp.payload;
-            if let Some(points) = sp.points {
-                set_payload(segments, op_num, &payload, &points, &sp.key, hw_counter)
-            } else if let Some(filter) = sp.filter {
-                set_payload_by_filter(segments, op_num, &payload, &filter, &sp.key, hw_counter)
-            } else {
-                // TODO: BadRequest (prev) vs BadInput (current)!?
-                Err(OperationError::ValidationError {
-                    description: "No points or filter specified".to_string(),
-                })
+            match (sp.points, sp.filter) {
+                (Some(points), Some(filter)) => {
+                    let points =
+                        retain_points_matching_filter(segments, points, filter, hw_counter)?;
+                    set_payload(segments, op_num, &payload, &points, &sp.key, hw_counter)
+                }
+                (Some(points), None) => {
+                    set_payload(segments, op_num, &payload, &points, &sp.key, hw_counter)
+                }
+                (None, Some(filter)) => {
+                    set_payload_by_filter(segments, op_num, &payload, &filter, &sp.key, hw_counter)
+                }
+                (None, None) => {
+                    // TODO: BadRequest (prev) vs BadInput (current)!?
+                    Err(OperationError::ValidationError {
+                        description: "No points or filter specified".to_string(),
+                    })
+                }
             }
         }
         PayloadOps::DeletePayload(dp) => {
-            if let Some(points) = dp.points {
-                delete_payload(segments, op_num, &points, &dp.keys, hw_counter)
-            } else if let Some(filter) = dp.filter {
-                delete_payload_by_filter(segments, op_num, &filter, &dp.keys, hw_counter)
-            } else {
-                // TODO: BadRequest (prev) vs BadInput (current)!?
-                Err(OperationError::ValidationError {
-                    description: "No points or filter specified".to_string(),
-                })
+            match (dp.points, dp.filter) {
+                (Some(points), Some(filter)) => {
+                    let points =
+                        retain_points_matching_filter(segments, points, filter, hw_counter)?;
+                    delete_payload(segments, op_num, &points, &dp.keys, hw_counter)
+                }
+                (Some(points), None) => {
+                    delete_payload(segments, op_num, &points, &dp.keys, hw_counter)
+                }
+                (None, Some(filter)) => {
+                    delete_payload_by_filter(segments, op_num, &filter, &dp.keys, hw_counter)
+                }
+                (None, None) => {
+                    // TODO: BadRequest (prev) vs BadInput (current)!?
+                    Err(OperationError::ValidationError {
+                        description: "No points or filter specified".to_string(),
+                    })
+                }
             }
         }
         PayloadOps::ClearPayload { ref points, .. } => {
@@ -134,18 +152,41 @@ pub fn process_payload_operation(
         }
         PayloadOps::OverwritePayload(sp) => {
             let payload: Payload = sp.payload;
-            if let Some(points) = sp.points {
-                overwrite_payload(segments, op_num, &payload, &points, hw_counter)
-            } else if let Some(filter) = sp.filter {
-                overwrite_payload_by_filter(segments, op_num, &payload, &filter, hw_counter)
-            } else {
-                // TODO: BadRequest (prev) vs BadInput (current)!?
-                Err(OperationError::ValidationError {
-                    description: "No points or filter specified".to_string(),
-                })
+            match (sp.points, sp.filter) {
+                (Some(points), Some(filter)) => {
+                    let points =
+                        retain_points_matching_filter(segments, points, filter, hw_counter)?;
+                    overwrite_payload(segments, op_num, &payload, &points, hw_counter)
+                }
+                (Some(points), None) => {
+                    overwrite_payload(segments, op_num, &payload, &points, hw_counter)
+                }
+                (None, Some(filter)) => {
+                    overwrite_payload_by_filter(segments, op_num, &payload, &filter, hw_counter)
+                }
+                (None, None) => {
+                    // TODO: BadRequest (prev) vs BadInput (current)!?
+                    Err(OperationError::ValidationError {
+                        description: "No points or filter specified".to_string(),
+                    })
+                }
             }
         }
     }
+}
+
+fn retain_points_matching_filter(
+    segments: &SegmentHolder,
+    points: Vec<PointIdType>,
+    filter: Filter,
+    hw_counter: &HardwareCounterCell,
+) -> OperationResult<Vec<PointIdType>> {
+    let points_to_exclude =
+        select_excluded_by_filter_ids(segments, points.iter().copied(), filter, hw_counter)?;
+    Ok(points
+        .into_iter()
+        .filter(|point| !points_to_exclude.contains(point))
+        .collect())
 }
 
 pub fn process_field_index_operation(
@@ -1043,10 +1084,12 @@ mod test {
     use crate::fixtures::{
         build_segment_1, build_segment_2, empty_segment, empty_segment_with_deferred,
     };
+    use crate::operations::payload_ops::{PayloadOps, SetPayloadOp};
     use crate::segment_holder::SegmentHolder;
     use crate::update::{
         clear_payload_by_filter, delete_payload_by_filter, delete_points_by_filter,
-        delete_vectors_by_filter, overwrite_payload_by_filter, set_payload_by_filter,
+        delete_vectors_by_filter, overwrite_payload_by_filter, process_payload_operation,
+        set_payload_by_filter,
     };
 
     #[test]
@@ -1158,6 +1201,59 @@ mod test {
                 value: ValueVariants::String(city.to_string()),
             }),
         )))
+    }
+
+    #[test]
+    fn test_set_payload_points_and_filter_intersection() {
+        let dir = Builder::new().prefix("segment_dir").tempdir().unwrap();
+        let hw_counter = HardwareCounterCell::new();
+
+        let mut segment = empty_segment(dir.path());
+        for (point_id, city) in [(1, "Berlin"), (2, "Amsterdam")] {
+            segment
+                .upsert_point(
+                    1,
+                    point_id.into(),
+                    only_default_vector(&[1.0, 0.0, 0.0, 0.0]),
+                    &hw_counter,
+                )
+                .unwrap();
+            let payload: segment::types::Payload = payload_json! {"city": city.to_owned()};
+            segment
+                .set_payload(1, point_id.into(), &payload, &None, &hw_counter)
+                .unwrap();
+        }
+
+        let mut holder = SegmentHolder::default();
+        let segment_id = holder.add_new(segment);
+
+        let updated = process_payload_operation(
+            &holder,
+            10,
+            PayloadOps::SetPayload(SetPayloadOp {
+                payload: payload_json! {"sidecar": "ciphertext"},
+                points: Some(vec![1.into(), 2.into()]),
+                filter: Some(city_filter("Berlin")),
+                key: None,
+            }),
+            &hw_counter,
+        )
+        .unwrap();
+
+        assert_eq!(updated, 1);
+
+        let segment = holder.get(segment_id).unwrap().get();
+        let segment = segment.read();
+        let berlin_payload = segment.payload(1.into(), &hw_counter).unwrap();
+        assert_eq!(
+            berlin_payload.0.get("sidecar"),
+            Some(&serde_json::Value::String("ciphertext".to_string())),
+        );
+        let amsterdam_payload = segment.payload(2.into(), &hw_counter).unwrap();
+        assert!(
+            !amsterdam_payload.0.contains_key("sidecar"),
+            "points+filter payload operation must not update excluded points",
+        );
     }
 
     /// Delete by filter with deferred points corner case:
