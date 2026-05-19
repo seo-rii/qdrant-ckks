@@ -281,6 +281,18 @@ mod ckks_tests {
     #[test]
     fn encryption_config_allows_vector_names_for_sidecar_storage() {
         let params = CollectionParams {
+            vectors: VectorsConfig::Multi(BTreeMap::from([(
+                "embedding".into(),
+                VectorParams {
+                    size: std::num::NonZeroU64::new(4).unwrap(),
+                    distance: Distance::Dot,
+                    hnsw_config: None,
+                    quantization_config: None,
+                    on_disk: None,
+                    datatype: None,
+                    multivector_config: None,
+                },
+            )])),
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
                 key_id: Some("tenant-a:docs".to_string()),
@@ -300,6 +312,43 @@ mod ckks_tests {
         };
 
         params.validate().unwrap();
+    }
+
+    #[test]
+    fn encryption_config_rejects_sparse_only_encrypted_vector_selector() {
+        let params = CollectionParams {
+            sparse_vectors: Some(BTreeMap::from([(
+                "embedding".into(),
+                SparseVectorParams {
+                    index: None,
+                    modifier: None,
+                },
+            )])),
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "embedding_conf".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["embedding".to_string()],
+                    },
+                    instance: "docs_vector_v1".to_string(),
+                    binding: Some("vector-envelope/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = params
+            .validate()
+            .expect_err("encrypted vector selector must reject sparse-only vector names");
+        assert!(
+            err.to_string()
+                .contains("encrypted_vector_sparse_unsupported")
+        );
     }
 
     #[test]
@@ -2168,7 +2217,18 @@ fn validate_collection_encryption_sections(
             };
             for name in names {
                 let Some(vector_params) = params.vectors.get_params(name.as_str()) else {
-                    continue;
+                    if params
+                        .sparse_vectors
+                        .as_ref()
+                        .is_some_and(|sparse_vectors| sparse_vectors.contains_key(name.as_str()))
+                    {
+                        return Err(validator::ValidationError::new(
+                            "encrypted_vector_sparse_unsupported",
+                        ));
+                    }
+                    return Err(validator::ValidationError::new(
+                        "encrypted_vector_dense_vector_required",
+                    ));
                 };
                 if vector_params.quantization_config.is_some() {
                     return Err(validator::ValidationError::new(
