@@ -487,6 +487,9 @@ message CreateCollection {
   optional StrictModeConfig strict_mode_config = 17;
   // Arbitrary JSON metadata for the collection
   map<string, Value> metadata = 18;
+  // Capability-oriented collection encryption config as JSON.
+  // This mirrors the REST `CreateCollection.encryption` object.
+  optional string encryption_json = 19;
 }
 
 message UpdateCollection {

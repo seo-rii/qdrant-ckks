@@ -4,6 +4,7 @@ use std::str::FromStr;
 use api::conversions::json;
 use api::grpc::qdrant as grpc;
 use chrono::{DateTime, Utc};
+use collection::config::CollectionEncryptionConfig;
 use collection::operations::config_diff::{
     CollectionParamsDiff, HnswConfigDiff, OptimizersConfigDiff, QuantizationConfigDiff,
 };
@@ -85,7 +86,19 @@ impl TryFrom<grpc::CreateCollection> for CollectionMetaOperations {
             sparse_vectors_config,
             strict_mode_config,
             metadata,
+            encryption_json,
         } = value;
+        let encryption = encryption_json
+            .as_deref()
+            .filter(|json| !json.trim().is_empty())
+            .map(|json| {
+                serde_json::from_str::<CollectionEncryptionConfig>(json).map_err(|err| {
+                    Status::invalid_argument(format!(
+                        "invalid create collection encryption_json: {err}",
+                    ))
+                })
+            })
+            .transpose()?;
         let op = CreateCollectionOperation::new(
             collection_name,
             CreateCollection {
@@ -108,7 +121,7 @@ impl TryFrom<grpc::CreateCollection> for CollectionMetaOperations {
                 sharding_method: sharding_method
                     .map(sharding_method_from_proto)
                     .transpose()?,
-                encryption: None,
+                encryption,
                 strict_mode_config: strict_mode_config.map(strict_mode_from_api),
                 uuid: None,
                 metadata: if metadata.is_empty() {
@@ -372,5 +385,66 @@ impl From<ConsensusThreadStatus> for grpc::ConsensusThreadStatus {
                 )),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use collection::config::{CryptoMigrationState, EncryptionRuleRef, EncryptionSelector};
+
+    use super::*;
+
+    fn grpc_create_collection(encryption_json: Option<String>) -> grpc::CreateCollection {
+        grpc::CreateCollection {
+            collection_name: "docs".to_string(),
+            encryption_json,
+            ..Default::default()
+        }
+    }
+
+    fn encryption_config() -> CollectionEncryptionConfig {
+        CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a:docs".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 7,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![EncryptionRuleRef {
+                id: "docs_body".to_string(),
+                selector: EncryptionSelector::PayloadPaths {
+                    paths: vec!["document.body".to_string()],
+                },
+                instance: "docs_payload_v1".to_string(),
+                binding: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn grpc_create_collection_preserves_encryption_json() {
+        let encryption = encryption_config();
+        let operation = CollectionMetaOperations::try_from(grpc_create_collection(Some(
+            serde_json::to_string(&encryption).unwrap(),
+        )))
+        .unwrap();
+
+        let CollectionMetaOperations::CreateCollection(operation) = operation else {
+            panic!("expected create collection operation");
+        };
+
+        assert_eq!(operation.create_collection.encryption, Some(encryption));
+        assert!(operation.create_collection.uuid.is_some());
+    }
+
+    #[test]
+    fn grpc_create_collection_rejects_invalid_encryption_json() {
+        let err = CollectionMetaOperations::try_from(grpc_create_collection(Some("{".to_string())))
+            .unwrap_err();
+
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message()
+                .contains("invalid create collection encryption_json")
+        );
     }
 }

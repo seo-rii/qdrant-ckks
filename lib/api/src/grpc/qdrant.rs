@@ -1203,6 +1203,11 @@ pub struct CreateCollection {
     /// Arbitrary JSON metadata for the collection
     #[prost(map = "string, message", tag = "18")]
     pub metadata: ::std::collections::HashMap<::prost::alloc::string::String, Value>,
+    /// Capability-oriented collection encryption config as JSON.
+    /// This mirrors the REST `CreateCollection.encryption` object.
+    #[prost(string, optional, tag = "19")]
+    #[validate(length(max = 1048576))]
+    pub encryption_json: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(validator::Validate)]
 #[derive(serde::Serialize)]
