@@ -100,23 +100,28 @@ impl LocalShard {
 
             let mut records = Vec::new();
             let mut indexed_offsets = HashSet::<PointOffsetType>::new();
+            let mut stale_artifact = false;
             for indexed_record in index.records() {
                 let Some(record) = sidecar_by_offset.get(&indexed_record.point_offset) else {
-                    return Err(CollectionError::service_error(format!(
-                        "CKKS ciphertext HNSW index for vector '{vector_name}' references point offset {} without encrypted vector sidecar",
-                        indexed_record.point_offset,
-                    )));
+                    stale_artifact = true;
+                    break;
                 };
                 if record.encrypted.envelope.ciphertext.as_bytes() != indexed_record.ciphertext {
-                    return Err(CollectionError::service_error(format!(
-                        "CKKS ciphertext HNSW index for vector '{vector_name}' references stale ciphertext for point {}",
-                        record.id,
-                    )));
+                    stale_artifact = true;
+                    break;
                 }
                 indexed_offsets.insert(indexed_record.point_offset);
                 let mut record = record.clone();
                 record.indexed_record = indexed_record.clone();
                 records.push(record);
+            }
+
+            if stale_artifact {
+                snapshot.complete = false;
+                snapshot
+                    .residual_records
+                    .extend(sidecar_by_offset.into_values());
+                continue;
             }
 
             if !records.is_empty() {

@@ -345,7 +345,7 @@ pub(crate) fn open_vector_index(
             hnsw_config: *hnsw_config,
         })?),
         Indexes::CkksCiphertextHnsw {
-            hnsw_config: _,
+            hnsw_config,
             vector_name,
         } => {
             let records = ckks_ciphertext_records_from_payload_index(
@@ -355,13 +355,18 @@ pub(crate) fn open_vector_index(
                 &HardwareCounterCell::disposable(),
             )?;
             let graph_path = CkksCiphertextVectorIndex::graph_file_path(path);
-            let Some(index) = CkksCiphertextVectorIndex::open_graph_file(records, &graph_path)?
-            else {
-                return Err(OperationError::service_error(format!(
-                    "CKKS ciphertext HNSW index for vector '{vector_name}' requires a prebuilt graph file at {}",
-                    graph_path.display(),
-                )));
-            };
+            let index =
+                match CkksCiphertextVectorIndex::open_graph_file(records.clone(), &graph_path)? {
+                    Some(index) => index,
+                    None => {
+                        let mut index = CkksCiphertextVectorIndex::build_optimizer_candidate_graph(
+                            records,
+                            hnsw_config.m,
+                        )?;
+                        index.persist_graph_file(&graph_path)?;
+                        index
+                    }
+                };
             VectorIndexEnum::CkksCiphertextHnsw(index)
         }
     })

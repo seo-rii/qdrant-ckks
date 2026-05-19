@@ -348,31 +348,17 @@ impl CkksCiphertextVectorIndex {
             )));
         }
         if graph_file.record_count != records.len() {
-            return Err(OperationError::service_error(format!(
-                "CKKS ciphertext HNSW graph file {} record count {} does not match {} indexed records",
-                path.display(),
-                graph_file.record_count,
-                records.len(),
-            )));
+            return Ok(None);
         }
         let expected_records_digest = ckks_ciphertext_records_digest(&records);
         if graph_file.records_digest != expected_records_digest {
-            return Err(OperationError::service_error(format!(
-                "CKKS ciphertext HNSW graph file {} records digest does not match indexed records",
-                path.display(),
-            )));
+            return Ok(None);
         }
         let Some(graph) = CkksCiphertextHnswGraph::from_validated_links(graph_file.links) else {
-            return Err(OperationError::service_error(format!(
-                "CKKS ciphertext HNSW graph file {} contains invalid links",
-                path.display(),
-            )));
+            return Ok(None);
         };
         let Some(mut index) = Self::from_graph(records, graph) else {
-            return Err(OperationError::service_error(format!(
-                "CKKS ciphertext HNSW graph file {} does not match indexed records",
-                path.display(),
-            )));
+            return Ok(None);
         };
         index.graph_file = Some(path.to_path_buf());
         Ok(Some(index))
@@ -1876,7 +1862,7 @@ mod tests {
     }
 
     #[test]
-    fn ciphertext_vector_index_rejects_graph_record_count_mismatch_on_open() {
+    fn ciphertext_vector_index_ignores_graph_record_count_mismatch_on_open() {
         let directory = tempfile::tempdir().unwrap();
         let graph_file = CkksCiphertextVectorIndex::graph_file_path(directory.path());
         let mut index = CkksCiphertextVectorIndex::from_graph(
@@ -1889,16 +1875,19 @@ mod tests {
         .unwrap();
         index.persist_graph_file(&graph_file).unwrap();
 
-        let err = CkksCiphertextVectorIndex::open_graph_file(
+        let reopened = CkksCiphertextVectorIndex::open_graph_file(
             vec![CkksCiphertextIndexedRecord::new(
                 0,
                 b"ciphertext-a".to_vec(),
             )],
             &graph_file,
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(err.to_string().contains("record count"));
+        assert!(
+            reopened.is_none(),
+            "record-count mismatches should trigger rebuild/fallback instead of hard-failing",
+        );
     }
 
     #[test]
@@ -1963,7 +1952,7 @@ mod tests {
     }
 
     #[test]
-    fn ciphertext_vector_index_rejects_graph_records_digest_mismatch_on_open() {
+    fn ciphertext_vector_index_ignores_graph_records_digest_mismatch_on_open() {
         let directory = tempfile::tempdir().unwrap();
         let graph_file = CkksCiphertextVectorIndex::graph_file_path(directory.path());
         let mut index = CkksCiphertextVectorIndex::from_graph(
@@ -1976,31 +1965,37 @@ mod tests {
         .unwrap();
         index.persist_graph_file(&graph_file).unwrap();
 
-        let err = CkksCiphertextVectorIndex::open_graph_file(
+        let reopened = CkksCiphertextVectorIndex::open_graph_file(
             vec![
                 CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
                 CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
             ],
             &graph_file,
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(err.to_string().contains("records digest"));
+        assert!(
+            reopened.is_none(),
+            "record digest mismatch should trigger rebuild/fallback instead of hard-failing",
+        );
 
-        let err = CkksCiphertextVectorIndex::open_graph_file(
+        let reopened = CkksCiphertextVectorIndex::open_graph_file(
             vec![
                 CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
                 CkksCiphertextIndexedRecord::new(1, b"ciphertext-c".to_vec()),
             ],
             &graph_file,
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(err.to_string().contains("records digest"));
+        assert!(
+            reopened.is_none(),
+            "ciphertext digest mismatch should trigger rebuild/fallback instead of hard-failing",
+        );
     }
 
     #[test]
-    fn ciphertext_vector_index_rejects_invalid_graph_links_on_open() {
+    fn ciphertext_vector_index_ignores_invalid_graph_links_on_open() {
         let directory = tempfile::tempdir().unwrap();
         let graph_file = CkksCiphertextVectorIndex::graph_file_path(directory.path());
         let invalid_graph = CkksCiphertextHnswGraphFile {
@@ -2015,7 +2010,7 @@ mod tests {
         };
         write_graph_file(&graph_file, &serde_json::to_vec(&invalid_graph).unwrap()).unwrap();
 
-        let err = CkksCiphertextVectorIndex::open_graph_file(
+        let reopened = CkksCiphertextVectorIndex::open_graph_file(
             vec![
                 CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
                 CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
@@ -2023,9 +2018,12 @@ mod tests {
             ],
             &graph_file,
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(err.to_string().contains("invalid links"));
+        assert!(
+            reopened.is_none(),
+            "invalid graph links should trigger rebuild/fallback instead of hard-failing",
+        );
     }
 
     #[test]
