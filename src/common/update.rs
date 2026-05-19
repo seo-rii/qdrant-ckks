@@ -628,6 +628,12 @@ pub async fn do_delete_vectors(
     let vector_names: Vec<_> = vector.into_iter().collect();
     let (vector_names, encrypted_sidecar_keys) =
         split_encrypted_vector_delete_names(toc, &collection_name, &auth, vector_names).await?;
+    ensure_not_mixed_encrypted_and_plaintext_vector_mutation(
+        &collection_name,
+        encrypted_sidecar_keys.len(),
+        vector_names.len(),
+        "delete_vectors",
+    )?;
     let encrypted_sidecar_vector_names =
         encrypted_vector_sidecar_delete_names(&encrypted_sidecar_keys);
 
@@ -1949,9 +1955,29 @@ async fn maybe_encrypt_update_vectors(
         }
     }
     points.retain(|point| !point.vector.is_empty());
+    ensure_not_mixed_encrypted_and_plaintext_vector_mutation(
+        collection_name,
+        sidecar_updates.len(),
+        points.len(),
+        "update_vectors",
+    )?;
 
     let provenance = CollectionUpdateProvenance::runtime_encrypted_vectors(verified_sidecar_keys);
     Ok((sidecar_updates, provenance))
+}
+
+fn ensure_not_mixed_encrypted_and_plaintext_vector_mutation(
+    collection_name: &str,
+    encrypted_count: usize,
+    plaintext_count: usize,
+    operation: &str,
+) -> Result<(), StorageError> {
+    if encrypted_count > 0 && plaintext_count > 0 {
+        return Err(StorageError::bad_input(format!(
+            "collection {collection_name} cannot mix encrypted vector sidecar mutations and plaintext vector mutations in one {operation} request; split the request until atomic mixed vector updates are implemented",
+        )));
+    }
+    Ok(())
 }
 
 fn upsert_vectors_touch_encrypted_config(
@@ -2997,6 +3023,31 @@ esac
             }),
             ..CollectionParams::empty()
         }
+    }
+
+    #[test]
+    fn mixed_encrypted_plaintext_vector_mutation_guard_rejects_mixed_requests() {
+        let err = ensure_not_mixed_encrypted_and_plaintext_vector_mutation(
+            "docs",
+            1,
+            1,
+            "update_vectors",
+        )
+        .expect_err("mixed encrypted/plaintext vector mutation must be rejected");
+
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("cannot mix encrypted vector sidecar mutations")
+                    && description.contains("update_vectors")
+        ));
+
+        ensure_not_mixed_encrypted_and_plaintext_vector_mutation("docs", 1, 0, "update_vectors")
+            .unwrap();
+        ensure_not_mixed_encrypted_and_plaintext_vector_mutation("docs", 0, 1, "update_vectors")
+            .unwrap();
+        ensure_not_mixed_encrypted_and_plaintext_vector_mutation("docs", 0, 0, "delete_vectors")
+            .unwrap();
     }
 
     #[cfg(unix)]
