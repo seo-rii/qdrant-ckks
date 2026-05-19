@@ -40,6 +40,7 @@ impl LocalShard {
 
         for locked_segment in segments {
             let LockedSegment::Original(segment) = locked_segment else {
+                snapshot.complete = false;
                 continue;
             };
             let segment = segment.read();
