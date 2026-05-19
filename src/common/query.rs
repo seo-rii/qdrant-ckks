@@ -1658,7 +1658,7 @@ async fn ckks_vector_search_points_with_scoring(
 #[allow(clippy::too_many_arguments)]
 async fn ckks_fill_scored_points_payload_or_vectors(
     collection: &collection::collection::Collection,
-    points: &mut [ScoredPoint],
+    points: &mut Vec<ScoredPoint>,
     with_payload: WithPayloadInterface,
     with_vector: WithVector,
     read_consistency: Option<ReadConsistency>,
@@ -1683,20 +1683,31 @@ async fn ckks_fill_scored_points_payload_or_vectors(
             hw_measurement_acc,
         )
         .await?;
+    ckks_hydrate_scored_points_from_records(points, records);
+
+    Ok(())
+}
+
+fn ckks_hydrate_scored_points_from_records(
+    points: &mut Vec<ScoredPoint>,
+    records: Vec<RecordInternal>,
+) {
     let mut records_by_id = records
         .into_iter()
         .map(|record| (record.id, record))
         .collect::<std::collections::HashMap<_, _>>();
-    for point in points {
+
+    let mut hydrated = Vec::with_capacity(points.len());
+    for mut point in std::mem::take(points) {
         if let Some(record) = records_by_id.remove(&point.id) {
             point.version = record.version;
             point.payload = record.payload;
             point.vector = record.vector;
             point.shard_key = record.shard_key.or_else(|| point.shard_key.clone());
+            hydrated.push(point);
         }
     }
-
-    Ok(())
+    *points = hydrated;
 }
 
 fn ckks_score_passes_threshold(order: Order, score: f32, score_threshold: Option<f32>) -> bool {
@@ -7338,6 +7349,29 @@ mod tests {
             payload.as_object().unwrap().clone(),
         ));
         point
+    }
+
+    #[test]
+    fn ckks_fill_drops_scored_points_missing_from_retrieve_results() {
+        let mut points = vec![scored_point(1, 9.0), scored_point(2, 8.0)];
+        points[0].shard_key = Some(ShardKey::from("stale-shard"));
+        let payload = json!({ "body": "kept" });
+        let records = vec![RecordInternal {
+            id: 2.into(),
+            version: 42,
+            payload: Some(Payload(payload.as_object().unwrap().clone())),
+            vector: None,
+            shard_key: Some(ShardKey::from("tenant-b")),
+            order_value: None,
+        }];
+
+        ckks_hydrate_scored_points_from_records(&mut points, records);
+
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].id, 2.into());
+        assert_eq!(points[0].version, 42);
+        assert_eq!(points[0].payload.as_ref().unwrap().0["body"], "kept");
+        assert_eq!(points[0].shard_key, Some(ShardKey::from("tenant-b")));
     }
 
     #[test]
