@@ -63,7 +63,9 @@ fn https_client(
     tls_config: Option<&TlsConfig>,
     verify_https_client_certificate: bool,
 ) -> Result<reqwest::Client> {
-    let mut builder = reqwest::Client::builder().user_agent(APP_USER_AGENT.as_str());
+    let mut builder = reqwest::Client::builder()
+        .user_agent(APP_USER_AGENT.as_str())
+        .redirect(reqwest::redirect::Policy::none());
 
     // Configure TLS root certificate and validation
     if let Some(tls_config) = tls_config {
@@ -176,6 +178,35 @@ impl Error {
 impl From<Error> for StorageError {
     fn from(err: Error) -> Self {
         StorageError::service_error(format!("failed to initialize HTTP(S) client: {err}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use reqwest::StatusCode;
+
+    use super::https_client;
+
+    #[tokio::test]
+    async fn api_key_client_does_not_follow_redirects() {
+        let mut server = mockito::Server::new_async().await;
+        let redirect = server
+            .mock("GET", "/redirect")
+            .with_status(StatusCode::FOUND.as_u16() as usize)
+            .with_header("location", "/target")
+            .create();
+        let target = server.mock("GET", "/target").with_status(200).create();
+
+        let client = https_client(Some("secret-api-key"), None, true).unwrap();
+        let response = client
+            .get(format!("{}/redirect", server.url()))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FOUND);
+        redirect.expect(1).assert_async().await;
+        target.expect(0).assert_async().await;
     }
 }
 
