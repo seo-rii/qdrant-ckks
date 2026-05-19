@@ -435,6 +435,10 @@ pub async fn do_update_collection_cluster(
                     ),
                 });
             }
+            collection
+                .ensure_filter_does_not_touch_encrypted_payload(filter.as_ref())
+                .await
+                .map_err(StorageError::from)?;
 
             // submit operation to consensus
             dispatcher

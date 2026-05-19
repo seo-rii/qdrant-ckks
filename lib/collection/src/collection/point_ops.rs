@@ -2187,7 +2187,7 @@ impl Collection {
         Ok(points)
     }
 
-    pub(crate) async fn ensure_filter_does_not_touch_encrypted_payload(
+    pub async fn ensure_filter_does_not_touch_encrypted_payload(
         &self,
         filter: Option<&Filter>,
     ) -> CollectionResult<()> {

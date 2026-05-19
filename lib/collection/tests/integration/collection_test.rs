@@ -2663,6 +2663,18 @@ async fn encrypted_payload_field_rejects_plaintext_filters() {
         encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
 
     let err = collection
+        .ensure_filter_does_not_touch_encrypted_payload(Some(&encrypted_payload_filter()))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot filter on encrypted payload field")
+                && description.contains("document.body")
+                && description.contains("blind index")
+    ));
+
+    let err = collection
         .scroll_by(
             ScrollRequestInternal {
                 offset: None,
