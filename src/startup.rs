@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use fs_err as fs;
 
-use crate::common::error_reporting::ErrorReporter;
+use crate::common::error_reporting::{ErrorReporter, redact_crypto_material_for_report};
 
 const DEFAULT_INITIALIZED_FILE: &str = ".qdrant-initialized";
 
@@ -32,11 +32,14 @@ pub fn setup_panic_hook(reporting_enabled: bool, reporting_id: String) {
             "Payload not captured as it is not a string."
         };
 
-        log::error!("Panic backtrace: \n{backtrace}");
-        log::error!("Panic occurred{loc}: {message}");
+        let redacted_backtrace = redact_crypto_material_for_report(&backtrace);
+        let redacted_message = redact_crypto_material_for_report(message);
+
+        log::error!("Panic backtrace: \n{redacted_backtrace}");
+        log::error!("Panic occurred{loc}: {redacted_message}");
 
         if reporting_enabled {
-            ErrorReporter::report(message, &reporting_id, Some(&loc));
+            ErrorReporter::report(&redacted_message, &reporting_id, Some(&loc));
         }
     }));
 }

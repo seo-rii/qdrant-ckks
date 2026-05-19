@@ -52,7 +52,7 @@ impl ErrorReporter {
     }
 }
 
-fn redact_crypto_material_for_report(value: &str) -> String {
+pub(crate) fn redact_crypto_material_for_report(value: &str) -> String {
     let compact = value
         .chars()
         .filter(|character| character.is_ascii_alphanumeric())
@@ -64,13 +64,25 @@ fn redact_crypto_material_for_report(value: &str) -> String {
         "qdrantsecvectors",
         "ciphertext",
         "encryptedquery",
+        "authorization",
+        "awssessiontoken",
+        "awssecuritytoken",
+        "contextdigest",
+        "cryptocontext",
+        "cryptocontextb64",
+        "materialfingerprint",
+        "publickeyb64",
         "wrappedkey",
         "valueb64",
         "nonceb64",
         "signatureb64",
+        "signaturesig",
+        "sigb64",
         "privatekey",
         "secretkey",
+        "sessiontoken",
         "vaulttoken",
+        "xamzsecuritytoken",
         "xapikey",
     ]
     .iter()
@@ -121,5 +133,23 @@ mod tests {
         assert!(!payload.contains("ciphertext-sentinel"));
         assert!(!payload.contains("wrapped-sentinel"));
         assert!(!payload.contains("x-vault-token"));
+    }
+
+    #[test]
+    fn test_build_report_payload_redacts_aws_and_auth_spellings() {
+        for secret in [
+            "Authorization: Bearer authorization-sentinel",
+            "X-Amz-Security-Token: aws-token-sentinel",
+            "session_token=session-token-sentinel",
+            "sessionToken=session-token-sentinel",
+            "cryptoContextB64=crypto-context-sentinel",
+            "publicKeyB64=public-key-sentinel",
+            "signature.sig=sig-sentinel",
+        ] {
+            let payload = ErrorReporter::build_report_payload(secret, "node-4", Some(secret));
+
+            assert!(payload.contains("crypto material omitted"), "{payload}");
+            assert!(!payload.contains("sentinel"), "{payload}");
+        }
     }
 }

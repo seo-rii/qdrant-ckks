@@ -20,6 +20,8 @@ use storage::content_manager::toc::TableOfContent;
 use storage::rbac::Access;
 use tokio::{runtime, sync, time};
 
+use crate::common::error_reporting::redact_crypto_material_for_report;
+
 const READY_CHECK_TIMEOUT: Duration = Duration::from_millis(500);
 const GET_CONSENSUS_COMMITS_RETRIES: usize = 2;
 
@@ -118,6 +120,7 @@ impl Task {
     pub async fn exec(self) {
         while let Err(err) = self.exec_catch_unwind().await {
             let message = common::panic::downcast_str(&err).unwrap_or("");
+            let message = redact_crypto_material_for_report(message);
             let separator = if !message.is_empty() { ": " } else { "" };
 
             log::error!("HealthChecker task panicked, retrying{separator}{message}",);
