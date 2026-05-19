@@ -917,7 +917,9 @@ impl Collection {
                     if key.first_key != ENCRYPTED_VECTOR_SIDECAR_FIELD {
                         continue;
                     }
-                    if !update_provenance.allows_vector_sidecar_delete_key(key) {
+                    if !update_provenance
+                        .allows_vector_sidecar_delete_key(&collection_crypto_id, key)
+                    {
                         return Err(CollectionError::bad_input(format!(
                             "encrypted vector sidecar '{key}' can only be removed by runtime delete_vectors operations",
                         )));

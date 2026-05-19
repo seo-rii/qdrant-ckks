@@ -387,9 +387,21 @@ pub struct CkksVectorVerifiedSidecarKey {
     envelope_key: CkksVectorSidecarEnvelopeKey,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CkksVectorVerifiedSidecarDeleteKey {
+    collection_id: String,
+    vector_name: String,
+}
+
 impl CkksVectorVerifiedSidecarKey {
     pub fn envelope_key(&self) -> &CkksVectorSidecarEnvelopeKey {
         &self.envelope_key
+    }
+}
+
+impl CkksVectorVerifiedSidecarDeleteKey {
+    pub fn matches_binding(&self, collection_id: &str, vector_name: &str) -> bool {
+        self.collection_id == collection_id && self.vector_name == vector_name
     }
 }
 
@@ -399,6 +411,25 @@ impl CkksVectorSidecarEnvelopeKey {
             && self.point_id == point_id
             && self.vector_name == vector_name
     }
+}
+
+pub fn ckks_vector_verified_sidecar_delete_key(
+    collection_id: &str,
+    vector_name: impl Into<String>,
+) -> Result<CkksVectorVerifiedSidecarDeleteKey, CkksError> {
+    let vector_name = validate_vector_name(vector_name)?;
+    Ok(CkksVectorVerifiedSidecarDeleteKey {
+        collection_id: collection_id.to_string(),
+        vector_name,
+    })
+}
+
+fn validate_vector_name(vector_name: impl Into<String>) -> Result<String, CkksError> {
+    let vector_name = vector_name.into();
+    if vector_name.len() > MAX_VECTOR_NAME_LEN || vector_name.contains('\0') {
+        return Err(CkksError::InvalidVectorName);
+    }
+    Ok(vector_name)
 }
 
 pub fn encrypted_ckks_vector_payload_value(
@@ -572,10 +603,7 @@ where
     ) -> Result<String, CkksError> {
         validate_key_id(key_id).map_err(|_| CkksError::InvalidKeyId)?;
 
-        let vector_name = vector_name.into();
-        if vector_name.len() > MAX_VECTOR_NAME_LEN || vector_name.contains('\0') {
-            return Err(CkksError::InvalidVectorName);
-        }
+        let vector_name = validate_vector_name(vector_name)?;
 
         parameters.validate()?;
         Ok(vector_name)

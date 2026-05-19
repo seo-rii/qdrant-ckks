@@ -20,9 +20,9 @@ use common::validation::validate_range_generic;
 use common::{defaults, save_on_disk};
 use issues::IssueRecord;
 use qdrant_sec::{
-    CkksVectorSidecarEnvelopeKey, CkksVectorVerifiedSidecarKey, ClientPayloadEnvelopeKey,
-    ClientPayloadVerifiedEnvelopeKey, ENCRYPTED_VECTOR_SIDECAR_FIELD, ServerPayloadEnvelopeKey,
-    ServerPayloadVerifiedEnvelopeKey,
+    CkksVectorSidecarEnvelopeKey, CkksVectorVerifiedSidecarDeleteKey, CkksVectorVerifiedSidecarKey,
+    ClientPayloadEnvelopeKey, ClientPayloadVerifiedEnvelopeKey, ENCRYPTED_VECTOR_SIDECAR_FIELD,
+    ServerPayloadEnvelopeKey, ServerPayloadVerifiedEnvelopeKey,
 };
 use schemars::JsonSchema;
 use segment::common::anonymize::Anonymize;
@@ -112,7 +112,7 @@ struct RuntimeEncryptedVectorSidecars {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 struct RuntimeEncryptedVectorSidecarDeletes {
-    vector_names: Arc<HashSet<String>>,
+    verified_delete_keys: Arc<HashSet<CkksVectorVerifiedSidecarDeleteKey>>,
 }
 
 impl RuntimeEncryptedPayloadEnvelopes {
@@ -176,18 +176,24 @@ impl RuntimeEncryptedVectorSidecars {
 }
 
 impl RuntimeEncryptedVectorSidecarDeletes {
-    fn from_vector_names(vector_names: impl IntoIterator<Item = String>) -> Self {
+    fn from_verified(
+        verified_delete_keys: impl IntoIterator<Item = CkksVectorVerifiedSidecarDeleteKey>,
+    ) -> Self {
         Self {
-            vector_names: Arc::new(vector_names.into_iter().collect()),
+            verified_delete_keys: Arc::new(verified_delete_keys.into_iter().collect()),
         }
     }
 
-    fn allows_key(&self, key: &JsonPath) -> bool {
-        key.first_key == ENCRYPTED_VECTOR_SIDECAR_FIELD
-            && matches!(
-                key.rest.as_slice(),
-                [JsonPathItem::Key(vector_name)] if self.vector_names.contains(vector_name)
-            )
+    fn allows_key(&self, collection_id: &str, key: &JsonPath) -> bool {
+        if key.first_key != ENCRYPTED_VECTOR_SIDECAR_FIELD {
+            return false;
+        }
+        let [JsonPathItem::Key(vector_name)] = key.rest.as_slice() else {
+            return false;
+        };
+        self.verified_delete_keys
+            .iter()
+            .any(|verified| verified.matches_binding(collection_id, vector_name))
     }
 }
 
@@ -232,10 +238,10 @@ impl CollectionUpdateProvenance {
     }
 
     pub fn runtime_encrypted_vector_deletes(
-        vector_names: impl IntoIterator<Item = String>,
+        verified_delete_keys: impl IntoIterator<Item = CkksVectorVerifiedSidecarDeleteKey>,
     ) -> Self {
-        let verified = RuntimeEncryptedVectorSidecarDeletes::from_vector_names(vector_names);
-        if verified.vector_names.is_empty() {
+        let verified = RuntimeEncryptedVectorSidecarDeletes::from_verified(verified_delete_keys);
+        if verified.verified_delete_keys.is_empty() {
             return Self::client_plaintext();
         }
         Self {
@@ -325,10 +331,10 @@ impl CollectionUpdateProvenance {
         self.vector_sidecars.is_some()
     }
 
-    pub fn allows_vector_sidecar_delete_key(&self, key: &JsonPath) -> bool {
+    pub fn allows_vector_sidecar_delete_key(&self, collection_id: &str, key: &JsonPath) -> bool {
         self.vector_sidecar_deletes
             .as_ref()
-            .is_some_and(|verified| verified.allows_key(key))
+            .is_some_and(|verified| verified.allows_key(collection_id, key))
     }
 
     pub fn verified_vector_sidecar_key_for_binding(

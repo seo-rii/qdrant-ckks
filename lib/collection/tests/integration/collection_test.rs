@@ -53,9 +53,10 @@ use qdrant_sec::{
     ClientPayloadValidationContext, ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_PAYLOAD_MARKER,
     ENCRYPTED_VECTOR_SIDECAR_FIELD, ExistingPayloadMode, METADATA_EXACT_MATCH_TOKEN_BINDING,
     METADATA_VALUE_BINDING, PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionPolicy, PayloadTextEncryptor,
-    SecretKey, ServerPayloadValidationContext, client_payload_signature_message,
-    is_client_encrypted_payload_value, is_encrypted_payload_value,
-    validate_client_payload_value_for_runtime, validate_server_payload_value_metadata,
+    SecretKey, ServerPayloadValidationContext, ckks_vector_verified_sidecar_delete_key,
+    client_payload_signature_message, is_client_encrypted_payload_value,
+    is_encrypted_payload_value, validate_client_payload_value_for_runtime,
+    validate_server_payload_value_metadata,
 };
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -6773,6 +6774,31 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
             if description.contains("can only be removed by runtime delete_vectors")
                 && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
     ));
+    let wrong_collection_delete_key =
+        ckks_vector_verified_sidecar_delete_key("other-collection", DEFAULT_VECTOR_NAME).unwrap();
+    let err = collection
+        .update_from_client(
+            delete_sidecar.clone(),
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::runtime_encrypted_vector_deletes(vec![
+                wrong_collection_delete_key,
+            ]),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("can only be removed by runtime delete_vectors")
+                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+    ));
+    let verified_delete_key =
+        ckks_vector_verified_sidecar_delete_key(&collection_crypto_id, DEFAULT_VECTOR_NAME)
+            .unwrap();
     let err = collection
         .update_from_client(
             delete_sidecar,
@@ -6781,9 +6807,7 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::runtime_encrypted_vector_deletes(vec![
-                DEFAULT_VECTOR_NAME.to_string(),
-            ]),
+            CollectionUpdateProvenance::runtime_encrypted_vector_deletes(vec![verified_delete_key]),
         )
         .await
         .unwrap_err();
