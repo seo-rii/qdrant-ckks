@@ -12,7 +12,8 @@ use qdrant_sec::{
     CKKS_SCHEME, CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadNonceReplayKey,
     ClientPayloadValidationContext, ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD,
     EncryptedCkksVector, METADATA_EXACT_MATCH_TOKEN_BINDING, METADATA_VALUE_BINDING,
-    PAYLOAD_FIELD_BINDING, ServerPayloadValidationContext, ServerPayloadVerifiedEnvelopeKey,
+    METADATA_VALUE_ENVELOPE_KIND, PAYLOAD_FIELD_BINDING, PAYLOAD_TEXT_ENVELOPE_KIND,
+    ServerPayloadValidationContext, ServerPayloadVerifiedEnvelopeKey,
     ckks_vector_sidecar_envelope_key, client_payload_envelope_key, client_payload_nonce_replay_key,
     is_client_encrypted_payload_value, is_encrypted_payload_value, server_payload_envelope_key,
     validate_client_payload_value_after_runtime_verification,
@@ -282,7 +283,11 @@ impl Collection {
                                     "payload encrypted field path '{path}' is invalid: {err:?}",
                                 ))
                             })?;
-                            server_rewrite_paths.push((path_string, json_path));
+                            server_rewrite_paths.push((
+                                path_string,
+                                json_path,
+                                PAYLOAD_TEXT_ENVELOPE_KIND,
+                            ));
                         }
                     }
                     (EncryptionSelector::MetadataKeys { keys }, Some(METADATA_VALUE_BINDING)) => {
@@ -293,7 +298,11 @@ impl Collection {
                                     "metadata encrypted field path '{path}' is invalid: {err:?}",
                                 ))
                             })?;
-                            server_rewrite_paths.push((path_string, json_path));
+                            server_rewrite_paths.push((
+                                path_string,
+                                json_path,
+                                METADATA_VALUE_ENVELOPE_KIND,
+                            ));
                         }
                     }
                     (
@@ -450,7 +459,7 @@ impl Collection {
                     }
                     let mut original_non_migrated_payload = original_payload.0.clone();
                     let mut updated_non_migrated_payload = payload.0.clone();
-                    for (server_rewrite_path, json_path) in &server_rewrite_paths {
+                    for (server_rewrite_path, json_path, envelope_kind) in &server_rewrite_paths {
                         let original_values = json_path.value_get(&original_payload.0);
                         let updated_values = json_path.value_get(&payload.0);
                         if original_values.len() != updated_values.len() {
@@ -492,6 +501,7 @@ impl Collection {
                                         &record.id.to_string(),
                                         ServerPayloadValidationContext {
                                             field_path: server_rewrite_path,
+                                            expected_kind: Some(*envelope_kind),
                                             key_id: key_id.as_deref(),
                                             crypto_schema_version,
                                             encryption_epoch,
@@ -1067,6 +1077,7 @@ impl Collection {
                                                             point_id: Option<&str>,
                                                             encrypted_path: &JsonPath,
                                                             encrypted_path_str: &str,
+                                                            expected_envelope_kind: &str,
                                                             allow_client_envelope: bool|
              -> CollectionResult<bool> {
                 if let Some(key) = key {
@@ -1114,6 +1125,7 @@ impl Collection {
                             point_id,
                             ServerPayloadValidationContext {
                                 field_path: encrypted_path_str,
+                                expected_kind: Some(expected_envelope_kind),
                                 key_id: encryption.key_id.as_deref(),
                                 crypto_schema_version: encryption.crypto_schema_version,
                                 encryption_epoch: encryption.encryption_epoch,
@@ -1273,6 +1285,7 @@ impl Collection {
                                                             Some(id.as_str()),
                                                             &encrypted_json_path,
                                                             encrypted_path,
+                                                            PAYLOAD_TEXT_ENVELOPE_KIND,
                                                             allow_client_envelope,
                                                         )? {
                                                             touches = true;
@@ -1301,6 +1314,7 @@ impl Collection {
                                                         Some(id.as_str()),
                                                         &encrypted_json_path,
                                                         encrypted_path,
+                                                        PAYLOAD_TEXT_ENVELOPE_KIND,
                                                         allow_client_envelope,
                                                     )? {
                                                         touches = true;
@@ -1328,6 +1342,7 @@ impl Collection {
                                                     Some(id.as_str()),
                                                     &encrypted_json_path,
                                                     encrypted_path,
+                                                    PAYLOAD_TEXT_ENVELOPE_KIND,
                                                     allow_client_envelope,
                                                 )? {
                                                     touches = true;
@@ -1353,6 +1368,7 @@ impl Collection {
                                         point_id.as_deref(),
                                         &encrypted_json_path,
                                         encrypted_path,
+                                        PAYLOAD_TEXT_ENVELOPE_KIND,
                                         allow_client_envelope,
                                     )?
                                 }
@@ -1500,6 +1516,7 @@ impl Collection {
                                                                 Some(id.as_str()),
                                                                 &metadata_path,
                                                                 metadata_key,
+                                                                METADATA_VALUE_ENVELOPE_KIND,
                                                                 false,
                                                             )? {
                                                                 touches = true;
@@ -1526,6 +1543,7 @@ impl Collection {
                                                             Some(id.as_str()),
                                                             &metadata_path,
                                                             metadata_key,
+                                                            METADATA_VALUE_ENVELOPE_KIND,
                                                             false,
                                                         )? {
                                                             touches = true;
@@ -1552,6 +1570,7 @@ impl Collection {
                                                         Some(id.as_str()),
                                                         &metadata_path,
                                                         metadata_key,
+                                                        METADATA_VALUE_ENVELOPE_KIND,
                                                         false,
                                                     )? {
                                                         touches = true;
@@ -1579,6 +1598,7 @@ impl Collection {
                                             point_id.as_deref(),
                                             &metadata_path,
                                             metadata_key,
+                                            METADATA_VALUE_ENVELOPE_KIND,
                                             false,
                                         )?
                                     }

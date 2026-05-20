@@ -13,9 +13,9 @@ pub mod vector;
 pub use aead::{
     AeadCipher, AeadKeyring, CKKS_VECTOR_KEY_DOMAIN, EncryptedEnvelope, EncryptionContext,
     EncryptionError, EncryptionPurpose, LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_B64_LEN,
-    LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_LEN, LocalMasterKeyProvider, MasterKeyProvider,
-    PAYLOAD_TEXT_KEY_DOMAIN, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, WrappedKeyBlob,
-    rewrap_resource_key,
+    LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_LEN, LocalMasterKeyProvider, METADATA_VALUE_KEY_DOMAIN,
+    MasterKeyProvider, PAYLOAD_TEXT_KEY_DOMAIN, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey,
+    WrappedKeyBlob, rewrap_resource_key,
 };
 pub use control_plane::{
     CLIENT_PAYLOAD_ENVELOPE_BINDING, CiphertextEnvelope, CompiledCollectionCryptoPlan,
@@ -34,9 +34,10 @@ pub use payload::{
     CLIENT_ENCRYPTED_PAYLOAD_MARKER, ClientPayloadEnvelopeKey, ClientPayloadNonceReplayKey,
     ClientPayloadSignatureVerification, ClientPayloadValidationContext,
     ClientPayloadVerifiedEnvelopeKey, ENCRYPTED_PAYLOAD_MARKER, ExistingPayloadMode,
-    PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
-    ServerPayloadEnvelopeKey, ServerPayloadValidationContext, ServerPayloadVerifiedEnvelopeKey,
-    client_payload_envelope_key, client_payload_nonce_replay_key, client_payload_signature_key_id,
+    METADATA_VALUE_ENVELOPE_KIND, PAYLOAD_TEXT_ENVELOPE_KIND, PayloadEncryptionError,
+    PayloadEncryptionPolicy, PayloadTextEncryptor, ServerPayloadEnvelopeKey,
+    ServerPayloadValidationContext, ServerPayloadVerifiedEnvelopeKey, client_payload_envelope_key,
+    client_payload_nonce_replay_key, client_payload_signature_key_id,
     client_payload_signature_message, is_client_encrypted_payload_value,
     is_encrypted_payload_value, server_payload_envelope_key, validate_client_payload_value,
     validate_client_payload_value_after_runtime_verification,

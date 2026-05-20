@@ -832,7 +832,10 @@ fn command_openfhe_backend_checked_constructor_validates_bridge_path() {
         Err(CkksError::Backend(message)) if message.contains("sha256 pin does not match")
     ));
     assert!(matches!(
-        CommandOpenFheBackend::new_checked_with_sha256_b64(&script_path, "not base64!"),
+        CommandOpenFheBackend::new_checked_with_sha256_b64(
+            &script_path,
+            format!("{}!", "A".repeat(42)),
+        ),
         Err(CkksError::Backend(message)) if message.contains("base64url-no-padding")
     ));
 

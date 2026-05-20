@@ -7,13 +7,14 @@ use thiserror::Error;
 
 use crate::aead::{
     AeadCipher, AeadKeyring, EncryptedEnvelope, EncryptionContext, EncryptionError,
-    PAYLOAD_TEXT_KEY_DOMAIN, SecretKey, validate_encrypted_envelope_metadata,
-    validate_resource_key_id,
+    EncryptionPurpose, METADATA_VALUE_KEY_DOMAIN, PAYLOAD_TEXT_KEY_DOMAIN, SecretKey,
+    validate_encrypted_envelope_metadata, validate_resource_key_id,
 };
 
 pub const ENCRYPTED_PAYLOAD_MARKER: &str = "$qdrant_sec";
 pub const CLIENT_ENCRYPTED_PAYLOAD_MARKER: &str = "$qdrant_client_aead";
-const PAYLOAD_TEXT_KIND: &str = "payload_text";
+pub const PAYLOAD_TEXT_ENVELOPE_KIND: &str = "payload_text";
+pub const METADATA_VALUE_ENVELOPE_KIND: &str = "metadata_value";
 const CLIENT_PAYLOAD_ALGORITHM: &str = "AES-256-GCM";
 const CLIENT_PAYLOAD_KDF_DOMAIN: &str = "qdrant-sec/client-payload-text/v1";
 const CLIENT_PAYLOAD_SIGNATURE_DOMAIN: &str = "qdrant-sec/client-payload-signature/v1";
@@ -168,6 +169,9 @@ impl PayloadEncryptionPolicy {
 pub struct PayloadTextEncryptor {
     collection: String,
     keyring: AeadKeyring,
+    key_domain: &'static [u8],
+    purpose: EncryptionPurpose,
+    envelope_kind: &'static str,
     crypto_schema_version: u16,
     encryption_epoch: u64,
 }
@@ -373,6 +377,33 @@ impl PayloadTextEncryptor {
         unsafe { Self::new_with_derived_cipher_unchecked(collection, cipher) }
     }
 
+    pub fn new_metadata_value_from_resource_key_with_metadata(
+        collection: impl Into<String>,
+        key_id: impl Into<String>,
+        resource_key: &SecretKey,
+        material_fingerprint_id: impl Into<String>,
+        rk_id: impl Into<String>,
+        rk_epoch: u64,
+    ) -> Result<Self, PayloadEncryptionError> {
+        let metadata_key = resource_key.derive_subkey(METADATA_VALUE_KEY_DOMAIN)?;
+        let cipher = AeadCipher::new_with_material_fingerprint(
+            key_id,
+            metadata_key,
+            material_fingerprint_id,
+        )?
+        .with_resource_key_metadata(rk_id, rk_epoch)?;
+        // SAFETY: `cipher` is built from the metadata-value HKDF subkey above.
+        unsafe {
+            Self::new_with_derived_keyring_for_domain_unchecked(
+                collection,
+                AeadKeyring::new(cipher),
+                METADATA_VALUE_KEY_DOMAIN,
+                EncryptionPurpose::MetadataValue,
+                METADATA_VALUE_ENVELOPE_KIND,
+            )
+        }
+    }
+
     /// Builds an encryptor from an already domain-separated AEAD cipher.
     ///
     /// Runtime code that starts from a collection/rule resource key should use
@@ -394,6 +425,26 @@ impl PayloadTextEncryptor {
         collection: impl Into<String>,
         keyring: AeadKeyring,
     ) -> Result<Self, PayloadEncryptionError> {
+        // SAFETY: caller guarantees `keyring` is domain-separated for payload
+        // text encryption.
+        unsafe {
+            Self::new_with_derived_keyring_for_domain_unchecked(
+                collection,
+                keyring,
+                PAYLOAD_TEXT_KEY_DOMAIN,
+                EncryptionPurpose::PayloadText,
+                PAYLOAD_TEXT_ENVELOPE_KIND,
+            )
+        }
+    }
+
+    unsafe fn new_with_derived_keyring_for_domain_unchecked(
+        collection: impl Into<String>,
+        keyring: AeadKeyring,
+        key_domain: &'static [u8],
+        purpose: EncryptionPurpose,
+        envelope_kind: &'static str,
+    ) -> Result<Self, PayloadEncryptionError> {
         let collection = collection.into();
         if collection.is_empty() || collection.contains('\0') {
             return Err(PayloadEncryptionError::InvalidFieldPath(
@@ -403,6 +454,9 @@ impl PayloadTextEncryptor {
         Ok(Self {
             collection,
             keyring,
+            key_domain,
+            purpose,
+            envelope_kind,
             crypto_schema_version: CRYPTO_SCHEMA_VERSION,
             encryption_epoch: DEFAULT_ENCRYPTION_EPOCH,
         })
@@ -425,13 +479,39 @@ impl PayloadTextEncryptor {
         self.encryption_epoch
     }
 
+    fn context<'a>(&'a self, point_id: &'a str, field: &'a str) -> EncryptionContext<'a> {
+        match self.purpose {
+            EncryptionPurpose::PayloadText => {
+                EncryptionContext::payload_text(&self.collection, point_id, field)
+            }
+            EncryptionPurpose::MetadataValue => {
+                EncryptionContext::metadata_value(&self.collection, point_id, field)
+            }
+            EncryptionPurpose::CkksVector => {
+                unreachable!("payload encryptor never uses the CKKS vector purpose")
+            }
+        }
+    }
+
+    fn ensure_envelope_kind(
+        &self,
+        envelope: &StoredPayloadEnvelope,
+    ) -> Result<(), PayloadEncryptionError> {
+        if envelope.kind != self.envelope_kind {
+            return Err(PayloadEncryptionError::UnsupportedEnvelopeKind(
+                envelope.kind.clone(),
+            ));
+        }
+        Ok(())
+    }
+
     pub fn with_retired_resource_key(
         mut self,
         key_id: impl Into<String>,
         resource_key: &SecretKey,
         material_fingerprint_id: impl Into<String>,
     ) -> Result<Self, PayloadEncryptionError> {
-        let payload_key = resource_key.derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)?;
+        let payload_key = resource_key.derive_subkey(self.key_domain)?;
         let retired = AeadCipher::new_with_material_fingerprint(
             key_id,
             payload_key,
@@ -449,7 +529,7 @@ impl PayloadTextEncryptor {
         rk_id: impl Into<String>,
         rk_epoch: u64,
     ) -> Result<Self, PayloadEncryptionError> {
-        let payload_key = resource_key.derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)?;
+        let payload_key = resource_key.derive_subkey(self.key_domain)?;
         let retired = AeadCipher::new_with_material_fingerprint(
             key_id,
             payload_key,
@@ -492,6 +572,7 @@ impl PayloadTextEncryptor {
             };
 
             if let Some(existing_envelope) = extract_envelope(value, field)? {
+                self.ensure_envelope_kind(&existing_envelope)?;
                 match existing_mode {
                     ExistingPayloadMode::SkipExisting => continue,
                     ExistingPayloadMode::FailIfExisting => {
@@ -507,8 +588,7 @@ impl PayloadTextEncryptor {
                             continue;
                         }
 
-                        let context =
-                            EncryptionContext::payload_text(&self.collection, point_id, field);
+                        let context = self.context(point_id, field);
                         let old_aad_suffix = payload_metadata_aad(
                             &existing_envelope.kind,
                             existing_envelope.schema_version,
@@ -520,7 +600,7 @@ impl PayloadTextEncryptor {
                             &old_aad_suffix,
                         )?;
                         let new_aad_suffix = payload_metadata_aad(
-                            PAYLOAD_TEXT_KIND,
+                            self.envelope_kind,
                             self.crypto_schema_version,
                             self.encryption_epoch,
                         );
@@ -532,6 +612,7 @@ impl PayloadTextEncryptor {
                         *value = stored_envelope_value(
                             envelope,
                             field,
+                            self.envelope_kind,
                             self.crypto_schema_version,
                             self.encryption_epoch,
                         )?;
@@ -551,9 +632,9 @@ impl PayloadTextEncryptor {
                 }
             };
 
-            let context = EncryptionContext::payload_text(&self.collection, point_id, field);
+            let context = self.context(point_id, field);
             let aad_suffix = payload_metadata_aad(
-                PAYLOAD_TEXT_KIND,
+                self.envelope_kind,
                 self.crypto_schema_version,
                 self.encryption_epoch,
             );
@@ -563,6 +644,7 @@ impl PayloadTextEncryptor {
             *value = stored_envelope_value(
                 envelope,
                 field,
+                self.envelope_kind,
                 self.crypto_schema_version,
                 self.encryption_epoch,
             )?;
@@ -614,6 +696,7 @@ impl PayloadTextEncryptor {
                 point_id,
                 ServerPayloadValidationContext {
                     field_path: field,
+                    expected_kind: Some(self.envelope_kind),
                     key_id: Some(self.key_id()),
                     crypto_schema_version: self.crypto_schema_version,
                     encryption_epoch: self.encryption_epoch,
@@ -645,7 +728,8 @@ impl PayloadTextEncryptor {
                     found: json_type_name(value),
                 }
             })?;
-            let context = EncryptionContext::payload_text(&self.collection, point_id, field);
+            self.ensure_envelope_kind(&envelope)?;
+            let context = self.context(point_id, field);
             let aad_suffix = payload_metadata_aad(
                 &envelope.kind,
                 envelope.schema_version,
@@ -691,7 +775,8 @@ impl PayloadTextEncryptor {
             let Some(envelope) = extract_envelope(value, field)? else {
                 continue;
             };
-            let context = EncryptionContext::payload_text(&self.collection, point_id, field);
+            self.ensure_envelope_kind(&envelope)?;
+            let context = self.context(point_id, field);
             let aad_suffix = payload_metadata_aad(
                 &envelope.kind,
                 envelope.schema_version,
@@ -734,6 +819,7 @@ pub fn is_client_encrypted_payload_value(value: &Value) -> bool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ServerPayloadValidationContext<'a> {
     pub field_path: &'a str,
+    pub expected_kind: Option<&'a str>,
     pub key_id: Option<&'a str>,
     pub crypto_schema_version: u16,
     pub encryption_epoch: u64,
@@ -757,6 +843,13 @@ pub fn validate_server_payload_value_metadata(
     }
     if envelope.encryption_epoch != context.encryption_epoch {
         return Err(PayloadEncryptionError::EncryptionEpochMismatch);
+    }
+    if let Some(expected_kind) = context.expected_kind
+        && envelope.kind != expected_kind
+    {
+        return Err(PayloadEncryptionError::UnsupportedEnvelopeKind(
+            envelope.kind,
+        ));
     }
     validate_encrypted_envelope_metadata(&envelope.envelope)?;
     if let Some(key_id) = context.key_id
@@ -853,7 +946,7 @@ fn validate_client_payload_value_inner(
             envelope.version,
         ));
     }
-    if envelope.kind != PAYLOAD_TEXT_KIND {
+    if envelope.kind != PAYLOAD_TEXT_ENVELOPE_KIND {
         return Err(PayloadEncryptionError::UnsupportedEnvelopeKind(
             envelope.kind,
         ));
@@ -1402,11 +1495,12 @@ fn locate_path_mut<'a>(
 fn stored_envelope_value(
     envelope: EncryptedEnvelope,
     field: &str,
+    kind: &str,
     schema_version: u16,
     encryption_epoch: u64,
 ) -> Result<Value, PayloadEncryptionError> {
     let envelope = StoredPayloadEnvelope {
-        kind: PAYLOAD_TEXT_KIND.to_string(),
+        kind: kind.to_string(),
         schema_version,
         encryption_epoch,
         envelope,
@@ -1457,7 +1551,8 @@ fn extract_envelope(
 
     let envelope: StoredPayloadEnvelope = serde_json::from_value(envelope.clone())
         .map_err(|_| PayloadEncryptionError::MalformedEnvelope(field.to_string()))?;
-    if envelope.kind != PAYLOAD_TEXT_KIND {
+    if envelope.kind != PAYLOAD_TEXT_ENVELOPE_KIND && envelope.kind != METADATA_VALUE_ENVELOPE_KIND
+    {
         return Err(PayloadEncryptionError::UnsupportedEnvelopeKind(
             envelope.kind,
         ));
@@ -1520,7 +1615,7 @@ mod tests {
         serde_json::json!({
             CLIENT_ENCRYPTED_PAYLOAD_MARKER: {
                 "version": 1,
-                "kind": PAYLOAD_TEXT_KIND,
+                "kind": PAYLOAD_TEXT_ENVELOPE_KIND,
                 "algorithm": CLIENT_PAYLOAD_ALGORITHM,
                 "key_id": "tenant-a:client-rk",
                 "rk_id": "tenant-a:client-rk",
@@ -1541,6 +1636,144 @@ mod tests {
                 }
             }
         })
+    }
+
+    fn server_envelope_kind(value: &Value) -> &str {
+        value
+            .get(ENCRYPTED_PAYLOAD_MARKER)
+            .and_then(Value::as_object)
+            .and_then(|envelope| envelope.get("kind"))
+            .and_then(Value::as_str)
+            .unwrap()
+    }
+
+    fn set_server_envelope_kind(value: &mut Value, kind: &str) {
+        value
+            .get_mut(ENCRYPTED_PAYLOAD_MARKER)
+            .and_then(Value::as_object_mut)
+            .unwrap()
+            .insert("kind".to_string(), Value::String(kind.to_string()));
+    }
+
+    #[test]
+    fn metadata_value_envelope_uses_distinct_kind_and_aad_domain() {
+        let resource_key = SecretKey::from_bytes([7_u8; 32]);
+        let payload_encryptor = PayloadTextEncryptor::new_from_resource_key_with_metadata(
+            "collection-crypto-id",
+            "tenant-a:docs",
+            &resource_key,
+            "tenant-a/payload@v1",
+            "tenant-a/payload-rk",
+            3,
+        )
+        .unwrap()
+        .with_encryption_epoch(3);
+        let metadata_encryptor =
+            PayloadTextEncryptor::new_metadata_value_from_resource_key_with_metadata(
+                "collection-crypto-id",
+                "tenant-a:docs",
+                &resource_key,
+                "tenant-a/payload@v1",
+                "tenant-a/payload-rk",
+                3,
+            )
+            .unwrap()
+            .with_encryption_epoch(3);
+        let policy = PayloadEncryptionPolicy::new(["field"]).unwrap();
+
+        let mut payload_value = serde_json::json!({ "field": "secret" })
+            .as_object()
+            .unwrap()
+            .clone();
+        let mut metadata_value = payload_value.clone();
+        payload_encryptor
+            .encrypt_selected_fields("1", &mut payload_value, &policy)
+            .unwrap();
+        metadata_encryptor
+            .encrypt_selected_fields("1", &mut metadata_value, &policy)
+            .unwrap();
+
+        let payload_marker = payload_value.get("field").unwrap();
+        let metadata_marker = metadata_value.get("field").unwrap();
+        assert_eq!(
+            server_envelope_kind(payload_marker),
+            PAYLOAD_TEXT_ENVELOPE_KIND
+        );
+        assert_eq!(
+            server_envelope_kind(metadata_marker),
+            METADATA_VALUE_ENVELOPE_KIND,
+        );
+
+        assert!(matches!(
+            payload_encryptor.decrypt_selected_fields("1", &mut metadata_value.clone(), &policy),
+            Err(PayloadEncryptionError::UnsupportedEnvelopeKind(kind))
+                if kind == METADATA_VALUE_ENVELOPE_KIND
+        ));
+        assert!(matches!(
+            metadata_encryptor.decrypt_selected_fields("1", &mut payload_value.clone(), &policy),
+            Err(PayloadEncryptionError::UnsupportedEnvelopeKind(kind))
+                if kind == PAYLOAD_TEXT_ENVELOPE_KIND
+        ));
+
+        let mut tampered_metadata = metadata_marker.clone();
+        set_server_envelope_kind(&mut tampered_metadata, PAYLOAD_TEXT_ENVELOPE_KIND);
+        let mut tampered_payload = Map::from_iter([("field".to_string(), tampered_metadata)]);
+        assert!(matches!(
+            payload_encryptor.decrypt_selected_fields("1", &mut tampered_payload, &policy),
+            Err(PayloadEncryptionError::Crypto(EncryptionError::OpenFailed))
+        ));
+    }
+
+    #[test]
+    fn server_payload_validation_rejects_wrong_envelope_kind() {
+        let resource_key = SecretKey::from_bytes([8_u8; 32]);
+        let metadata_encryptor =
+            PayloadTextEncryptor::new_metadata_value_from_resource_key_with_metadata(
+                "collection-crypto-id",
+                "tenant-a:docs",
+                &resource_key,
+                "tenant-a/metadata@v1",
+                "tenant-a/metadata-rk",
+                3,
+            )
+            .unwrap()
+            .with_encryption_epoch(3);
+        let policy = PayloadEncryptionPolicy::new(["field"]).unwrap();
+        let mut payload = serde_json::json!({ "field": "secret" })
+            .as_object()
+            .unwrap()
+            .clone();
+        metadata_encryptor
+            .encrypt_selected_fields("1", &mut payload, &policy)
+            .unwrap();
+
+        assert_eq!(
+            validate_server_payload_value_metadata(
+                payload.get("field").unwrap(),
+                ServerPayloadValidationContext {
+                    field_path: "field",
+                    expected_kind: Some(METADATA_VALUE_ENVELOPE_KIND),
+                    key_id: Some("tenant-a:docs"),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 3,
+                },
+            ),
+            Ok(())
+        );
+        assert!(matches!(
+            validate_server_payload_value_metadata(
+                payload.get("field").unwrap(),
+                ServerPayloadValidationContext {
+                    field_path: "field",
+                    expected_kind: Some(PAYLOAD_TEXT_ENVELOPE_KIND),
+                    key_id: Some("tenant-a:docs"),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 3,
+                },
+            ),
+            Err(PayloadEncryptionError::UnsupportedEnvelopeKind(kind))
+                if kind == METADATA_VALUE_ENVELOPE_KIND
+        ));
     }
 
     #[test]

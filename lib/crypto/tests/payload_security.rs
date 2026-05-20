@@ -3,8 +3,8 @@ use proptest::prelude::*;
 use qdrant_sec::{
     AeadCipher, AeadKeyring, CLIENT_ENCRYPTED_PAYLOAD_MARKER, ClientPayloadNonceReplayKey,
     ClientPayloadSignatureVerification, ClientPayloadValidationContext, ENCRYPTED_PAYLOAD_MARKER,
-    EncryptionError, ExistingPayloadMode, PayloadEncryptionError, PayloadEncryptionPolicy,
-    PayloadTextEncryptor, SecretKey, ServerPayloadValidationContext,
+    EncryptionError, ExistingPayloadMode, PAYLOAD_TEXT_ENVELOPE_KIND, PayloadEncryptionError,
+    PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey, ServerPayloadValidationContext,
     client_payload_nonce_replay_key, client_payload_signature_key_id,
     client_payload_signature_message, is_client_encrypted_payload_value,
     is_encrypted_payload_value, validate_client_payload_value,
@@ -773,6 +773,7 @@ fn post_runtime_server_payload_validation_requires_verified_proof_match() {
     let body = payload.get("body").unwrap();
     let context = ServerPayloadValidationContext {
         field_path: "body",
+        expected_kind: Some(PAYLOAD_TEXT_ENVELOPE_KIND),
         key_id: Some("tenant-a:payload"),
         crypto_schema_version: 1,
         encryption_epoch: 0,
@@ -958,6 +959,7 @@ fn server_payload_metadata_validation_rejects_stale_or_wrong_key_markers() {
         body,
         ServerPayloadValidationContext {
             field_path: "body",
+            expected_kind: Some(PAYLOAD_TEXT_ENVELOPE_KIND),
             key_id: Some("tenant-a:payload"),
             crypto_schema_version: 1,
             encryption_epoch: 0,
@@ -970,6 +972,7 @@ fn server_payload_metadata_validation_rejects_stale_or_wrong_key_markers() {
             body,
             ServerPayloadValidationContext {
                 field_path: "body",
+                expected_kind: Some(PAYLOAD_TEXT_ENVELOPE_KIND),
                 key_id: Some("tenant-a:other"),
                 crypto_schema_version: 1,
                 encryption_epoch: 0,
@@ -982,6 +985,7 @@ fn server_payload_metadata_validation_rejects_stale_or_wrong_key_markers() {
             body,
             ServerPayloadValidationContext {
                 field_path: "body",
+                expected_kind: Some(PAYLOAD_TEXT_ENVELOPE_KIND),
                 key_id: Some("tenant-a:payload"),
                 crypto_schema_version: 1,
                 encryption_epoch: 1,
@@ -1021,6 +1025,7 @@ fn server_payload_metadata_validation_rejects_invalid_envelope_headers() {
     };
     let context = ServerPayloadValidationContext {
         field_path: "body",
+        expected_kind: Some(PAYLOAD_TEXT_ENVELOPE_KIND),
         key_id: Some("tenant-a:payload"),
         crypto_schema_version: 1,
         encryption_epoch: 0,

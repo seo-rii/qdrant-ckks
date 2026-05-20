@@ -21,6 +21,7 @@ pub const LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_LEN: usize = KEY_LEN + TAG_LEN;
 pub const LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_B64_LEN: usize = 64;
 
 pub const PAYLOAD_TEXT_KEY_DOMAIN: &[u8] = b"qdrant-sec/payload-text/v1";
+pub const METADATA_VALUE_KEY_DOMAIN: &[u8] = b"qdrant-sec/metadata-value/v1";
 pub const CKKS_VECTOR_KEY_DOMAIN: &[u8] = b"qdrant-sec/vector-envelope/v1";
 
 #[derive(Error, Debug, PartialEq, Eq)]
@@ -126,6 +127,7 @@ impl Drop for SecretKey {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EncryptionPurpose {
     PayloadText,
+    MetadataValue,
     CkksVector,
 }
 
@@ -133,6 +135,7 @@ impl EncryptionPurpose {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::PayloadText => "payload_text",
+            Self::MetadataValue => "metadata_value",
             Self::CkksVector => "ckks_vector",
         }
     }
@@ -151,6 +154,20 @@ impl<'a> EncryptionContext<'a> {
     pub const fn payload_text(collection: &'a str, point_id: &'a str, field_path: &'a str) -> Self {
         Self {
             purpose: EncryptionPurpose::PayloadText,
+            collection,
+            point_id: Some(point_id),
+            field_path: Some(field_path),
+            vector_name: None,
+        }
+    }
+
+    pub const fn metadata_value(
+        collection: &'a str,
+        point_id: &'a str,
+        field_path: &'a str,
+    ) -> Self {
+        Self {
+            purpose: EncryptionPurpose::MetadataValue,
             collection,
             point_id: Some(point_id),
             field_path: Some(field_path),

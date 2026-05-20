@@ -3800,14 +3800,25 @@ fn generic_payload_write_plan(
                             });
                         }
                     };
-                let mut encryptor = PayloadTextEncryptor::new_from_resource_key_with_metadata(
-                    collection_crypto_id,
-                    key_id,
-                    &resource_key,
-                    material_fingerprint_id,
-                    material_ref.clone(),
-                    rk_epoch,
-                )?
+                let mut encryptor = if instance.provider == METADATA_AES_GCM_PROVIDER {
+                    PayloadTextEncryptor::new_metadata_value_from_resource_key_with_metadata(
+                        collection_crypto_id,
+                        key_id,
+                        &resource_key,
+                        material_fingerprint_id,
+                        material_ref.clone(),
+                        rk_epoch,
+                    )?
+                } else {
+                    PayloadTextEncryptor::new_from_resource_key_with_metadata(
+                        collection_crypto_id,
+                        key_id,
+                        &resource_key,
+                        material_fingerprint_id,
+                        material_ref.clone(),
+                        rk_epoch,
+                    )?
+                }
                 .with_encryption_epoch(encryption.encryption_epoch);
 
                 if let Some(retired_materials) = instance.options.get(RETIRED_MATERIALS_OPTION) {
