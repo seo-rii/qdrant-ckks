@@ -13,6 +13,15 @@ use crate::StorageError;
 use crate::content_manager::snapshots::download_result::DownloadResult;
 use crate::content_manager::snapshots::download_tar::download_and_unpack_tar;
 
+fn redacted_snapshot_url(url: &Url) -> String {
+    let mut redacted = url.clone();
+    let _ = redacted.set_username("");
+    let _ = redacted.set_password(None);
+    redacted.set_query(url.query().map(|_| "[redacted]"));
+    redacted.set_fragment(url.fragment().map(|_| "[redacted]"));
+    redacted.to_string()
+}
+
 fn snapshot_prefix(url: &Url) -> OsString {
     Path::new(url.path())
         .file_name()
@@ -125,8 +134,29 @@ pub async fn download_snapshot(
             })
         }
         _ => Err(StorageError::bad_request(format!(
-            "URL {url} with scheme {} is not supported",
+            "URL {} with scheme {} is not supported",
+            redacted_snapshot_url(&url),
             url.scheme(),
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use url::Url;
+
+    use super::redacted_snapshot_url;
+
+    #[test]
+    fn redacted_snapshot_url_hides_credentials_in_errors() {
+        let url =
+            Url::parse("s3://user:password@example.test/snapshot?token=secret#fragment").unwrap();
+        let redacted = redacted_snapshot_url(&url);
+
+        assert_eq!(redacted, "s3://example.test/snapshot?[redacted]#[redacted]",);
+        assert!(!redacted.contains("user"));
+        assert!(!redacted.contains("password"));
+        assert!(!redacted.contains("secret"));
+        assert!(!redacted.contains("fragment"));
     }
 }

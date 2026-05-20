@@ -18,6 +18,15 @@ use crate::StorageError;
 /// Timeout for stream reads - if no data is received within this duration, the download fails.
 const STREAM_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
+fn redacted_url_for_log(url: &Url) -> String {
+    let mut redacted = url.clone();
+    let _ = redacted.set_username("");
+    let _ = redacted.set_password(None);
+    redacted.set_query(url.query().map(|_| "[redacted]"));
+    redacted.set_fragment(url.fragment().map(|_| "[redacted]"));
+    redacted.to_string()
+}
+
 /// An async reader wrapper that times out if no data is received within a specified duration.
 ///
 /// This implements an inactivity timeout - the timeout resets each time data is successfully read.
@@ -157,16 +166,22 @@ pub async fn download_and_unpack_tar(
     target_dir: &Path,
     compute_checksum: bool,
 ) -> Result<Option<String>, StorageError> {
+    let redacted_url = redacted_url_for_log(url);
     log::debug!(
-        "Streaming tar download from {url} to {}",
+        "Streaming tar download from {redacted_url} to {}",
         target_dir.display()
     );
 
-    let response = client.get(url.clone()).send().await?;
+    let response = client.get(url.clone()).send().await.map_err(|err| {
+        StorageError::service_error(format!(
+            "Failed to download tar from {redacted_url}: {}",
+            err.without_url(),
+        ))
+    })?;
 
     if !response.status().is_success() {
         return Err(StorageError::bad_input(format!(
-            "Failed to download tar from {url}: status - {}",
+            "Failed to download tar from {redacted_url}: status - {}",
             response.status()
         )));
     }
@@ -212,7 +227,7 @@ pub async fn download_and_unpack_tar(
     .map_err(|e| StorageError::service_error(format!("Download task failed: {e}")))??;
 
     log::debug!(
-        "Successfully unpacked tar from {url} to {}",
+        "Successfully unpacked tar from {redacted_url} to {}",
         target_dir_for_log.display()
     );
 
@@ -227,6 +242,22 @@ mod tests {
     use futures::StreamExt;
 
     use super::*;
+
+    #[test]
+    fn redacted_url_for_log_hides_snapshot_url_credentials() {
+        let url = Url::parse("https://user:password@example.test/snapshot?token=secret#fragment")
+            .unwrap();
+        let redacted = redacted_url_for_log(&url);
+
+        assert_eq!(
+            redacted,
+            "https://example.test/snapshot?[redacted]#[redacted]",
+        );
+        assert!(!redacted.contains("user"));
+        assert!(!redacted.contains("password"));
+        assert!(!redacted.contains("secret"));
+        assert!(!redacted.contains("fragment"));
+    }
 
     #[tokio::test]
     async fn test_download_and_unpack_tar() {

@@ -32,13 +32,32 @@ pub fn validate_snapshot_url_api_key_policy(
     api_key: Option<&str>,
     operation: &str,
 ) -> Result<(), StorageError> {
+    if matches!(url.scheme(), "http" | "https")
+        && (!url.username().is_empty() || url.password().is_some())
+    {
+        return Err(StorageError::bad_input(format!(
+            "{operation} does not allow credentials embedded in caller-provided snapshot URL {}; use configured peer credentials instead",
+            redacted_snapshot_url_for_message(url),
+        )));
+    }
+
     if api_key.is_some() && matches!(url.scheme(), "http" | "https") {
         return Err(StorageError::bad_input(format!(
-            "{operation} does not allow api_key with caller-provided snapshot URL {url}; configure a trusted peer transfer or host allowlist before forwarding credentials",
+            "{operation} does not allow api_key with caller-provided snapshot URL {}; configure a trusted peer transfer or host allowlist before forwarding credentials",
+            redacted_snapshot_url_for_message(url),
         )));
     }
 
     Ok(())
+}
+
+fn redacted_snapshot_url_for_message(url: &Url) -> String {
+    let mut redacted = url.clone();
+    let _ = redacted.set_username("");
+    let _ = redacted.set_password(None);
+    redacted.set_query(url.query().map(|_| "[redacted]"));
+    redacted.set_fragment(url.fragment().map(|_| "[redacted]"));
+    redacted.to_string()
 }
 
 /// # Cancel safety
@@ -221,7 +240,8 @@ pub async fn recover_shard_snapshot(
                 ShardSnapshotLocation::Url(url) => {
                     if !matches!(url.scheme(), "http" | "https") {
                         let description = format!(
-                            "Invalid snapshot URL {url}: URLs with {} scheme are not supported",
+                            "Invalid snapshot URL {}: URLs with {} scheme are not supported",
+                            redacted_snapshot_url_for_message(&url),
                             url.scheme(),
                         );
 
@@ -577,6 +597,39 @@ mod tests {
         let file_url = Url::parse("file:///tmp/docs.snapshot").unwrap();
         validate_snapshot_url_api_key_policy(&file_url, Some("secret"), "snapshot recovery")
             .expect("non-network snapshot locations do not forward HTTP credentials");
+    }
+
+    #[test]
+    fn snapshot_url_policy_rejects_and_redacts_embedded_credentials() {
+        let url = Url::parse(
+            "https://user:password@example.test/snapshots/docs.snapshot?token=secret#fragment",
+        )
+        .unwrap();
+        let err = validate_snapshot_url_api_key_policy(&url, None, "snapshot recovery")
+            .expect_err("embedded snapshot URL credentials must fail closed");
+        let message = err.to_string();
+
+        assert!(message.contains("does not allow credentials embedded"));
+        assert!(
+            message.contains("https://example.test/snapshots/docs.snapshot?[redacted]#[redacted]")
+        );
+        assert!(!message.contains("user"));
+        assert!(!message.contains("password"));
+        assert!(!message.contains("secret"));
+        assert!(!message.contains("fragment"));
+    }
+
+    #[test]
+    fn snapshot_url_api_key_error_redacts_query_tokens() {
+        let url = Url::parse("https://example.test/snapshots/docs.snapshot?token=secret").unwrap();
+        let err = validate_snapshot_url_api_key_policy(&url, Some("api-key"), "snapshot recovery")
+            .expect_err("snapshot api_key with caller URL must fail closed");
+        let message = err.to_string();
+
+        assert!(message.contains("does not allow api_key"));
+        assert!(message.contains("https://example.test/snapshots/docs.snapshot?[redacted]"));
+        assert!(!message.contains("secret"));
+        assert!(!message.contains("api-key"));
     }
 
     #[test]
