@@ -2804,6 +2804,33 @@ async fn encrypted_payload_field_rejects_plaintext_filters() {
     ));
 
     let err = collection
+        .query_batch_internal(
+            vec![ShardQueryRequest {
+                prefetches: vec![],
+                query: Some(ScoringQuery::Sample(SampleInternal::Random)),
+                filter: Some(encrypted_payload_filter()),
+                score_threshold: None,
+                limit: 1,
+                offset: 0,
+                params: None,
+                with_vector: WithVector::Bool(false),
+                with_payload: WithPayloadInterface::Bool(false),
+            }],
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot filter on encrypted payload field")
+                && description.contains("document.body")
+                && description.contains("blind index")
+    ));
+
+    let err = collection
         .facet(
             FacetParams {
                 key: "document.title".parse().unwrap(),
@@ -7453,6 +7480,60 @@ async fn encrypted_vector_rejects_search_path() {
         CollectionError::BadInput { description }
             if description.contains("cannot query encrypted vector")
                 && description.contains("runtime CKKS sidecar query entrypoint")
+    ));
+
+    let err = collection
+        .query_batch_internal(
+            vec![ShardQueryRequest {
+                prefetches: vec![],
+                query: Some(ScoringQuery::Vector(vec![1.0, 0.0, 0.0, 0.0].into())),
+                filter: None,
+                score_threshold: None,
+                limit: 1,
+                offset: 0,
+                params: None,
+                with_vector: WithVector::Bool(false),
+                with_payload: WithPayloadInterface::Bool(false),
+            }],
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot query encrypted vector")
+                && description.contains("runtime CKKS sidecar query entrypoint")
+    ));
+
+    let err = collection
+        .query_batch_internal(
+            vec![ShardQueryRequest {
+                prefetches: vec![],
+                query: Some(ScoringQuery::Sample(SampleInternal::Random)),
+                filter: None,
+                score_threshold: None,
+                limit: 1,
+                offset: 0,
+                params: None,
+                with_vector: WithVector::Bool(true),
+                with_payload: WithPayloadInterface::Bool(false),
+            }],
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot return encrypted vector")
+                && description.contains("ciphertext read path returns payload sidecar only")
     ));
 
     let err = collection

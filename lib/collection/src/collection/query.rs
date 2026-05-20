@@ -219,86 +219,13 @@ impl Collection {
         if requests_batch.iter().all(|s| s.limit == 0) {
             return Ok(vec![]);
         }
-        self.ensure_crypto_migration_allows_regular_operation("reads")
+        self.ensure_query_batch_crypto_policy(&requests_batch)
             .await?;
-
-        for request in &requests_batch {
-            for filter in request.filter_refs() {
-                self.ensure_filter_does_not_touch_encrypted_payload(filter)
-                    .await?;
-            }
-            if let Some(ScoringQuery::OrderBy(order_by)) = request.query.as_ref() {
-                self.ensure_order_by_does_not_touch_encrypted_payload(Some(order_by))
-                    .await?;
-            }
-            if let Some(ScoringQuery::Formula(formula)) = request.query.as_ref() {
-                self.ensure_formula_does_not_touch_encrypted_payload(Some(formula))
-                    .await?;
-            }
-            let mut prefetches: Vec<&ShardPrefetch> = request.prefetches.iter().collect();
-            while let Some(prefetch) = prefetches.pop() {
-                if let Some(ScoringQuery::OrderBy(order_by)) = prefetch.query.as_ref() {
-                    self.ensure_order_by_does_not_touch_encrypted_payload(Some(order_by))
-                        .await?;
-                }
-                if let Some(ScoringQuery::Formula(formula)) = prefetch.query.as_ref() {
-                    self.ensure_formula_does_not_touch_encrypted_payload(Some(formula))
-                        .await?;
-                }
-                prefetches.extend(prefetch.prefetches.iter());
-            }
-        }
-
-        if let Some(encryption) = self
-            .collection_config
-            .read()
-            .await
-            .params
-            .effective_encryption()
-        {
-            for rule in &encryption.rules {
-                let EncryptionSelector::VectorNames { names } = &rule.selector else {
-                    continue;
-                };
-
-                for request in &requests_batch {
-                    if let Some(vector_name) = request
-                        .query
-                        .as_ref()
-                        .and_then(ScoringQuery::get_vector_name)
-                        && names.iter().any(|name| name == vector_name)
-                    {
-                        return Err(CollectionError::bad_input(format!(
-                            "cannot query encrypted vector '{vector_name}' through direct collection query; use the runtime CKKS sidecar query entrypoint",
-                        )));
-                    }
-
-                    let mut prefetches: Vec<&ShardPrefetch> = request.prefetches.iter().collect();
-                    while let Some(prefetch) = prefetches.pop() {
-                        if let Some(vector_name) = prefetch
-                            .query
-                            .as_ref()
-                            .and_then(ScoringQuery::get_vector_name)
-                            && names.iter().any(|name| name == vector_name)
-                        {
-                            return Err(CollectionError::bad_input(format!(
-                                "cannot query encrypted vector '{vector_name}' through direct collection query; use the runtime CKKS sidecar query entrypoint",
-                            )));
-                        }
-                        prefetches.extend(prefetch.prefetches.iter());
-                    }
-                }
-            }
-        }
-
         let is_payload_required = requests_batch.iter().all(|s| s.with_payload.is_required());
         let encrypted_payload_read_modes = requests_batch
             .iter()
             .map(|request| request.with_payload.encrypted_payload_read_mode())
             .collect_vec();
-        for mode in &encrypted_payload_read_modes {
-            ensure_encrypted_payload_read_mode_is_supported(*mode)?;
-        }
         let with_vectors = requests_batch.iter().all(|s| s.with_vector.is_enabled());
 
         let metadata_required = is_payload_required || with_vectors;
@@ -630,6 +557,94 @@ impl Collection {
         Ok(results)
     }
 
+    async fn ensure_query_batch_crypto_policy(
+        &self,
+        requests_batch: &[ShardQueryRequest],
+    ) -> CollectionResult<()> {
+        self.ensure_crypto_migration_allows_regular_operation("reads")
+            .await?;
+
+        for request in requests_batch {
+            self.ensure_with_vector_does_not_touch_encrypted_vector(&request.with_vector)
+                .await?;
+            for filter in request.filter_refs() {
+                self.ensure_filter_does_not_touch_encrypted_payload(filter)
+                    .await?;
+            }
+            if let Some(ScoringQuery::OrderBy(order_by)) = request.query.as_ref() {
+                self.ensure_order_by_does_not_touch_encrypted_payload(Some(order_by))
+                    .await?;
+            }
+            if let Some(ScoringQuery::Formula(formula)) = request.query.as_ref() {
+                self.ensure_formula_does_not_touch_encrypted_payload(Some(formula))
+                    .await?;
+            }
+            let mut prefetches: Vec<&ShardPrefetch> = request.prefetches.iter().collect();
+            while let Some(prefetch) = prefetches.pop() {
+                if let Some(ScoringQuery::OrderBy(order_by)) = prefetch.query.as_ref() {
+                    self.ensure_order_by_does_not_touch_encrypted_payload(Some(order_by))
+                        .await?;
+                }
+                if let Some(ScoringQuery::Formula(formula)) = prefetch.query.as_ref() {
+                    self.ensure_formula_does_not_touch_encrypted_payload(Some(formula))
+                        .await?;
+                }
+                prefetches.extend(prefetch.prefetches.iter());
+            }
+        }
+
+        if let Some(encryption) = self
+            .collection_config
+            .read()
+            .await
+            .params
+            .effective_encryption()
+        {
+            for rule in &encryption.rules {
+                let EncryptionSelector::VectorNames { names } = &rule.selector else {
+                    continue;
+                };
+
+                for request in requests_batch {
+                    if let Some(vector_name) = request
+                        .query
+                        .as_ref()
+                        .and_then(ScoringQuery::get_vector_name)
+                        && names.iter().any(|name| name == vector_name)
+                    {
+                        return Err(CollectionError::bad_input(format!(
+                            "cannot query encrypted vector '{vector_name}' through direct collection query; use the runtime CKKS sidecar query entrypoint",
+                        )));
+                    }
+
+                    let mut prefetches: Vec<&ShardPrefetch> = request.prefetches.iter().collect();
+                    while let Some(prefetch) = prefetches.pop() {
+                        if let Some(vector_name) = prefetch
+                            .query
+                            .as_ref()
+                            .and_then(ScoringQuery::get_vector_name)
+                            && names.iter().any(|name| name == vector_name)
+                        {
+                            return Err(CollectionError::bad_input(format!(
+                                "cannot query encrypted vector '{vector_name}' through direct collection query; use the runtime CKKS sidecar query entrypoint",
+                            )));
+                        }
+                        prefetches.extend(prefetch.prefetches.iter());
+                    }
+                }
+            }
+        }
+
+        for mode in requests_batch
+            .iter()
+            .map(|request| request.with_payload.encrypted_payload_read_mode())
+        {
+            ensure_encrypted_payload_read_mode_is_supported(mode)?;
+        }
+
+        Ok(())
+    }
+
     /// To be called on the remote instance. Only used for the internal service.
     ///
     /// If the root query is a Fusion, the returned results correspond to each the prefetches.
@@ -641,6 +656,10 @@ impl Collection {
         timeout: Option<Duration>,
         hw_measurement_acc: HwMeasurementAcc,
     ) -> CollectionResult<Vec<ShardQueryResponse>> {
+        if requests.iter().all(|s| s.limit == 0) {
+            return Ok(vec![]);
+        }
+        self.ensure_query_batch_crypto_policy(&requests).await?;
         let requests_arc = Arc::new(requests);
 
         // Results from all shards
