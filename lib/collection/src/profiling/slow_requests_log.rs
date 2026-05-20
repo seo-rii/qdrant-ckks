@@ -149,36 +149,25 @@ impl SlowRequestsLog {
         request: &dyn Loggable,
         cpu_usage_ratio: Option<f32>,
     ) -> Option<LogEntry> {
-        let content_hash = Self::content_hash(request.request_hash(), collection_name);
-
-        self.inc_counter(content_hash);
-
         let queue = self
             .log_priority_queue
             .entry(request.request_name())
             .or_insert_with(|| FixedLengthPriorityQueue::new(self.max_entries));
 
-        if !queue.is_full() {
-            let entry = LogEntry::new(
-                collection_name.to_string(),
-                duration,
-                datetime,
-                request.request_name(),
-                request.to_log_value(),
-                content_hash,
-                cpu_usage_ratio,
-            );
-            return self.try_insert_dedup(entry);
+        if queue.is_full() {
+            // Check if we can insert into the queue before hashing or serializing the request.
+            // Safety: unwrap is safe because we checked that the queue is full.
+            let fastest_logged = queue.top().unwrap();
+
+            if duration <= fastest_logged.duration {
+                // Our queue is already slower than this request.
+                return None;
+            }
         }
 
-        // Check if we can insert into the queue before actually serializing the request
-        // Safety: unwrap is safe because we checked that the queue is full
-        let fastest_logged = queue.top().unwrap();
+        let content_hash = Self::content_hash(request.request_hash(), collection_name);
 
-        if duration <= fastest_logged.duration {
-            // Our queue is already slower than this request
-            return None;
-        }
+        self.inc_counter(content_hash);
 
         let entry = LogEntry::new(
             collection_name.to_string(),
@@ -218,6 +207,7 @@ impl SlowRequestsLog {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::time::Duration;
 
     use serde_json::{Value, json};
@@ -236,6 +226,37 @@ mod tests {
 
         fn request_hash(&self) -> u64 {
             42
+        }
+    }
+
+    struct CountingLoggable {
+        log_value_calls: Cell<usize>,
+        request_hash_calls: Cell<usize>,
+    }
+
+    impl CountingLoggable {
+        fn new() -> Self {
+            Self {
+                log_value_calls: Cell::new(0),
+                request_hash_calls: Cell::new(0),
+            }
+        }
+    }
+
+    impl Loggable for CountingLoggable {
+        fn to_log_value(&self) -> Value {
+            self.log_value_calls.set(self.log_value_calls.get() + 1);
+            json!({"secret": "must-not-be-materialized-for-fast-skip"})
+        }
+
+        fn request_name(&self) -> &'static str {
+            "counting"
+        }
+
+        fn request_hash(&self) -> u64 {
+            self.request_hash_calls
+                .set(self.request_hash_calls.get() + 1);
+            7
         }
     }
 
@@ -261,5 +282,30 @@ mod tests {
         assert!(evicted.is_none());
         let entries = log.get_log_entries(10, None);
         assert_eq!(entries.len(), 3);
+    }
+
+    #[test]
+    fn full_queue_fast_request_skips_hash_and_log_projection() {
+        let mut log = SlowRequestsLog::new(1);
+        let slow = CountingLoggable::new();
+        let fast = CountingLoggable::new();
+
+        log.log_request("col", Duration::from_secs(10), Utc::now(), &slow, None);
+        assert_eq!(slow.request_hash_calls.get(), 1);
+        assert_eq!(slow.log_value_calls.get(), 1);
+
+        let evicted = log.log_request("col", Duration::from_secs(1), Utc::now(), &fast, None);
+
+        assert!(evicted.is_none());
+        assert_eq!(
+            fast.request_hash_calls.get(),
+            0,
+            "skipped fast requests must not hash secret-bearing request bodies",
+        );
+        assert_eq!(
+            fast.log_value_calls.get(),
+            0,
+            "skipped fast requests must not build redacted JSON projections",
+        );
     }
 }
