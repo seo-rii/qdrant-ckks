@@ -24,6 +24,7 @@ use crate::vector::{
 const DEFAULT_BRIDGE_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 const MIN_OPENFHE_SECURITY_LEVEL_BITS: u16 = 128;
+const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BridgeSandbox {
@@ -418,6 +419,12 @@ fn validate_bridge_program_sha256_b64(
 }
 
 fn decode_bridge_sha256_pin(path: &Path, expected_sha256_b64: &str) -> Result<Vec<u8>, CkksError> {
+    if expected_sha256_b64.len() != BASE64URL_NOPAD_32_BYTE_LEN {
+        return Err(CkksError::Backend(format!(
+            "OpenFHE bridge sha256 pin must decode to 32 bytes: {}",
+            path.display(),
+        )));
+    }
     let expected = BASE64URL_NOPAD
         .decode(expected_sha256_b64.as_bytes())
         .map_err(|_| {
@@ -2196,5 +2203,13 @@ mod tests {
 
         assert!(spawn_program.path().starts_with("/proc/self/fd"));
         assert!(spawn_program._fd.is_some());
+    }
+
+    #[test]
+    fn checked_bridge_sha256_pin_rejects_oversized_encoded_pin() {
+        let program = std::env::current_exe().unwrap();
+        let err = CommandOpenFheBackend::new_checked_with_sha256_b64(&program, "A".repeat(1024))
+            .expect_err("oversized sha256 pin must fail before bridge hash validation");
+        assert!(format!("{err}").contains("must decode to 32 bytes"));
     }
 }

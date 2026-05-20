@@ -178,6 +178,8 @@ const OPENFHE_BACKEND_KIND_PROCESS_POOL: &str = "process_pool";
 const OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK: &str = "process_landlock";
 const OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK: &str = "process_pool_landlock";
 const OPENFHE_BACKEND_SIGNATURE_DOMAIN: &[u8] = b"qdrant-sec/openfhe-bridge-binary-signature/v1\0";
+const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
+const BASE64URL_NOPAD_64_BYTE_LEN: usize = 86;
 const METADATA_BLIND_INDEX_ALLOWED_OPTIONS: &[&str] = &[
     "key_id",
     EXPECTED_RK_ID_OPTION,
@@ -2963,6 +2965,11 @@ fn validate_collection_runtime_backend_metadata(
             "collection {collection_name} vector crypto instance {instance_name} backend {backend_name} requires sha256_b64 program pin",
         )));
     };
+    if expected_sha256_b64.len() != BASE64URL_NOPAD_32_BYTE_LEN {
+        return Err(StorageError::bad_input(format!(
+            "collection {collection_name} vector crypto instance {instance_name} backend {backend_name} sha256_b64 must decode to 32 bytes",
+        )));
+    }
     let digest = BASE64URL_NOPAD
         .decode(expected_sha256_b64.as_bytes())
         .map_err(|_| {
@@ -3024,11 +3031,19 @@ fn validate_backend_signature_config(
         return Ok(());
     };
 
+    if expected_sha256_b64.len() != BASE64URL_NOPAD_32_BYTE_LEN {
+        return Err(invalid_signature("sha256_b64 must decode to 32 bytes"));
+    }
     let expected_sha256 = BASE64URL_NOPAD
         .decode(expected_sha256_b64.as_bytes())
         .map_err(|_| invalid_signature("sha256_b64 must be base64url without padding"))?;
     if expected_sha256.len() != 32 {
         return Err(invalid_signature("sha256_b64 must decode to 32 bytes"));
+    }
+    if signature_public_key_b64.len() != BASE64URL_NOPAD_32_BYTE_LEN {
+        return Err(invalid_signature(
+            "signature_public_key_b64 must decode to 32 bytes",
+        ));
     }
     let public_key = BASE64URL_NOPAD
         .decode(signature_public_key_b64.as_bytes())
@@ -3039,6 +3054,9 @@ fn validate_backend_signature_config(
         return Err(invalid_signature(
             "signature_public_key_b64 must decode to 32 bytes",
         ));
+    }
+    if signature_b64.len() != BASE64URL_NOPAD_64_BYTE_LEN {
+        return Err(invalid_signature("signature_b64 must decode to 64 bytes"));
     }
     let signature = BASE64URL_NOPAD
         .decode(signature_b64.as_bytes())
@@ -3117,6 +3135,9 @@ fn validate_backend_program_path_with_sha256(
     }
 
     if let Some(expected_sha256_b64) = expected_sha256_b64 {
+        if expected_sha256_b64.len() != BASE64URL_NOPAD_32_BYTE_LEN {
+            return Err(invalid_program());
+        }
         let expected = BASE64URL_NOPAD
             .decode(expected_sha256_b64.as_bytes())
             .map_err(|_| invalid_program())?;
@@ -9180,8 +9201,8 @@ mod tests {
                 kind: "process".to_string(),
                 program: Some(program),
                 sha256_b64: Some(BASE64URL_NOPAD.encode(&[7_u8; 32])),
-                signature_public_key_b64: Some(signature_public_key_b64),
-                signature_b64: Some(signature_b64),
+                signature_public_key_b64: Some(signature_public_key_b64.clone()),
+                signature_b64: Some(signature_b64.clone()),
                 size: None,
                 timeout_ms: Some(5_000),
             },
@@ -9204,6 +9225,40 @@ mod tests {
             err,
             CryptoSetupError::InvalidBackendSignature { .. }
         ));
+
+        for (sha256, public_key, signature, expected_reason) in [
+            (
+                "A".repeat(1024),
+                signature_public_key_b64.clone(),
+                signature_b64.clone(),
+                "sha256_b64 must decode to 32 bytes",
+            ),
+            (
+                sha256_b64.clone(),
+                "A".repeat(1024),
+                signature_b64.clone(),
+                "signature_public_key_b64 must decode to 32 bytes",
+            ),
+            (
+                sha256_b64.clone(),
+                signature_public_key_b64.clone(),
+                "A".repeat(1024),
+                "signature_b64 must decode to 64 bytes",
+            ),
+        ] {
+            let err = validate_backend_signature_config(
+                "openfhe_local",
+                &sha256,
+                Some(&public_key),
+                Some(&signature),
+            )
+            .expect_err("oversized fixed-size signature policy field must fail before decode");
+            assert!(matches!(
+                err,
+                CryptoSetupError::InvalidBackendSignature { reason, .. }
+                    if reason.contains(expected_reason)
+            ));
+        }
     }
 
     #[test]
@@ -12944,6 +12999,13 @@ mod tests {
 
         let backend = settings.crypto.backends.get_mut("openfhe_local").unwrap();
         backend.sha256_b64 = Some(BASE64URL_NOPAD.encode(&[17_u8; 31]));
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
+        assert!(
+            matches!(err, StorageError::BadInput { description } if description.contains("sha256_b64 must decode to 32 bytes"))
+        );
+
+        let backend = settings.crypto.backends.get_mut("openfhe_local").unwrap();
+        backend.sha256_b64 = Some("A".repeat(1024));
         let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
         assert!(
             matches!(err, StorageError::BadInput { description } if description.contains("sha256_b64 must decode to 32 bytes"))
