@@ -98,6 +98,8 @@ pub enum CryptoSetupError {
     InvalidBackendTimeout { backend: String, reason: String },
     #[error("crypto backend {backend} sandbox is invalid: {reason}")]
     InvalidBackendSandbox { backend: String, reason: String },
+    #[error("crypto cluster key attestation config is invalid: {reason}")]
+    InvalidClusterKeyAttestation { reason: String },
     #[error(
         "crypto instance {instance} references unknown material {material_ref} for role {role}"
     )]
@@ -141,6 +143,8 @@ const RESOURCE_KEY_STATE_ACTIVE: &str = "active";
 const RESOURCE_KEY_STATE_RETIRED: &str = "retired";
 const RESOURCE_KEY_STATE_DISABLED: &str = "disabled";
 const RESOURCE_KEY_STATE_DESTROYED: &str = "destroyed";
+const CLUSTER_KEY_ATTESTATION_ENV: &str = "QDRANT_CRYPTO_CLUSTER_ATTESTATION_B64";
+const CLUSTER_KEY_ATTESTATION_B64_LEN: usize = 43;
 const MATERIAL_FINGERPRINT_ID_OPTION: &str = "material_fingerprint_id";
 const KEY_ID_REQUIRED_OPTION: &str = "key_id_required";
 const EXPECTED_RK_ID_OPTION: &str = "expected_rk_id";
@@ -1331,20 +1335,39 @@ fn validate_collection_crypto_runtime_inner(
 ) -> Result<(), StorageError> {
     if let Some(encryption) = &params.encryption {
         if settings.cluster.enabled {
+            let mut has_server_side_keyed_provider = false;
             for rule in &encryption.rules {
-                let EncryptionSelector::PayloadPaths { .. } = &rule.selector else {
-                    continue;
-                };
                 let Some(instance) = settings.crypto.instances.get(&rule.instance) else {
                     continue;
                 };
-                if instance.provider == PAYLOAD_CLIENT_AEAD_PROVIDER {
+                if matches!(rule.selector, EncryptionSelector::PayloadPaths { .. })
+                    && instance.provider == PAYLOAD_CLIENT_AEAD_PROVIDER
+                {
                     return Err(StorageError::bad_input(format!(
                         "collection {collection_name} rule {} uses {PAYLOAD_CLIENT_AEAD_PROVIDER}, \
                          which requires a cluster-wide nonce replay ledger when cluster.enabled=true",
                         rule.id,
                     )));
                 }
+                if matches!(
+                    instance.provider.as_str(),
+                    PAYLOAD_AES_GCM_PROVIDER
+                        | METADATA_AES_GCM_PROVIDER
+                        | VECTOR_OPENFHE_CKKS_PROVIDER
+                ) {
+                    has_server_side_keyed_provider = true;
+                }
+            }
+            if has_server_side_keyed_provider
+                && decode_cluster_key_attestation_secret()
+                    .map_err(|err| StorageError::bad_input(err.to_string()))?
+                    .is_none()
+            {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} uses server-side encrypted runtime providers in cluster mode; \
+                     {CLUSTER_KEY_ATTESTATION_ENV} must be configured on every peer so runtime parity can \
+                     compare non-reversible resource-key commitments",
+                )));
             }
         }
         return validate_generic_collection_crypto_runtime(
@@ -1396,6 +1419,7 @@ pub fn effective_settings(settings: &Settings) -> CryptoSettings {
 }
 
 pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
+    let cluster_key_attestation = decode_cluster_key_attestation_secret().ok().flatten();
     let mut instances = BTreeMap::new();
     for (instance_name, instance) in &settings.crypto.instances {
         let mut materials = BTreeMap::new();
@@ -1415,6 +1439,9 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
 
     let mut materials = BTreeMap::new();
     for (material_name, material) in &settings.crypto.materials {
+        let key_commitment = cluster_key_attestation.as_deref().and_then(|secret| {
+            material_key_attestation_commitment(&settings.crypto, material_name, material, secret)
+        });
         materials.insert(
             material_name,
             json!({
@@ -1432,6 +1459,7 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
                 "rk_epoch": material.rk_epoch,
                 "state": material.state,
                 "scope": material.scope,
+                "key_commitment": key_commitment,
             }),
         );
     }
@@ -1445,6 +1473,7 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
         "version": 1,
         "crypto": {
             "allow_inline_key_material": settings.crypto.allow_inline_key_material,
+            "has_cluster_key_attestation": cluster_key_attestation.is_some(),
             "instances": instances,
             "materials": materials,
             "backends": backends,
@@ -1454,6 +1483,76 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
         .expect("serializing sanitized crypto runtime capability fingerprint cannot fail");
     let digest = Sha256::digest(&canonical);
     BASE64URL_NOPAD.encode(&digest)
+}
+
+fn decode_cluster_key_attestation_secret() -> Result<Option<Zeroizing<Vec<u8>>>, CryptoSetupError> {
+    let Ok(secret_b64) = std::env::var(CLUSTER_KEY_ATTESTATION_ENV) else {
+        return Ok(None);
+    };
+    let secret_b64 = secret_b64.trim();
+    if secret_b64.len() != CLUSTER_KEY_ATTESTATION_B64_LEN {
+        return Err(CryptoSetupError::InvalidClusterKeyAttestation {
+            reason: format!(
+                "{CLUSTER_KEY_ATTESTATION_ENV} must be exactly {CLUSTER_KEY_ATTESTATION_B64_LEN} base64url characters",
+            ),
+        });
+    }
+    let secret = BASE64URL_NOPAD.decode(secret_b64.as_bytes()).map_err(|_| {
+        CryptoSetupError::InvalidClusterKeyAttestation {
+            reason: format!("{CLUSTER_KEY_ATTESTATION_ENV} must be base64url without padding"),
+        }
+    })?;
+    if secret.len() != 32 {
+        return Err(CryptoSetupError::InvalidClusterKeyAttestation {
+            reason: format!("{CLUSTER_KEY_ATTESTATION_ENV} must decode to 32 bytes"),
+        });
+    }
+    Ok(Some(Zeroizing::new(secret)))
+}
+
+fn material_key_attestation_commitment(
+    runtime_settings: &CryptoSettings,
+    material_name: &str,
+    material: &CryptoMaterialConfig,
+    attestation_secret: &[u8],
+) -> Option<String> {
+    let resource_key = match material.kind.as_str() {
+        SYMMETRIC_KEY_32_KIND => decode_direct_material_key(material_name, material).ok()?,
+        WRAPPED_SYMMETRIC_KEY_32_KIND => match wrapped_resource_key_state(material) {
+            RESOURCE_KEY_STATE_ACTIVE => decode_wrapped_resource_key_for_state(
+                runtime_settings,
+                material_name,
+                material,
+                RESOURCE_KEY_STATE_ACTIVE,
+            )
+            .ok()?,
+            RESOURCE_KEY_STATE_RETIRED => decode_wrapped_resource_key_for_state(
+                runtime_settings,
+                material_name,
+                material,
+                RESOURCE_KEY_STATE_RETIRED,
+            )
+            .ok()?,
+            RESOURCE_KEY_STATE_DISABLED | RESOURCE_KEY_STATE_DESTROYED => return None,
+            _ => return None,
+        },
+        _ => return None,
+    };
+
+    let key = hmac::Key::new(hmac::HMAC_SHA256, attestation_secret);
+    let mut context = hmac::Context::with_key(&key);
+    context.update(b"qdrant-sec/crypto-runtime-key-commitment/v1");
+    context.update(material_name.as_bytes());
+    context.update(material.kind.as_bytes());
+    context.update(resource_key_state(material).as_bytes());
+    if let Some(epoch) = material.rk_epoch {
+        context.update(&epoch.to_be_bytes());
+    }
+    if let Some(scope) = &material.scope {
+        context.update(scope.as_bytes());
+    }
+    context.update(resource_key.as_bytes());
+    Some(BASE64URL_NOPAD.encode(context.sign().as_ref()))
 }
 
 fn sanitized_crypto_instance_options(instance: &CryptoInstanceConfig) -> serde_json::Value {
@@ -1638,10 +1737,11 @@ pub fn validate_crypto_runtime_capability_parity<'a>(
 }
 
 pub fn validate_runtime_config(settings: &Settings) -> Result<(), CryptoSetupError> {
-    let _capability_fingerprint = crypto_runtime_capability_fingerprint(settings);
+    let _cluster_key_attestation = decode_cluster_key_attestation_secret()?;
     if settings.crypto.is_configured() {
         validate_crypto_settings(&settings.crypto)?;
     }
+    let _capability_fingerprint = crypto_runtime_capability_fingerprint(settings);
 
     Ok(())
 }
@@ -7610,6 +7710,97 @@ mod tests {
     }
 
     #[test]
+    fn crypto_runtime_capability_fingerprint_tracks_attested_resource_key_bytes() {
+        unsafe {
+            std::env::set_var(
+                CLUSTER_KEY_ATTESTATION_ENV,
+                BASE64URL_NOPAD.encode(&[42_u8; 32]),
+            );
+        }
+        let mk_material = "tenant-a/mk";
+        let rk_material = "tenant-a/docs-rk";
+        let wrapped_rk_config = |rk_secret: [u8; 32]| {
+            let mut config = CryptoMaterialConfig {
+                kind: WRAPPED_SYMMETRIC_KEY_32_KIND.to_string(),
+                source: Some("wrapped".to_string()),
+                wrapped_by: Some(mk_material.to_string()),
+                wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
+                rk_epoch: Some(3),
+                scope: Some("collection:docs".to_string()),
+                ..CryptoMaterialConfig::default()
+            };
+            let aad = resource_key_wrap_aad(
+                rk_material,
+                &config,
+                mk_material,
+                RESOURCE_KEY_WRAP_ALGORITHM,
+            );
+            let wrapped =
+                LocalMasterKeyProvider::new(mk_material, SecretKey::from_bytes([91_u8; 32]))
+                    .unwrap()
+                    .wrap_resource_key(&SecretKey::from_bytes(rk_secret), &aad)
+                    .unwrap();
+            config.nonce = Some(wrapped.nonce);
+            config.wrapped_key_b64 = Some(wrapped.wrapped_key);
+            config
+        };
+        let settings_for_rk = |rk_secret: [u8; 32]| Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_payload_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_AES_GCM_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            rk_material.to_string(),
+                        )]),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a/docs",
+                            "material_fingerprint_id": "tenant-a/docs-rk@v1",
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([
+                    (
+                        mk_material.to_string(),
+                        CryptoMaterialConfig {
+                            kind: WRAPPING_KEY_32_KIND.to_string(),
+                            source: Some("inline".to_string()),
+                            value_b64: Some(BASE64URL_NOPAD.encode(&[91_u8; 32])),
+                            ..CryptoMaterialConfig::default()
+                        },
+                    ),
+                    (rk_material.to_string(), wrapped_rk_config(rk_secret)),
+                ]),
+                backends: HashMap::new(),
+            },
+            ..Settings::new(None).unwrap()
+        };
+
+        let settings = settings_for_rk([92_u8; 32]);
+        let fingerprint = crypto_runtime_capability_fingerprint(&settings);
+        let peer_with_same_metadata_different_rk = settings_for_rk([93_u8; 32]);
+        let peer_fingerprint =
+            crypto_runtime_capability_fingerprint(&peer_with_same_metadata_different_rk);
+
+        assert_ne!(
+            fingerprint, peer_fingerprint,
+            "cluster attestation must bind parity to the actual unwrapped resource key bytes",
+        );
+        let err = validate_crypto_runtime_capability_parity(
+            &settings,
+            [("peer-rk", peer_fingerprint.as_str())],
+        )
+        .expect_err("attested RK drift must fail runtime parity validation");
+        unsafe {
+            std::env::remove_var(CLUSTER_KEY_ATTESTATION_ENV);
+        }
+        assert!(err.to_string().contains("peer-rk"));
+    }
+
+    #[test]
     fn crypto_runtime_capability_fingerprint_tracks_client_verifier_policy() {
         let settings = Settings {
             crypto: CryptoSettings {
@@ -10857,6 +11048,75 @@ mod tests {
             StorageError::BadInput { description }
                 if description.contains("cluster-wide nonce replay ledger")
                     && description.contains(PAYLOAD_CLIENT_AEAD_PROVIDER)
+        ));
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_requires_attestation_for_server_keys_in_clustered_mode() {
+        let mut settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_payload_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_AES_GCM_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            "tenant-a/docs-rk".to_string(),
+                        )]),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a/docs",
+                            "material_fingerprint_id": "tenant-a/docs-rk@v1",
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([(
+                    "tenant-a/docs-rk".to_string(),
+                    CryptoMaterialConfig {
+                        kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[7_u8; 32])),
+                        rk_epoch: Some(1),
+                        state: Some(RESOURCE_KEY_STATE_ACTIVE.to_string()),
+                        scope: Some("collection:docs".to_string()),
+                        ..CryptoMaterialConfig::default()
+                    },
+                )]),
+                backends: HashMap::new(),
+            },
+            ..Settings::new(None).unwrap()
+        };
+        settings.cluster.enabled = true;
+        unsafe {
+            std::env::remove_var(CLUSTER_KEY_ATTESTATION_ENV);
+        }
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some(PAYLOAD_FIELD_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params)
+            .expect_err("clustered server-side encryption must require key attestation");
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains(CLUSTER_KEY_ATTESTATION_ENV)
+                    && description.contains("resource-key commitments")
         ));
     }
 
