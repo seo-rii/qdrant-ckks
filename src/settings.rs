@@ -36,6 +36,13 @@ pub struct ServiceConfig {
     pub metrics_port: Option<u16>,
 
     pub max_request_size_mb: usize,
+    /// Maximum accepted multipart upload size in megabytes.
+    ///
+    /// Snapshot uploads are spooled to temp files by Actix before handler-level
+    /// auth and crypto preflight run, so this must be finite.
+    #[serde(default = "default_max_snapshot_upload_size_mb")]
+    #[validate(range(min = 1))]
+    pub max_snapshot_upload_size_mb: usize,
     pub max_workers: Option<usize>,
     /// Keep-alive timeout for incoming HTTP connections in seconds.
     #[serde(default = "default_http_keep_alive_timeout_sec")]
@@ -614,6 +621,10 @@ const fn default_http_client_request_timeout_sec() -> u64 {
     5
 }
 
+const fn default_max_snapshot_upload_size_mb() -> usize {
+    1024
+}
+
 const fn default_http_client_disconnect_timeout_sec() -> u64 {
     5
 }
@@ -788,6 +799,10 @@ mod tests {
         assert_eq!(
             config.service.http_client_disconnect_timeout_sec,
             default_http_client_disconnect_timeout_sec()
+        );
+        assert_eq!(
+            config.service.max_snapshot_upload_size_mb,
+            default_max_snapshot_upload_size_mb()
         );
     }
 

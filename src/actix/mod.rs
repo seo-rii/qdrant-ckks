@@ -54,6 +54,14 @@ use crate::common::telemetry::TelemetryCollector;
 use crate::settings::{Settings, max_web_workers};
 use crate::tracing::LoggerHandle;
 
+pub(crate) fn multipart_snapshot_upload_limit_bytes(settings: &Settings) -> usize {
+    settings
+        .service
+        .max_snapshot_upload_size_mb
+        .saturating_mul(1024 * 1024)
+        .max(1)
+}
+
 #[get("/")]
 pub async fn index() -> impl Responder {
     HttpResponse::Ok().json(VersionInfo::default())
@@ -88,6 +96,7 @@ pub fn init(
         let service_config = web::Data::new(settings.service.clone());
         let settings_data = web::Data::new(settings.clone());
         let audit_config_data = web::Data::new(settings.audit.clone());
+        let snapshot_upload_limit_bytes = multipart_snapshot_upload_limit_bytes(&settings);
 
         let mut api_key_whitelist = vec![
             WhitelistItem::exact("/"),
@@ -145,7 +154,10 @@ pub fn init(
                 .app_data(validate_query_config)
                 .app_data(validate_json_config)
                 .app_data(TempFileConfig::default().directory(&upload_dir))
-                .app_data(MultipartFormConfig::default().total_limit(usize::MAX))
+                .app_data(
+                    MultipartFormConfig::default()
+                        .total_limit(snapshot_upload_limit_bytes),
+                )
                 .app_data(service_config.clone())
                 .app_data(settings_data.clone())
                 .app_data(audit_config_data.clone())
@@ -275,6 +287,8 @@ fn validation_error_handler(
 mod tests {
     use ::api::grpc::api_crate_version;
 
+    use super::*;
+
     #[test]
     fn test_version() {
         assert_eq!(
@@ -282,5 +296,21 @@ mod tests {
             env!("CARGO_PKG_VERSION"),
             "Qdrant and lib/api crate versions are not same"
         );
+    }
+
+    #[test]
+    fn multipart_snapshot_upload_limit_is_finite_and_configurable() {
+        let mut settings = Settings::new(None).unwrap();
+        assert_eq!(
+            multipart_snapshot_upload_limit_bytes(&settings),
+            1024 * 1024 * 1024
+        );
+
+        settings.service.max_snapshot_upload_size_mb = 7;
+        assert_eq!(
+            multipart_snapshot_upload_limit_bytes(&settings),
+            7 * 1024 * 1024
+        );
+        assert_ne!(multipart_snapshot_upload_limit_bytes(&settings), usize::MAX);
     }
 }
