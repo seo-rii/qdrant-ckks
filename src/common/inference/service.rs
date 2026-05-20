@@ -90,11 +90,13 @@ impl InferenceService {
             address: _,
             timeout,
             token: _,
+            allowed_api_key_headers: _,
         } = &config;
 
         let timeout = timeout.unwrap_or(DEFAULT_INFERENCE_TIMEOUT_SECS);
         let client_builder = Client::builder()
             .user_agent(APP_USER_AGENT.as_str())
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(timeout));
 
         Self {
@@ -191,7 +193,7 @@ impl InferenceService {
 
         let InferenceParams { api_keys, timeout } = inference_params;
         let InferenceApiKeys {
-            keys: ext_api_keys,
+            keys: mut ext_api_keys,
             token: inference_token,
         } = api_keys;
 
@@ -217,6 +219,15 @@ impl InferenceService {
         };
 
         let mut request = request.json(&request_body);
+        if !ext_api_keys.is_empty() {
+            ext_api_keys.retain(|key, _| {
+                self.config
+                    .allowed_api_key_headers
+                    .iter()
+                    .any(|allowed| allowed.eq_ignore_ascii_case(key))
+            });
+        }
+
         if !ext_api_keys.is_empty() {
             request = request.headers(convert_to_reqwest_headers(&ext_api_keys));
         }
@@ -400,6 +411,7 @@ mod test {
     use std::collections::HashMap;
 
     use api::rest::Bm25Config;
+    use mockito::Matcher;
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
     use rand::{RngExt, SeedableRng};
@@ -464,6 +476,115 @@ mod test {
         inputs.shuffle(&mut rng);
         let res = run_inference_with_mocked_remote(inputs.clone()).await;
         check_inference_response(inputs, res);
+    }
+
+    #[tokio::test]
+    async fn remote_inference_does_not_follow_redirects() {
+        let mut redirect_target = mockito::Server::new_async().await;
+        let target_mock = redirect_target
+            .mock("POST", "/")
+            .with_status(200)
+            .with_body(
+                json!(InferenceResponse {
+                    embeddings: vec![VectorPersisted::Dense(vec![1.0])],
+                    usage: None,
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let mut redirect_source = mockito::Server::new_async().await;
+        let source_mock = redirect_source
+            .mock("POST", "/")
+            .match_header("openai-api-key", "secret-provider-key")
+            .with_status(307)
+            .with_header("location", &redirect_target.url())
+            .with_body("redirecting")
+            .create_async()
+            .await;
+
+        let service = InferenceService::new(Some(InferenceConfig {
+            address: Some(redirect_source.url()),
+            timeout: None,
+            token: Some("inference-token".to_string()),
+            allowed_api_key_headers: vec!["openai-api-key".to_string()],
+        }));
+
+        let mut api_keys = InferenceApiKeys::new(None);
+        api_keys.keys.insert(
+            "openai-api-key".to_string(),
+            "secret-provider-key".to_string(),
+        );
+
+        let err = service
+            .infer(
+                vec![make_normal_inference_input(
+                    "sensitive remote inference input",
+                    &mut StdRng::seed_from_u64(7),
+                )],
+                InferenceType::Update,
+                InferenceParams::new(api_keys, None),
+            )
+            .await
+            .expect_err("redirect response must not be followed");
+
+        let err = err.to_string();
+        assert!(
+            err.contains("307") || err.contains("Temporary Redirect"),
+            "unexpected redirect error: {err}",
+        );
+        source_mock.expect(1).assert_async().await;
+        target_mock.expect(0).assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn remote_inference_does_not_forward_unallowed_api_key_headers() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/")
+            .match_header("openai-api-key", Matcher::Missing)
+            .match_header("cohere-api-key", "forwarded-provider-key")
+            .with_status(200)
+            .with_body(
+                json!(InferenceResponse {
+                    embeddings: vec![VectorPersisted::Dense(vec![1.0])],
+                    usage: None,
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let service = InferenceService::new(Some(InferenceConfig {
+            address: Some(server.url()),
+            timeout: None,
+            token: None,
+            allowed_api_key_headers: vec!["cohere-api-key".to_string()],
+        }));
+
+        let mut api_keys = InferenceApiKeys::new(None);
+        api_keys
+            .keys
+            .insert("openai-api-key".to_string(), "must-not-forward".to_string());
+        api_keys.keys.insert(
+            "cohere-api-key".to_string(),
+            "forwarded-provider-key".to_string(),
+        );
+
+        service
+            .infer(
+                vec![make_normal_inference_input(
+                    "sensitive remote inference input",
+                    &mut StdRng::seed_from_u64(8),
+                )],
+                InferenceType::Update,
+                InferenceParams::new(api_keys, None),
+            )
+            .await
+            .expect("allowed provider key should still support remote inference");
+
+        mock.expect(1).assert_async().await;
     }
 
     fn make_normal_inference_input(input: &str, rand: &mut StdRng) -> InferenceInput {
@@ -556,6 +677,7 @@ mod test {
             address: Some(server.url()), // Use mock's URL as address when doing inference.
             timeout: None,
             token: Some(String::default()),
+            allowed_api_key_headers: Vec::new(),
         };
 
         let service = InferenceService::new(Some(config));

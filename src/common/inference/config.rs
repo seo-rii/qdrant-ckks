@@ -5,6 +5,8 @@ pub struct InferenceConfig {
     pub address: Option<String>,
     pub timeout: Option<u64>,
     pub token: Option<String>,
+    #[serde(default)]
+    pub allowed_api_key_headers: Vec<String>,
 }
 
 impl InferenceConfig {
@@ -13,6 +15,7 @@ impl InferenceConfig {
             address,
             timeout: None,
             token: None,
+            allowed_api_key_headers: Vec::new(),
         }
     }
 }

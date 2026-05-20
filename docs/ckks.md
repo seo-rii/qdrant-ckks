@@ -803,6 +803,15 @@ external seccomp/AppArmor/container profile. See
 [`openfhe-bridge-sandbox.md`](openfhe-bridge-sandbox.md) for a hardened
 deployment checklist and starter AppArmor/seccomp examples.
 
+Server-side inference is also a plaintext boundary. If clients submit
+`Document`, `Image`, or `Object` vectors for encrypted vector names, Qdrant must
+embed that input before CKKS encryption or search scoring. The remote inference
+HTTP client does not follow redirects, and request-provided `*-api-key` headers
+are forwarded only when their exact header names are listed in
+`inference.allowed_api_key_headers`. Leave that list empty for zero-trust
+deployments and require clients to submit dense vectors or client-encrypted CKKS
+query envelopes produced outside Qdrant.
+
 Collection encryption rules and runtime instances must use the same explicit
 provider instance and `key_id`; runtime validation rejects missing instances,
 missing material, provider/selector mismatches, and key-id mismatches instead of
