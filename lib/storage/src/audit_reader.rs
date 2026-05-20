@@ -295,6 +295,7 @@ fn event_field_matches(event: &AuditEvent, key: &str, expected: &str) -> Option<
         tracing_id,
         result,
         error,
+        metadata,
     } = event;
 
     match key {
@@ -313,6 +314,14 @@ fn event_field_matches(event: &AuditEvent, key: &str, expected: &str) -> Option<
         "collection" => Some(collection.as_deref() == Some(expected)),
         "tracing_id" => Some(tracing_id.as_deref() == Some(expected)),
         "error" => Some(error.as_deref() == Some(expected)),
+        metadata_key if metadata_key.starts_with("metadata.") => {
+            let metadata_key = metadata_key.strip_prefix("metadata.")?;
+            Some(
+                metadata
+                    .get(metadata_key)
+                    .is_some_and(|value| value == expected),
+            )
+        }
         _ => None,
     }
 }
@@ -334,6 +343,9 @@ mod tests {
             tracing_id: None,
             result: AuditResult::Ok,
             error: None,
+            metadata: HashMap::from([("rk_id".to_string(), "tenant-a/rk-v1".to_string())])
+                .into_iter()
+                .collect(),
         }
     }
 
@@ -392,6 +404,32 @@ mod tests {
     }
 
     #[test]
+    fn test_matches_query_metadata_filters() {
+        let event = make_event();
+        let query = AuditLogQuery::new(
+            None,
+            None,
+            HashMap::from([("metadata.rk_id".to_string(), "tenant-a/rk-v1".to_string())]),
+            None,
+        );
+        assert!(matches!(
+            matches_query_result(&event, &query),
+            MatchResult::Match
+        ));
+
+        let query = AuditLogQuery::new(
+            None,
+            None,
+            HashMap::from([("metadata.rk_id".to_string(), "tenant-a/rk-v2".to_string())]),
+            None,
+        );
+        assert!(matches!(
+            matches_query_result(&event, &query),
+            MatchResult::NoMatch
+        ));
+    }
+
+    #[test]
     fn test_matches_query_time_range() {
         let event = make_event();
         let query = AuditLogQuery::new(
@@ -426,5 +464,6 @@ mod tests {
         assert_eq!(deserialized.timestamp, event.timestamp);
         assert_eq!(deserialized.auth_type, event.auth_type);
         assert_eq!(deserialized.result, event.result);
+        assert_eq!(deserialized.metadata, event.metadata);
     }
 }

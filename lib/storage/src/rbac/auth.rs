@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use chrono::Utc;
 
 use super::{Access, AccessRequirements, AuthType, CollectionMultipass, CollectionPass};
@@ -103,6 +105,16 @@ impl Auth {
         collection: Option<&str>,
         result: &Result<T, StorageError>,
     ) {
+        self.emit_audit_with_metadata(method, collection, result, BTreeMap::new());
+    }
+
+    pub fn emit_audit_with_metadata<T>(
+        &self,
+        method: &str,
+        collection: Option<&str>,
+        result: &Result<T, StorageError>,
+        metadata: BTreeMap<String, String>,
+    ) {
         if !is_audit_enabled() || self.auth_type == AuthType::Internal {
             return;
         }
@@ -125,6 +137,7 @@ impl Auth {
             tracing_id: self.tracing_id.clone(),
             result: audit_result,
             error,
+            metadata,
         });
     }
 }

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -119,6 +120,9 @@ pub struct AuditEvent {
     /// Error message when the access check failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Non-secret operation metadata for audit filtering and incident review.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, String>,
 }
 
 // ---------------------------------------------------------------------------

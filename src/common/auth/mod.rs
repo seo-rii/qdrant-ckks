@@ -84,6 +84,7 @@ pub fn log_denied_auth(
             tracing_id,
             result: AuditResult::Denied,
             error: Some(error.to_string()),
+            metadata: Default::default(),
         });
     }
 }

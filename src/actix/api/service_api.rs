@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::future::Future;
 use std::sync::Arc;
@@ -434,6 +434,74 @@ fn build_runtime_resource_key_generate_response(
     })
 }
 
+fn insert_runtime_resource_key_audit_list<I>(
+    metadata: &mut BTreeMap<String, String>,
+    key: &str,
+    values: I,
+) where
+    I: IntoIterator<Item = String>,
+{
+    let values = values.into_iter().collect::<BTreeSet<_>>();
+    if values.is_empty() {
+        return;
+    }
+    metadata.insert(
+        key.to_string(),
+        values.into_iter().collect::<Vec<_>>().join(","),
+    );
+}
+
+fn runtime_resource_key_generate_request_audit_metadata(
+    request: &RuntimeResourceKeyGenerateRequest,
+) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("operation".to_string(), "generate".to_string()),
+        ("material".to_string(), request.material.clone()),
+        ("wrapped_by".to_string(), request.wrapped_by.clone()),
+        ("rk_epoch".to_string(), request.rk_epoch.to_string()),
+        ("scope".to_string(), request.scope.clone()),
+    ])
+}
+
+fn runtime_resource_key_generate_response_audit_metadata(
+    response: &RuntimeResourceKeyGenerateResponse,
+) -> BTreeMap<String, String> {
+    let mut metadata = BTreeMap::from([
+        ("operation".to_string(), "generate".to_string()),
+        ("wrapped_by".to_string(), response.wrapped_by.clone()),
+        (
+            "material_count".to_string(),
+            response.materials.len().to_string(),
+        ),
+        (
+            "settings_mutated".to_string(),
+            response.settings_mutated.to_string(),
+        ),
+    ]);
+    insert_runtime_resource_key_audit_list(
+        &mut metadata,
+        "materials",
+        response.materials.keys().cloned(),
+    );
+    insert_runtime_resource_key_audit_list(
+        &mut metadata,
+        "rk_epochs",
+        response
+            .materials
+            .values()
+            .map(|material| material.rk_epoch.to_string()),
+    );
+    insert_runtime_resource_key_audit_list(
+        &mut metadata,
+        "scopes",
+        response
+            .materials
+            .values()
+            .map(|material| material.scope.clone()),
+    );
+    metadata
+}
+
 #[post("/crypto/resource-keys/generate")]
 async fn generate_runtime_resource_key(
     settings: web::Data<Settings>,
@@ -443,11 +511,35 @@ async fn generate_runtime_resource_key(
     let timing = Instant::now();
 
     let future = async {
-        auth.check_global_access(
-            AccessRequirements::new().manage(),
+        let operation = operation.into_inner();
+        let request_audit_metadata =
+            runtime_resource_key_generate_request_audit_metadata(&operation);
+        if let Err(err) = auth
+            .unlogged_access()
+            .check_global_access(AccessRequirements::new().manage())
+        {
+            let result: Result<RuntimeResourceKeyGenerateResponse, StorageError> = Err(err);
+            auth.emit_audit_with_metadata(
+                "generate_runtime_resource_key",
+                None,
+                &result,
+                request_audit_metadata,
+            );
+            return result;
+        }
+
+        let result = build_runtime_resource_key_generate_response(settings.get_ref(), operation);
+        let audit_metadata = result
+            .as_ref()
+            .map(runtime_resource_key_generate_response_audit_metadata)
+            .unwrap_or(request_audit_metadata);
+        auth.emit_audit_with_metadata(
             "generate_runtime_resource_key",
-        )?;
-        build_runtime_resource_key_generate_response(settings.get_ref(), operation.into_inner())
+            None,
+            &result,
+            audit_metadata,
+        );
+        result
     };
 
     helpers::process_response(future.await, timing, None)
@@ -493,6 +585,70 @@ fn build_runtime_resource_key_rewrap_response(
     })
 }
 
+fn runtime_resource_key_rewrap_request_audit_metadata(
+    request: &RuntimeResourceKeyRewrapRequest,
+) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("operation".to_string(), "rewrap".to_string()),
+        ("old_wrapped_by".to_string(), request.old_wrapped_by.clone()),
+        ("new_wrapped_by".to_string(), request.new_wrapped_by.clone()),
+    ])
+}
+
+fn runtime_resource_key_rewrap_response_audit_metadata(
+    response: &RuntimeResourceKeyRewrapResponse,
+) -> BTreeMap<String, String> {
+    let mut metadata = BTreeMap::from([
+        ("operation".to_string(), "rewrap".to_string()),
+        (
+            "old_wrapped_by".to_string(),
+            response.old_wrapped_by.clone(),
+        ),
+        (
+            "new_wrapped_by".to_string(),
+            response.new_wrapped_by.clone(),
+        ),
+        (
+            "material_count".to_string(),
+            response.materials.len().to_string(),
+        ),
+        (
+            "settings_mutated".to_string(),
+            response.settings_mutated.to_string(),
+        ),
+    ]);
+    insert_runtime_resource_key_audit_list(
+        &mut metadata,
+        "materials",
+        response.materials.keys().cloned(),
+    );
+    insert_runtime_resource_key_audit_list(
+        &mut metadata,
+        "rk_epochs",
+        response
+            .materials
+            .values()
+            .map(|material| material.rk_epoch.to_string()),
+    );
+    insert_runtime_resource_key_audit_list(
+        &mut metadata,
+        "scopes",
+        response
+            .materials
+            .values()
+            .map(|material| material.scope.clone()),
+    );
+    insert_runtime_resource_key_audit_list(
+        &mut metadata,
+        "states",
+        response
+            .materials
+            .values()
+            .filter_map(|material| material.state.clone()),
+    );
+    metadata
+}
+
 #[post("/crypto/resource-keys/rewrap")]
 async fn rewrap_runtime_resource_keys(
     settings: web::Data<Settings>,
@@ -502,11 +658,34 @@ async fn rewrap_runtime_resource_keys(
     let timing = Instant::now();
 
     let future = async {
-        auth.check_global_access(
-            AccessRequirements::new().manage(),
+        let operation = operation.into_inner();
+        let request_audit_metadata = runtime_resource_key_rewrap_request_audit_metadata(&operation);
+        if let Err(err) = auth
+            .unlogged_access()
+            .check_global_access(AccessRequirements::new().manage())
+        {
+            let result: Result<RuntimeResourceKeyRewrapResponse, StorageError> = Err(err);
+            auth.emit_audit_with_metadata(
+                "rewrap_runtime_resource_keys",
+                None,
+                &result,
+                request_audit_metadata,
+            );
+            return result;
+        }
+
+        let result = build_runtime_resource_key_rewrap_response(settings.get_ref(), operation);
+        let audit_metadata = result
+            .as_ref()
+            .map(runtime_resource_key_rewrap_response_audit_metadata)
+            .unwrap_or(request_audit_metadata);
+        auth.emit_audit_with_metadata(
             "rewrap_runtime_resource_keys",
-        )?;
-        build_runtime_resource_key_rewrap_response(settings.get_ref(), operation.into_inner())
+            None,
+            &result,
+            audit_metadata,
+        );
+        result
     };
 
     helpers::process_response(future.await, timing, None)
@@ -732,6 +911,80 @@ fn build_runtime_resource_key_retire_response(
     })
 }
 
+fn runtime_resource_key_retire_request_audit_metadata(
+    request: &RuntimeResourceKeyRetireRequest,
+) -> BTreeMap<String, String> {
+    let mut metadata = BTreeMap::from([
+        ("operation".to_string(), "retire".to_string()),
+        ("target_state".to_string(), request.target_state.clone()),
+        (
+            "material_count".to_string(),
+            request.materials.len().to_string(),
+        ),
+    ]);
+    insert_runtime_resource_key_audit_list(
+        &mut metadata,
+        "materials",
+        request.materials.iter().cloned(),
+    );
+    metadata
+}
+
+fn runtime_resource_key_retire_response_audit_metadata(
+    response: &RuntimeResourceKeyRetireResponse,
+) -> BTreeMap<String, String> {
+    let mut metadata = BTreeMap::from([
+        ("operation".to_string(), "retire".to_string()),
+        ("target_state".to_string(), response.target_state.clone()),
+        (
+            "material_count".to_string(),
+            response.materials.len().to_string(),
+        ),
+        (
+            "settings_mutated".to_string(),
+            response.settings_mutated.to_string(),
+        ),
+    ]);
+    insert_runtime_resource_key_audit_list(
+        &mut metadata,
+        "materials",
+        response.materials.keys().cloned(),
+    );
+    insert_runtime_resource_key_audit_list(
+        &mut metadata,
+        "rk_epochs",
+        response
+            .materials
+            .values()
+            .map(|material| material.rk_epoch.to_string()),
+    );
+    insert_runtime_resource_key_audit_list(
+        &mut metadata,
+        "scopes",
+        response
+            .materials
+            .values()
+            .map(|material| material.scope.clone()),
+    );
+    insert_runtime_resource_key_audit_list(
+        &mut metadata,
+        "states",
+        response
+            .materials
+            .values()
+            .map(|material| material.state.clone()),
+    );
+    insert_runtime_resource_key_audit_list(
+        &mut metadata,
+        "wrapped_by",
+        response
+            .materials
+            .values()
+            .filter_map(|material| material.wrapped_by.clone()),
+    );
+    metadata
+}
+
 #[post("/crypto/resource-keys/retire")]
 async fn retire_runtime_resource_keys(
     settings: web::Data<Settings>,
@@ -741,11 +994,34 @@ async fn retire_runtime_resource_keys(
     let timing = Instant::now();
 
     let future = async {
-        auth.check_global_access(
-            AccessRequirements::new().manage(),
+        let operation = operation.into_inner();
+        let request_audit_metadata = runtime_resource_key_retire_request_audit_metadata(&operation);
+        if let Err(err) = auth
+            .unlogged_access()
+            .check_global_access(AccessRequirements::new().manage())
+        {
+            let result: Result<RuntimeResourceKeyRetireResponse, StorageError> = Err(err);
+            auth.emit_audit_with_metadata(
+                "retire_runtime_resource_keys",
+                None,
+                &result,
+                request_audit_metadata,
+            );
+            return result;
+        }
+
+        let result = build_runtime_resource_key_retire_response(settings.get_ref(), operation);
+        let audit_metadata = result
+            .as_ref()
+            .map(runtime_resource_key_retire_response_audit_metadata)
+            .unwrap_or(request_audit_metadata);
+        auth.emit_audit_with_metadata(
             "retire_runtime_resource_keys",
-        )?;
-        build_runtime_resource_key_retire_response(settings.get_ref(), operation.into_inner())
+            None,
+            &result,
+            audit_metadata,
+        );
+        result
     };
 
     helpers::process_response(future.await, timing, None)
@@ -976,6 +1252,78 @@ mod tests {
         assert!(!retire_debug.contains("retire-nonce-sentinel"));
         assert!(!retire_debug.contains("retire-wrapped-key-sentinel"));
         assert!(retire_debug.contains("[redacted]"));
+    }
+
+    #[test]
+    fn runtime_resource_key_admin_audit_metadata_excludes_wrapped_material() {
+        let generate_response = RuntimeResourceKeyGenerateResponse {
+            wrapped_by: "tenant-a/mk-v1".to_string(),
+            settings_mutated: false,
+            materials: BTreeMap::from([(
+                "tenant-a/payload-rk-v4".to_string(),
+                RuntimeResourceKeyRewrapMaterialPatch {
+                    kind: "wrapped_symmetric_key_32".to_string(),
+                    wrapped_by: "tenant-a/mk-v1".to_string(),
+                    wrap_algorithm: RESOURCE_KEY_WRAP_ALGORITHM.to_string(),
+                    nonce: "nonce-sentinel".to_string(),
+                    wrapped_key_b64: "wrapped-key-sentinel".to_string(),
+                    rk_epoch: 4,
+                    state: Some("active".to_string()),
+                    scope: "collection:docs/payload:body".to_string(),
+                },
+            )]),
+        };
+        let generate_metadata =
+            runtime_resource_key_generate_response_audit_metadata(&generate_response);
+        let generate_json = serde_json::to_string(&generate_metadata).unwrap();
+        assert_eq!(
+            generate_metadata.get("materials").map(String::as_str),
+            Some("tenant-a/payload-rk-v4")
+        );
+        assert_eq!(
+            generate_metadata.get("wrapped_by").map(String::as_str),
+            Some("tenant-a/mk-v1")
+        );
+        assert_eq!(
+            generate_metadata.get("rk_epochs").map(String::as_str),
+            Some("4")
+        );
+        assert_eq!(
+            generate_metadata.get("scopes").map(String::as_str),
+            Some("collection:docs/payload:body")
+        );
+        assert!(!generate_json.contains("nonce-sentinel"));
+        assert!(!generate_json.contains("wrapped-key-sentinel"));
+
+        let retire_response = RuntimeResourceKeyRetireResponse {
+            target_state: "disabled".to_string(),
+            settings_mutated: false,
+            materials: BTreeMap::from([(
+                "tenant-a/payload-rk-v3".to_string(),
+                RuntimeResourceKeyRetireMaterialPatch {
+                    kind: "wrapped_symmetric_key_32".to_string(),
+                    rk_epoch: 3,
+                    state: "disabled".to_string(),
+                    scope: "collection:docs".to_string(),
+                    wrapped_by: Some("tenant-a/mk-v1".to_string()),
+                    wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
+                    nonce: Some("retire-nonce-sentinel".to_string()),
+                    wrapped_key_b64: Some("retire-wrapped-key-sentinel".to_string()),
+                },
+            )]),
+        };
+        let retire_metadata = runtime_resource_key_retire_response_audit_metadata(&retire_response);
+        let retire_json = serde_json::to_string(&retire_metadata).unwrap();
+        assert_eq!(
+            retire_metadata.get("target_state").map(String::as_str),
+            Some("disabled")
+        );
+        assert_eq!(
+            retire_metadata.get("wrapped_by").map(String::as_str),
+            Some("tenant-a/mk-v1")
+        );
+        assert!(!retire_json.contains("retire-nonce-sentinel"));
+        assert!(!retire_json.contains("retire-wrapped-key-sentinel"));
     }
 
     #[test]
