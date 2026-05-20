@@ -10,6 +10,7 @@ use tokio::task::yield_now;
 use tokio_util::task::AbortOnDropHandle;
 
 use super::{ShardReplicaSet, clock_set};
+use crate::operations::loggable::Loggable;
 use crate::operations::point_ops::WriteOrdering;
 use crate::operations::types::{CollectionError, CollectionResult, UpdateResult, UpdateStatus};
 use crate::operations::{ClockTag, CollectionUpdateOperations, OperationWithClockTag};
@@ -25,6 +26,10 @@ use crate::shards::shard_trait::{ShardOperation as _, WaitUntil};
 const UPDATE_MAX_CLOCK_REJECTED_RETRIES: usize = 3;
 
 const DEFAULT_SHARD_DEACTIVATION_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn redacted_operation_for_log(operation: &CollectionUpdateOperations) -> serde_json::Value {
+    operation.to_log_value()
+}
 
 impl ShardReplicaSet {
     /// Update local shard if any without forwarding to remote shards
@@ -114,8 +119,9 @@ impl ShardReplicaSet {
                             "Operation affecting point IDs {ids:?} rejected on this peer, force flag required in recovery state",
                         );
                     } else {
+                        let operation = redacted_operation_for_log(&operation.operation);
                         log::debug!(
-                            "Operation {operation:?} rejected on this peer, force flag required in recovery state",
+                            "Operation {operation} rejected on this peer, force flag required in recovery state",
                         );
                     }
                 }
@@ -288,16 +294,18 @@ impl ShardReplicaSet {
                          (attempt {attempt}/{UPDATE_MAX_CLOCK_REJECTED_RETRIES})"
                     );
                 } else {
+                    let operation = redacted_operation_for_log(&operation);
                     log::warn!(
-                        "Operation {operation:?} was rejected by some node(s), retrying... \
+                        "Operation {operation} was rejected by some node(s), retrying... \
                          (attempt {attempt}/{UPDATE_MAX_CLOCK_REJECTED_RETRIES})"
                     );
                 }
             }
         }
 
+        let redacted_operation = redacted_operation_for_log(&operation);
         Err(CollectionError::service_error(format!(
-            "Failed to apply operation {operation:?} \
+            "Failed to apply operation {redacted_operation} \
              after {UPDATE_MAX_CLOCK_REJECTED_RETRIES} attempts, \
              all attempts were rejected",
         )))
@@ -792,7 +800,11 @@ mod tests {
 
     use common::budget::ResourceBudget;
     use common::save_on_disk::SaveOnDisk;
-    use segment::types::Distance;
+    use segment::types::{Distance, Payload};
+    use serde_json::json;
+    use shard::operations::point_ops::{
+        PointInsertOperationsInternal, PointOperations, PointStructPersisted, VectorStructPersisted,
+    };
     use tempfile::{Builder, TempDir};
     use tokio::runtime::Handle;
     use tokio::sync::RwLock;
@@ -803,6 +815,40 @@ mod tests {
     use crate::operations::vector_params_builder::VectorParamsBuilder;
     use crate::optimizers_builder::OptimizersConfig;
     use crate::shards::replica_set::{AbortShardTransfer, ChangePeerFromState};
+
+    #[test]
+    fn replica_update_operation_log_projection_redacts_payloads_and_vectors() {
+        let operation = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::PointsList(vec![PointStructPersisted {
+                id: 1.into(),
+                vector: VectorStructPersisted::from(vec![12345.125, -54321.25]),
+                payload: Some(Payload(
+                    json!({
+                        "body": "qdrant-sec-replica-log-payload-sentinel",
+                        "$qdrant_client_aead": {
+                            "ciphertext": "qdrant-sec-replica-log-ciphertext-sentinel",
+                            "signature": { "sig": "qdrant-sec-replica-log-signature-sentinel" }
+                        }
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                )),
+            }]),
+        ));
+
+        let redacted = redacted_operation_for_log(&operation);
+        let serialized = serde_json::to_string(&redacted).unwrap();
+        let error = format!("Failed to apply operation {redacted} after retries");
+
+        for output in [serialized.as_str(), error.as_str()] {
+            assert!(!output.contains("qdrant-sec-replica-log-payload-sentinel"));
+            assert!(!output.contains("qdrant-sec-replica-log-ciphertext-sentinel"));
+            assert!(!output.contains("qdrant-sec-replica-log-signature-sentinel"));
+            assert!(!output.contains("12345.125"));
+            assert!(output.contains("[redacted]"));
+        }
+    }
 
     #[test]
     fn test_merge_successful_update_results_wait_timeout_dominates() {

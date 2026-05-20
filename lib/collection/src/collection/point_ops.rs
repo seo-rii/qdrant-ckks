@@ -37,6 +37,7 @@ use crate::config::{
     EncryptionSelector,
 };
 use crate::operations::consistency_params::ReadConsistency;
+use crate::operations::loggable::Loggable;
 use crate::operations::payload_ops::{PayloadOps, SetPayloadOp};
 use crate::operations::point_ops::{
     BatchVectorStructPersisted, PointInsertOperationsInternal, PointOperations,
@@ -669,8 +670,8 @@ impl Collection {
                     if let Some(clock_tag) = operation.clock_tag {
                         log::warn!(
                             "Received update operation forwarded from another peer with {ordering:?} \
-                             with non-`None` clock tag {clock_tag:?} (operation: {:#?})",
-                             operation.operation,
+                             with non-`None` clock tag {clock_tag:?} (operation: {})",
+                             operation.operation.to_log_value(),
                         );
                     }
 

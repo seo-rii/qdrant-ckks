@@ -55,11 +55,11 @@ use qdrant_sec::{
     CkksVectorEncryptor, CkksVectorVerifiedSidecarKey, ClientPayloadSignatureVerification,
     ClientPayloadValidationContext, ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_PAYLOAD_MARKER,
     ENCRYPTED_VECTOR_SIDECAR_FIELD, ExistingPayloadMode, METADATA_EXACT_MATCH_TOKEN_BINDING,
-    METADATA_VALUE_BINDING, PAYLOAD_TEXT_KEY_DOMAIN, PayloadEncryptionPolicy, PayloadTextEncryptor,
-    SecretKey, ServerPayloadValidationContext, ckks_vector_verified_sidecar_delete_key,
-    client_payload_signature_message, is_client_encrypted_payload_value,
-    is_encrypted_payload_value, validate_client_payload_value_for_runtime,
-    validate_server_payload_value_metadata,
+    METADATA_VALUE_BINDING, PAYLOAD_TEXT_ENVELOPE_KIND, PAYLOAD_TEXT_KEY_DOMAIN,
+    PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey, ServerPayloadValidationContext,
+    ckks_vector_verified_sidecar_delete_key, client_payload_signature_message,
+    is_client_encrypted_payload_value, is_encrypted_payload_value,
+    validate_client_payload_value_for_runtime, validate_server_payload_value_metadata,
 };
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -4041,6 +4041,7 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
             wrong_key_value,
             ServerPayloadValidationContext {
                 field_path: "document.body",
+                expected_kind: Some(PAYLOAD_TEXT_ENVELOPE_KIND),
                 key_id: Some("tenant-a:docs"),
                 crypto_schema_version: 1,
                 encryption_epoch: 0,
@@ -4142,6 +4143,7 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
             malformed_header_value,
             ServerPayloadValidationContext {
                 field_path: "document.body",
+                expected_kind: Some(PAYLOAD_TEXT_ENVELOPE_KIND),
                 key_id: Some("tenant-a:docs"),
                 crypto_schema_version: 1,
                 encryption_epoch: 0,
