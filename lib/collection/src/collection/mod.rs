@@ -1349,25 +1349,44 @@ fn rewrite_client_payload_nonce_replay_cache(
 
 #[cfg(unix)]
 fn validate_client_payload_nonce_replay_cache_parent(path: &Path) -> CollectionResult<()> {
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
     let Some(parent) = path.parent() else {
         return Ok(());
     };
-    let metadata = std::fs::symlink_metadata(parent).map_err(|err| {
-        CollectionError::service_error(format!(
-            "failed to inspect client payload nonce replay cache directory {parent:?}: {err}",
-        ))
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(CollectionError::service_error(format!(
-            "client payload nonce replay cache directory {parent:?} must be a regular directory",
-        )));
-    }
-    if metadata.permissions().mode() & 0o022 != 0 {
-        return Err(CollectionError::service_error(format!(
-            "client payload nonce replay cache directory {parent:?} must not be group/world writable",
-        )));
+    let effective_uid = nix::unistd::Uid::effective().as_raw();
+    let direct_parent = Some(parent);
+    let mut current = direct_parent;
+    while let Some(directory) = current {
+        let metadata = std::fs::symlink_metadata(directory).map_err(|err| {
+            CollectionError::service_error(format!(
+                "failed to inspect client payload nonce replay cache directory {directory:?}: {err}",
+            ))
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(CollectionError::service_error(format!(
+                "client payload nonce replay cache directory {directory:?} must be a regular directory",
+            )));
+        }
+        let owner = metadata.uid();
+        if owner != 0 && owner != effective_uid {
+            return Err(CollectionError::service_error(format!(
+                "client payload nonce replay cache directory {directory:?} must be owned by root or the Qdrant process user",
+            )));
+        }
+        let mode = metadata.permissions().mode();
+        if mode & 0o022 != 0 {
+            let sticky_ancestor =
+                Some(directory) != direct_parent && mode & nix::libc::S_ISVTX != 0;
+            if sticky_ancestor {
+                current = directory.parent();
+                continue;
+            }
+            return Err(CollectionError::service_error(format!(
+                "client payload nonce replay cache directory {directory:?} must not be group/world writable",
+            )));
+        }
+        current = directory.parent();
     }
 
     Ok(())
@@ -1664,6 +1683,33 @@ mod tests {
         let cache_path = dir.path().join(CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE);
 
         let err = ClientPayloadNonceReplayCache::load(dir.path()).unwrap_err();
+        assert!(format!("{err:?}").contains("must not be group/world writable"));
+
+        let err = append_client_payload_nonce_replay_cache(&cache_path, &["nonce-a".to_string()])
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("must not be group/world writable"));
+
+        let mut keys = VecDeque::new();
+        keys.push_back("nonce-b".to_string());
+        let err = rewrite_client_payload_nonce_replay_cache(&cache_path, &keys).unwrap_err();
+        assert!(format!("{err:?}").contains("must not be group/world writable"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_payload_nonce_replay_cache_rejects_group_world_writable_ancestor() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let writable_ancestor = dir.path().join("writable-ancestor");
+        let collection_dir = writable_ancestor.join("collection");
+        std::fs::create_dir(&writable_ancestor).unwrap();
+        std::fs::create_dir(&collection_dir).unwrap();
+        std::fs::set_permissions(&writable_ancestor, std::fs::Permissions::from_mode(0o777))
+            .unwrap();
+        let cache_path = collection_dir.join(CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE);
+
+        let err = ClientPayloadNonceReplayCache::load(&collection_dir).unwrap_err();
         assert!(format!("{err:?}").contains("must not be group/world writable"));
 
         let err = append_client_payload_nonce_replay_cache(&cache_path, &["nonce-a".to_string()])
