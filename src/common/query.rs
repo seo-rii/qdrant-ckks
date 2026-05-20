@@ -159,6 +159,8 @@ const CKKS_CLIENT_QUERY_CONTEXT_DIGEST_B64_LEN: usize = 43;
 const CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_BYTES: usize = 16 * 1024 * 1024;
 const CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_ENCODED_BYTES: usize =
     (CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_BYTES + 2) / 3 * 4;
+const CKKS_GROUPED_SEARCH_CANDIDATE_OVERSAMPLING: usize = 32;
+const CKKS_GROUPED_SEARCH_MAX_CANDIDATES: usize = 4096;
 
 static CKKS_SIDECAR_HNSW_GRAPH_CACHE: LazyLock<Mutex<CkksSidecarHnswGraphCache>> =
     LazyLock::new(|| Mutex::new(CkksSidecarHnswGraphCache::default()));
@@ -559,6 +561,7 @@ async fn try_ckks_vector_search_batch_points(
                     read_consistency,
                     shard_selection,
                     timeout,
+                    None,
                     hw_measurement_acc.clone(),
                 )
                 .await?,
@@ -607,6 +610,7 @@ async fn ckks_vector_search_points(
     read_consistency: Option<ReadConsistency>,
     shard_selection: &ShardSelectorInternal,
     timeout: Option<Duration>,
+    candidate_scan_limit: Option<usize>,
     hw_measurement_acc: HwMeasurementAcc,
 ) -> Result<Vec<ScoredPoint>, StorageError> {
     let (vector_name, scoring) = match &search.query {
@@ -699,6 +703,7 @@ async fn ckks_vector_search_points(
         search.with_payload.clone(),
         search.with_vector.clone(),
         search.score_threshold,
+        candidate_scan_limit,
         plan,
         read_consistency,
         shard_selection,
@@ -722,12 +727,16 @@ async fn ckks_vector_search_points_with_scoring(
     with_payload: Option<WithPayloadInterface>,
     with_vector: Option<WithVector>,
     score_threshold: Option<f32>,
+    candidate_scan_limit: Option<usize>,
     plan: &crate::common::crypto::VectorWritePlan,
     read_consistency: Option<ReadConsistency>,
     shard_selection: &ShardSelectorInternal,
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
 ) -> Result<Vec<ScoredPoint>, StorageError> {
+    if matches!(candidate_scan_limit, Some(0)) || limit == 0 {
+        return Ok(Vec::new());
+    }
     let distance = plan.distance_for_vector(vector_name).ok_or_else(|| {
         StorageError::service_error(format!(
             "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
@@ -901,7 +910,9 @@ async fn ckks_vector_search_points_with_scoring(
                     "non-nearest or unsupported CKKS HNSW sidecar search was rejected before segment search"
                 ),
             };
-            let hnsw_top = offset.saturating_add(limit);
+            let hnsw_top = offset
+                .saturating_add(limit)
+                .min(candidate_scan_limit.unwrap_or(usize::MAX));
             let mut segment_scored_by_id = HashMap::<_, ScoredPoint>::new();
             let indexed_points = ckks_sidecar_hnsw_search_segment_snapshots(
                 collection_name,
@@ -984,6 +995,7 @@ async fn ckks_vector_search_points_with_scoring(
     }
 
     let mut next_offset = None;
+    let mut remaining_candidate_scan_limit = candidate_scan_limit;
     let mut scored_by_id = std::collections::HashMap::<_, ScoredPoint>::new();
     let mut encrypted_by_id =
         std::collections::HashMap::<PointIdType, (String, EncryptedCkksVector)>::new();
@@ -1024,9 +1036,21 @@ async fn ckks_vector_search_points_with_scoring(
                 encrypted,
             });
         }
+        if let Some(remaining) = remaining_candidate_scan_limit.as_mut() {
+            if *remaining == 0 {
+                break;
+            }
+            if encrypted_records.len() > *remaining {
+                encrypted_records.truncate(*remaining);
+            }
+            *remaining = remaining.saturating_sub(encrypted_records.len());
+        }
 
         if hnsw_ef.is_some() {
             hnsw_records.extend(encrypted_records);
+            if matches!(remaining_candidate_scan_limit, Some(0)) {
+                break;
+            }
             let Some(offset) = scroll_result.next_page_offset else {
                 break;
             };
@@ -1531,7 +1555,9 @@ async fn ckks_vector_search_points_with_scoring(
                 "non-nearest or unsupported CKKS HNSW sidecar search was rejected before scrolling"
             ),
         };
-        let hnsw_top = offset.saturating_add(limit);
+        let hnsw_top = offset
+            .saturating_add(limit)
+            .min(candidate_scan_limit.unwrap_or(usize::MAX));
         let hnsw_points = ckks_sidecar_hnsw_search_points(
             collection_name,
             collection_crypto_id,
@@ -3292,6 +3318,28 @@ fn group_ckks_search_points(
     groups
 }
 
+fn ckks_grouped_candidate_limit(
+    group_limit: usize,
+    group_size: usize,
+) -> Result<usize, StorageError> {
+    let requested_hits = group_limit.checked_mul(group_size).ok_or_else(|| {
+        StorageError::bad_input("encrypted vector grouped search request is too large")
+    })?;
+    if requested_hits == 0 {
+        return Ok(0);
+    }
+    if requested_hits > CKKS_GROUPED_SEARCH_MAX_CANDIDATES {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector grouped search may request at most {CKKS_GROUPED_SEARCH_MAX_CANDIDATES} grouped hits",
+        )));
+    }
+
+    Ok(requested_hits
+        .saturating_mul(CKKS_GROUPED_SEARCH_CANDIDATE_OVERSAMPLING)
+        .min(CKKS_GROUPED_SEARCH_MAX_CANDIDATES)
+        .max(requested_hits))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn ckks_vector_group_points(
     collection: &collection::collection::Collection,
@@ -3308,15 +3356,20 @@ async fn ckks_vector_group_points(
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
 ) -> Result<GroupsResult, StorageError> {
+    let candidate_limit = ckks_grouped_candidate_limit(group_limit, group_size)?;
+    let mut bounded_search_request = search_request.clone();
+    bounded_search_request.offset = 0;
+    bounded_search_request.limit = candidate_limit;
     let scored = ckks_vector_search_points(
         collection,
         collection_name,
         collection_crypto_id,
-        search_request,
+        &bounded_search_request,
         plan,
         read_consistency,
         shard_selection,
         timeout,
+        Some(candidate_limit),
         hw_measurement_acc.clone(),
     )
     .await?;
@@ -3356,6 +3409,7 @@ async fn ckks_vector_group_points_with_scoring(
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
 ) -> Result<GroupsResult, StorageError> {
+    let candidate_limit = ckks_grouped_candidate_limit(group_limit, group_size)?;
     let scored = ckks_vector_search_points_with_scoring(
         collection,
         collection_name,
@@ -3364,11 +3418,12 @@ async fn ckks_vector_group_points_with_scoring(
         scoring,
         filter,
         params,
-        usize::MAX,
+        candidate_limit,
         0,
         Some(WithPayloadInterface::Bool(true)),
         Some(WithVector::Bool(false)),
         score_threshold,
+        Some(candidate_limit),
         plan,
         read_consistency,
         shard_selection,
@@ -3801,6 +3856,7 @@ async fn try_ckks_vector_recommend_batch_points(
                     read_consistency,
                     &shard_selection,
                     timeout,
+                    None,
                     hw_measurement_acc.clone(),
                 )
                 .await?
@@ -3834,6 +3890,7 @@ async fn try_ckks_vector_recommend_batch_points(
                     with_payload,
                     with_vector,
                     score_threshold,
+                    None,
                     &plan,
                     read_consistency,
                     &shard_selection,
@@ -3867,6 +3924,7 @@ async fn try_ckks_vector_recommend_batch_points(
                     with_payload,
                     with_vector,
                     score_threshold,
+                    None,
                     &plan,
                     read_consistency,
                     &shard_selection,
@@ -4640,6 +4698,7 @@ async fn try_ckks_vector_discover_batch_points(
                     read_consistency,
                     &shard_selection,
                     timeout,
+                    None,
                     hw_measurement_acc.clone(),
                 )
                 .await?
@@ -4669,6 +4728,7 @@ async fn try_ckks_vector_discover_batch_points(
                     with_payload,
                     with_vector,
                     score_threshold,
+                    None,
                     &plan,
                     read_consistency,
                     &shard_selection,
@@ -6305,6 +6365,7 @@ pub async fn do_query_batch_points(
                                 read_consistency,
                                 &shard_selection,
                                 timeout,
+                                None,
                                 hw_measurement_acc.clone(),
                             )
                             .await?
@@ -6338,6 +6399,7 @@ pub async fn do_query_batch_points(
                                 Some(with_payload),
                                 Some(with_vector),
                                 score_threshold,
+                                None,
                                 &plan,
                                 read_consistency,
                                 &shard_selection,
@@ -6371,6 +6433,7 @@ pub async fn do_query_batch_points(
                                 Some(with_payload),
                                 Some(with_vector),
                                 score_threshold,
+                                None,
                                 &plan,
                                 read_consistency,
                                 &shard_selection,
@@ -8836,6 +8899,27 @@ mod tests {
         assert_eq!(groups[0].1[0].id, 1.into());
         assert_eq!(groups[1].0, GroupId::from("b"));
         assert_eq!(groups[1].1[0].id, 3.into());
+    }
+
+    #[test]
+    fn ckks_sidecar_grouped_candidate_limit_is_bounded() {
+        assert_eq!(ckks_grouped_candidate_limit(1, 1).unwrap(), 32);
+        assert_eq!(ckks_grouped_candidate_limit(64, 2).unwrap(), 4096);
+        assert_eq!(ckks_grouped_candidate_limit(0, 10).unwrap(), 0);
+
+        let err = ckks_grouped_candidate_limit(CKKS_GROUPED_SEARCH_MAX_CANDIDATES + 1, 1)
+            .expect_err("grouped requests larger than the CKKS candidate budget must fail");
+        assert!(
+            format!("{err}").contains("at most"),
+            "unexpected error: {err}",
+        );
+
+        let err = ckks_grouped_candidate_limit(usize::MAX, 2)
+            .expect_err("overflowing grouped requests must fail");
+        assert!(
+            format!("{err}").contains("too large"),
+            "unexpected error: {err}",
+        );
     }
 
     #[test]
