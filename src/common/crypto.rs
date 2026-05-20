@@ -3589,6 +3589,90 @@ fn hash_backend_program_reader(
     Ok(hasher.finalize().into())
 }
 
+fn validate_resource_key_scope_for_rule(
+    collection_name: &str,
+    collection_crypto_id: &str,
+    rule_id: &str,
+    selector: &EncryptionSelector,
+    material_ref: &str,
+    material: &CryptoMaterialConfig,
+) -> Result<(), String> {
+    let Some(scope) = material.scope.as_deref() else {
+        return Ok(());
+    };
+    let Some(mut suffix) = scope
+        .strip_prefix(&format!("collection:{collection_crypto_id}"))
+        .or_else(|| scope.strip_prefix(&format!("collection:{collection_name}")))
+    else {
+        return Err(format!(
+            "material {material_ref} scope {scope:?} must start with collection:{collection_crypto_id}"
+        ));
+    };
+    if suffix.is_empty() {
+        return Ok(());
+    }
+    let Some(trimmed) = suffix.strip_prefix('/') else {
+        return Err(format!(
+            "material {material_ref} scope {scope:?} must use '/' separated binding components",
+        ));
+    };
+    suffix = trimmed;
+    for component in suffix.split('/') {
+        if component.is_empty() {
+            return Err(format!(
+                "material {material_ref} scope {scope:?} contains an empty binding component",
+            ));
+        }
+        if let Some(scoped_rule_id) = component.strip_prefix("rule:") {
+            if scoped_rule_id != rule_id {
+                return Err(format!(
+                    "material {material_ref} scope {scope:?} is bound to rule {scoped_rule_id:?}, expected {rule_id:?}",
+                ));
+            }
+            continue;
+        }
+        match selector {
+            EncryptionSelector::PayloadPaths { paths } => {
+                let Some(path) = component.strip_prefix("payload:") else {
+                    return Err(format!(
+                        "material {material_ref} scope {scope:?} uses component {component:?}, expected payload:<field-path> or rule:<rule-id>",
+                    ));
+                };
+                if !paths.iter().any(|candidate| candidate == path) {
+                    return Err(format!(
+                        "material {material_ref} scope {scope:?} is bound to payload path {path:?}, expected one of {paths:?}",
+                    ));
+                }
+            }
+            EncryptionSelector::MetadataKeys { keys } => {
+                let Some(key) = component.strip_prefix("metadata:") else {
+                    return Err(format!(
+                        "material {material_ref} scope {scope:?} uses component {component:?}, expected metadata:<key> or rule:<rule-id>",
+                    ));
+                };
+                if !keys.iter().any(|candidate| candidate == key) {
+                    return Err(format!(
+                        "material {material_ref} scope {scope:?} is bound to metadata key {key:?}, expected one of {keys:?}",
+                    ));
+                }
+            }
+            EncryptionSelector::VectorNames { names } => {
+                let Some(vector_name) = component.strip_prefix("vector:") else {
+                    return Err(format!(
+                        "material {material_ref} scope {scope:?} uses component {component:?}, expected vector:<name> or rule:<rule-id>",
+                    ));
+                };
+                if !names.iter().any(|candidate| candidate == vector_name) {
+                    return Err(format!(
+                        "material {material_ref} scope {scope:?} is bound to vector {vector_name:?}, expected one of {names:?}",
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn generic_payload_write_plan(
     runtime_settings: &CryptoSettings,
     collection_name: &str,
@@ -3677,6 +3761,20 @@ fn generic_payload_write_plan(
                         instance: rule.instance.clone(),
                         role: PAYLOAD_SYM_KEY_ROLE.to_string(),
                     })?;
+                validate_resource_key_scope_for_rule(
+                    collection_name,
+                    collection_crypto_id,
+                    &rule.id,
+                    &rule.selector,
+                    material_ref,
+                    material,
+                )
+                .map_err(|reason| {
+                    PayloadWriteSetupError::InvalidWrappedMaterial {
+                        material: material_ref.to_string(),
+                        reason,
+                    }
+                })?;
 
                 let key_id =
                     resolve_payload_key_id(collection_name, encryption, &rule.instance, instance)?;
@@ -3755,6 +3853,20 @@ fn generic_payload_write_plan(
                                 instance: rule.instance.clone(),
                                 role: PAYLOAD_SYM_KEY_ROLE.to_string(),
                             })?;
+                        validate_resource_key_scope_for_rule(
+                            collection_name,
+                            collection_crypto_id,
+                            &rule.id,
+                            &rule.selector,
+                            retired_material_ref,
+                            retired_material_config,
+                        )
+                        .map_err(|reason| {
+                            PayloadWriteSetupError::InvalidWrappedMaterial {
+                                material: retired_material_ref.to_string(),
+                                reason,
+                            }
+                        })?;
                         let retired_resource_key = decode_retired_resource_key(
                             runtime_settings,
                             retired_material_ref,
@@ -4326,6 +4438,20 @@ fn validate_generic_collection_crypto_runtime(
                 rule.instance
             )));
         };
+        validate_resource_key_scope_for_rule(
+            collection_name,
+            collection_name,
+            &rule.id,
+            &rule.selector,
+            material_ref,
+            material,
+        )
+        .map_err(|reason| {
+            StorageError::bad_input(format!(
+                "collection {collection_name} vector crypto instance {} metadata key material {material_ref} scope is invalid: {reason}",
+                rule.instance
+            ))
+        })?;
         let Some(rk_epoch) = material.rk_epoch else {
             return Err(StorageError::bad_input(format!(
                 "collection {collection_name} vector crypto instance {} metadata key material {material_ref} must set rk_epoch",
@@ -13041,11 +13167,27 @@ mod tests {
 
     #[test]
     fn validate_collection_crypto_runtime_accepts_generic_payload_and_vector_rules() {
-        let bridge_program = std::env::current_exe()
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
-        let bridge_sha256_b64 = current_exe_sha256_b64();
+        let bridge_dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-scope-bridge-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let bridge_path = bridge_dir.path().join("openfhe-bridge");
+        let bridge_bytes = b"#!/bin/sh\nexit 0\n";
+        std::fs::write(&bridge_path, bridge_bytes).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut dir_permissions = std::fs::metadata(bridge_dir.path()).unwrap().permissions();
+            dir_permissions.set_mode(0o700);
+            std::fs::set_permissions(bridge_dir.path(), dir_permissions).unwrap();
+
+            let mut permissions = std::fs::metadata(&bridge_path).unwrap().permissions();
+            permissions.set_mode(0o700);
+            std::fs::set_permissions(&bridge_path, permissions).unwrap();
+        }
+        let bridge_program = bridge_path.to_string_lossy().to_string();
+        let bridge_sha256_b64 = BASE64URL_NOPAD.encode(&Sha256::digest(bridge_bytes));
         let settings = Settings {
             crypto: CryptoSettings {
                 allow_inline_key_material: true,
@@ -13159,6 +13301,69 @@ mod tests {
 
         validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap();
 
+        let mut settings_with_wrong_payload_collection_scope = settings.clone();
+        settings_with_wrong_payload_collection_scope
+            .crypto
+            .materials
+            .get_mut("tenant-a/payload-v1")
+            .unwrap()
+            .scope = Some("collection:other/payload:body".to_string());
+        let err = validate_collection_crypto_runtime_inner(
+            &settings_with_wrong_payload_collection_scope,
+            "docs",
+            &params,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("payload crypto runtime validation failed")
+                    && description.contains("scope")
+                    && description.contains("collection:docs")),
+            "unexpected error: {err:?}",
+        );
+
+        let mut settings_with_wrong_payload_path_scope = settings.clone();
+        settings_with_wrong_payload_path_scope
+            .crypto
+            .materials
+            .get_mut("tenant-a/payload-v1")
+            .unwrap()
+            .scope = Some("collection:docs/payload:other".to_string());
+        let err = validate_collection_crypto_runtime_inner(
+            &settings_with_wrong_payload_path_scope,
+            "docs",
+            &params,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("payload crypto runtime validation failed")
+                    && description.contains("payload path")
+                    && description.contains("body")),
+            "unexpected error: {err:?}",
+        );
+
+        let mut settings_with_wrong_vector_scope = settings.clone();
+        settings_with_wrong_vector_scope
+            .crypto
+            .materials
+            .get_mut("tenant-a/vector-v1")
+            .unwrap()
+            .scope = Some("collection:docs/vector:other".to_string());
+        let err = validate_collection_crypto_runtime_inner(
+            &settings_with_wrong_vector_scope,
+            "docs",
+            &params,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("metadata key material tenant-a/vector-v1 scope is invalid")
+                    && description.contains("vector")
+                    && description.contains("embedding")),
+            "unexpected error: {err:?}",
+        );
+
         let mut settings_with_oversized_context = settings.clone();
         settings_with_oversized_context
             .crypto
@@ -13174,13 +13379,19 @@ mod tests {
                     base64url_nopad_encoded_len(CKKS_PUBLIC_MATERIAL_MAX_CRYPTO_CONTEXT_BYTES) + 1
                 )),
             );
-        assert!(matches!(
-            validate_crypto_settings(&settings_with_oversized_context.crypto),
-            Err(CryptoSetupError::InvalidInstanceOption { instance, option, reason })
-                if instance == "docs_vector_v1"
-                    && option == CKKS_CRYPTO_CONTEXT_B64_OPTION
-                    && reason.contains("at most")
-        ));
+        let oversized_context_err =
+            validate_crypto_settings(&settings_with_oversized_context.crypto)
+                .expect_err("oversized CKKS context must fail settings validation");
+        assert!(
+            matches!(
+                oversized_context_err,
+                CryptoSetupError::InvalidInstanceOption { ref instance, ref option, ref reason }
+                    if instance == "docs_vector_v1"
+                        && option == CKKS_CRYPTO_CONTEXT_B64_OPTION
+                        && reason.contains("at most")
+            ),
+            "unexpected error: {oversized_context_err:?}",
+        );
         let err = validate_collection_crypto_runtime_inner(
             &settings_with_oversized_context,
             "docs",
