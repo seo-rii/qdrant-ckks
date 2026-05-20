@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path as FsPath;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use actix_web::rt::time::Instant;
 use actix_web::{HttpResponse, Responder, delete, get, patch, post, put, web};
@@ -635,10 +637,17 @@ fn persist_payload_crypto_migration_run_record(
     collection_path: &FsPath,
     record: &PayloadCryptoMigrationRunRecord,
 ) -> Result<(), StorageError> {
+    validate_payload_crypto_migration_record_directory(collection_path)?;
     let record_path = collection_path.join(PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_FILE);
+    validate_payload_crypto_migration_record_target(&record_path)?;
+    let temp_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
     let temp_path = collection_path.join(format!(
-        ".{PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_FILE}.{}.tmp",
-        std::process::id()
+        ".{PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_FILE}.{}.{}.tmp",
+        std::process::id(),
+        temp_suffix,
     ));
     let bytes = serde_json::to_vec_pretty(record).map_err(|err| {
         StorageError::service_error(format!(
@@ -648,8 +657,8 @@ fn persist_payload_crypto_migration_run_record(
     {
         let mut file = fs::OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
+            .apply_private_payload_crypto_migration_record_open_options()
             .open(&temp_path)
             .map_err(|err| {
                 StorageError::service_error(format!(
@@ -672,6 +681,7 @@ fn persist_payload_crypto_migration_run_record(
             "failed to replace payload crypto migration run record {record_path:?}: {err}"
         ))
     })?;
+    set_private_payload_crypto_migration_record_permissions(&record_path)?;
     if let Ok(parent) = fs::File::open(collection_path) {
         parent.sync_all().map_err(|err| {
             StorageError::service_error(format!(
@@ -679,6 +689,94 @@ fn persist_payload_crypto_migration_run_record(
             ))
         })?;
     }
+    Ok(())
+}
+
+trait PayloadCryptoMigrationRecordOpenOptionsExt {
+    fn apply_private_payload_crypto_migration_record_open_options(&mut self) -> &mut Self;
+}
+
+impl PayloadCryptoMigrationRecordOpenOptionsExt for fs::OpenOptions {
+    fn apply_private_payload_crypto_migration_record_open_options(&mut self) -> &mut Self {
+        #[cfg(unix)]
+        {
+            self.mode(0o600)
+                .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+        }
+
+        #[cfg(not(unix))]
+        {
+            self
+        }
+    }
+}
+
+fn validate_payload_crypto_migration_record_directory(
+    collection_path: &FsPath,
+) -> Result<(), StorageError> {
+    let metadata = fs::symlink_metadata(collection_path).map_err(|err| {
+        StorageError::service_error(format!(
+            "failed to inspect payload crypto migration run record directory {collection_path:?}: {err}",
+        ))
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(StorageError::service_error(format!(
+            "payload crypto migration run record directory must be a regular non-symlink directory: {collection_path:?}",
+        )));
+    }
+
+    #[cfg(unix)]
+    if metadata.permissions().mode() & 0o022 != 0 {
+        return Err(StorageError::service_error(format!(
+            "payload crypto migration run record directory must not be group/world-writable: {collection_path:?}",
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_payload_crypto_migration_record_target(
+    record_path: &FsPath,
+) -> Result<(), StorageError> {
+    let Ok(metadata) = fs::symlink_metadata(record_path) else {
+        return Ok(());
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(StorageError::service_error(format!(
+            "payload crypto migration run record target must be a regular non-symlink file: {record_path:?}",
+        )));
+    }
+
+    #[cfg(unix)]
+    if metadata.permissions().mode() & 0o077 != 0 {
+        return Err(StorageError::service_error(format!(
+            "payload crypto migration run record target must not be group/world-accessible: {record_path:?}",
+        )));
+    }
+
+    Ok(())
+}
+
+fn set_private_payload_crypto_migration_record_permissions(
+    record_path: &FsPath,
+) -> Result<(), StorageError> {
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(record_path)
+            .map_err(|err| {
+                StorageError::service_error(format!(
+                    "failed to inspect payload crypto migration run record {record_path:?}: {err}",
+                ))
+            })?
+            .permissions();
+        permissions.set_mode(0o600);
+        fs::set_permissions(record_path, permissions).map_err(|err| {
+            StorageError::service_error(format!(
+                "failed to restrict payload crypto migration run record permissions {record_path:?}: {err}",
+            ))
+        })?;
+    }
+
     Ok(())
 }
 
@@ -968,6 +1066,8 @@ pub fn config_collections_api(cfg: &mut web::ServiceConfig) {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    #[cfg(unix)]
+    use std::os::unix::fs::{PermissionsExt, symlink};
 
     use actix_web::web::Query;
     use collection::config::{
@@ -1018,6 +1118,29 @@ mod tests {
             rewritten_points: 3,
             changed_points: 2,
             status: CryptoMigrationCheckpointStatus::Verified,
+        }
+    }
+
+    fn payload_crypto_migration_run_test_record() -> PayloadCryptoMigrationRunRecord {
+        let completion_plan = payload_crypto_migration_completion_plan(
+            CryptoMigrationState::Rotating,
+            4,
+            RunPayloadCryptoMigration {
+                active_rk_id: "rk/docs/4".to_string(),
+                retired_rk_id: Some("rk/docs/3".to_string()),
+                dry_run: false,
+            },
+            vec![verified_checkpoint()],
+        )
+        .unwrap();
+
+        PayloadCryptoMigrationRunRecord {
+            collection_name: "docs".to_string(),
+            stable_crypto_id: "12345678-90ab-cdef-1234-567890abcdef".to_string(),
+            checkpoints: completion_plan.checkpoints.clone(),
+            completion_plan,
+            completed: true,
+            dry_run: false,
         }
     }
 
@@ -1293,32 +1416,24 @@ mod tests {
             .prefix("qdrant-sec-payload-migration-record-")
             .tempdir_in(std::env::current_dir().unwrap())
             .unwrap();
-        let completion_plan = payload_crypto_migration_completion_plan(
-            CryptoMigrationState::Rotating,
-            4,
-            RunPayloadCryptoMigration {
-                active_rk_id: "rk/docs/4".to_string(),
-                retired_rk_id: Some("rk/docs/3".to_string()),
-                dry_run: false,
-            },
-            vec![verified_checkpoint()],
-        )
-        .unwrap();
-        let record = PayloadCryptoMigrationRunRecord {
-            collection_name: "docs".to_string(),
-            stable_crypto_id: "12345678-90ab-cdef-1234-567890abcdef".to_string(),
-            checkpoints: completion_plan.checkpoints.clone(),
-            completion_plan,
-            completed: true,
-            dry_run: false,
-        };
+        let record = payload_crypto_migration_run_test_record();
 
         persist_payload_crypto_migration_run_record(dir.path(), &record).unwrap();
+        let record_path = dir.path().join(PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_FILE);
 
-        let persisted: Value = serde_json::from_slice(
-            &std::fs::read(dir.path().join(PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_FILE)).unwrap(),
-        )
-        .unwrap();
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::metadata(&record_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600,
+            "payload migration run record must be private"
+        );
+
+        let persisted: Value =
+            serde_json::from_slice(&std::fs::read(record_path).unwrap()).unwrap();
         assert_eq!(persisted["collection_name"], "docs");
         assert_eq!(
             persisted["stable_crypto_id"],
@@ -1329,6 +1444,51 @@ mod tests {
         assert_eq!(persisted["completion_plan"]["from"], "rotating");
         assert_eq!(persisted["completion_plan"]["to"], "active");
         assert_eq!(persisted["checkpoints"][0]["status"], "verified");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn payload_crypto_migration_run_record_rejects_symlink_target() {
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-payload-migration-record-symlink-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let target_path = dir.path().join("attacker-controlled-record.json");
+        std::fs::write(&target_path, b"{}").unwrap();
+        let record_path = dir.path().join(PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_FILE);
+        symlink(&target_path, &record_path).unwrap();
+
+        let err = persist_payload_crypto_migration_run_record(
+            dir.path(),
+            &payload_crypto_migration_run_test_record(),
+        )
+        .expect_err("payload migration run record must reject symlink target");
+        assert!(
+            err.to_string().contains("non-symlink file"),
+            "unexpected error: {err}",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn payload_crypto_migration_run_record_rejects_writable_directory() {
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-payload-migration-record-dir-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let mut permissions = std::fs::metadata(dir.path()).unwrap().permissions();
+        permissions.set_mode(0o722);
+        std::fs::set_permissions(dir.path(), permissions).unwrap();
+
+        let err = persist_payload_crypto_migration_run_record(
+            dir.path(),
+            &payload_crypto_migration_run_test_record(),
+        )
+        .expect_err("payload migration run record must reject writable collection directory");
+        assert!(
+            err.to_string().contains("group/world-writable"),
+            "unexpected error: {err}",
+        );
     }
 
     #[test]
