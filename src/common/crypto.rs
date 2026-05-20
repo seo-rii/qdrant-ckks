@@ -32,6 +32,7 @@ use ring::hmac;
 use ring::signature::{ED25519, UnparsedPublicKey};
 use segment::json_path::JsonPath;
 use segment::types::{Distance, Payload};
+use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use storage::content_manager::collection_meta_ops::CreateCollection;
@@ -197,6 +198,39 @@ const METADATA_BLIND_INDEX_ALLOWED_OPTIONS: &[&str] = &[
     MIN_RK_EPOCH_OPTION,
     MAX_RK_EPOCH_OPTION,
 ];
+
+struct ZeroizingRequestBody {
+    bytes: Zeroizing<Vec<u8>>,
+    position: usize,
+}
+
+impl ZeroizingRequestBody {
+    fn new(bytes: Zeroizing<Vec<u8>>) -> Self {
+        Self { bytes, position: 0 }
+    }
+}
+
+impl Read for ZeroizingRequestBody {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        if self.position >= self.bytes.len() {
+            return Ok(0);
+        }
+        let remaining = &self.bytes[self.position..];
+        let count = remaining.len().min(out.len());
+        out[..count].copy_from_slice(&remaining[..count]);
+        self.position += count;
+        Ok(count)
+    }
+}
+
+fn zeroizing_json_body<T: Serialize>(
+    value: &T,
+) -> Result<Zeroizing<Vec<u8>>, qdrant_sec::EncryptionError> {
+    let mut body = Zeroizing::new(Vec::new());
+    serde_json::to_writer(&mut *body, value)
+        .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)?;
+    Ok(body)
+}
 
 fn unsupported_instance_option(options: &Value, allowed_options: &[&str]) -> Option<String> {
     let options = options.as_object()?;
@@ -5176,17 +5210,15 @@ impl AwsKmsMasterKeyProvider {
     fn call(
         &self,
         target: &str,
-        body: Value,
+        body: Zeroizing<Vec<u8>>,
         operation: &str,
     ) -> Result<Value, qdrant_sec::EncryptionError> {
         let credentials = self.credentials()?;
-        let body =
-            serde_json::to_vec(&body).map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)?;
         let date_time = Utc::now();
         let amz_date = date_time.format("%Y%m%dT%H%M%SZ").to_string();
         let date = date_time.format("%Y%m%d").to_string();
         let authorization =
-            aws_kms_authorization_header(target, &body, &credentials, &amz_date, &date)?;
+            aws_kms_authorization_header(target, body.as_slice(), &credentials, &amz_date, &date)?;
         let authorization = aws_kms_sensitive_header_value(&authorization)?;
         let mut request = self
             .client()?
@@ -5195,7 +5227,9 @@ impl AwsKmsMasterKeyProvider {
             .header("x-amz-date", amz_date)
             .header("x-amz-target", target)
             .header(reqwest::header::AUTHORIZATION, authorization)
-            .body(body);
+            .body(reqwest::blocking::Body::new(ZeroizingRequestBody::new(
+                body,
+            )));
         if let Some(session_token) = credentials.session_token.as_ref() {
             request = request.header(
                 reqwest::header::HeaderName::from_static("x-amz-security-token"),
@@ -5221,6 +5255,52 @@ impl AwsKmsMasterKeyProvider {
     }
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct AwsKmsEncryptRequest<'a> {
+    key_id: &'a str,
+    plaintext: &'a str,
+    encryption_context: AwsKmsEncryptionContext<'a>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct AwsKmsDecryptRequest<'a> {
+    ciphertext_blob: &'a str,
+    encryption_context: AwsKmsEncryptionContext<'a>,
+}
+
+#[derive(Serialize)]
+struct AwsKmsEncryptionContext<'a> {
+    qdrant_sec_aad: &'a str,
+}
+
+fn aws_kms_encrypt_request_body(
+    key_id: &str,
+    plaintext_b64: &str,
+    aad_b64: &str,
+) -> Result<Zeroizing<Vec<u8>>, qdrant_sec::EncryptionError> {
+    zeroizing_json_body(&AwsKmsEncryptRequest {
+        key_id,
+        plaintext: plaintext_b64,
+        encryption_context: AwsKmsEncryptionContext {
+            qdrant_sec_aad: aad_b64,
+        },
+    })
+}
+
+fn aws_kms_decrypt_request_body(
+    ciphertext_b64: &str,
+    aad_b64: &str,
+) -> Result<Zeroizing<Vec<u8>>, qdrant_sec::EncryptionError> {
+    zeroizing_json_body(&AwsKmsDecryptRequest {
+        ciphertext_blob: ciphertext_b64,
+        encryption_context: AwsKmsEncryptionContext {
+            qdrant_sec_aad: aad_b64,
+        },
+    })
+}
+
 impl MasterKeyProvider for AwsKmsMasterKeyProvider {
     fn mk_id(&self) -> &str {
         &self.mk_id
@@ -5231,15 +5311,11 @@ impl MasterKeyProvider for AwsKmsMasterKeyProvider {
         rk_plaintext: &SecretKey,
         aad: &[u8],
     ) -> Result<WrappedKeyBlob, qdrant_sec::EncryptionError> {
+        let plaintext = Zeroizing::new(BASE64.encode(rk_plaintext.as_bytes()));
+        let aad_b64 = BASE64.encode(aad);
         let response = self.call(
             "TrentService.Encrypt",
-            json!({
-                "KeyId": self.key_id,
-                "Plaintext": BASE64.encode(rk_plaintext.as_bytes()),
-                "EncryptionContext": {
-                    "qdrant_sec_aad": BASE64.encode(aad),
-                },
-            }),
+            aws_kms_encrypt_request_body(&self.key_id, plaintext.as_str(), &aad_b64)?,
             "encrypt",
         )?;
         let ciphertext = response
@@ -5277,14 +5353,11 @@ impl MasterKeyProvider for AwsKmsMasterKeyProvider {
             return Err(qdrant_sec::EncryptionError::MasterKeyMismatch);
         }
         let ciphertext = decode_remote_wrapped_resource_key(&wrapped.wrapped_key)?;
+        let ciphertext_b64 = BASE64.encode(&ciphertext);
+        let aad_b64 = BASE64.encode(aad);
         let response = self.call(
             "TrentService.Decrypt",
-            json!({
-                "CiphertextBlob": BASE64.encode(&ciphertext),
-                "EncryptionContext": {
-                    "qdrant_sec_aad": BASE64.encode(aad),
-                },
-            }),
+            aws_kms_decrypt_request_body(&ciphertext_b64, &aad_b64)?,
             "decrypt",
         )?;
         let plaintext = response
@@ -5502,6 +5575,38 @@ impl VaultTransitMasterKeyProvider {
     }
 }
 
+#[derive(Serialize)]
+struct VaultTransitEncryptRequest<'a> {
+    plaintext: &'a str,
+    context: &'a str,
+}
+
+#[derive(Serialize)]
+struct VaultTransitDecryptRequest<'a> {
+    ciphertext: &'a str,
+    context: &'a str,
+}
+
+fn vault_transit_encrypt_request_body(
+    plaintext_b64: &str,
+    context_b64: &str,
+) -> Result<Zeroizing<Vec<u8>>, qdrant_sec::EncryptionError> {
+    zeroizing_json_body(&VaultTransitEncryptRequest {
+        plaintext: plaintext_b64,
+        context: context_b64,
+    })
+}
+
+fn vault_transit_decrypt_request_body(
+    ciphertext: &str,
+    context_b64: &str,
+) -> Result<Zeroizing<Vec<u8>>, qdrant_sec::EncryptionError> {
+    zeroizing_json_body(&VaultTransitDecryptRequest {
+        ciphertext,
+        context: context_b64,
+    })
+}
+
 impl MasterKeyProvider for VaultTransitMasterKeyProvider {
     fn mk_id(&self) -> &str {
         &self.mk_id
@@ -5512,6 +5617,9 @@ impl MasterKeyProvider for VaultTransitMasterKeyProvider {
         rk_plaintext: &SecretKey,
         aad: &[u8],
     ) -> Result<WrappedKeyBlob, qdrant_sec::EncryptionError> {
+        let plaintext = Zeroizing::new(BASE64.encode(rk_plaintext.as_bytes()));
+        let context = BASE64.encode(aad);
+        let body = vault_transit_encrypt_request_body(plaintext.as_str(), &context)?;
         let response = self
             .client()?
             .post(&self.encrypt_url)
@@ -5519,10 +5627,10 @@ impl MasterKeyProvider for VaultTransitMasterKeyProvider {
                 reqwest::header::HeaderName::from_static("x-vault-token"),
                 self.token_header()?,
             )
-            .json(&json!({
-                "plaintext": BASE64.encode(rk_plaintext.as_bytes()),
-                "context": BASE64.encode(aad),
-            }))
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(reqwest::blocking::Body::new(ZeroizingRequestBody::new(
+                body,
+            )))
             .send()
             .map_err(|_| qdrant_sec::EncryptionError::SealFailed)?;
         let response = Self::read_response(response, "encrypt")?;
@@ -5560,6 +5668,8 @@ impl MasterKeyProvider for VaultTransitMasterKeyProvider {
         let ciphertext_bytes = decode_remote_wrapped_resource_key(&wrapped.wrapped_key)?;
         let ciphertext = std::str::from_utf8(&ciphertext_bytes)
             .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)?;
+        let context = BASE64.encode(aad);
+        let body = vault_transit_decrypt_request_body(ciphertext, &context)?;
         let response = self
             .client()?
             .post(&self.decrypt_url)
@@ -5567,10 +5677,10 @@ impl MasterKeyProvider for VaultTransitMasterKeyProvider {
                 reqwest::header::HeaderName::from_static("x-vault-token"),
                 self.token_header()?,
             )
-            .json(&json!({
-                "ciphertext": ciphertext,
-                "context": BASE64.encode(aad),
-            }))
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(reqwest::blocking::Body::new(ZeroizingRequestBody::new(
+                body,
+            )))
             .send()
             .map_err(|_| qdrant_sec::EncryptionError::OpenFailed)?;
         let response = Self::read_response(response, "decrypt")?;
@@ -9504,6 +9614,44 @@ mod tests {
 
         assert!(authorization.is_sensitive());
         assert!(session.is_sensitive());
+    }
+
+    fn assert_zeroizing_request_buffer(_: &Zeroizing<Vec<u8>>) {}
+
+    #[test]
+    fn external_wrap_request_bodies_keep_plaintext_resource_key_in_zeroizing_buffers() {
+        let plaintext = Zeroizing::new(BASE64.encode(&[91u8; 32]));
+        let aad = BASE64.encode(b"collection:docs/payload:body");
+
+        let aws_body =
+            aws_kms_encrypt_request_body("alias/qdrant-sec-docs", plaintext.as_str(), &aad)
+                .unwrap();
+        let vault_body = vault_transit_encrypt_request_body(plaintext.as_str(), &aad).unwrap();
+
+        assert_zeroizing_request_buffer(&aws_body);
+        assert_zeroizing_request_buffer(&vault_body);
+        assert!(
+            std::str::from_utf8(&aws_body)
+                .unwrap()
+                .contains("\"Plaintext\"")
+        );
+        assert!(
+            std::str::from_utf8(&vault_body)
+                .unwrap()
+                .contains("\"plaintext\"")
+        );
+    }
+
+    #[test]
+    fn zeroizing_request_body_streams_without_copying_to_plain_vec() {
+        let expected = br#"{"payload":"sentinel"}"#;
+        let body = Zeroizing::new(expected.to_vec());
+        let mut reader = ZeroizingRequestBody::new(body);
+        let mut streamed = Vec::new();
+
+        reader.read_to_end(&mut streamed).unwrap();
+
+        assert_eq!(streamed, expected);
     }
 
     #[test]
