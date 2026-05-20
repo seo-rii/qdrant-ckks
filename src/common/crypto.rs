@@ -183,6 +183,7 @@ const OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK: &str = "process_pool_landlock"
 const OPENFHE_BACKEND_SIGNATURE_DOMAIN: &[u8] = b"qdrant-sec/openfhe-bridge-binary-signature/v1\0";
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
 const BASE64URL_NOPAD_64_BYTE_LEN: usize = 86;
+const DIRECT_MATERIAL_RAW_MAX_BYTES: usize = 128;
 const MAX_CLIENT_SIGNATURE_PUBLIC_KEYS: usize = 8;
 const MAX_REMOTE_WRAPPED_RESOURCE_KEY_BYTES: usize = 16 * 1024;
 const MAX_OPENFHE_BRIDGE_PROGRAM_BYTES: u64 = 64 * 1024 * 1024;
@@ -2558,6 +2559,8 @@ fn validate_material_fd_source(material_name: &str, fd: i32) -> Result<(), Crypt
 
     #[cfg(unix)]
     {
+        use std::mem::MaybeUninit;
+
         let result = unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFD) };
         if result < 0 {
             return Err(CryptoSetupError::InvalidMaterialFileSource {
@@ -2576,6 +2579,32 @@ fn validate_material_fd_source(material_name: &str, fd: i32) -> Result<(), Crypt
                     reason: "fd close-on-exec flag could not be set".to_string(),
                 });
             }
+        }
+
+        let mut stat = MaybeUninit::<nix::libc::stat>::uninit();
+        if unsafe { nix::libc::fstat(fd, stat.as_mut_ptr()) } < 0 {
+            return Err(CryptoSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: format!("fd:{fd}"),
+                reason: "fd metadata could not be inspected".to_string(),
+            });
+        }
+        let stat = unsafe { stat.assume_init() };
+        if stat.st_mode & nix::libc::S_IFMT != nix::libc::S_IFREG {
+            return Err(CryptoSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: format!("fd:{fd}"),
+                reason: "fd source must be a regular file".to_string(),
+            });
+        }
+        if stat.st_size < 0 || stat.st_size as u64 > DIRECT_MATERIAL_RAW_MAX_BYTES as u64 {
+            return Err(CryptoSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: format!("fd:{fd}"),
+                reason: format!(
+                    "fd source exceeds maximum size of {DIRECT_MATERIAL_RAW_MAX_BYTES} bytes"
+                ),
+            });
         }
     }
 
@@ -2613,6 +2642,15 @@ fn validate_material_file_source(material_name: &str, path: &str) -> Result<(), 
             material: material_name.to_string(),
             path: path.to_string(),
             reason: "must be a regular non-symlink file".to_string(),
+        });
+    }
+    if link_metadata.len() > DIRECT_MATERIAL_RAW_MAX_BYTES as u64 {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: path.to_string(),
+            reason: format!(
+                "file source exceeds maximum size of {DIRECT_MATERIAL_RAW_MAX_BYTES} bytes"
+            ),
         });
     }
 
@@ -5428,7 +5466,7 @@ fn decode_direct_material_key(
         });
     }
 
-    let encoded = Zeroizing::new(match material.source.as_deref() {
+    let encoded = match material.source.as_deref() {
         Some("env") => {
             let env = material.env.as_deref().ok_or_else(|| {
                 PayloadWriteSetupError::MissingMaterialEnv {
@@ -5443,10 +5481,12 @@ fn decode_direct_material_key(
                     reason: "environment variable name is invalid".to_string(),
                 });
             }
-            std::env::var(env).map_err(|_| PayloadWriteSetupError::MissingMaterialEnv {
-                material: material_name.to_string(),
-                env: env.to_string(),
-            })?
+            Zeroizing::new(std::env::var(env).map_err(|_| {
+                PayloadWriteSetupError::MissingMaterialEnv {
+                    material: material_name.to_string(),
+                    env: env.to_string(),
+                }
+            })?)
         }
         Some("file") => {
             let path = material.path.as_deref().ok_or_else(|| {
@@ -5493,11 +5533,11 @@ fn decode_direct_material_key(
                 })?;
             read_material_fd_to_string(material_name, fd)?
         }
-        Some("inline") => material.value_b64.clone().ok_or_else(|| {
+        Some("inline") => Zeroizing::new(material.value_b64.clone().ok_or_else(|| {
             PayloadWriteSetupError::MissingInlineMaterial {
                 material: material_name.to_string(),
             }
-        })?,
+        })?),
         None => {
             return Err(PayloadWriteSetupError::MissingMaterialSource {
                 material: material_name.to_string(),
@@ -5509,9 +5549,15 @@ fn decode_direct_material_key(
                 material_source: source.to_string(),
             });
         }
-    });
+    };
 
+    validate_direct_material_encoded_size(material_name, source, &encoded)?;
     let encoded = encoded.trim();
+    if encoded.len() != BASE64URL_NOPAD_32_BYTE_LEN {
+        return Err(PayloadWriteSetupError::InvalidMaterialLength {
+            material: material_name.to_string(),
+        });
+    }
     let decoded = Zeroizing::new(BASE64URL_NOPAD.decode(encoded.as_bytes()).map_err(|_| {
         PayloadWriteSetupError::InvalidMaterialEncoding {
             material: material_name.to_string(),
@@ -5524,10 +5570,27 @@ fn decode_direct_material_key(
     })
 }
 
+fn validate_direct_material_encoded_size(
+    material_name: &str,
+    source: &str,
+    encoded: &str,
+) -> Result<(), PayloadWriteSetupError> {
+    if encoded.len() > DIRECT_MATERIAL_RAW_MAX_BYTES {
+        return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: source.to_string(),
+            reason: format!(
+                "direct material source exceeds maximum size of {DIRECT_MATERIAL_RAW_MAX_BYTES} bytes"
+            ),
+        });
+    }
+    Ok(())
+}
+
 fn read_material_fd_to_string(
     material_name: &str,
     fd: i32,
-) -> Result<String, PayloadWriteSetupError> {
+) -> Result<Zeroizing<String>, PayloadWriteSetupError> {
     validate_material_fd_source(material_name, fd).map_err(|err| match err {
         CryptoSetupError::InvalidMaterialFileSource {
             material,
@@ -5559,14 +5622,7 @@ fn read_material_fd_to_string(
             });
         }
         let mut file = unsafe { File::from_raw_fd(duplicated) };
-        let mut encoded = String::new();
-        file.read_to_string(&mut encoded).map_err(|_| {
-            PayloadWriteSetupError::UnreadableMaterialFile {
-                material: material_name.to_string(),
-                path: format!("fd:{fd}"),
-            }
-        })?;
-        Ok(encoded)
+        read_bounded_material_to_string(material_name, &format!("fd:{fd}"), &mut file)
     }
 
     #[cfg(not(unix))]
@@ -5584,7 +5640,7 @@ fn read_material_vault_kv2_to_string(
     url: &str,
     token_env: &str,
     vault_field: &str,
-) -> Result<String, PayloadWriteSetupError> {
+) -> Result<Zeroizing<String>, PayloadWriteSetupError> {
     validate_material_vault_kv2_source(material_name, url, token_env, Some(vault_field)).map_err(
         |err| match err {
             CryptoSetupError::InvalidMaterialFileSource {
@@ -5675,7 +5731,7 @@ fn read_material_vault_kv2_to_string(
         .and_then(Value::as_object)
         .and_then(|data| data.get(vault_field))
         .and_then(Value::as_str)
-        .map(str::to_string)
+        .map(|value| Zeroizing::new(value.to_string()))
         .ok_or_else(|| PayloadWriteSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
             path: url.to_string(),
@@ -5686,7 +5742,7 @@ fn read_material_vault_kv2_to_string(
 fn read_material_unix_socket_to_string(
     material_name: &str,
     path: &str,
-) -> Result<String, PayloadWriteSetupError> {
+) -> Result<Zeroizing<String>, PayloadWriteSetupError> {
     validate_material_unix_socket_source(material_name, path).map_err(|err| match err {
         CryptoSetupError::InvalidMaterialFileSource {
             material,
@@ -5721,14 +5777,7 @@ fn read_material_unix_socket_to_string(
             }
         })?;
 
-        let mut encoded = String::new();
-        stream.read_to_string(&mut encoded).map_err(|_| {
-            PayloadWriteSetupError::UnreadableMaterialFile {
-                material: material_name.to_string(),
-                path: path.to_string(),
-            }
-        })?;
-        Ok(encoded)
+        read_bounded_material_to_string(material_name, path, &mut stream)
     }
 
     #[cfg(not(unix))]
@@ -5744,7 +5793,7 @@ fn read_material_unix_socket_to_string(
 fn read_material_file_to_string(
     material_name: &str,
     path: &str,
-) -> Result<String, PayloadWriteSetupError> {
+) -> Result<Zeroizing<String>, PayloadWriteSetupError> {
     validate_material_file_source_for_payload_read(material_name, path)?;
 
     #[cfg(unix)]
@@ -5772,6 +5821,15 @@ fn read_material_file_to_string(
                 reason: "opened path must be a regular file".to_string(),
             });
         }
+        if metadata.len() > DIRECT_MATERIAL_RAW_MAX_BYTES as u64 {
+            return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: path.to_string(),
+                reason: format!(
+                    "opened file exceeds maximum size of {DIRECT_MATERIAL_RAW_MAX_BYTES} bytes"
+                ),
+            });
+        }
 
         unsafe extern "C" {
             fn geteuid() -> u32;
@@ -5794,23 +5852,63 @@ fn read_material_file_to_string(
             });
         }
 
-        let mut encoded = String::new();
-        file.read_to_string(&mut encoded).map_err(|_| {
-            PayloadWriteSetupError::UnreadableMaterialFile {
-                material: material_name.to_string(),
-                path: path.to_string(),
-            }
-        })?;
-        Ok(encoded)
+        read_bounded_material_to_string(material_name, path, &mut file)
     }
 
     #[cfg(not(unix))]
     {
-        fs::read_to_string(path).map_err(|_| PayloadWriteSetupError::UnreadableMaterialFile {
+        let mut file =
+            fs::File::open(path).map_err(|_| PayloadWriteSetupError::UnreadableMaterialFile {
+                material: material_name.to_string(),
+                path: path.to_string(),
+            })?;
+        let metadata =
+            file.metadata()
+                .map_err(|_| PayloadWriteSetupError::UnreadableMaterialFile {
+                    material: material_name.to_string(),
+                    path: path.to_string(),
+                })?;
+        if !metadata.is_file() || metadata.len() > DIRECT_MATERIAL_RAW_MAX_BYTES as u64 {
+            return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: path.to_string(),
+                reason: format!(
+                    "file source exceeds maximum size of {DIRECT_MATERIAL_RAW_MAX_BYTES} bytes"
+                ),
+            });
+        }
+        read_bounded_material_to_string(material_name, path, &mut file)
+    }
+}
+
+fn read_bounded_material_to_string<R: Read>(
+    material_name: &str,
+    path: &str,
+    reader: &mut R,
+) -> Result<Zeroizing<String>, PayloadWriteSetupError> {
+    let mut limited_reader = reader.take(DIRECT_MATERIAL_RAW_MAX_BYTES as u64 + 1);
+    let mut bytes = Zeroizing::new(Vec::with_capacity(DIRECT_MATERIAL_RAW_MAX_BYTES));
+    limited_reader.read_to_end(&mut bytes).map_err(|_| {
+        PayloadWriteSetupError::UnreadableMaterialFile {
             material: material_name.to_string(),
             path: path.to_string(),
-        })
+        }
+    })?;
+    if bytes.len() > DIRECT_MATERIAL_RAW_MAX_BYTES {
+        return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: path.to_string(),
+            reason: format!(
+                "direct material source exceeds maximum size of {DIRECT_MATERIAL_RAW_MAX_BYTES} bytes"
+            ),
+        });
     }
+    let encoded = std::str::from_utf8(&bytes).map_err(|_| {
+        PayloadWriteSetupError::InvalidMaterialEncoding {
+            material: material_name.to_string(),
+        }
+    })?;
+    Ok(Zeroizing::new(encoded.to_owned()))
 }
 
 fn validate_material_file_source_for_payload_read(
@@ -8188,6 +8286,42 @@ mod tests {
     }
 
     #[test]
+    fn decode_direct_material_key_rejects_oversized_env_and_inline_before_decode() {
+        unsafe {
+            std::env::set_var(
+                "QDRANT_TEST_OVERSIZED_PAYLOAD_KEY",
+                "A".repeat(DIRECT_MATERIAL_RAW_MAX_BYTES + 1),
+            );
+        }
+        let env_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("env".to_string()),
+            env: Some("QDRANT_TEST_OVERSIZED_PAYLOAD_KEY".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        assert!(matches!(
+            decode_direct_material_key("tenant-a/payload-v1", &env_material),
+            Err(PayloadWriteSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("maximum size")
+        ));
+        unsafe {
+            std::env::remove_var("QDRANT_TEST_OVERSIZED_PAYLOAD_KEY");
+        }
+
+        let inline_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("inline".to_string()),
+            value_b64: Some("A".repeat(DIRECT_MATERIAL_RAW_MAX_BYTES + 1)),
+            ..CryptoMaterialConfig::default()
+        };
+        assert!(matches!(
+            decode_direct_material_key("tenant-a/payload-v1", &inline_material),
+            Err(PayloadWriteSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("maximum size")
+        ));
+    }
+
+    #[test]
     fn decode_direct_material_key_revalidates_source_shape() {
         let inline_with_path = CryptoMaterialConfig {
             kind: "symmetric_key_32".to_string(),
@@ -8333,6 +8467,40 @@ mod tests {
         }
     }
 
+    #[test]
+    fn decode_direct_material_key_rejects_oversized_file_source_before_decode() {
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-material-oversized-file-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let key_path = dir.path().join("payload.key");
+        std::fs::write(&key_path, "A".repeat(DIRECT_MATERIAL_RAW_MAX_BYTES + 1)).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut dir_permissions = std::fs::metadata(dir.path()).unwrap().permissions();
+            dir_permissions.set_mode(0o700);
+            std::fs::set_permissions(dir.path(), dir_permissions).unwrap();
+
+            let mut permissions = std::fs::metadata(&key_path).unwrap().permissions();
+            permissions.set_mode(0o600);
+            std::fs::set_permissions(&key_path, permissions).unwrap();
+        }
+
+        let file_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("file".to_string()),
+            path: Some(key_path.to_string_lossy().to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        assert!(matches!(
+            decode_direct_material_key("tenant-a/payload-v1", &file_material),
+            Err(PayloadWriteSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("maximum size")
+        ));
+    }
+
     #[cfg(unix)]
     #[test]
     fn decode_direct_material_key_reads_fd_source() {
@@ -8385,6 +8553,57 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn decode_direct_material_key_rejects_oversized_fd_source_before_decode() {
+        use std::os::fd::AsRawFd;
+
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-material-oversized-fd-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let key_path = dir.path().join("payload.key");
+        std::fs::write(&key_path, "A".repeat(DIRECT_MATERIAL_RAW_MAX_BYTES + 1)).unwrap();
+        let file = std::fs::File::open(&key_path).unwrap();
+        let fd_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("fd".to_string()),
+            fd: Some(file.as_raw_fd()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        assert!(matches!(
+            decode_direct_material_key("tenant-a/payload-v1", &fd_material),
+            Err(PayloadWriteSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("maximum size")
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_material_fd_source_rejects_pipe() {
+        use std::os::fd::{AsRawFd, FromRawFd};
+
+        let mut fds = [0; 2];
+        assert_eq!(unsafe { nix::libc::pipe(fds.as_mut_ptr()) }, 0);
+        let read_file = unsafe { std::fs::File::from_raw_fd(fds[0]) };
+        let write_file = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+        let fd_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("fd".to_string()),
+            fd: Some(read_file.as_raw_fd()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        assert!(matches!(
+            validate_material("tenant-a/payload-v1", &fd_material, false),
+            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("regular file")
+        ));
+        drop(write_file);
+        drop(read_file);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn validate_material_fd_source_sets_close_on_exec() {
         use std::ffi::CString;
         use std::os::fd::{AsRawFd, FromRawFd};
@@ -8432,6 +8651,51 @@ mod tests {
             3,
         )
         .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn decode_direct_material_key_rejects_oversized_unix_socket_source_before_decode() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::net::UnixListener;
+
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-material-oversized-socket-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let mut dir_permissions = std::fs::metadata(dir.path()).unwrap().permissions();
+        dir_permissions.set_mode(0o700);
+        std::fs::set_permissions(dir.path(), dir_permissions).unwrap();
+
+        let socket_path = dir.path().join("payload.key.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let mut socket_permissions = std::fs::symlink_metadata(&socket_path)
+            .unwrap()
+            .permissions();
+        socket_permissions.set_mode(0o600);
+        std::fs::set_permissions(&socket_path, socket_permissions).unwrap();
+
+        let writer = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .write_all("A".repeat(DIRECT_MATERIAL_RAW_MAX_BYTES + 1).as_bytes())
+                .unwrap();
+        });
+
+        let socket_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("unix_socket".to_string()),
+            path: Some(socket_path.to_string_lossy().to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        assert!(matches!(
+            decode_direct_material_key("tenant-a/payload-v1", &socket_material),
+            Err(PayloadWriteSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("maximum size")
+        ));
+        writer.join().unwrap();
     }
 
     #[cfg(unix)]
