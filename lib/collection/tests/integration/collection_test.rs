@@ -27,7 +27,7 @@ use collection::operations::shard_selector_internal::ShardSelectorInternal;
 use collection::operations::types::{
     CollectionError, CollectionUpdateProvenance, CountRequestInternal, DiscoverRequestInternal,
     PointRequestInternal, RecommendExample, RecommendRequestInternal, ScrollRequestInternal,
-    UpdateStatus,
+    UpdateStatus, ckks_vector_sidecar_delete_target,
 };
 use collection::operations::universal_query::collection_query::{
     CollectionPrefetch, CollectionQueryRequest, Query, VectorInputInternal, VectorQuery,
@@ -72,7 +72,7 @@ use segment::types::{
     HasIdCondition, HasVectorCondition, Payload, PayloadEncryptedReadPolicy, PayloadFieldSchema,
     PayloadSchemaType, PointIdType, WithPayloadInterface, WithVector,
 };
-use serde_json::Map;
+use serde_json::{Map, json};
 use shard::files::PAYLOAD_INDEX_CONFIG_FILE;
 use shard::payload_index_schema::PayloadIndexSchema;
 use shard::search::CoreSearchRequestBatch;
@@ -6949,8 +6949,14 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
             if description.contains("can only be removed by runtime delete_vectors")
                 && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
     ));
-    let wrong_collection_delete_key =
-        ckks_vector_verified_sidecar_delete_key("other-collection", DEFAULT_VECTOR_NAME).unwrap();
+    let delete_points = vec![1.into()];
+    let delete_target = ckks_vector_sidecar_delete_target(Some(&delete_points), None).unwrap();
+    let wrong_collection_delete_key = ckks_vector_verified_sidecar_delete_key(
+        "other-collection",
+        DEFAULT_VECTOR_NAME,
+        delete_target.clone(),
+    )
+    .unwrap();
     let err = collection
         .update_from_client(
             delete_sidecar.clone(),
@@ -6971,9 +6977,106 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
             if description.contains("can only be removed by runtime delete_vectors")
                 && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
     ));
-    let verified_delete_key =
-        ckks_vector_verified_sidecar_delete_key(&collection_crypto_id, DEFAULT_VECTOR_NAME)
-            .unwrap();
+    let verified_delete_key = ckks_vector_verified_sidecar_delete_key(
+        &collection_crypto_id,
+        DEFAULT_VECTOR_NAME,
+        delete_target.clone(),
+    )
+    .unwrap();
+    let wrong_point_delete_sidecar =
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(DeletePayloadOp {
+            keys: vec![encrypted_sidecar_delete_key.clone()],
+            points: Some(vec![2.into()]),
+            filter: None,
+        }));
+    let err = collection
+        .update_from_client(
+            wrong_point_delete_sidecar,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::runtime_encrypted_vector_deletes(vec![
+                verified_delete_key.clone(),
+            ]),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("can only be removed by runtime delete_vectors")
+                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+    ));
+    let filter_delete_sidecar =
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(DeletePayloadOp {
+            keys: vec![encrypted_sidecar_delete_key.clone()],
+            points: None,
+            filter: Some(Filter::default()),
+        }));
+    let err = collection
+        .update_from_client(
+            filter_delete_sidecar,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::runtime_encrypted_vector_deletes(vec![
+                verified_delete_key.clone(),
+            ]),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("can only be removed by runtime delete_vectors")
+                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+    ));
+    let filter_delete_target = ckks_vector_sidecar_delete_target(None, Some(&Filter::default()))
+        .expect("filter delete target");
+    let filter_verified_delete_key = ckks_vector_verified_sidecar_delete_key(
+        &collection_crypto_id,
+        DEFAULT_VECTOR_NAME,
+        filter_delete_target,
+    )
+    .unwrap();
+    let different_filter_delete_sidecar =
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(DeletePayloadOp {
+            keys: vec![encrypted_sidecar_delete_key.clone()],
+            points: None,
+            filter: Some(Filter::new_must(Condition::Field(
+                FieldCondition::new_match(
+                    "plain.field".parse().unwrap(),
+                    serde_json::from_value(json!({
+                        "value": "different-filter-target",
+                    }))
+                    .unwrap(),
+                ),
+            ))),
+        }));
+    let err = collection
+        .update_from_client(
+            different_filter_delete_sidecar,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::runtime_encrypted_vector_deletes(vec![
+                filter_verified_delete_key,
+            ]),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("can only be removed by runtime delete_vectors")
+                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+    ));
     let err = collection
         .update_from_client(
             delete_sidecar,

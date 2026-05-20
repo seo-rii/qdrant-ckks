@@ -925,14 +925,25 @@ impl Collection {
             Ok(touches)
         };
         let validate_payload_delete_does_not_mutate_vector_sidecar =
-            |keys: &[JsonPath]| -> CollectionResult<()> {
+            |keys: &[JsonPath],
+             points: Option<&[segment::types::PointIdType]>,
+             filter: Option<&Filter>|
+             -> CollectionResult<()> {
+                let target = ckks_vector_sidecar_delete_target(points, filter);
                 for key in keys {
                     if key.first_key != ENCRYPTED_VECTOR_SIDECAR_FIELD {
                         continue;
                     }
-                    if !update_provenance
-                        .allows_vector_sidecar_delete_key(&collection_crypto_id, key)
-                    {
+                    let Some(target) = target.as_ref() else {
+                        return Err(CollectionError::bad_input(format!(
+                            "encrypted vector sidecar '{key}' can only be removed by targeted runtime delete_vectors operations",
+                        )));
+                    };
+                    if !update_provenance.allows_vector_sidecar_delete_key(
+                        &collection_crypto_id,
+                        key,
+                        target,
+                    ) {
                         return Err(CollectionError::bad_input(format!(
                             "encrypted vector sidecar '{key}' can only be removed by runtime delete_vectors operations",
                         )));
@@ -1026,7 +1037,11 @@ impl Collection {
                 )?
             }
             CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(operation)) => {
-                validate_payload_delete_does_not_mutate_vector_sidecar(&operation.keys)?;
+                validate_payload_delete_does_not_mutate_vector_sidecar(
+                    &operation.keys,
+                    operation.points.as_deref(),
+                    operation.filter.as_ref(),
+                )?;
                 false
             }
             CollectionUpdateOperations::PayloadOperation(

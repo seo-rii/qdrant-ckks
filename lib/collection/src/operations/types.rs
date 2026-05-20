@@ -18,11 +18,13 @@ use common::rate_limiting::{RateLimitError, RetryError};
 use common::types::ScoreType;
 use common::validation::validate_range_generic;
 use common::{defaults, save_on_disk};
+use data_encoding::BASE64URL_NOPAD;
 use issues::IssueRecord;
 use qdrant_sec::{
-    CkksVectorSidecarEnvelopeKey, CkksVectorVerifiedSidecarDeleteKey, CkksVectorVerifiedSidecarKey,
-    ClientPayloadEnvelopeKey, ClientPayloadVerifiedEnvelopeKey, ENCRYPTED_VECTOR_SIDECAR_FIELD,
-    ServerPayloadEnvelopeKey, ServerPayloadVerifiedEnvelopeKey,
+    CkksVectorSidecarDeleteTarget, CkksVectorSidecarEnvelopeKey,
+    CkksVectorVerifiedSidecarDeleteKey, CkksVectorVerifiedSidecarKey, ClientPayloadEnvelopeKey,
+    ClientPayloadVerifiedEnvelopeKey, ENCRYPTED_VECTOR_SIDECAR_FIELD, ServerPayloadEnvelopeKey,
+    ServerPayloadVerifiedEnvelopeKey,
 };
 use schemars::JsonSchema;
 use segment::common::anonymize::Anonymize;
@@ -40,6 +42,7 @@ use segment::types::{
 use semver::Version;
 use serde::{self, Deserialize, Serialize};
 use serde_json::{Error as JsonError, Map, Value};
+use sha2::{Digest, Sha256};
 pub use shard::count::CountRequestInternal;
 use shard::payload_index_schema::PayloadIndexSchema;
 pub use shard::query::scroll::{QueryScrollRequestInternal, ScrollOrder};
@@ -184,7 +187,12 @@ impl RuntimeEncryptedVectorSidecarDeletes {
         }
     }
 
-    fn allows_key(&self, collection_id: &str, key: &JsonPath) -> bool {
+    fn allows_key(
+        &self,
+        collection_id: &str,
+        key: &JsonPath,
+        target: &CkksVectorSidecarDeleteTarget,
+    ) -> bool {
         if key.first_key != ENCRYPTED_VECTOR_SIDECAR_FIELD {
             return false;
         }
@@ -193,7 +201,7 @@ impl RuntimeEncryptedVectorSidecarDeletes {
         };
         self.verified_delete_keys
             .iter()
-            .any(|verified| verified.matches_binding(collection_id, vector_name))
+            .any(|verified| verified.matches_binding(collection_id, vector_name, target))
     }
 }
 
@@ -331,10 +339,15 @@ impl CollectionUpdateProvenance {
         self.vector_sidecars.is_some()
     }
 
-    pub fn allows_vector_sidecar_delete_key(&self, collection_id: &str, key: &JsonPath) -> bool {
+    pub fn allows_vector_sidecar_delete_key(
+        &self,
+        collection_id: &str,
+        key: &JsonPath,
+        target: &CkksVectorSidecarDeleteTarget,
+    ) -> bool {
         self.vector_sidecar_deletes
             .as_ref()
-            .is_some_and(|verified| verified.allows_key(collection_id, key))
+            .is_some_and(|verified| verified.allows_key(collection_id, key, target))
     }
 
     pub fn verified_vector_sidecar_key_for_binding(
@@ -366,6 +379,36 @@ impl CollectionUpdateProvenance {
             .as_ref()
             .and_then(|verified| verified.proof_for(envelope_key))
     }
+}
+
+pub fn ckks_vector_sidecar_delete_target(
+    points: Option<&[PointIdType]>,
+    filter: Option<&Filter>,
+) -> Option<CkksVectorSidecarDeleteTarget> {
+    if let Some(points) = points {
+        let mut point_ids = points
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<String>>();
+        point_ids.sort();
+        let digest_b64 = digest_delete_target("point_ids", &point_ids);
+        return Some(CkksVectorSidecarDeleteTarget::PointIds { digest_b64 });
+    }
+    filter.map(|filter| {
+        let digest_b64 = digest_delete_target("filter", filter);
+        CkksVectorSidecarDeleteTarget::Filter { digest_b64 }
+    })
+}
+
+fn digest_delete_target(kind: &str, target: &impl Serialize) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"qdrant-sec/vector-sidecar-delete-target/v1\0");
+    hasher.update(kind.as_bytes());
+    hasher.update(b"\0");
+    let target_bytes = serde_json::to_vec(target).unwrap_or_default();
+    hasher.update((target_bytes.len() as u64).to_be_bytes());
+    hasher.update(target_bytes);
+    BASE64URL_NOPAD.encode(&hasher.finalize())
 }
 
 /// Current state of the shard (supports same states as the collection)

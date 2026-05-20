@@ -28,6 +28,8 @@ pub enum CkksError {
     InvalidKeyId,
     #[error("ckks vector name is invalid")]
     InvalidVectorName,
+    #[error("ckks vector sidecar delete target is invalid")]
+    InvalidDeleteTarget,
     #[error("ckks context value is invalid: {0}")]
     InvalidContext(String),
     #[error("ckks parameters are invalid: {0}")]
@@ -403,6 +405,13 @@ pub struct CkksVectorVerifiedSidecarKey {
 pub struct CkksVectorVerifiedSidecarDeleteKey {
     collection_id: String,
     vector_name: String,
+    target: CkksVectorSidecarDeleteTarget,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum CkksVectorSidecarDeleteTarget {
+    PointIds { digest_b64: String },
+    Filter { digest_b64: String },
 }
 
 impl CkksVectorVerifiedSidecarKey {
@@ -412,8 +421,15 @@ impl CkksVectorVerifiedSidecarKey {
 }
 
 impl CkksVectorVerifiedSidecarDeleteKey {
-    pub fn matches_binding(&self, collection_id: &str, vector_name: &str) -> bool {
-        self.collection_id == collection_id && self.vector_name == vector_name
+    pub fn matches_binding(
+        &self,
+        collection_id: &str,
+        vector_name: &str,
+        target: &CkksVectorSidecarDeleteTarget,
+    ) -> bool {
+        self.collection_id == collection_id
+            && self.vector_name == vector_name
+            && &self.target == target
     }
 }
 
@@ -428,12 +444,31 @@ impl CkksVectorSidecarEnvelopeKey {
 pub fn ckks_vector_verified_sidecar_delete_key(
     collection_id: &str,
     vector_name: impl Into<String>,
+    target: CkksVectorSidecarDeleteTarget,
 ) -> Result<CkksVectorVerifiedSidecarDeleteKey, CkksError> {
     let vector_name = validate_vector_name(vector_name)?;
+    validate_delete_target(&target)?;
     Ok(CkksVectorVerifiedSidecarDeleteKey {
         collection_id: collection_id.to_string(),
         vector_name,
+        target,
     })
+}
+
+fn validate_delete_target(target: &CkksVectorSidecarDeleteTarget) -> Result<(), CkksError> {
+    let digest_b64 = match target {
+        CkksVectorSidecarDeleteTarget::PointIds { digest_b64 }
+        | CkksVectorSidecarDeleteTarget::Filter { digest_b64 } => digest_b64,
+    };
+    if BASE64URL_NOPAD
+        .decode(digest_b64.as_bytes())
+        .ok()
+        .filter(|digest| digest.len() == 32)
+        .is_none()
+    {
+        return Err(CkksError::InvalidDeleteTarget);
+    }
+    Ok(())
 }
 
 fn validate_vector_name(vector_name: impl Into<String>) -> Result<String, CkksError> {

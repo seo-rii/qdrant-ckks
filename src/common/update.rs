@@ -14,16 +14,17 @@ use collection::operations::point_ops::*;
 use collection::operations::shard_selector_internal::ShardSelectorInternal;
 use collection::operations::types::{
     CollectionError, CollectionResult, CollectionUpdateProvenance, UpdateResult,
+    ckks_vector_sidecar_delete_target,
 };
 use collection::operations::vector_ops::*;
 use collection::operations::verification::*;
 use collection::shards::shard::ShardId;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use qdrant_sec::{
-    CkksVectorVerifiedSidecarDeleteKey, CkksVectorVerifiedSidecarKey, ClientPayloadNonceReplayKey,
-    ClientPayloadVerifiedEnvelopeKey, ENCRYPTED_VECTOR_SIDECAR_FIELD, METADATA_VALUE_BINDING,
-    PayloadEncryptionError, ServerPayloadVerifiedEnvelopeKey,
-    ckks_vector_verified_sidecar_delete_key,
+    CkksVectorSidecarDeleteTarget, CkksVectorVerifiedSidecarDeleteKey,
+    CkksVectorVerifiedSidecarKey, ClientPayloadNonceReplayKey, ClientPayloadVerifiedEnvelopeKey,
+    ENCRYPTED_VECTOR_SIDECAR_FIELD, METADATA_VALUE_BINDING, PayloadEncryptionError,
+    ServerPayloadVerifiedEnvelopeKey, ckks_vector_verified_sidecar_delete_key,
 };
 use schemars::JsonSchema;
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
@@ -627,8 +628,17 @@ pub async fn do_delete_vectors(
     } = operation;
 
     let vector_names: Vec<_> = vector.into_iter().collect();
+    let encrypted_sidecar_delete_target =
+        ckks_vector_sidecar_delete_target(points.as_deref(), filter.as_ref());
     let (vector_names, encrypted_sidecar_keys, encrypted_sidecar_delete_keys) =
-        split_encrypted_vector_delete_names(toc, &collection_name, &auth, vector_names).await?;
+        split_encrypted_vector_delete_names(
+            toc,
+            &collection_name,
+            &auth,
+            vector_names,
+            encrypted_sidecar_delete_target.as_ref(),
+        )
+        .await?;
     ensure_not_mixed_encrypted_and_plaintext_vector_mutation(
         &collection_name,
         encrypted_sidecar_keys.len(),
@@ -2246,6 +2256,7 @@ async fn split_encrypted_vector_delete_names(
     collection_name: &str,
     auth: &Auth,
     vector_names: Vec<String>,
+    delete_target: Option<&CkksVectorSidecarDeleteTarget>,
 ) -> Result<
     (
         Vec<String>,
@@ -2280,9 +2291,13 @@ async fn split_encrypted_vector_delete_names(
     let mut encrypted_sidecar_delete_keys = Vec::new();
     for vector_name in vector_names {
         if encrypted_names.contains(&vector_name) {
+            let Some(delete_target) = delete_target else {
+                return Err(StorageError::bad_request("No filter or points provided"));
+            };
             let verified_delete_key = ckks_vector_verified_sidecar_delete_key(
                 &collection_crypto_id,
                 &vector_name,
+                delete_target.clone(),
             )
             .map_err(|err| {
                 StorageError::bad_input(format!(
