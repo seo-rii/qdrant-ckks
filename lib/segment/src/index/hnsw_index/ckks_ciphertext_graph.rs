@@ -18,15 +18,17 @@ use crate::index::{PayloadIndex, VectorIndex};
 use crate::telemetry::VectorIndexSearchesTelemetry;
 use crate::types::{Filter, Order, Payload, SearchParams};
 
-const CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_VERSION: u8 = 1;
+const CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_VERSION: u8 = 2;
 const CKKS_CIPHERTEXT_HNSW_GRAPH_FILE: &str = "ckks_ciphertext_hnsw_graph.json";
 const CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_MAX_BYTES: u64 = 512 * 1024 * 1024;
+const CKKS_CIPHERTEXT_HNSW_GRAPH_MAX_DEGREE: usize = 512;
 pub const CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD: &str = "$qdrant_sec_vectors";
 pub const CKKS_VECTOR_SIDECAR_MARKER: &str = "$qdrant_sec_ckks_vector";
 
 #[derive(Clone, Debug)]
 pub struct CkksCiphertextHnswGraph {
     links: Arc<Vec<Vec<usize>>>,
+    max_degree: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -79,17 +81,22 @@ struct CkksCiphertextHnswGraphFile {
     version: u8,
     record_count: usize,
     records_digest: String,
+    #[serde(default)]
+    max_degree: Option<usize>,
     links: Vec<Vec<usize>>,
 }
 
 impl CkksCiphertextHnswGraph {
     pub fn from_validated_links(links: Vec<Vec<usize>>) -> Option<Self> {
-        if links_have_valid_neighbors(&links)
+        let max_degree = links.iter().map(Vec::len).max().unwrap_or(0);
+        if max_degree <= CKKS_CIPHERTEXT_HNSW_GRAPH_MAX_DEGREE
+            && links_have_valid_neighbors(&links)
             && links_are_reciprocal(&links)
             && links_are_connected(&links)
         {
             Some(Self {
                 links: Arc::new(links),
+                max_degree,
             })
         } else {
             None
@@ -98,6 +105,10 @@ impl CkksCiphertextHnswGraph {
 
     pub fn links(&self) -> &[Vec<usize>] {
         self.links.as_ref()
+    }
+
+    pub fn max_degree(&self) -> usize {
+        self.max_degree
     }
 
     pub fn links_are_reciprocal(links: &[Vec<usize>]) -> bool {
@@ -131,10 +142,14 @@ impl CkksCiphertextHnswGraph {
         if points_len == 0 {
             return Ok(Self {
                 links: Arc::new(links),
+                max_degree: 0,
             });
         }
 
-        let max_degree = m.saturating_mul(2).max(1);
+        let max_degree = m
+            .saturating_mul(2)
+            .max(1)
+            .min(CKKS_CIPHERTEXT_HNSW_GRAPH_MAX_DEGREE);
         for idx in 1..points_len {
             let scores = score_previous_points(idx).map_err(CkksCiphertextScoreError::Scoring)?;
             if scores.len() != idx {
@@ -155,8 +170,10 @@ impl CkksCiphertextHnswGraph {
         }
 
         add_connectivity_backbone(&mut links);
+        let max_degree = links.iter().map(Vec::len).max().unwrap_or(0);
         Ok(Self {
             links: Arc::new(links),
+            max_degree,
         })
     }
 
@@ -165,13 +182,17 @@ impl CkksCiphertextHnswGraph {
         if points_len == 0 {
             return Self {
                 links: Arc::new(links),
+                max_degree: 0,
             };
         }
 
         // Segment optimization does not own an OpenFHE scoring runtime. Build a
         // deterministic connected candidate graph here; query-time CKKS search
         // still scores visited ciphertext candidates through the runtime bridge.
-        let max_degree = m.saturating_mul(2).max(1);
+        let max_degree = m
+            .saturating_mul(2)
+            .max(1)
+            .min(CKKS_CIPHERTEXT_HNSW_GRAPH_MAX_DEGREE);
         for idx in 1..points_len {
             let first_candidate = idx.saturating_sub(m.max(1));
             for candidate in first_candidate..idx {
@@ -180,8 +201,10 @@ impl CkksCiphertextHnswGraph {
         }
 
         add_connectivity_backbone(&mut links);
+        let max_degree = links.iter().map(Vec::len).max().unwrap_or(0);
         Self {
             links: Arc::new(links),
+            max_degree,
         }
     }
 
@@ -201,8 +224,10 @@ impl CkksCiphertextHnswGraph {
         let mut visited = vec![false; links.len()];
         let mut frontier = vec![0usize];
         let mut scored = Vec::<CkksCiphertextHnswHit>::new();
+        let score_budget = ef.max(top).max(1).min(links.len());
+        let mut scored_candidates = 0usize;
 
-        while !frontier.is_empty() && scored.len() < ef {
+        while !frontier.is_empty() && scored_candidates < score_budget {
             frontier.sort_unstable();
             frontier.dedup();
             frontier.retain(|candidate| {
@@ -213,6 +238,8 @@ impl CkksCiphertextHnswGraph {
             if frontier.is_empty() {
                 break;
             }
+            let remaining_budget = score_budget.saturating_sub(scored_candidates);
+            frontier.truncate(remaining_budget);
 
             let scores = score_candidates(&frontier).map_err(CkksCiphertextScoreError::Scoring)?;
             if scores.len() != frontier.len() {
@@ -226,6 +253,7 @@ impl CkksCiphertextHnswGraph {
                 .zip(scores)
                 .map(|(point_index, score)| CkksCiphertextHnswHit { point_index, score })
                 .collect::<Vec<_>>();
+            scored_candidates = scored_candidates.saturating_add(batch.len());
             sort_hits(score_order, &mut batch);
 
             frontier = Vec::new();
@@ -238,7 +266,7 @@ impl CkksCiphertextHnswGraph {
                         frontier.push(*neighbor);
                     }
                 }
-                if scored.len() >= ef {
+                if scored.len() >= top && scored_candidates >= score_budget {
                     break;
                 }
             }
@@ -354,6 +382,19 @@ impl CkksCiphertextVectorIndex {
         if graph_file.records_digest != expected_records_digest {
             return Ok(None);
         }
+        let Some(max_degree) = graph_file.max_degree else {
+            return Ok(None);
+        };
+        if max_degree > CKKS_CIPHERTEXT_HNSW_GRAPH_MAX_DEGREE {
+            return Ok(None);
+        }
+        if graph_file
+            .links
+            .iter()
+            .any(|neighbors| neighbors.len() > max_degree)
+        {
+            return Ok(None);
+        }
         let Some(graph) = CkksCiphertextHnswGraph::from_validated_links(graph_file.links) else {
             return Ok(None);
         };
@@ -378,6 +419,7 @@ impl CkksCiphertextVectorIndex {
             version: CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_VERSION,
             record_count: self.index.records().len(),
             records_digest: ckks_ciphertext_records_digest(self.index.records()),
+            max_degree: Some(self.index.graph().max_degree()),
             links: self.index.graph().links().to_vec(),
         };
         let bytes = serde_json::to_vec(&graph_file).map_err(|err| {
@@ -386,6 +428,12 @@ impl CkksCiphertextVectorIndex {
                 path.display(),
             ))
         })?;
+        if bytes.len() as u64 > CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_MAX_BYTES {
+            return Err(OperationError::service_error(format!(
+                "CKKS ciphertext HNSW graph file {} exceeds maximum size",
+                path.display(),
+            )));
+        }
         write_graph_file(path, &bytes).map_err(|err| {
             OperationError::service_error(format!(
                 "failed to write CKKS ciphertext HNSW graph file {}: {err}",
@@ -1164,6 +1212,71 @@ mod tests {
     }
 
     #[test]
+    fn search_counts_threshold_filtered_candidates_against_ef_budget() {
+        let graph = CkksCiphertextHnswGraph::from_validated_links(vec![
+            vec![1],
+            vec![0, 2],
+            vec![1, 3],
+            vec![2],
+        ])
+        .unwrap();
+        let mut scored_candidates = 0usize;
+
+        let results = graph
+            .search(
+                2,
+                2,
+                Order::SmallBetter,
+                Some(-1.0),
+                |candidates| -> Result<Vec<f32>, std::convert::Infallible> {
+                    scored_candidates += candidates.len();
+                    Ok(vec![1.0; candidates.len()])
+                },
+            )
+            .unwrap();
+
+        assert!(results.is_empty());
+        assert_eq!(
+            scored_candidates, 2,
+            "threshold-filtered candidates must still consume the ef scoring budget",
+        );
+    }
+
+    #[test]
+    fn search_truncates_high_degree_frontier_to_remaining_ef_budget() {
+        let graph = CkksCiphertextHnswGraph::from_validated_links(vec![
+            vec![1, 2, 3, 4],
+            vec![0],
+            vec![0],
+            vec![0],
+            vec![0],
+        ])
+        .unwrap();
+        let mut max_batch = 0usize;
+        let mut scored_candidates = 0usize;
+
+        let _results = graph
+            .search(
+                2,
+                2,
+                Order::LargeBetter,
+                None,
+                |candidates| -> Result<Vec<f32>, std::convert::Infallible> {
+                    max_batch = max_batch.max(candidates.len());
+                    scored_candidates += candidates.len();
+                    Ok(vec![1.0; candidates.len()])
+                },
+            )
+            .unwrap();
+
+        assert_eq!(scored_candidates, 2);
+        assert!(
+            max_batch <= 1,
+            "high-degree frontier batches must be truncated before bridge scoring",
+        );
+    }
+
+    #[test]
     fn index_rejects_graph_record_count_mismatch() {
         let graph = CkksCiphertextHnswGraph::from_validated_links(vec![vec![1], vec![0]]).unwrap();
 
@@ -1901,6 +2014,7 @@ mod tests {
                 CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
                 CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
             ]),
+            max_degree: Some(1),
             links: vec![vec![1], vec![0]],
         };
         write_graph_file(&graph_file, &serde_json::to_vec(&graph).unwrap()).unwrap();
@@ -1931,6 +2045,7 @@ mod tests {
                 CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
                 CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
             ]),
+            "max_degree": 1,
             "links": [[1], [0]],
             "untrusted_cache_metadata": "must not be ignored",
         });
@@ -2006,6 +2121,7 @@ mod tests {
                 CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
                 CkksCiphertextIndexedRecord::new(2, b"ciphertext-c".to_vec()),
             ]),
+            max_degree: Some(1),
             links: vec![vec![1], vec![], vec![]],
         };
         write_graph_file(&graph_file, &serde_json::to_vec(&invalid_graph).unwrap()).unwrap();
@@ -2023,6 +2139,32 @@ mod tests {
         assert!(
             reopened.is_none(),
             "invalid graph links should trigger rebuild/fallback instead of hard-failing",
+        );
+    }
+
+    #[test]
+    fn ciphertext_vector_index_ignores_graph_degree_above_persisted_limit_on_open() {
+        let directory = tempfile::tempdir().unwrap();
+        let graph_file = CkksCiphertextVectorIndex::graph_file_path(directory.path());
+        let records = vec![
+            CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
+            CkksCiphertextIndexedRecord::new(1, b"ciphertext-b".to_vec()),
+            CkksCiphertextIndexedRecord::new(2, b"ciphertext-c".to_vec()),
+        ];
+        let invalid_graph = CkksCiphertextHnswGraphFile {
+            version: CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_VERSION,
+            record_count: records.len(),
+            records_digest: ckks_ciphertext_records_digest(&records),
+            max_degree: Some(1),
+            links: vec![vec![1, 2], vec![0, 2], vec![0, 1]],
+        };
+        write_graph_file(&graph_file, &serde_json::to_vec(&invalid_graph).unwrap()).unwrap();
+
+        let reopened = CkksCiphertextVectorIndex::open_graph_file(records, &graph_file).unwrap();
+
+        assert!(
+            reopened.is_none(),
+            "graph degree above persisted max_degree must trigger rebuild/fallback",
         );
     }
 
