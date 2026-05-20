@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
+use std::fmt;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -303,7 +304,7 @@ pub struct RuntimeResourceKeyRewrapRequest {
     pub new_wrapped_by: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Validate)]
+#[derive(Deserialize, Serialize, JsonSchema, Validate)]
 pub struct RuntimeResourceKeyRewrapMaterialPatch {
     pub kind: String,
     pub wrapped_by: String,
@@ -314,6 +315,22 @@ pub struct RuntimeResourceKeyRewrapMaterialPatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
     pub scope: String,
+}
+
+impl fmt::Debug for RuntimeResourceKeyRewrapMaterialPatch {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimeResourceKeyRewrapMaterialPatch")
+            .field("kind", &self.kind)
+            .field("wrapped_by", &self.wrapped_by)
+            .field("wrap_algorithm", &self.wrap_algorithm)
+            .field("nonce", &"[redacted]")
+            .field("wrapped_key_b64", &"[redacted]")
+            .field("rk_epoch", &self.rk_epoch)
+            .field("state", &self.state)
+            .field("scope", &self.scope)
+            .finish()
+    }
 }
 
 impl RuntimeResourceKeyRewrapMaterialPatch {
@@ -491,7 +508,7 @@ pub struct RuntimeResourceKeyRetireRequest {
     pub target_state: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Validate)]
+#[derive(Deserialize, Serialize, JsonSchema, Validate)]
 pub struct RuntimeResourceKeyRetireMaterialPatch {
     pub kind: String,
     pub rk_epoch: u64,
@@ -505,6 +522,25 @@ pub struct RuntimeResourceKeyRetireMaterialPatch {
     pub nonce: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wrapped_key_b64: Option<String>,
+}
+
+impl fmt::Debug for RuntimeResourceKeyRetireMaterialPatch {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimeResourceKeyRetireMaterialPatch")
+            .field("kind", &self.kind)
+            .field("rk_epoch", &self.rk_epoch)
+            .field("state", &self.state)
+            .field("scope", &self.scope)
+            .field("wrapped_by", &self.wrapped_by)
+            .field("wrap_algorithm", &self.wrap_algorithm)
+            .field("nonce", &self.nonce.as_ref().map(|_| "[redacted]"))
+            .field(
+                "wrapped_key_b64",
+                &self.wrapped_key_b64.as_ref().map(|_| "[redacted]"),
+            )
+            .finish()
+    }
 }
 
 impl RuntimeResourceKeyRetireMaterialPatch {
@@ -810,6 +846,57 @@ mod tests {
         assert_eq!(patch.scope, "collection:docs/payload:body");
         assert!(!patch.nonce.is_empty());
         assert!(!patch.wrapped_key_b64.is_empty());
+    }
+
+    #[test]
+    fn runtime_resource_key_admin_debug_redacts_wrapped_material() {
+        let generate_response = RuntimeResourceKeyGenerateResponse {
+            wrapped_by: "tenant-a/mk-v1".to_string(),
+            settings_mutated: false,
+            materials: BTreeMap::from([(
+                "tenant-a/payload-rk-v4".to_string(),
+                RuntimeResourceKeyRewrapMaterialPatch {
+                    kind: "wrapped_symmetric_key_32".to_string(),
+                    wrapped_by: "tenant-a/mk-v1".to_string(),
+                    wrap_algorithm: RESOURCE_KEY_WRAP_ALGORITHM.to_string(),
+                    nonce: "nonce-sentinel".to_string(),
+                    wrapped_key_b64: "wrapped-key-sentinel".to_string(),
+                    rk_epoch: 4,
+                    state: Some("active".to_string()),
+                    scope: "collection:docs/payload:body".to_string(),
+                },
+            )]),
+        };
+        let generate_debug = format!("{generate_response:?}");
+        assert!(generate_debug.contains("tenant-a/payload-rk-v4"));
+        assert!(generate_debug.contains("collection:docs/payload:body"));
+        assert!(!generate_debug.contains("nonce-sentinel"));
+        assert!(!generate_debug.contains("wrapped-key-sentinel"));
+        assert!(generate_debug.contains("[redacted]"));
+
+        let retire_response = RuntimeResourceKeyRetireResponse {
+            target_state: "retired".to_string(),
+            settings_mutated: false,
+            materials: BTreeMap::from([(
+                "tenant-a/payload-rk-v3".to_string(),
+                RuntimeResourceKeyRetireMaterialPatch {
+                    kind: "wrapped_symmetric_key_32".to_string(),
+                    rk_epoch: 3,
+                    state: "retired".to_string(),
+                    scope: "collection:docs".to_string(),
+                    wrapped_by: Some("tenant-a/mk-v1".to_string()),
+                    wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
+                    nonce: Some("retire-nonce-sentinel".to_string()),
+                    wrapped_key_b64: Some("retire-wrapped-key-sentinel".to_string()),
+                },
+            )]),
+        };
+        let retire_debug = format!("{retire_response:?}");
+        assert!(retire_debug.contains("tenant-a/payload-rk-v3"));
+        assert!(retire_debug.contains("collection:docs"));
+        assert!(!retire_debug.contains("retire-nonce-sentinel"));
+        assert!(!retire_debug.contains("retire-wrapped-key-sentinel"));
+        assert!(retire_debug.contains("[redacted]"));
     }
 
     #[test]
