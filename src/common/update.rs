@@ -6537,6 +6537,36 @@ esac
                     if description.contains("requires runtime crypto settings")
             ));
 
+            let err = crate::common::query::do_scroll_points(
+                &toc,
+                "docs",
+                shard::scroll::ScrollRequestInternal {
+                    offset: None,
+                    limit: Some(1),
+                    filter: None,
+                    with_payload: Some(WithPayloadInterface::Encrypted(
+                        PayloadEncryptedReadPolicy {
+                            encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                        },
+                    )),
+                    with_vector: WithVector::Bool(false),
+                    order_by: None,
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("requires runtime crypto settings")
+            ));
+
             let decrypted_scroll = crate::common::query::do_scroll_points(
                 &toc,
                 "docs",
