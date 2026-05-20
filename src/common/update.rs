@@ -1970,6 +1970,10 @@ async fn maybe_encrypt_update_vectors(
         points.len(),
         "update_vectors",
     )?;
+    ensure_encrypted_vector_update_sidecar_fanout_is_atomic(
+        collection_name,
+        sidecar_updates.len(),
+    )?;
 
     let provenance = CollectionUpdateProvenance::runtime_encrypted_vectors(verified_sidecar_keys);
     Ok((sidecar_updates, provenance))
@@ -1984,6 +1988,20 @@ fn ensure_not_mixed_encrypted_and_plaintext_vector_mutation(
     if encrypted_count > 0 && plaintext_count > 0 {
         return Err(StorageError::bad_input(format!(
             "collection {collection_name} cannot mix encrypted vector sidecar mutations and plaintext vector mutations in one {operation} request; split the request until atomic mixed vector updates are implemented",
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_encrypted_vector_update_sidecar_fanout_is_atomic(
+    collection_name: &str,
+    encrypted_point_count: usize,
+) -> Result<(), StorageError> {
+    if encrypted_point_count > 1 {
+        return Err(StorageError::bad_input(format!(
+            "collection {collection_name} cannot update encrypted vectors for multiple points in \
+             one update_vectors request until atomic encrypted vector sidecar fanout is \
+             implemented; split the request into one point per update_vectors call",
         )));
     }
     Ok(())
@@ -3076,6 +3094,22 @@ esac
             .unwrap();
         ensure_not_mixed_encrypted_and_plaintext_vector_mutation("docs", 0, 0, "delete_vectors")
             .unwrap();
+    }
+
+    #[test]
+    fn encrypted_vector_update_rejects_multi_point_sidecar_fanout() {
+        let err = ensure_encrypted_vector_update_sidecar_fanout_is_atomic("docs", 2)
+            .expect_err("multi-point encrypted vector sidecar fanout must be rejected");
+
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("cannot update encrypted vectors for multiple points")
+                    && description.contains("atomic encrypted vector sidecar fanout")
+        ));
+
+        ensure_encrypted_vector_update_sidecar_fanout_is_atomic("docs", 1).unwrap();
+        ensure_encrypted_vector_update_sidecar_fanout_is_atomic("docs", 0).unwrap();
     }
 
     #[cfg(unix)]
