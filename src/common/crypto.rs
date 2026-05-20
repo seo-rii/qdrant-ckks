@@ -180,6 +180,7 @@ const OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK: &str = "process_pool_landlock"
 const OPENFHE_BACKEND_SIGNATURE_DOMAIN: &[u8] = b"qdrant-sec/openfhe-bridge-binary-signature/v1\0";
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
 const BASE64URL_NOPAD_64_BYTE_LEN: usize = 86;
+const MAX_CLIENT_SIGNATURE_PUBLIC_KEYS: usize = 8;
 const METADATA_BLIND_INDEX_ALLOWED_OPTIONS: &[&str] = &[
     "key_id",
     EXPECTED_RK_ID_OPTION,
@@ -284,6 +285,14 @@ pub enum PayloadWriteSetupError {
         "payload crypto instance {instance} signature_public_keys option contains an invalid base64url Ed25519 public key"
     )]
     InvalidClientSignaturePublicKey { instance: String },
+    #[error(
+        "payload crypto instance {instance} signature_public_keys option contains a public key with invalid encoded length"
+    )]
+    InvalidClientSignaturePublicKeyLength { instance: String },
+    #[error(
+        "payload crypto instance {instance} signature_public_keys option contains too many keys; max is {max_keys}"
+    )]
+    ClientSignaturePublicKeyRegistryTooLarge { instance: String, max_keys: usize },
     #[error(
         "payload crypto instance {instance} signature_public_keys option must be an object mapping signature key ids to base64url Ed25519 public keys"
     )]
@@ -1360,7 +1369,7 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
                 "provider": instance.provider,
                 "materials": materials,
                 "backend_ref": instance.backend_ref,
-                "options": instance.options,
+                "options": sanitized_crypto_instance_options(instance),
             }),
         );
     }
@@ -1417,6 +1426,57 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
         .expect("serializing sanitized crypto runtime capability fingerprint cannot fail");
     let digest = Sha256::digest(&canonical);
     BASE64URL_NOPAD.encode(&digest)
+}
+
+fn sanitized_crypto_instance_options(instance: &CryptoInstanceConfig) -> serde_json::Value {
+    let mut options = instance.options.clone();
+    if instance.provider == PAYLOAD_CLIENT_AEAD_PROVIDER
+        && let Some(signature_public_keys) = options
+            .as_object_mut()
+            .and_then(|options| options.get_mut(SIGNATURE_PUBLIC_KEYS_OPTION))
+        && let Some(signature_public_keys) = signature_public_keys.as_object()
+    {
+        let mut verifier_fingerprint = BTreeMap::new();
+        for (key_id, public_key_b64) in signature_public_keys {
+            let Some(public_key_b64) = public_key_b64.as_str() else {
+                verifier_fingerprint.insert(
+                    key_id.clone(),
+                    json!({
+                        "kind": "invalid",
+                        "json_type": public_key_b64_type(public_key_b64),
+                    }),
+                );
+                continue;
+            };
+            let digest = Sha256::digest(public_key_b64.as_bytes());
+            verifier_fingerprint.insert(
+                key_id.clone(),
+                json!({
+                    "kind": "encoded-public-key",
+                    "encoded_len": public_key_b64.len(),
+                    "encoded_sha256_b64": BASE64URL_NOPAD.encode(&digest),
+                }),
+            );
+        }
+        *options
+            .as_object_mut()
+            .expect("options object still exists")
+            .get_mut(SIGNATURE_PUBLIC_KEYS_OPTION)
+            .expect("signature_public_keys option still exists") =
+            serde_json::Value::Object(verifier_fingerprint.into_iter().collect());
+    }
+    options
+}
+
+fn public_key_b64_type(value: &serde_json::Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
 }
 
 #[allow(
@@ -3566,6 +3626,14 @@ fn client_payload_signature_verifier(
             instance: instance_id.to_string(),
         });
     }
+    if signature_public_keys.len() > MAX_CLIENT_SIGNATURE_PUBLIC_KEYS {
+        return Err(
+            PayloadWriteSetupError::ClientSignaturePublicKeyRegistryTooLarge {
+                instance: instance_id.to_string(),
+                max_keys: MAX_CLIENT_SIGNATURE_PUBLIC_KEYS,
+            },
+        );
+    }
 
     let mut public_keys = std::collections::HashMap::new();
     for (key_id, public_key_b64) in signature_public_keys {
@@ -3579,6 +3647,13 @@ fn client_payload_signature_verifier(
                 instance: instance_id.to_string(),
             });
         };
+        if public_key_b64.len() != BASE64URL_NOPAD_32_BYTE_LEN {
+            return Err(
+                PayloadWriteSetupError::InvalidClientSignaturePublicKeyLength {
+                    instance: instance_id.to_string(),
+                },
+            );
+        }
         let public_key = BASE64URL_NOPAD
             .decode(public_key_b64.as_bytes())
             .map_err(
@@ -5715,6 +5790,17 @@ mod tests {
         })
     }
 
+    fn oversized_client_signature_registry() -> serde_json::Value {
+        let mut keys = serde_json::Map::new();
+        for key_index in 0..=MAX_CLIENT_SIGNATURE_PUBLIC_KEYS {
+            keys.insert(
+                format!("tenant-a/client-signing-v{key_index}"),
+                json!(BASE64URL_NOPAD.encode(&[key_index as u8; 32])),
+            );
+        }
+        serde_json::Value::Object(keys)
+    }
+
     #[test]
     fn validate_crypto_settings_rejects_missing_material_and_backend_refs() {
         let mut settings = CryptoSettings {
@@ -6202,6 +6288,42 @@ mod tests {
             backends: HashMap::new(),
         };
         validate_crypto_settings(&valid_client_settings).unwrap();
+
+        let mut oversized_registry = valid_client_settings.clone();
+        oversized_registry
+            .instances
+            .get_mut("docs_payload_client_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                SIGNATURE_PUBLIC_KEYS_OPTION.to_string(),
+                oversized_client_signature_registry(),
+            );
+        assert!(matches!(
+            validate_crypto_settings(&oversized_registry),
+            Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
+
+        let mut oversized_public_key = valid_client_settings.clone();
+        oversized_public_key
+            .instances
+            .get_mut("docs_payload_client_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                SIGNATURE_PUBLIC_KEYS_OPTION.to_string(),
+                json!({
+                    "tenant-a/client-signing-v1": "A".repeat(BASE64URL_NOPAD_32_BYTE_LEN + 1),
+                }),
+            );
+        assert!(matches!(
+            validate_crypto_settings(&oversized_public_key),
+            Err(CryptoSetupError::InvalidInstanceOption { .. })
+        ));
 
         let mut key_id_not_required = valid_client_settings.clone();
         key_id_not_required
@@ -7204,6 +7326,48 @@ mod tests {
             ..Settings::new(None).unwrap()
         };
         let fingerprint = crypto_runtime_capability_fingerprint(&settings);
+        let raw_public_key_b64 = BASE64URL_NOPAD.encode(&[11_u8; 32]);
+        let sanitized_options = serde_json::to_string(&sanitized_crypto_instance_options(
+            settings
+                .crypto
+                .instances
+                .get("docs_client_payload_v1")
+                .unwrap(),
+        ))
+        .unwrap();
+        assert!(
+            !sanitized_options.contains(&raw_public_key_b64),
+            "client verifier fingerprint view must not serialize raw public keys",
+        );
+        assert!(sanitized_options.contains("encoded_sha256_b64"));
+
+        let mut peer_with_oversized_verifier = settings.clone();
+        let oversized_public_key_b64 = "A".repeat(10_000);
+        peer_with_oversized_verifier
+            .crypto
+            .instances
+            .get_mut("docs_client_payload_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                SIGNATURE_PUBLIC_KEYS_OPTION.to_string(),
+                json!({ "tenant-a:signing-v1": oversized_public_key_b64 }),
+            );
+        let sanitized_oversized_options =
+            serde_json::to_string(&sanitized_crypto_instance_options(
+                peer_with_oversized_verifier
+                    .crypto
+                    .instances
+                    .get("docs_client_payload_v1")
+                    .unwrap(),
+            ))
+            .unwrap();
+        assert!(
+            sanitized_oversized_options.len() < 1_000,
+            "client verifier fingerprint view must remain bounded for oversized public keys",
+        );
 
         let mut peer_with_different_verifier = settings.clone();
         peer_with_different_verifier
@@ -10787,13 +10951,27 @@ mod tests {
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "signature_public_keys": {
-                        "tenant-a/client-signing-v1": "not-base64",
+                        "tenant-a/client-signing-v1": "!".repeat(BASE64URL_NOPAD_32_BYTE_LEN),
                     },
                 })),
                 "docs",
                 &params,
             ),
             Err(PayloadWriteSetupError::InvalidClientSignaturePublicKey { instance })
+                if instance == "docs_payload_client_v1"
+        ));
+        assert!(matches!(
+            payload_write_plan_for_collection_for_test(
+                &settings_with_options(json!({
+                    "key_id": "tenant-a/client-rk-2026-04",
+                    "signature_public_keys": {
+                        "tenant-a/client-signing-v1": "A".repeat(BASE64URL_NOPAD_32_BYTE_LEN + 1),
+                    },
+                })),
+                "docs",
+                &params,
+            ),
+            Err(PayloadWriteSetupError::InvalidClientSignaturePublicKeyLength { instance })
                 if instance == "docs_payload_client_v1"
         ));
         assert!(matches!(
@@ -10851,7 +11029,7 @@ mod tests {
                 &settings_with_options(json!({
                     "key_id": "tenant-a/client-rk-2026-04",
                     "signature_public_keys": {
-                        "tenant-a/client-signing-v1": "not-base64",
+                        "tenant-a/client-signing-v1": "!".repeat(BASE64URL_NOPAD_32_BYTE_LEN),
                     },
                 })),
                 "docs",
@@ -10859,6 +11037,20 @@ mod tests {
             ),
             Err(PayloadWriteSetupError::InvalidClientSignaturePublicKey { instance })
                 if instance == "docs_payload_client_v1"
+        ));
+        assert!(matches!(
+            payload_write_plan_for_collection_for_test(
+                &settings_with_options(json!({
+                    "key_id": "tenant-a/client-rk-2026-04",
+                    "signature_public_keys": oversized_client_signature_registry(),
+                })),
+                "docs",
+                &params,
+            ),
+            Err(PayloadWriteSetupError::ClientSignaturePublicKeyRegistryTooLarge {
+                instance,
+                max_keys: MAX_CLIENT_SIGNATURE_PUBLIC_KEYS,
+            }) if instance == "docs_payload_client_v1"
         ));
         assert!(
             payload_write_plan_for_collection_for_test(
