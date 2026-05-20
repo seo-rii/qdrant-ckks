@@ -6246,6 +6246,7 @@ esac
                         collection: "docs".to_string(),
                         access: CollectionAccessMode::Read,
                         payload_decrypt: true,
+                        snapshot_export: false,
                         #[expect(deprecated)]
                         payload: None,
                     },
@@ -7062,6 +7063,7 @@ esac
                         collection: "metadata_docs".to_string(),
                         access: CollectionAccessMode::Read,
                         payload_decrypt: true,
+                        snapshot_export: false,
                         #[expect(deprecated)]
                         payload: None,
                     },

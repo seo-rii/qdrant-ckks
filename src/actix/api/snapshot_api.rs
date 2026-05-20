@@ -94,7 +94,10 @@ pub async fn do_get_full_snapshot(
     auth: &Auth,
     snapshot_name: &str,
 ) -> Result<SnapshotStream, HttpError> {
-    auth.check_global_access(AccessRequirements::new(), "get_full_snapshot")?;
+    auth.check_global_access(
+        AccessRequirements::new().snapshot_export(),
+        "get_full_snapshot",
+    )?;
     let snapshots_storage_manager = toc.get_snapshots_storage_manager()?;
     let snapshot_path =
         snapshots_storage_manager.get_full_snapshot_path(toc.snapshots_path(), snapshot_name)?;
@@ -152,7 +155,7 @@ pub async fn do_get_snapshot(
 ) -> Result<SnapshotStream, HttpError> {
     let collection_pass = auth.check_collection_access(
         collection_name,
-        AccessRequirements::new().extras(),
+        AccessRequirements::new().extras().snapshot_export(),
         "get_snapshot",
     )?;
     let collection: Arc<collection::collection::Collection> =
@@ -612,7 +615,7 @@ async fn download_shard_snapshot(
     } = path.into_inner();
     let collection_pass = auth.check_collection_access(
         &collection,
-        AccessRequirements::new().extras(),
+        AccessRequirements::new().extras().snapshot_export(),
         "download_shard_snapshot",
     )?;
     let collection = dispatcher

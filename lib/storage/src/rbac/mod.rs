@@ -58,6 +58,14 @@ pub struct CollectionAccess {
     #[serde(default, skip_serializing_if = "is_false")]
     pub payload_decrypt: bool,
 
+    /// Permit bulk export of raw snapshot archives for this collection.
+    ///
+    /// Snapshot archives may contain encrypted envelope metadata, wrapped-key
+    /// manifests, nonce caches, sidecar indexes, and other backup-grade crypto
+    /// artifacts. This is separate from ordinary point reads.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub snapshot_export: bool,
+
     /// Payload constraints.
     /// An object where each key is a JSON path, and each value is JSON value.
     ///
@@ -88,6 +96,7 @@ impl CollectionAccess {
             collection: &self.collection,
             access: self.access,
             payload_decrypt: self.payload_decrypt,
+            snapshot_export: self.snapshot_export,
         }
     }
 }
@@ -194,6 +203,7 @@ struct CollectionAccessView<'a> {
     pub collection: &'a str,
     pub access: CollectionAccessMode,
     pub payload_decrypt: bool,
+    pub snapshot_export: bool,
 }
 
 impl CollectionAccessView<'_> {
@@ -203,11 +213,19 @@ impl CollectionAccessView<'_> {
             manage,
             extras,
             payload_decrypt,
+            snapshot_export,
         } = requirements;
 
         if payload_decrypt && !self.payload_decrypt {
             return Err(StorageError::forbidden(format!(
                 "Payload decrypt access to collection {} is required",
+                self.collection,
+            )));
+        }
+
+        if snapshot_export && !self.snapshot_export {
+            return Err(StorageError::forbidden(format!(
+                "Snapshot export access to collection {} is required",
                 self.collection,
             )));
         }
@@ -289,6 +307,8 @@ pub struct AccessRequirements {
     pub extras: bool,
     /// Require permission to decrypt server-side encrypted payload fields.
     pub payload_decrypt: bool,
+    /// Require permission to export raw snapshot archives.
+    pub snapshot_export: bool,
 }
 
 impl AccessRequirements {
@@ -323,6 +343,13 @@ impl AccessRequirements {
             ..*self
         }
     }
+
+    pub fn snapshot_export(&self) -> Self {
+        Self {
+            snapshot_export: true,
+            ..*self
+        }
+    }
 }
 
 impl GlobalAccessMode {
@@ -331,12 +358,15 @@ impl GlobalAccessMode {
             write,
             manage,
             payload_decrypt,
+            snapshot_export,
             extras: _,
         } = requirements;
-        if write || manage || payload_decrypt {
+        if write || manage || payload_decrypt || snapshot_export {
             match self {
                 GlobalAccessMode::Read => {
-                    let message = if payload_decrypt && !write && !manage {
+                    let message = if snapshot_export && !write && !manage {
+                        "Global manage or snapshot export collection access is required"
+                    } else if payload_decrypt && !write && !manage {
                         "Global manage or payload decrypt collection access is required"
                     } else {
                         "Global manage access is required"
@@ -408,6 +438,7 @@ impl AccessCollectionBuilder {
                 CollectionAccessMode::Read
             },
             payload_decrypt: false,
+            snapshot_export: false,
             #[expect(deprecated)]
             payload: None,
         });
@@ -419,6 +450,19 @@ impl AccessCollectionBuilder {
             collection: name.to_string(),
             access: CollectionAccessMode::Read,
             payload_decrypt: true,
+            snapshot_export: false,
+            #[expect(deprecated)]
+            payload: None,
+        });
+        self
+    }
+
+    pub(self) fn add_with_snapshot_export(mut self, name: &str) -> Self {
+        self.0.push(CollectionAccess {
+            collection: name.to_string(),
+            access: CollectionAccessMode::Read,
+            payload_decrypt: false,
+            snapshot_export: true,
             #[expect(deprecated)]
             payload: None,
         });
@@ -463,6 +507,39 @@ mod tests {
         assert!(
             Access::full_ro("test")
                 .check_collection_access("docs", AccessRequirements::new().payload_decrypt())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn collection_snapshot_export_capability_is_separate_from_read_and_extras() {
+        let read_only: Access = AccessCollectionBuilder::new().add("docs", false).into();
+        assert!(
+            read_only
+                .check_collection_access(
+                    "docs",
+                    AccessRequirements::new().extras().snapshot_export(),
+                )
+                .is_err()
+        );
+
+        let snapshot_export: Access = AccessCollectionBuilder::new()
+            .add_with_snapshot_export("docs")
+            .into();
+        snapshot_export
+            .check_collection_access("docs", AccessRequirements::new().extras().snapshot_export())
+            .expect("snapshot export capability must satisfy raw archive reads");
+    }
+
+    #[test]
+    fn global_manage_satisfies_snapshot_export_but_global_read_does_not() {
+        Access::full("test")
+            .check_global_access(AccessRequirements::new().snapshot_export())
+            .expect("global manage satisfies snapshot export");
+
+        assert!(
+            Access::full_ro("test")
+                .check_global_access(AccessRequirements::new().snapshot_export())
                 .is_err()
         );
     }

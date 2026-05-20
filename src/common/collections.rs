@@ -201,7 +201,7 @@ pub async fn do_list_snapshots(
 ) -> Result<Vec<SnapshotDescription>, StorageError> {
     let collection_pass = auth.check_collection_access(
         collection_name,
-        AccessRequirements::new().extras(),
+        AccessRequirements::new().extras().snapshot_export(),
         "list_snapshots",
     )?;
     Ok(toc

@@ -91,7 +91,10 @@ pub async fn do_list_full_snapshots(
     toc: &TableOfContent,
     auth: Auth,
 ) -> Result<Vec<SnapshotDescription>, StorageError> {
-    auth.check_global_access(AccessRequirements::new(), "list_full_snapshots")?;
+    auth.check_global_access(
+        AccessRequirements::new().snapshot_export(),
+        "list_full_snapshots",
+    )?;
     let snapshots_manager = toc.get_snapshots_storage_manager()?;
     let snapshots_path = toc.snapshots_path();
     Ok(snapshots_manager.list_snapshots(snapshots_path).await?)

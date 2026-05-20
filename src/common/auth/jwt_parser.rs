@@ -81,6 +81,7 @@ mod tests {
                 collection: "collection".to_string(),
                 access: CollectionAccessMode::ReadWrite,
                 payload_decrypt: false,
+                snapshot_export: false,
                 #[expect(deprecated)]
                 payload: None,
             }])),
@@ -109,6 +110,7 @@ mod tests {
                 collection: "encrypted_docs".to_string(),
                 access: CollectionAccessMode::Read,
                 payload_decrypt: true,
+                snapshot_export: false,
                 #[expect(deprecated)]
                 payload: None,
             }])),
@@ -132,6 +134,41 @@ mod tests {
     }
 
     #[test]
+    fn test_jwt_parser_preserves_snapshot_export_collection_access() {
+        let exp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_secs();
+        let claims = Claims {
+            sub: None,
+            exp: Some(exp),
+            access: Access::Collection(CollectionAccessList(vec![CollectionAccess {
+                collection: "archive_docs".to_string(),
+                access: CollectionAccessMode::Read,
+                payload_decrypt: false,
+                snapshot_export: true,
+                #[expect(deprecated)]
+                payload: None,
+            }])),
+            value_exists: None,
+            subject: None,
+        };
+        let token = create_token(&claims);
+
+        let parser = JwtParser::new("secret");
+        let decoded_claims = parser.decode(&token).unwrap().unwrap();
+
+        assert!(matches!(
+            decoded_claims.access,
+            Access::Collection(CollectionAccessList(ref collections))
+                if collections
+                    .iter()
+                    .any(|access| access.collection == "archive_docs"
+                        && access.snapshot_export)
+        ));
+    }
+
+    #[test]
     fn test_jwt_parser_with_deprecated_payloads() {
         let exp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -144,6 +181,7 @@ mod tests {
                 collection: "collection".to_string(),
                 access: CollectionAccessMode::ReadWrite,
                 payload_decrypt: false,
+                snapshot_export: false,
                 #[expect(deprecated)]
                 payload: Some(json!({
                     "field1": "value",

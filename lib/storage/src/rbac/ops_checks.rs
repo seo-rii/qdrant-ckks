@@ -111,6 +111,7 @@ impl CheckableCollectionOperation for SearchRequestInternal {
             manage: false,
             extras: false,
             payload_decrypt: false,
+            snapshot_export: false,
         }
     }
 
@@ -126,6 +127,7 @@ impl CheckableCollectionOperation for RecommendRequestInternal {
             manage: false,
             extras: false,
             payload_decrypt: false,
+            snapshot_export: false,
         }
     }
 
@@ -142,6 +144,7 @@ impl CheckableCollectionOperation for PointRequestInternal {
             manage: false,
             extras: false,
             payload_decrypt: false,
+            snapshot_export: false,
         }
     }
 
@@ -157,6 +160,7 @@ impl CheckableCollectionOperation for CoreSearchRequest {
             manage: false,
             extras: false,
             payload_decrypt: false,
+            snapshot_export: false,
         }
     }
 
@@ -172,6 +176,7 @@ impl CheckableCollectionOperation for CountRequestInternal {
             manage: false,
             extras: false,
             payload_decrypt: false,
+            snapshot_export: false,
         }
     }
 
@@ -187,6 +192,7 @@ impl CheckableCollectionOperation for GroupRequest {
             manage: false,
             extras: false,
             payload_decrypt: false,
+            snapshot_export: false,
         }
     }
 
@@ -208,6 +214,7 @@ impl CheckableCollectionOperation for DiscoverRequestInternal {
             manage: false,
             extras: false,
             payload_decrypt: false,
+            snapshot_export: false,
         }
     }
 
@@ -224,6 +231,7 @@ impl CheckableCollectionOperation for ScrollRequestInternal {
             manage: false,
             extras: false,
             payload_decrypt: false,
+            snapshot_export: false,
         }
     }
 
@@ -239,6 +247,7 @@ impl CheckableCollectionOperation for CollectionQueryRequest {
             manage: false,
             extras: false,
             payload_decrypt: false,
+            snapshot_export: false,
         }
     }
 
@@ -274,6 +283,7 @@ impl CheckableCollectionOperation for FacetParams {
             manage: false,
             extras: false,
             payload_decrypt: false,
+            snapshot_export: false,
         }
     }
 
@@ -289,6 +299,7 @@ impl CheckableCollectionOperation for CollectionSearchMatrixRequest {
             manage: false,
             extras: false,
             payload_decrypt: false,
+            snapshot_export: false,
         }
     }
 
@@ -307,12 +318,14 @@ impl CheckableCollectionOperation for CollectionUpdateOperations {
                 manage: false,
                 extras: false,
                 payload_decrypt: false,
+                snapshot_export: false,
             },
             CollectionUpdateOperations::FieldIndexOperation(_) => AccessRequirements {
                 write: true,
                 manage: true,
                 extras: true,
                 payload_decrypt: false,
+                snapshot_export: false,
             },
             #[cfg(feature = "staging")]
             CollectionUpdateOperations::StagingOperation(_) => AccessRequirements {
@@ -320,6 +333,7 @@ impl CheckableCollectionOperation for CollectionUpdateOperations {
                 manage: false,
                 extras: false,
                 payload_decrypt: false,
+                snapshot_export: false,
             },
         }
     }
