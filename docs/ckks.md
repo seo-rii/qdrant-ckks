@@ -1039,6 +1039,7 @@ encrypted query envelope instead of a raw dense vector:
     "security_profile": "ckks-128-n16384-d4-scale50",
     "context_digest": "...",
     "slots": 1536,
+    "ciphertext_sha256": "base64url-no-pad-sha256-of-ciphertext",
     "ciphertext": "..."
   }
 }
@@ -1046,9 +1047,10 @@ encrypted query envelope instead of a raw dense vector:
 
 The `context_digest` must match the active OpenFHE public material and CKKS
 parameter profile for the encrypted vector rule, `slots` must match each stored
-sidecar envelope being scored, and `ciphertext` is base64url without padding.
-Qdrant does not decrypt or validate the CKKS ciphertext itself; it treats the
-validated bytes as the encrypted query input to the OpenFHE bridge scoring API.
+sidecar envelope being scored, `ciphertext_sha256` must match the decoded
+ciphertext bytes, and `ciphertext` is base64url without padding. Qdrant does not
+decrypt or validate the CKKS ciphertext itself; it treats the validated bytes as
+the encrypted query input to the OpenFHE bridge scoring API.
 Result ordering and
 `score_threshold` follow the configured Qdrant distance metric:
 `dot`/`cosine` are larger-is-better, while `euclid`/`manhattan` are

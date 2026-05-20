@@ -151,6 +151,7 @@ impl Generalizer for crate::operations::universal_query::collection_query::CkksE
             security_profile: self.security_profile.clone(),
             context_digest: self.context_digest.clone(),
             slots: self.slots,
+            ciphertext_sha256: self.ciphertext_sha256.clone(),
             ciphertext: "[redacted]".to_string(),
         }
     }

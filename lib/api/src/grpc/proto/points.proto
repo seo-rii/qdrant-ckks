@@ -141,6 +141,7 @@ message CkksEncryptedQueryVector {
   string context_digest = 4;
   uint64 slots = 5;
   string ciphertext = 6;
+  string ciphertext_sha256 = 7;
 }
 
 // Vector type to be used in queries.

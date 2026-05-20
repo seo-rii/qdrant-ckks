@@ -195,6 +195,7 @@ fn convert_vector_input_with_inferred(
                     security_profile: query.envelope.security_profile,
                     context_digest: query.envelope.context_digest,
                     slots: query.envelope.slots,
+                    ciphertext_sha256: query.envelope.ciphertext_sha256,
                     ciphertext: query.envelope.ciphertext,
                 },
             ))
@@ -449,6 +450,7 @@ mod tests {
                 security_profile: "ckks-128-n16384-d4-scale50".to_string(),
                 context_digest: BASE64URL_NOPAD.encode(&[3_u8; 32]),
                 slots: 2,
+                ciphertext_sha256: "MFUx3MUOvKMc8dWzHp_HbtUfZrO23VoDDGU5rmUy-Xk".to_string(),
                 ciphertext: BASE64URL_NOPAD.encode(b"ciphertext"),
             },
         });
@@ -475,6 +477,7 @@ mod tests {
                 security_profile: "ckks-128-n16384-d4-scale50".to_string(),
                 context_digest: "not base64url!".to_string(),
                 slots: 2,
+                ciphertext_sha256: "MFUx3MUOvKMc8dWzHp_HbtUfZrO23VoDDGU5rmUy-Xk".to_string(),
                 ciphertext: BASE64URL_NOPAD.encode(b"ciphertext"),
             },
         });

@@ -3015,6 +3015,7 @@ fn grpc_ckks_encrypted_query_to_rest_named_vector(
                 slots: query.slots.try_into().map_err(|_| {
                     Status::invalid_argument("CKKS encrypted query slots is too large")
                 })?,
+                ciphertext_sha256: query.ciphertext_sha256,
                 ciphertext: query.ciphertext,
             },
         },
@@ -3544,6 +3545,7 @@ mod tests {
             security_profile: "ckks-128-n16384-d4-scale50".to_string(),
             context_digest: BASE64URL_NOPAD.encode(&[3_u8; 32]),
             slots: 2,
+            ciphertext_sha256: "960f1uTAQoGVZfumV71jfeMvFAiR1SdiZDC50Oy7ksY".to_string(),
             ciphertext: BASE64URL_NOPAD.encode(b"test-ciphertext"),
         }
     }

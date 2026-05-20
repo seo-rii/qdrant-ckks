@@ -3008,6 +3008,7 @@ esac
             context_digest: public_material
                 .digest_for(&qdrant_sec::CkksParameters::openfhe_default_128_bit()),
             slots,
+            ciphertext_sha256: BASE64URL_NOPAD.encode(&Sha256::digest(ciphertext)),
             ciphertext: BASE64URL_NOPAD.encode(ciphertext),
         }
     }
@@ -3025,6 +3026,7 @@ esac
                 security_profile: query.security_profile,
                 context_digest: query.context_digest,
                 slots: query.slots,
+                ciphertext_sha256: query.ciphertext_sha256,
                 ciphertext: query.ciphertext,
             },
         })
@@ -3041,6 +3043,7 @@ esac
             security_profile: query.security_profile,
             context_digest: query.context_digest,
             slots: query.slots as u64,
+            ciphertext_sha256: query.ciphertext_sha256,
             ciphertext: query.ciphertext,
         }
     }

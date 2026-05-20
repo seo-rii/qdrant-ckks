@@ -13,6 +13,7 @@ const TIMESTAMP_MAX_SECONDS: i64 = 253_402_300_799; // 9999-12-31T23:59:59Z
 const CKKS_ENCRYPTED_QUERY_SCHEME: &str = "openfhe-ckks";
 const CKKS_ENCRYPTED_QUERY_SECURITY_PROFILE: &str = "ckks-128-n16384-d4-scale50";
 const CKKS_ENCRYPTED_QUERY_CONTEXT_DIGEST_B64_LEN: usize = 43;
+const CKKS_ENCRYPTED_QUERY_SHA256_B64_LEN: usize = 43;
 const CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_BYTES: usize = 16 * 1024 * 1024;
 const CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_ENCODED_BYTES: usize =
     (CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_BYTES + 2) / 3 * 4;
@@ -450,6 +451,31 @@ impl Validate for grpc::CkksEncryptedQueryVector {
                 ValidationError::new("empty_ckks_encrypted_query_slots"),
             );
         }
+        if self.ciphertext_sha256.is_empty() {
+            errors.add(
+                "ciphertext_sha256",
+                ValidationError::new("empty_ckks_encrypted_query_ciphertext_sha256"),
+            );
+        } else if self.ciphertext_sha256.len() != CKKS_ENCRYPTED_QUERY_SHA256_B64_LEN {
+            errors.add(
+                "ciphertext_sha256",
+                ValidationError::new("invalid_ckks_encrypted_query_ciphertext_sha256_length"),
+            );
+        } else {
+            match BASE64URL_NOPAD.decode(self.ciphertext_sha256.as_bytes()) {
+                Ok(decoded) if decoded.len() == 32 => {}
+                Ok(_) => errors.add(
+                    "ciphertext_sha256",
+                    ValidationError::new("invalid_ckks_encrypted_query_ciphertext_sha256_length"),
+                ),
+                Err(_) => errors.add(
+                    "ciphertext_sha256",
+                    ValidationError::new(
+                        "invalid_ckks_encrypted_query_ciphertext_sha256_base64url",
+                    ),
+                ),
+            }
+        }
         if self.ciphertext.is_empty() {
             errors.add(
                 "ciphertext",
@@ -756,6 +782,7 @@ mod tests {
             security_profile: "ckks-128-n16384-d4-scale50".to_string(),
             context_digest: BASE64URL_NOPAD.encode(&[3_u8; 32]),
             slots: 2,
+            ciphertext_sha256: "MFUx3MUOvKMc8dWzHp_HbtUfZrO23VoDDGU5rmUy-Xk".to_string(),
             ciphertext: BASE64URL_NOPAD.encode(b"ciphertext"),
         }
     }
@@ -793,6 +820,7 @@ mod tests {
             ckks_encrypted_query: Some(CkksEncryptedQueryVector {
                 context_digest: String::new(),
                 slots: 0,
+                ciphertext_sha256: String::new(),
                 ciphertext: String::new(),
                 ..valid_ckks_encrypted_query()
             }),
@@ -843,6 +871,20 @@ mod tests {
         assert!(
             bad_request.validate().is_err(),
             "oversized CKKS encrypted query ciphertext should error before decode"
+        );
+
+        let bad_request = SearchPoints {
+            collection_name: "docs".to_string(),
+            limit: 1,
+            ckks_encrypted_query: Some(CkksEncryptedQueryVector {
+                ciphertext_sha256: "not base64url!".to_string(),
+                ..valid_ckks_encrypted_query()
+            }),
+            ..Default::default()
+        };
+        assert!(
+            bad_request.validate().is_err(),
+            "malformed CKKS encrypted query ciphertext hash should error on validation"
         );
 
         let bad_request = SearchPoints {

@@ -193,6 +193,7 @@ const CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_FILES: usize = 32;
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 const CKKS_CLIENT_QUERY_CONTEXT_DIGEST_B64_LEN: usize = 43;
+const CKKS_CLIENT_QUERY_CIPHERTEXT_SHA256_B64_LEN: usize = 43;
 const CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_BYTES: usize = 16 * 1024 * 1024;
 const CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_ENCODED_BYTES: usize =
     (CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_BYTES + 2) / 3 * 4;
@@ -431,6 +432,7 @@ fn ckks_legacy_search_as_query_request(
                 security_profile: query.envelope.security_profile.clone(),
                 context_digest: query.envelope.context_digest.clone(),
                 slots: query.envelope.slots,
+                ciphertext_sha256: query.envelope.ciphertext_sha256.clone(),
                 ciphertext: query.envelope.ciphertext.clone(),
             }),
         ))),
@@ -1913,6 +1915,7 @@ fn ckks_client_encrypted_query_source<'a>(
         &input.security_profile,
         &input.context_digest,
         input.slots,
+        &input.ciphertext_sha256,
         &input.ciphertext,
     )
 }
@@ -1928,6 +1931,7 @@ fn ckks_rest_client_encrypted_query_source<'a>(
         &input.envelope.security_profile,
         &input.envelope.context_digest,
         input.envelope.slots,
+        &input.envelope.ciphertext_sha256,
         &input.envelope.ciphertext,
     )
 }
@@ -1939,6 +1943,7 @@ fn ckks_client_encrypted_query_source_from_parts<'a>(
     security_profile: &str,
     context_digest_b64: &'a str,
     slots: usize,
+    ciphertext_sha256_b64: &str,
     ciphertext_b64: &str,
 ) -> Result<CkksSidecarQuerySource<'a>, StorageError> {
     if version != 1 {
@@ -1959,6 +1964,23 @@ fn ckks_client_encrypted_query_source_from_parts<'a>(
     if slots == 0 {
         return Err(StorageError::bad_input(format!(
             "encrypted vector '{vector_name}' client CKKS query slots must be greater than 0",
+        )));
+    }
+    if ciphertext_sha256_b64.len() != CKKS_CLIENT_QUERY_CIPHERTEXT_SHA256_B64_LEN {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query ciphertext_sha256 must be {CKKS_CLIENT_QUERY_CIPHERTEXT_SHA256_B64_LEN} base64url characters",
+        )));
+    }
+    let ciphertext_sha256 = BASE64URL_NOPAD
+        .decode(ciphertext_sha256_b64.as_bytes())
+        .map_err(|err| {
+            StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' client CKKS query ciphertext_sha256 is not base64url: {err}",
+            ))
+        })?;
+    if ciphertext_sha256.len() != 32 {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query ciphertext_sha256 must decode to 32 bytes",
         )));
     }
     if context_digest_b64.len() != CKKS_CLIENT_QUERY_CONTEXT_DIGEST_B64_LEN {
@@ -1998,6 +2020,12 @@ fn ckks_client_encrypted_query_source_from_parts<'a>(
     if ciphertext.len() > CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_BYTES {
         return Err(StorageError::bad_input(format!(
             "encrypted vector '{vector_name}' client CKKS query ciphertext exceeds maximum size",
+        )));
+    }
+    let actual_ciphertext_sha256 = Sha256::digest(&ciphertext);
+    if ciphertext_sha256.as_slice() != &actual_ciphertext_sha256[..] {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query ciphertext_sha256 does not match ciphertext",
         )));
     }
 
@@ -7840,7 +7868,10 @@ mod tests {
     #[test]
     fn ckks_client_encrypted_query_source_rejects_oversized_fixed_fields() {
         let context_digest = BASE64URL_NOPAD.encode(&[3_u8; 32]);
-        let valid_ciphertext = BASE64URL_NOPAD.encode(b"ciphertext");
+        let valid_ciphertext_bytes = b"ciphertext";
+        let valid_ciphertext = BASE64URL_NOPAD.encode(valid_ciphertext_bytes);
+        let valid_ciphertext_sha256 =
+            BASE64URL_NOPAD.encode(&Sha256::digest(valid_ciphertext_bytes));
 
         let err = match ckks_client_encrypted_query_source_from_parts(
             "embedding",
@@ -7849,6 +7880,7 @@ mod tests {
             CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
             &"A".repeat(CKKS_CLIENT_QUERY_CONTEXT_DIGEST_B64_LEN + 1),
             2,
+            &valid_ciphertext_sha256,
             &valid_ciphertext,
         ) {
             Ok(_) => panic!("oversized context digest must be rejected"),
@@ -7863,12 +7895,32 @@ mod tests {
             CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
             &context_digest,
             2,
+            &valid_ciphertext_sha256,
             &"A".repeat(CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_ENCODED_BYTES + 1),
         ) {
             Ok(_) => panic!("oversized ciphertext must be rejected"),
             Err(err) => err,
         };
         assert!(err.to_string().contains("maximum size"));
+    }
+
+    #[test]
+    fn ckks_client_encrypted_query_source_rejects_ciphertext_hash_mismatch() {
+        let err = match ckks_client_encrypted_query_source_from_parts(
+            "embedding",
+            1,
+            CKKS_SCHEME,
+            CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+            &BASE64URL_NOPAD.encode(&[3_u8; 32]),
+            2,
+            &BASE64URL_NOPAD.encode(&Sha256::digest(b"other-ciphertext")),
+            &BASE64URL_NOPAD.encode(b"ciphertext"),
+        ) {
+            Ok(_) => panic!("ciphertext hash mismatch must fail before bridge scoring"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("ciphertext_sha256"));
     }
 
     #[test]
