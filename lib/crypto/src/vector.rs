@@ -21,6 +21,7 @@ const VERSION: u8 = 1;
 const CRYPTO_SCHEMA_VERSION: u16 = 1;
 const DEFAULT_ENCRYPTION_EPOCH: u64 = 0;
 const MAX_VECTOR_NAME_LEN: usize = 255;
+const SHA256_B64_LEN: usize = 43;
 const CKKS_VECTOR_CIPHERTEXT_MAX_BYTES: usize = 16 * 1024 * 1024;
 const CKKS_VECTOR_CIPHERTEXT_MAX_B64_LEN: usize = (CKKS_VECTOR_CIPHERTEXT_MAX_BYTES + 2) / 3 * 4;
 
@@ -462,6 +463,9 @@ fn validate_delete_target(target: &CkksVectorSidecarDeleteTarget) -> Result<(), 
         CkksVectorSidecarDeleteTarget::PointIds { digest_b64 }
         | CkksVectorSidecarDeleteTarget::Filter { digest_b64 } => digest_b64,
     };
+    if digest_b64.len() != SHA256_B64_LEN {
+        return Err(CkksError::InvalidDeleteTarget);
+    }
     if BASE64URL_NOPAD
         .decode(digest_b64.as_bytes())
         .ok()

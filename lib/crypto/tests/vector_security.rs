@@ -13,8 +13,9 @@ use qdrant_sec::{
     CkksBatchEncryptionInput, CkksEncryptedQueryScoreBatchInput, CkksEncryptionInput, CkksError,
     CkksParameters, CkksPlaintextQueryScoreBatchInput, CkksPlaintextQueryScoreInput,
     CkksPublicMaterial, CkksVectorBackend, CkksVectorBatchItem, CkksVectorEncryptor,
-    CommandOpenFheBackend, ENCRYPTED_CKKS_VECTOR_MARKER, EncryptedCkksVector, EncryptionContext,
-    EncryptionError, SecretKey, ckks_vector_sidecar_envelope_key,
+    CkksVectorSidecarDeleteTarget, CommandOpenFheBackend, ENCRYPTED_CKKS_VECTOR_MARKER,
+    EncryptedCkksVector, EncryptionContext, EncryptionError, SecretKey,
+    ckks_vector_sidecar_envelope_key, ckks_vector_verified_sidecar_delete_key,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -331,6 +332,21 @@ fn ckks_vector_rejects_oversized_ciphertext_at_seal_and_proof_boundaries() {
         matches!(err, CkksError::MalformedEnvelope(ref message) if message.contains("maximum size")),
         "{err:?}",
     );
+}
+
+#[test]
+fn ckks_vector_delete_target_rejects_oversized_digest_before_decode() {
+    let oversized_digest = "A".repeat(44);
+    assert!(matches!(
+        ckks_vector_verified_sidecar_delete_key(
+            "collection-uuid-1",
+            "embedding",
+            CkksVectorSidecarDeleteTarget::PointIds {
+                digest_b64: oversized_digest,
+            },
+        ),
+        Err(CkksError::InvalidDeleteTarget)
+    ));
 }
 
 #[test]
