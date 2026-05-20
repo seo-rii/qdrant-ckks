@@ -5105,10 +5105,23 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     let collection_crypto_id = collection.config_snapshot().await.uuid.unwrap().to_string();
     let sentinel = "qdrant-sec-plaintext-sentinel-9f74dcb5";
     let mut encrypted_payload = Payload(
-        serde_json::json!({ "document": { "body": sentinel }, "group": 1 })
-            .as_object()
-            .unwrap()
-            .clone(),
+        serde_json::json!({
+            "document": { "body": sentinel },
+            "group": 1,
+            "notes": {
+                ENCRYPTED_PAYLOAD_MARKER: {
+                    "ordinary": "marker-shaped server note outside encrypted selector"
+                },
+                "nested": {
+                    CLIENT_ENCRYPTED_PAYLOAD_MARKER: {
+                        "ordinary": "marker-shaped client note outside encrypted selector"
+                    }
+                }
+            }
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
     );
     let metadata_key = SecretKey::from_bytes([31u8; 32])
         .derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)
@@ -5260,9 +5273,28 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
             "reason": "encrypted_payload",
         })
     );
-    let redacted_serialized = serde_json::to_string(&redacted[0].payload).unwrap();
-    assert!(!redacted_serialized.contains(&format!("\"{ENCRYPTED_PAYLOAD_MARKER}\"")));
-    assert!(!redacted_serialized.contains(sentinel));
+    let assert_marker_shaped_notes_visible = |payload: &Payload| {
+        let redacted_notes = payload.0.get("notes").unwrap();
+        assert_eq!(
+            redacted_notes
+                .get(ENCRYPTED_PAYLOAD_MARKER)
+                .and_then(|marker| marker.get("ordinary"))
+                .and_then(|ordinary| ordinary.as_str()),
+            Some("marker-shaped server note outside encrypted selector"),
+        );
+        assert_eq!(
+            redacted_notes
+                .get("nested")
+                .and_then(|nested| nested.get(CLIENT_ENCRYPTED_PAYLOAD_MARKER))
+                .and_then(|marker| marker.get("ordinary"))
+                .and_then(|ordinary| ordinary.as_str()),
+            Some("marker-shaped client note outside encrypted selector"),
+        );
+    };
+    let redacted_body_serialized = serde_json::to_string(redacted_body).unwrap();
+    assert!(!redacted_body_serialized.contains(&format!("\"{ENCRYPTED_PAYLOAD_MARKER}\"")));
+    assert!(!redacted_body_serialized.contains(sentinel));
+    assert_marker_shaped_notes_visible(redacted[0].payload.as_ref().unwrap());
 
     let redacted_scroll = collection
         .scroll_by(
@@ -5288,6 +5320,7 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
         .and_then(|document| document.get("body"))
         .unwrap();
     assert_eq!(redacted_scroll_body, redacted_body);
+    assert_marker_shaped_notes_visible(redacted_scroll.points[0].payload.as_ref().unwrap());
 
     let redacted_search = collection
         .search(
@@ -5316,6 +5349,7 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
         .and_then(|document| document.get("body"))
         .unwrap();
     assert_eq!(redacted_search_body, redacted_body);
+    assert_marker_shaped_notes_visible(redacted_search[0].payload.as_ref().unwrap());
 
     let redacted_search_batch = collection
         .core_search_batch(

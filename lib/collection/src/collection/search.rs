@@ -177,6 +177,15 @@ impl Collection {
                 });
             future::try_join_all(filled_results).await
         } else {
+            let redaction_plan = if encrypted_payload_read_modes
+                .iter()
+                .any(|mode| *mode == EncryptedPayloadReadMode::Redacted)
+            {
+                self.encrypted_payload_redaction_plan_for_mode(EncryptedPayloadReadMode::Redacted)
+                    .await?
+            } else {
+                None
+            };
             let mut result = self
                 .do_core_search_batch(
                     request,
@@ -187,7 +196,11 @@ impl Collection {
                 )
                 .await?;
             for (points, mode) in result.iter_mut().zip(encrypted_payload_read_modes) {
-                apply_encrypted_payload_read_mode_to_scored_points(points, mode);
+                apply_encrypted_payload_read_mode_to_scored_points(
+                    points,
+                    mode,
+                    redaction_plan.as_ref(),
+                );
             }
             Ok(result)
         }

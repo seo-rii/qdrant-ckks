@@ -22,7 +22,7 @@ use qdrant_sec::{
 use segment::data_types::order_by::{Direction, OrderBy};
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
 use segment::index::query_optimization::rescore_formula::parsed_formula::ParsedFormula;
-use segment::json_path::JsonPath;
+use segment::json_path::{JsonPath, JsonPathItem};
 use segment::types::{
     AnyVariants, Condition, EncryptedPayloadReadMode, ExtendedPointId, Filter, Match, Payload,
     ScoredPoint, ShardKey, ValueVariants, WithPayload, WithPayloadInterface, WithVector,
@@ -1974,8 +1974,15 @@ impl Collection {
             });
             future::try_join_all(scroll_futures).await?
         };
+        let redaction_plan = self
+            .encrypted_payload_redaction_plan_for_mode(encrypted_payload_read_mode)
+            .await?;
         for records in &mut retrieved_points {
-            apply_encrypted_payload_read_mode_to_records(records, encrypted_payload_read_mode);
+            apply_encrypted_payload_read_mode_to_records(
+                records,
+                encrypted_payload_read_mode,
+                redaction_plan.as_ref(),
+            );
         }
 
         let retrieved_iter = retrieved_points.into_iter();
@@ -2182,7 +2189,14 @@ impl Collection {
             .iter()
             .filter_map(|id| covered_point_ids.remove(id))
             .collect();
-        apply_encrypted_payload_read_mode_to_records(&mut points, encrypted_payload_read_mode);
+        let redaction_plan = self
+            .encrypted_payload_redaction_plan_for_mode(encrypted_payload_read_mode)
+            .await?;
+        apply_encrypted_payload_read_mode_to_records(
+            &mut points,
+            encrypted_payload_read_mode,
+            redaction_plan.as_ref(),
+        );
 
         Ok(points)
     }
@@ -2583,17 +2597,75 @@ pub(super) fn ensure_encrypted_payload_read_mode_is_supported(
     }
 }
 
+#[derive(Debug, Default)]
+pub(super) struct PayloadRedactionPlan {
+    encrypted_payload_paths: Vec<(String, JsonPath)>,
+    redact_vector_sidecar: bool,
+}
+
+impl PayloadRedactionPlan {
+    fn is_empty(&self) -> bool {
+        self.encrypted_payload_paths.is_empty() && !self.redact_vector_sidecar
+    }
+}
+
+impl Collection {
+    pub(super) async fn encrypted_payload_redaction_plan_for_mode(
+        &self,
+        mode: EncryptedPayloadReadMode,
+    ) -> CollectionResult<Option<PayloadRedactionPlan>> {
+        if mode != EncryptedPayloadReadMode::Redacted {
+            return Ok(None);
+        }
+
+        let collection_config = self.collection_config.read().await;
+        let Some(encryption) = collection_config.params.effective_encryption() else {
+            return Ok(None);
+        };
+
+        let mut plan = PayloadRedactionPlan::default();
+        for rule in &encryption.rules {
+            match (&rule.selector, rule.binding.as_deref()) {
+                (EncryptionSelector::PayloadPaths { paths }, _)
+                | (
+                    EncryptionSelector::MetadataKeys { keys: paths },
+                    Some(METADATA_VALUE_BINDING),
+                ) => {
+                    for path in paths {
+                        let json_path = path.parse::<JsonPath>().map_err(|err| {
+                            CollectionError::bad_input(format!(
+                                "encrypted payload field path '{path}' is invalid: {err:?}",
+                            ))
+                        })?;
+                        plan.encrypted_payload_paths.push((path.clone(), json_path));
+                    }
+                }
+                (EncryptionSelector::VectorNames { .. }, _) => {
+                    plan.redact_vector_sidecar = true;
+                }
+                (EncryptionSelector::MetadataKeys { .. }, _) => {}
+            }
+        }
+
+        Ok((!plan.is_empty()).then_some(plan))
+    }
+}
+
 pub(super) fn apply_encrypted_payload_read_mode_to_scored_points(
     points: &mut [ScoredPoint],
     mode: EncryptedPayloadReadMode,
+    redaction_plan: Option<&PayloadRedactionPlan>,
 ) {
     if mode != EncryptedPayloadReadMode::Redacted {
         return;
     }
+    let Some(redaction_plan) = redaction_plan else {
+        return;
+    };
 
     for point in points {
         if let Some(payload) = &mut point.payload {
-            redact_encrypted_payload_values(payload);
+            redact_encrypted_payload_values(payload, redaction_plan);
         }
     }
 }
@@ -2601,50 +2673,73 @@ pub(super) fn apply_encrypted_payload_read_mode_to_scored_points(
 fn apply_encrypted_payload_read_mode_to_records(
     records: &mut [RecordInternal],
     mode: EncryptedPayloadReadMode,
+    redaction_plan: Option<&PayloadRedactionPlan>,
 ) {
     if mode != EncryptedPayloadReadMode::Redacted {
         return;
     }
+    let Some(redaction_plan) = redaction_plan else {
+        return;
+    };
 
     for record in records {
         if let Some(payload) = &mut record.payload {
-            redact_encrypted_payload_values(payload);
+            redact_encrypted_payload_values(payload, redaction_plan);
         }
     }
 }
 
-fn redact_encrypted_payload_values(payload: &mut Payload) {
-    for value in payload.0.values_mut() {
-        redact_encrypted_json_value(value);
+fn redact_encrypted_payload_values(payload: &mut Payload, redaction_plan: &PayloadRedactionPlan) {
+    for (_, encrypted_path) in &redaction_plan.encrypted_payload_paths {
+        if let Some(value) = payload.0.get_mut(&encrypted_path.first_key) {
+            redact_encrypted_json_value_at_path(value, &encrypted_path.rest);
+        }
+    }
+
+    if redaction_plan.redact_vector_sidecar
+        && let Some(value) = payload.0.get_mut(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+    {
+        *value = encrypted_payload_redaction_value();
     }
 }
 
-fn redact_encrypted_json_value(value: &mut serde_json::Value) {
-    if is_encrypted_payload_value(value) || is_client_encrypted_payload_value(value) {
-        *value = encrypted_payload_redaction_value();
+fn redact_encrypted_json_value_at_path(value: &mut serde_json::Value, path: &[JsonPathItem]) {
+    let Some((head, tail)) = path.split_first() else {
+        if should_redact_encrypted_payload_value(value) {
+            *value = encrypted_payload_redaction_value();
+        }
         return;
-    }
+    };
 
-    match value {
-        serde_json::Value::Object(object) => {
-            for (key, value) in object {
-                if key == ENCRYPTED_PAYLOAD_MARKER
-                    || key == CLIENT_ENCRYPTED_PAYLOAD_MARKER
-                    || key == ENCRYPTED_VECTOR_SIDECAR_FIELD
-                {
-                    *value = encrypted_payload_redaction_value();
-                } else {
-                    redact_encrypted_json_value(value);
-                }
+    match (head, value) {
+        (JsonPathItem::Key(key), serde_json::Value::Object(object)) => {
+            if let Some(value) = object.get_mut(key) {
+                redact_encrypted_json_value_at_path(value, tail);
             }
         }
-        serde_json::Value::Array(values) => {
+        (JsonPathItem::Index(index), serde_json::Value::Array(values)) => {
+            if let Some(value) = values.get_mut(*index) {
+                redact_encrypted_json_value_at_path(value, tail);
+            }
+        }
+        (JsonPathItem::WildcardIndex, serde_json::Value::Array(values)) => {
             for value in values {
-                redact_encrypted_json_value(value);
+                redact_encrypted_json_value_at_path(value, tail);
             }
         }
         _ => {}
     }
+}
+
+fn should_redact_encrypted_payload_value(value: &serde_json::Value) -> bool {
+    if is_encrypted_payload_value(value) || is_client_encrypted_payload_value(value) {
+        return true;
+    }
+
+    value.as_object().is_some_and(|object| {
+        object.contains_key(ENCRYPTED_PAYLOAD_MARKER)
+            || object.contains_key(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+    })
 }
 
 fn encrypted_payload_redaction_value() -> serde_json::Value {
