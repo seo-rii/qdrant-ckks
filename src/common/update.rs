@@ -6742,6 +6742,48 @@ esac
                 Some("server secret"),
             );
 
+            let decrypted_search_groups_with_lookup = crate::common::query::do_search_point_groups(
+                &toc,
+                "docs",
+                SearchGroupsRequestInternal {
+                    vector: vec![0.1, 0.2].into(),
+                    filter: None,
+                    params: None,
+                    with_payload: Some(WithPayloadInterface::Encrypted(
+                        PayloadEncryptedReadPolicy {
+                            encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                        },
+                    )),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                    group_request: BaseGroupRequest {
+                        group_by: "lookup_id".parse().unwrap(),
+                        group_size: 1,
+                        limit: 1,
+                        with_lookup: Some(api::rest::WithLookupInterface::Collection(
+                            "docs".to_string(),
+                        )),
+                    },
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                decrypted_search_groups_with_lookup.groups[0]
+                    .lookup
+                    .as_ref()
+                    .and_then(|record| record.payload.as_ref())
+                    .and_then(|payload| payload.0.get("body"))
+                    .and_then(Value::as_str),
+                Some("server secret"),
+            );
+
             let err = crate::common::query::do_search_point_groups(
                 &toc,
                 "docs",

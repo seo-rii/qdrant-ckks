@@ -2992,6 +2992,14 @@ pub async fn do_search_point_groups(
         &auth,
     )
     .await?;
+    normalize_rest_group_lookup_payload_for_read(
+        &mut request.group_request.with_lookup,
+        encrypted_payload_read_mode,
+    );
+    let lookup_decrypt_collection = rest_group_lookup_payload_decrypt_collection(
+        &request.group_request.with_lookup,
+        encrypted_payload_read_mode,
+    );
     request_raw_encrypted_payload_for_collection_read(
         &mut request.with_payload,
         encrypted_payload_read_mode,
@@ -3008,12 +3016,22 @@ pub async fn do_search_point_groups(
             timeout,
             hw_measurement_acc.clone(),
             settings,
+            encrypted_payload_read_mode,
         )
         .await?
     {
         decrypt_group_hits_for_read(
             toc,
             collection_name,
+            encrypted_payload_read_mode,
+            &mut result,
+            runtime_settings,
+            &auth,
+        )
+        .await?;
+        decrypt_group_lookup_payloads_for_read(
+            toc,
+            lookup_decrypt_collection.as_deref(),
             encrypted_payload_read_mode,
             &mut result,
             runtime_settings,
@@ -3060,6 +3078,15 @@ pub async fn do_search_point_groups(
         &auth,
     )
     .await?;
+    decrypt_group_lookup_payloads_for_read(
+        toc,
+        lookup_decrypt_collection.as_deref(),
+        encrypted_payload_read_mode,
+        &mut result,
+        runtime_settings,
+        &auth,
+    )
+    .await?;
     Ok(result)
 }
 
@@ -3074,6 +3101,7 @@ async fn try_ckks_vector_search_groups(
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
     runtime_settings: &Settings,
+    encrypted_payload_read_mode: EncryptedPayloadReadMode,
 ) -> Result<Option<GroupsResult>, StorageError> {
     let collection_pass = auth.check_collection_access(
         collection_name,
@@ -3139,6 +3167,7 @@ async fn try_ckks_vector_search_groups(
             auth,
             timeout,
             hw_measurement_acc,
+            encrypted_payload_read_mode,
         )
         .await
         .map(Some);
@@ -3182,6 +3211,7 @@ async fn try_ckks_vector_search_groups(
         auth,
         timeout,
         hw_measurement_acc,
+        encrypted_payload_read_mode,
     )
     .await
     .map(Some)
@@ -3414,11 +3444,13 @@ async fn attach_ckks_group_lookup(
     auth: &Auth,
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
+    encrypted_payload_read_mode: EncryptedPayloadReadMode,
 ) -> Result<GroupsResult, StorageError> {
     let Some(with_lookup) = with_lookup else {
         return Ok(result);
     };
-    let lookup = with_lookup;
+    let mut lookup = with_lookup;
+    normalize_collection_group_lookup_payload_for_read(&mut lookup, encrypted_payload_read_mode);
     ensure_with_vector_does_not_request_encrypted_vectors(
         toc,
         &lookup.collection_name,
@@ -4035,6 +4067,14 @@ pub async fn do_recommend_point_groups(
         &auth,
     )
     .await?;
+    normalize_rest_group_lookup_payload_for_read(
+        &mut request.group_request.with_lookup,
+        encrypted_payload_read_mode,
+    );
+    let lookup_decrypt_collection = rest_group_lookup_payload_decrypt_collection(
+        &request.group_request.with_lookup,
+        encrypted_payload_read_mode,
+    );
     request_raw_encrypted_payload_for_collection_read(
         &mut request.with_payload,
         encrypted_payload_read_mode,
@@ -4051,12 +4091,22 @@ pub async fn do_recommend_point_groups(
             timeout,
             hw_measurement_acc.clone(),
             settings,
+            encrypted_payload_read_mode,
         )
         .await?
     {
         decrypt_group_hits_for_read(
             toc,
             collection_name,
+            encrypted_payload_read_mode,
+            &mut result,
+            runtime_settings,
+            &auth,
+        )
+        .await?;
+        decrypt_group_lookup_payloads_for_read(
+            toc,
+            lookup_decrypt_collection.as_deref(),
             encrypted_payload_read_mode,
             &mut result,
             runtime_settings,
@@ -4103,6 +4153,15 @@ pub async fn do_recommend_point_groups(
         &auth,
     )
     .await?;
+    decrypt_group_lookup_payloads_for_read(
+        toc,
+        lookup_decrypt_collection.as_deref(),
+        encrypted_payload_read_mode,
+        &mut result,
+        runtime_settings,
+        &auth,
+    )
+    .await?;
     Ok(result)
 }
 
@@ -4117,6 +4176,7 @@ async fn try_ckks_vector_recommend_groups(
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
     runtime_settings: &Settings,
+    encrypted_payload_read_mode: EncryptedPayloadReadMode,
 ) -> Result<Option<GroupsResult>, StorageError> {
     let vector_name = request
         .using
@@ -4211,6 +4271,7 @@ async fn try_ckks_vector_recommend_groups(
             auth,
             timeout,
             hw_measurement_acc,
+            encrypted_payload_read_mode,
         )
         .await
         .map(Some);
@@ -4259,6 +4320,7 @@ async fn try_ckks_vector_recommend_groups(
             auth,
             timeout,
             hw_measurement_acc,
+            encrypted_payload_read_mode,
         )
         .await
         .map(Some);
@@ -4293,6 +4355,7 @@ async fn try_ckks_vector_recommend_groups(
         auth,
         timeout,
         hw_measurement_acc,
+        encrypted_payload_read_mode,
     )
     .await
     .map(Some)
@@ -4808,6 +4871,96 @@ fn encrypted_payload_read_mode(
         .unwrap_or(EncryptedPayloadReadMode::Raw)
 }
 
+fn group_lookup_payload_is_required(with_payload: &Option<WithPayloadInterface>) -> bool {
+    with_payload
+        .as_ref()
+        .is_some_and(WithPayloadInterface::is_required)
+}
+
+fn group_lookup_fetch_mode_for_read(
+    mode: EncryptedPayloadReadMode,
+) -> Option<EncryptedPayloadReadMode> {
+    match mode {
+        EncryptedPayloadReadMode::Raw => None,
+        EncryptedPayloadReadMode::Redacted => Some(EncryptedPayloadReadMode::Redacted),
+        EncryptedPayloadReadMode::Decrypted => Some(EncryptedPayloadReadMode::Raw),
+    }
+}
+
+fn normalize_lookup_payload_for_read(
+    with_payload: &mut Option<WithPayloadInterface>,
+    mode: EncryptedPayloadReadMode,
+) {
+    if !group_lookup_payload_is_required(with_payload) {
+        return;
+    }
+    let Some(fetch_mode) = group_lookup_fetch_mode_for_read(mode) else {
+        return;
+    };
+
+    *with_payload = Some(WithPayloadInterface::Encrypted(
+        PayloadEncryptedReadPolicy {
+            encrypted_payload: fetch_mode,
+        },
+    ));
+}
+
+fn normalize_rest_group_lookup_payload_for_read(
+    with_lookup: &mut Option<api::rest::WithLookupInterface>,
+    mode: EncryptedPayloadReadMode,
+) {
+    let Some(with_lookup) = with_lookup else {
+        return;
+    };
+
+    match with_lookup {
+        api::rest::WithLookupInterface::Collection(collection_name) => {
+            if let Some(fetch_mode) = group_lookup_fetch_mode_for_read(mode) {
+                *with_lookup = api::rest::WithLookupInterface::WithLookup(api::rest::WithLookup {
+                    collection_name: collection_name.clone(),
+                    with_payload: Some(WithPayloadInterface::Encrypted(
+                        PayloadEncryptedReadPolicy {
+                            encrypted_payload: fetch_mode,
+                        },
+                    )),
+                    with_vectors: Some(WithVector::Bool(false)),
+                });
+            }
+        }
+        api::rest::WithLookupInterface::WithLookup(lookup) => {
+            normalize_lookup_payload_for_read(&mut lookup.with_payload, mode);
+        }
+    }
+}
+
+fn normalize_collection_group_lookup_payload_for_read(
+    lookup: &mut collection::lookup::WithLookup,
+    mode: EncryptedPayloadReadMode,
+) {
+    normalize_lookup_payload_for_read(&mut lookup.with_payload, mode);
+}
+
+fn rest_group_lookup_payload_decrypt_collection(
+    with_lookup: &Option<api::rest::WithLookupInterface>,
+    mode: EncryptedPayloadReadMode,
+) -> Option<String> {
+    if mode != EncryptedPayloadReadMode::Decrypted {
+        return None;
+    }
+
+    match with_lookup.as_ref()? {
+        api::rest::WithLookupInterface::Collection(collection_name) => {
+            Some(collection_name.clone())
+        }
+        api::rest::WithLookupInterface::WithLookup(lookup)
+            if group_lookup_payload_is_required(&lookup.with_payload) =>
+        {
+            Some(lookup.collection_name.clone())
+        }
+        api::rest::WithLookupInterface::WithLookup(_) => None,
+    }
+}
+
 fn request_raw_encrypted_payload_for_collection_read(
     with_payload: &mut Option<WithPayloadInterface>,
     mode: EncryptedPayloadReadMode,
@@ -5052,6 +5205,35 @@ async fn decrypt_group_hits_for_read(
     }
 
     Ok(())
+}
+
+async fn decrypt_group_lookup_payloads_for_read(
+    toc: &TableOfContent,
+    lookup_collection_name: Option<&str>,
+    mode: EncryptedPayloadReadMode,
+    result: &mut GroupsResult,
+    runtime_settings: Option<&Settings>,
+    auth: &Auth,
+) -> Result<(), StorageError> {
+    let Some(lookup_collection_name) = lookup_collection_name else {
+        return Ok(());
+    };
+    let Some(plan) =
+        payload_decrypt_plan_for_read(toc, lookup_collection_name, mode, runtime_settings, auth)
+            .await?
+    else {
+        return Ok(());
+    };
+
+    decrypt_payloads_for_read(
+        lookup_collection_name,
+        &plan,
+        result.groups.iter_mut().filter_map(|group| {
+            let record = group.lookup.as_mut()?;
+            let point_id = record.id;
+            record.payload.as_mut().map(|payload| (point_id, payload))
+        }),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6249,6 +6431,17 @@ pub async fn do_query_point_groups(
         &auth,
     )
     .await?;
+    if let Some(lookup) = &mut request.with_lookup {
+        normalize_collection_group_lookup_payload_for_read(lookup, encrypted_payload_read_mode);
+    }
+    let lookup_decrypt_collection = request
+        .with_lookup
+        .as_ref()
+        .filter(|lookup| {
+            encrypted_payload_read_mode == EncryptedPayloadReadMode::Decrypted
+                && group_lookup_payload_is_required(&lookup.with_payload)
+        })
+        .map(|lookup| lookup.collection_name.clone());
     request_raw_encrypted_payload_for_required_collection_read(
         &mut request.with_payload,
         encrypted_payload_read_mode,
@@ -6265,12 +6458,22 @@ pub async fn do_query_point_groups(
             timeout,
             hw_measurement_acc.clone(),
             settings,
+            encrypted_payload_read_mode,
         )
         .await?
     {
         decrypt_group_hits_for_read(
             toc,
             collection_name,
+            encrypted_payload_read_mode,
+            &mut result,
+            runtime_settings,
+            &auth,
+        )
+        .await?;
+        decrypt_group_lookup_payloads_for_read(
+            toc,
+            lookup_decrypt_collection.as_deref(),
             encrypted_payload_read_mode,
             &mut result,
             runtime_settings,
@@ -6327,6 +6530,15 @@ pub async fn do_query_point_groups(
         &auth,
     )
     .await?;
+    decrypt_group_lookup_payloads_for_read(
+        toc,
+        lookup_decrypt_collection.as_deref(),
+        encrypted_payload_read_mode,
+        &mut result,
+        runtime_settings,
+        &auth,
+    )
+    .await?;
     Ok(result)
 }
 
@@ -6341,6 +6553,7 @@ async fn try_ckks_vector_query_groups(
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
     runtime_settings: &Settings,
+    encrypted_payload_read_mode: EncryptedPayloadReadMode,
 ) -> Result<Option<GroupsResult>, StorageError> {
     let collection_pass = auth.check_collection_access(
         collection_name,
@@ -6439,6 +6652,7 @@ async fn try_ckks_vector_query_groups(
                 auth,
                 timeout,
                 hw_measurement_acc,
+                encrypted_payload_read_mode,
             )
             .await
             .map(Some);
@@ -6552,6 +6766,7 @@ async fn try_ckks_vector_query_groups(
             auth,
             timeout,
             hw_measurement_acc,
+            encrypted_payload_read_mode,
         )
         .await
         .map(Some);
@@ -6600,6 +6815,7 @@ async fn try_ckks_vector_query_groups(
             auth,
             timeout,
             hw_measurement_acc,
+            encrypted_payload_read_mode,
         )
         .await
         .map(Some);
@@ -6648,6 +6864,7 @@ async fn try_ckks_vector_query_groups(
             auth,
             timeout,
             hw_measurement_acc,
+            encrypted_payload_read_mode,
         )
         .await
         .map(Some);
@@ -6696,6 +6913,7 @@ async fn try_ckks_vector_query_groups(
             auth,
             timeout,
             hw_measurement_acc,
+            encrypted_payload_read_mode,
         )
         .await
         .map(Some);
@@ -6741,6 +6959,7 @@ async fn try_ckks_vector_query_groups(
             auth,
             timeout,
             hw_measurement_acc,
+            encrypted_payload_read_mode,
         )
         .await
         .map(Some);
@@ -6786,6 +7005,7 @@ async fn try_ckks_vector_query_groups(
             auth,
             timeout,
             hw_measurement_acc,
+            encrypted_payload_read_mode,
         )
         .await
         .map(Some);
@@ -6825,6 +7045,7 @@ async fn try_ckks_vector_query_groups(
             auth,
             timeout,
             hw_measurement_acc,
+            encrypted_payload_read_mode,
         )
         .await
         .map(Some);
@@ -6875,6 +7096,7 @@ async fn try_ckks_vector_query_groups(
             auth,
             timeout,
             hw_measurement_acc,
+            encrypted_payload_read_mode,
         )
         .await
         .map(Some);
@@ -6932,6 +7154,7 @@ async fn try_ckks_vector_query_groups(
             auth,
             timeout,
             hw_measurement_acc,
+            encrypted_payload_read_mode,
         )
         .await
         .map(Some);
@@ -6972,6 +7195,7 @@ async fn try_ckks_vector_query_groups(
         auth,
         timeout,
         hw_measurement_acc,
+        encrypted_payload_read_mode,
     )
     .await
     .map(Some)

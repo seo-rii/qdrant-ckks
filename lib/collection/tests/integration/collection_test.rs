@@ -5650,6 +5650,51 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
     assert_eq!(redacted_grouped_body, redacted_body);
 
     let lookup_collection = Arc::clone(&collection);
+    let inherited_redacted_lookup_grouped = GroupBy::new(
+        GroupRequest {
+            source: SourceRequest::Search(SearchRequestInternal {
+                vector: vec![1.0, 0.0, 0.0, 0.0].into(),
+                with_payload: Some(WithPayloadInterface::Encrypted(
+                    PayloadEncryptedReadPolicy {
+                        encrypted_payload: EncryptedPayloadReadMode::Redacted,
+                    },
+                )),
+                with_vector: Some(WithVector::Bool(false)),
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: Some(0),
+                score_threshold: None,
+            }),
+            group_by: "group".parse().unwrap(),
+            group_size: 1,
+            limit: 1,
+            with_lookup: Some(collection::lookup::WithLookup {
+                collection_name: "test".to_string(),
+                with_payload: Some(WithPayloadInterface::Bool(true)),
+                with_vectors: Some(WithVector::Bool(false)),
+            }),
+        },
+        &collection,
+        move |_name| {
+            let lookup_collection = Arc::clone(&lookup_collection);
+            async move { Some(lookup_collection) }
+        },
+        HwMeasurementAcc::new(),
+    )
+    .execute()
+    .await
+    .unwrap();
+    let inherited_redacted_lookup_body = inherited_redacted_lookup_grouped[0]
+        .lookup
+        .as_ref()
+        .and_then(|record| record.payload.as_ref())
+        .and_then(|payload| payload.0.get("document"))
+        .and_then(|document| document.get("body"))
+        .unwrap();
+    assert_eq!(inherited_redacted_lookup_body, redacted_body);
+
+    let lookup_collection = Arc::clone(&collection);
     let redacted_lookup_grouped = GroupBy::new(
         GroupRequest {
             source: SourceRequest::Search(SearchRequestInternal {

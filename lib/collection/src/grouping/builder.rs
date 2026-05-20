@@ -4,6 +4,7 @@ use std::time::Duration;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use futures::Future;
 use itertools::Itertools;
+use segment::types::{EncryptedPayloadReadMode, PayloadEncryptedReadPolicy, WithPayloadInterface};
 
 use super::group_by::{GroupRequest, group_by};
 use crate::collection::Collection;
@@ -84,6 +85,21 @@ where
     /// Does the actual grouping
     async fn run(self) -> CollectionResult<Vec<PointGroup>> {
         let start = std::time::Instant::now();
+        let lookup_payload_read_mode = match &self.group_by.source {
+            super::group_by::SourceRequest::Search(request) => request
+                .with_payload
+                .as_ref()
+                .map(WithPayloadInterface::encrypted_payload_read_mode)
+                .unwrap_or(EncryptedPayloadReadMode::Raw),
+            super::group_by::SourceRequest::Recommend(request) => request
+                .with_payload
+                .as_ref()
+                .map(WithPayloadInterface::encrypted_payload_read_mode)
+                .unwrap_or(EncryptedPayloadReadMode::Raw),
+            super::group_by::SourceRequest::Query(request) => {
+                request.with_payload.encrypted_payload_read_mode()
+            }
+        };
         let with_lookup = self.group_by.with_lookup.clone();
 
         let core_group_by = self
@@ -108,7 +124,20 @@ where
         )
         .await?;
 
-        if let Some(lookup) = with_lookup {
+        if let Some(mut lookup) = with_lookup {
+            if lookup_payload_read_mode != EncryptedPayloadReadMode::Raw
+                && lookup
+                    .with_payload
+                    .as_ref()
+                    .is_some_and(WithPayloadInterface::is_required)
+            {
+                lookup.with_payload = Some(WithPayloadInterface::Encrypted(
+                    PayloadEncryptedReadPolicy {
+                        encrypted_payload: lookup_payload_read_mode,
+                    },
+                ));
+            }
+
             // update timeout
             let timeout = self
                 .timeout
