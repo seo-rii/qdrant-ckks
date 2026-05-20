@@ -3,7 +3,7 @@ use std::str::FromStr;
 use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use std::{cmp, thread};
+use std::{cmp, fmt, thread};
 
 use anyhow::{Context as _, anyhow};
 use api::grpc::dynamic_channel_pool::make_grpc_channel;
@@ -1144,8 +1144,9 @@ impl RaftMessageBroker {
 
                 if log::max_level() >= log::Level::Debug {
                     log::error!(
-                        "Failed to forward message {message:?} to message sender task {peer_id}: \
-                         {description}"
+                        "Failed to forward message {:?} to message sender task {peer_id}: \
+                         {description}",
+                        redacted_raft_message(message),
                     );
                 } else {
                     log::error!(
@@ -1321,7 +1322,10 @@ impl RaftMessageSender {
             let peer_id = message.to;
 
             if log::max_level() >= log::Level::Debug {
-                log::error!("Failed to send Raft message {message:?} to peer {peer_id}: {err}");
+                log::error!(
+                    "Failed to send Raft message {:?} to peer {peer_id}: {err}",
+                    redacted_raft_message(message),
+                );
             } else {
                 log::error!("Failed to send Raft message to peer {peer_id}: {err}");
             }
@@ -1429,6 +1433,64 @@ impl RaftMessageSender {
     }
 }
 
+fn redacted_raft_message(message: &RaftMessage) -> RedactedRaftMessage<'_> {
+    RedactedRaftMessage(message)
+}
+
+struct RedactedRaftMessage<'a>(&'a RaftMessage);
+
+impl fmt::Debug for RedactedRaftMessage<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = self.0;
+        let entry_data_bytes = message
+            .entries
+            .iter()
+            .map(|entry| entry.data.len())
+            .sum::<usize>();
+        let entry_context_bytes = message
+            .entries
+            .iter()
+            .map(|entry| entry.context.len())
+            .sum::<usize>();
+        let snapshot_data_bytes = message
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.data.len());
+        let snapshot_index = message
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.metadata.as_ref())
+            .map(|metadata| metadata.index);
+        let snapshot_term = message
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.metadata.as_ref())
+            .map(|metadata| metadata.term);
+
+        f.debug_struct("RaftMessage")
+            .field("msg_type", &message.msg_type)
+            .field("to", &message.to)
+            .field("from", &message.from)
+            .field("term", &message.term)
+            .field("log_term", &message.log_term)
+            .field("index", &message.index)
+            .field("commit", &message.commit)
+            .field("commit_term", &message.commit_term)
+            .field("entries_count", &message.entries.len())
+            .field("entry_data_bytes", &entry_data_bytes)
+            .field("entry_context_bytes", &entry_context_bytes)
+            .field("snapshot_data_bytes", &snapshot_data_bytes)
+            .field("snapshot_index", &snapshot_index)
+            .field("snapshot_term", &snapshot_term)
+            .field("request_snapshot", &message.request_snapshot)
+            .field("reject", &message.reject)
+            .field("reject_hint", &message.reject_hint)
+            .field("context_bytes", &message.context.len())
+            .field("priority", &message.priority)
+            .finish()
+    }
+}
+
 fn is_heartbeat(message: &RaftMessage) -> bool {
     message.msg_type == raft::eraftpb::MessageType::MsgHeartbeat as i32
         || message.msg_type == raft::eraftpb::MessageType::MsgHeartbeatResponse as i32
@@ -1458,6 +1520,44 @@ mod tests {
     use super::Consensus;
     use crate::common::helpers::create_general_purpose_runtime;
     use crate::settings::ConsensusConfig;
+
+    #[test]
+    fn raft_message_log_projection_redacts_entry_payload_bytes() {
+        let mut message = raft::eraftpb::Message {
+            msg_type: raft::eraftpb::MessageType::MsgAppend as i32,
+            to: 7,
+            from: 3,
+            term: 11,
+            index: 13,
+            commit: 17,
+            context: b"qdrant-sec-raft-context-sentinel".to_vec(),
+            snapshot: Some(raft::eraftpb::Snapshot {
+                data: b"qdrant-sec-raft-snapshot-sentinel".to_vec(),
+                metadata: Some(raft::eraftpb::SnapshotMetadata {
+                    index: 19,
+                    term: 23,
+                    ..Default::default()
+                }),
+            }),
+            ..Default::default()
+        };
+        message.entries.push(raft::eraftpb::Entry {
+            data: b"qdrant-sec-raft-entry-sentinel".to_vec(),
+            context: b"qdrant-sec-raft-entry-context-sentinel".to_vec(),
+            ..Default::default()
+        });
+
+        let log_line = format!("{:?}", super::redacted_raft_message(&message));
+
+        assert!(!log_line.contains("qdrant-sec-raft-entry-sentinel"));
+        assert!(!log_line.contains("qdrant-sec-raft-entry-context-sentinel"));
+        assert!(!log_line.contains("qdrant-sec-raft-context-sentinel"));
+        assert!(!log_line.contains("qdrant-sec-raft-snapshot-sentinel"));
+        assert!(log_line.contains("entries_count: 1"), "{log_line}");
+        assert!(log_line.contains("entry_data_bytes"), "{log_line}");
+        assert!(log_line.contains("snapshot_data_bytes"), "{log_line}");
+        assert!(log_line.contains("context_bytes"), "{log_line}");
+    }
 
     #[test]
     fn collection_creation_passes_consensus() {

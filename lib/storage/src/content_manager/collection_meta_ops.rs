@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt;
 
 use collection::config::{
     CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams, CryptoMigrationPlan,
@@ -18,8 +19,8 @@ use collection::shards::transfer::{ShardTransfer, ShardTransferKey, ShardTransfe
 use collection::shards::{CollectionId, replica_set};
 use schemars::JsonSchema;
 use segment::types::{
-    Payload, PayloadFieldSchema, PayloadKeyType, QuantizationConfig, ShardKey, StrictModeConfig,
-    VectorNameBuf,
+    Filter, Payload, PayloadFieldSchema, PayloadKeyType, QuantizationConfig, ShardKey,
+    StrictModeConfig, VectorNameBuf,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -387,6 +388,86 @@ pub enum ShardTransferOperations {
     },
 }
 
+impl ShardTransferOperations {
+    pub(crate) fn redacted_log(&self) -> RedactedShardTransferOperation<'_> {
+        RedactedShardTransferOperation(self)
+    }
+}
+
+pub(crate) struct RedactedShardTransferOperation<'a>(&'a ShardTransferOperations);
+
+impl fmt::Debug for RedactedShardTransferOperation<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            ShardTransferOperations::Start(transfer) => f
+                .debug_struct("Start")
+                .field("transfer", &RedactedShardTransfer(transfer))
+                .finish(),
+            ShardTransferOperations::Restart(transfer) => f
+                .debug_struct("Restart")
+                .field("transfer", &RedactedShardTransferRestart(transfer))
+                .finish(),
+            ShardTransferOperations::Finish(transfer) => f
+                .debug_struct("Finish")
+                .field("transfer", &RedactedShardTransfer(transfer))
+                .finish(),
+            ShardTransferOperations::SnapshotRecovered(transfer) => {
+                f.debug_tuple("SnapshotRecovered").field(transfer).finish()
+            }
+            ShardTransferOperations::RecoveryToPartial(transfer) => {
+                f.debug_tuple("RecoveryToPartial").field(transfer).finish()
+            }
+            ShardTransferOperations::Abort { transfer, reason } => f
+                .debug_struct("Abort")
+                .field("transfer", transfer)
+                .field("reason_present", &(!reason.is_empty()))
+                .finish(),
+        }
+    }
+}
+
+struct RedactedShardTransfer<'a>(&'a ShardTransfer);
+
+impl fmt::Debug for RedactedShardTransfer<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let transfer = self.0;
+        let mut debug = f.debug_struct("ShardTransfer");
+        debug
+            .field("shard_id", &transfer.shard_id)
+            .field("to_shard_id", &transfer.to_shard_id)
+            .field("from", &transfer.from)
+            .field("to", &transfer.to)
+            .field("sync", &transfer.sync)
+            .field("method", &transfer.method);
+        append_redacted_filter_fields(&mut debug, transfer.filter.as_ref());
+        debug.finish()
+    }
+}
+
+struct RedactedShardTransferRestart<'a>(&'a ShardTransferRestart);
+
+impl fmt::Debug for RedactedShardTransferRestart<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let transfer = self.0;
+        f.debug_struct("ShardTransferRestart")
+            .field("shard_id", &transfer.shard_id)
+            .field("to_shard_id", &transfer.to_shard_id)
+            .field("from", &transfer.from)
+            .field("to", &transfer.to)
+            .field("method", &transfer.method)
+            .field("filter_present", &false)
+            .field("filter_condition_count", &Option::<usize>::None)
+            .finish()
+    }
+}
+
+fn append_redacted_filter_fields(debug: &mut fmt::DebugStruct<'_, '_>, filter: Option<&Filter>) {
+    debug.field("filter_present", &filter.is_some()).field(
+        "filter_condition_count",
+        &filter.map(Filter::total_conditions_count),
+    );
+}
+
 /// Sets the state of shard replica
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
 pub struct SetShardReplicaState {
@@ -509,6 +590,9 @@ mod tests {
         CollectionEncryptionConfig, CryptoMigrationPlan, CryptoMigrationState, EncryptionRuleRef,
         EncryptionSelector,
     };
+    use collection::shards::transfer::ShardTransferMethod;
+    use segment::types::{Condition, FieldCondition};
+    use serde_json::json;
 
     use super::*;
 
@@ -617,5 +701,53 @@ mod tests {
             format!("{err:?}").contains("invalid_crypto_migration_transition"),
             "nested ApplyCryptoMigrationPlan validation must reject unsafe migration plans: {err:?}",
         );
+    }
+
+    #[test]
+    fn shard_transfer_log_projection_redacts_filter_literals() {
+        let operation = ShardTransferOperations::Start(ShardTransfer {
+            shard_id: 1,
+            to_shard_id: Some(2),
+            from: 3,
+            to: 4,
+            sync: true,
+            method: Some(ShardTransferMethod::StreamRecords),
+            filter: Some(Filter::new_must(Condition::Field(
+                FieldCondition::new_match(
+                    "document.body".parse().unwrap(),
+                    serde_json::from_value(json!({
+                        "value": "qdrant-sec-transfer-filter-sentinel",
+                    }))
+                    .unwrap(),
+                ),
+            ))),
+        });
+
+        let log_line = format!("{:?}", operation.redacted_log());
+
+        assert!(!log_line.contains("qdrant-sec-transfer-filter-sentinel"));
+        assert!(log_line.contains("filter_present: true"), "{log_line}");
+        assert!(
+            log_line.contains("filter_condition_count: Some(1)"),
+            "{log_line}",
+        );
+    }
+
+    #[test]
+    fn shard_transfer_log_projection_redacts_abort_reason() {
+        let operation = ShardTransferOperations::Abort {
+            transfer: ShardTransferKey {
+                shard_id: 1,
+                to_shard_id: None,
+                from: 3,
+                to: 4,
+            },
+            reason: "qdrant-sec-transfer-abort-sentinel".to_string(),
+        };
+
+        let log_line = format!("{:?}", operation.redacted_log());
+
+        assert!(!log_line.contains("qdrant-sec-transfer-abort-sentinel"));
+        assert!(log_line.contains("reason_present: true"), "{log_line}");
     }
 }

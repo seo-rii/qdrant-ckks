@@ -100,7 +100,10 @@ impl TableOfContent {
                     .map(|_| true)
             }
             CollectionMetaOperations::TransferShard(collection, operation) => {
-                log::debug!("Transfer shard {operation:?} of {collection}");
+                log::debug!(
+                    "Transfer shard {:?} of {collection}",
+                    operation.redacted_log()
+                );
 
                 self.handle_transfer(collection, operation)
                     .await
