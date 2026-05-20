@@ -22,6 +22,9 @@ const CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_VERSION: u8 = 2;
 const CKKS_CIPHERTEXT_HNSW_GRAPH_FILE: &str = "ckks_ciphertext_hnsw_graph.json";
 const CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const CKKS_CIPHERTEXT_HNSW_GRAPH_MAX_DEGREE: usize = 512;
+const CKKS_CIPHERTEXT_SIDECAR_MAX_BYTES: usize = 16 * 1024 * 1024;
+const CKKS_CIPHERTEXT_SIDECAR_MAX_ENCODED_BYTES: usize =
+    (CKKS_CIPHERTEXT_SIDECAR_MAX_BYTES + 2) / 3 * 4;
 pub const CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD: &str = "$qdrant_sec_vectors";
 pub const CKKS_VECTOR_SIDECAR_MARKER: &str = "$qdrant_sec_ckks_vector";
 
@@ -673,11 +676,21 @@ pub fn ckks_ciphertext_from_payload<'a>(
             "stored CKKS vector sidecar entry '{vector_name}' has empty ciphertext",
         )));
     }
+    if ciphertext.len() > CKKS_CIPHERTEXT_SIDECAR_MAX_ENCODED_BYTES {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' exceeds maximum ciphertext size",
+        )));
+    }
     let ciphertext_bytes = BASE64URL_NOPAD.decode(ciphertext.as_bytes()).map_err(|_| {
         OperationError::service_error(format!(
             "stored CKKS vector sidecar entry '{vector_name}' has invalid ciphertext",
         ))
     })?;
+    if ciphertext_bytes.len() > CKKS_CIPHERTEXT_SIDECAR_MAX_BYTES {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' exceeds maximum ciphertext size",
+        )));
+    }
     if ciphertext_bytes.len() < 16 {
         return Err(OperationError::service_error(format!(
             "stored CKKS vector sidecar entry '{vector_name}' has invalid ciphertext",
@@ -2489,6 +2502,27 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("empty ciphertext"));
+
+        let oversized_ciphertext = "A".repeat(CKKS_CIPHERTEXT_SIDECAR_MAX_ENCODED_BYTES + 1);
+        let err = ckks_ciphertext_from_payload(
+            &payload_with_marker(serde_json::json!({
+                "version": 1,
+                "scheme": "openfhe-ckks",
+                "envelope": {
+                    "version": 1,
+                    "algorithm": "AES-256-GCM",
+                    "key_id": "tenant-a:vector",
+                    "material_fingerprint": "tenant-a/vector@v1",
+                    "rk_id": "tenant-a/vector-rk@v1",
+                    "rk_epoch": 1,
+                    "nonce": "AAAAAAAAAAAAAAAA",
+                    "ciphertext": oversized_ciphertext
+                }
+            })),
+            "embedding",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("maximum ciphertext size"));
 
         let err = ckks_ciphertext_from_payload(
             &payload_with_marker(serde_json::json!({
