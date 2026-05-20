@@ -372,7 +372,12 @@ impl Auth {
         let result = self
             .unlogged_access()
             .check_collection_meta_operation(operation);
-        self.emit_audit(operation.operation_name(), None, &result);
+        self.emit_audit_with_metadata(
+            operation.operation_name(),
+            None,
+            &result,
+            operation.audit_metadata(),
+        );
         result
     }
 }
