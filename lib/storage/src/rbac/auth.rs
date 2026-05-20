@@ -146,6 +146,7 @@ fn redact_audit_error(error: &str) -> String {
         "privatekey",
         "publickey",
         "secretkey",
+        "sessiontoken",
         "signature",
         "signatureb64",
         "sigb64",
@@ -153,6 +154,8 @@ fn redact_audit_error(error: &str) -> String {
         "vaulttoken",
         "wrappedkey",
         "wrappedkeyb64",
+        "awssecuritytoken",
+        "xamzsecuritytoken",
         "xapikey",
     ];
 
@@ -201,6 +204,9 @@ mod tests {
             "bridge public-key-b64 mismatch: public-key-sentinel",
             "vault x-vault-token rejected: vault-token-sentinel",
             "Authorization header rejected: bearer-sentinel",
+            "X-Amz-Security-Token rejected: aws-token-sentinel",
+            "session_token rejected: session-token-sentinel",
+            "sessionToken rejected: session-token-sentinel",
         ] {
             let redacted = redact_audit_error(error);
 

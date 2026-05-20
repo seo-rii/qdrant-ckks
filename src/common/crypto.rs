@@ -4521,7 +4521,7 @@ struct AwsKmsMasterKeyProvider {
 struct AwsKmsCredentials {
     access_key_id: String,
     secret_access_key: Zeroizing<String>,
-    session_token: Option<String>,
+    session_token: Option<Zeroizing<String>>,
     region: String,
     endpoint_url: String,
 }
@@ -4578,7 +4578,9 @@ impl AwsKmsMasterKeyProvider {
         Ok(AwsKmsCredentials {
             access_key_id,
             secret_access_key,
-            session_token: aws_kms_env(&self.env_prefix, "SESSION_TOKEN").ok(),
+            session_token: aws_kms_env(&self.env_prefix, "SESSION_TOKEN")
+                .ok()
+                .map(Zeroizing::new),
             region,
             endpoint_url,
         })
@@ -4598,16 +4600,20 @@ impl AwsKmsMasterKeyProvider {
         let date = date_time.format("%Y%m%d").to_string();
         let authorization =
             aws_kms_authorization_header(target, &body, &credentials, &amz_date, &date)?;
+        let authorization = aws_kms_sensitive_header_value(&authorization)?;
         let mut request = self
             .client()?
             .post(&credentials.endpoint_url)
             .header("content-type", "application/x-amz-json-1.1")
             .header("x-amz-date", amz_date)
             .header("x-amz-target", target)
-            .header("authorization", authorization)
+            .header(reqwest::header::AUTHORIZATION, authorization)
             .body(body);
-        if let Some(session_token) = credentials.session_token {
-            request = request.header("x-amz-security-token", session_token);
+        if let Some(session_token) = credentials.session_token.as_ref() {
+            request = request.header(
+                reqwest::header::HeaderName::from_static("x-amz-security-token"),
+                aws_kms_sensitive_header_value(session_token.as_str())?,
+            );
         }
         let response = request
             .send()
@@ -4756,6 +4762,15 @@ fn validate_aws_kms_endpoint_url(url: &str) -> Result<String, PayloadWriteSetupE
     Ok(url.to_string())
 }
 
+fn aws_kms_sensitive_header_value(
+    value: &str,
+) -> Result<reqwest::header::HeaderValue, qdrant_sec::EncryptionError> {
+    let mut header = reqwest::header::HeaderValue::from_str(value)
+        .map_err(|_| qdrant_sec::EncryptionError::SealFailed)?;
+    header.set_sensitive(true);
+    Ok(header)
+}
+
 fn aws_kms_authorization_header(
     target: &str,
     payload: &[u8],
@@ -4777,7 +4792,10 @@ fn aws_kms_authorization_header(
         format!("content-type:application/x-amz-json-1.1\nhost:{host}\nx-amz-date:{amz_date}\n");
     let mut signed_headers = "content-type;host;x-amz-date".to_string();
     if let Some(session_token) = &credentials.session_token {
-        canonical_headers.push_str(&format!("x-amz-security-token:{session_token}\n"));
+        canonical_headers.push_str(&format!(
+            "x-amz-security-token:{}\n",
+            session_token.as_str()
+        ));
         signed_headers.push_str(";x-amz-security-token");
     }
     canonical_headers.push_str(&format!("x-amz-target:{target}\n"));
@@ -4789,23 +4807,26 @@ fn aws_kms_authorization_header(
         "AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n{}",
         hex_lower(&Sha256::digest(canonical_request.as_bytes()))
     );
-    let k_date = hmac_sha256(
-        format!("AWS4{}", credentials.secret_access_key.as_str()).as_bytes(),
-        date.as_bytes(),
-    );
+    let mut aws_secret_access_key = Zeroizing::new(Vec::with_capacity(
+        b"AWS4".len() + credentials.secret_access_key.len(),
+    ));
+    aws_secret_access_key.extend_from_slice(b"AWS4");
+    aws_secret_access_key.extend_from_slice(credentials.secret_access_key.as_bytes());
+    let k_date = hmac_sha256(aws_secret_access_key.as_slice(), date.as_bytes());
     let k_region = hmac_sha256(&k_date, credentials.region.as_bytes());
     let k_service = hmac_sha256(&k_region, b"kms");
     let k_signing = hmac_sha256(&k_service, b"aws4_request");
-    let signature = hex_lower(&hmac_sha256(&k_signing, string_to_sign.as_bytes()));
+    let signature_bytes = hmac_sha256(&k_signing, string_to_sign.as_bytes());
+    let signature = hex_lower(signature_bytes.as_slice());
     Ok(format!(
         "AWS4-HMAC-SHA256 Credential={}/{credential_scope}, SignedHeaders={signed_headers}, Signature={signature}",
         credentials.access_key_id
     ))
 }
 
-fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
+fn hmac_sha256(key: &[u8], data: &[u8]) -> Zeroizing<Vec<u8>> {
     let key = hmac::Key::new(hmac::HMAC_SHA256, key);
-    hmac::sign(&key, data).as_ref().to_vec()
+    Zeroizing::new(hmac::sign(&key, data).as_ref().to_vec())
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
@@ -8418,6 +8439,39 @@ mod tests {
             std::env::remove_var(format!("{prefix}_ENDPOINT_URL"));
             std::env::remove_var(format!("{prefix}_SESSION_TOKEN"));
         }
+    }
+
+    #[test]
+    fn aws_kms_sensitive_headers_are_marked_sensitive() {
+        let authorization =
+            aws_kms_sensitive_header_value("AWS4-HMAC-SHA256 Credential=AKIATEST/test").unwrap();
+        let session = aws_kms_sensitive_header_value("session-token-sentinel").unwrap();
+
+        assert!(authorization.is_sensitive());
+        assert!(session.is_sensitive());
+    }
+
+    #[test]
+    fn aws_kms_authorization_signs_session_token_without_returning_it() {
+        let credentials = AwsKmsCredentials {
+            access_key_id: "AKIATEST".to_string(),
+            secret_access_key: Zeroizing::new("test-secret".to_string()),
+            session_token: Some(Zeroizing::new("session-token-sentinel".to_string())),
+            region: "us-east-1".to_string(),
+            endpoint_url: "https://kms.us-east-1.amazonaws.com/".to_string(),
+        };
+
+        let header = aws_kms_authorization_header(
+            "TrentService.Encrypt",
+            br#"{"Plaintext":"test"}"#,
+            &credentials,
+            "20260520T000000Z",
+            "20260520",
+        )
+        .unwrap();
+
+        assert!(header.contains("x-amz-security-token"));
+        assert!(!header.contains("session-token-sentinel"));
     }
 
     #[test]
