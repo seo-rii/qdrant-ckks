@@ -1422,7 +1422,10 @@ pub fn validate_recovered_collection_crypto_runtime(
 ) -> Result<(), StorageError> {
     if let Some(encryption) = &params.encryption {
         if encryption.migration_state == CryptoMigrationState::Disabled {
-            return Ok(());
+            return Err(StorageError::bad_input(format!(
+                "recovered collection {collection_name} has disabled encryption metadata; \
+                 restore requires either no encryption config or a verified decrypt-migration completion proof",
+            )));
         }
         encryption.validate().map_err(|err| {
             StorageError::bad_input(format!(
@@ -1438,7 +1441,7 @@ pub fn validate_recovered_collection_crypto_config(
     collection_name: &str,
     config: &CollectionConfigInternal,
 ) -> Result<(), StorageError> {
-    if config.params.effective_encryption().is_some() && config.uuid.is_none() {
+    if config.params.encryption.is_some() && config.uuid.is_none() {
         return Err(StorageError::bad_input(format!(
             "recovered encrypted collection {collection_name} is missing a stable UUID; \
              encrypted payload/vector AAD requires an explicit stable collection identity",
@@ -14217,7 +14220,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_recovered_collection_crypto_runtime_allows_disabled_audit_metadata() {
+    fn validate_recovered_collection_crypto_config_rejects_disabled_metadata_without_proof() {
         let settings = Settings::new(None).unwrap();
         let params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
@@ -14242,13 +14245,27 @@ mod tests {
             params.validate().is_err(),
             "public create/update validation must still reject direct disabled states",
         );
-        validate_recovered_collection_crypto_runtime(&settings, "docs", &params).unwrap();
-        validate_recovered_collection_crypto_config(
+        let err = validate_recovered_collection_crypto_runtime(&settings, "docs", &params)
+            .expect_err("recovered disabled crypto metadata must fail closed without proof");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("disabled encryption metadata")),
+            "unexpected error: {err:?}",
+        );
+        let err = validate_recovered_collection_crypto_config(
             &settings,
             "docs",
-            &recovered_config(params, None),
+            &recovered_config(
+                params,
+                Some("12345678-90ab-cdef-1234-567890abcdef".parse().unwrap()),
+            ),
         )
-        .unwrap();
+        .expect_err("recovered disabled crypto config must fail closed without proof");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("disabled encryption metadata")),
+            "unexpected error: {err:?}",
+        );
     }
 
     #[test]
