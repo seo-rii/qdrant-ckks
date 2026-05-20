@@ -18,6 +18,12 @@ pub trait Loggable {
 
     /// Hash of the query, which is going to be used for approximate deduplication and counting.
     fn request_hash(&self) -> u64;
+
+    fn to_log_value_and_hash(&self) -> (serde_json::Value, u64) {
+        let value = self.to_log_value();
+        let hash = redacted_request_hash(self.request_name(), &value);
+        (value, hash)
+    }
 }
 
 impl Loggable for CollectionUpdateOperations {

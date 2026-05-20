@@ -165,7 +165,8 @@ impl SlowRequestsLog {
             }
         }
 
-        let content_hash = Self::content_hash(request.request_hash(), collection_name);
+        let (request_body, request_hash) = request.to_log_value_and_hash();
+        let content_hash = Self::content_hash(request_hash, collection_name);
 
         self.inc_counter(content_hash);
 
@@ -174,7 +175,7 @@ impl SlowRequestsLog {
             duration,
             datetime,
             request.request_name(),
-            request.to_log_value(),
+            request_body,
             content_hash,
             cpu_usage_ratio,
         );
@@ -291,7 +292,7 @@ mod tests {
         let fast = CountingLoggable::new();
 
         log.log_request("col", Duration::from_secs(10), Utc::now(), &slow, None);
-        assert_eq!(slow.request_hash_calls.get(), 1);
+        assert_eq!(slow.request_hash_calls.get(), 0);
         assert_eq!(slow.log_value_calls.get(), 1);
 
         let evicted = log.log_request("col", Duration::from_secs(1), Utc::now(), &fast, None);
