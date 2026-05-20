@@ -2790,6 +2790,12 @@ fn validate_metadata_blind_index_json_value(
 }
 
 fn validate_metadata_blind_index_token(token: &str, metadata_key: &str) -> CollectionResult<()> {
+    const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
+    if token.len() != BASE64URL_NOPAD_32_BYTE_LEN {
+        return Err(CollectionError::bad_input(format!(
+            "metadata blind-index field '{metadata_key}' token must decode to 32 bytes",
+        )));
+    }
     let token = BASE64URL_NOPAD.decode(token.as_bytes()).map_err(|_| {
         CollectionError::bad_input(format!(
             "metadata blind-index field '{metadata_key}' token must be base64url-no-padding encoded",
@@ -3070,6 +3076,8 @@ mod tests {
         for token in [
             "not base64!".to_string(),
             BASE64URL_NOPAD.encode(&[7_u8; 31]),
+            BASE64URL_NOPAD.encode(&[7_u8; 33]),
+            "A".repeat(1024),
         ] {
             let filter = blind_index_filter(metadata_key, token.to_string().into());
             let err =
@@ -3091,6 +3099,8 @@ mod tests {
         for value in [
             serde_json::json!("not base64!"),
             serde_json::json!(BASE64URL_NOPAD.encode(&[9_u8; 31])),
+            serde_json::json!(BASE64URL_NOPAD.encode(&[9_u8; 33])),
+            serde_json::json!("A".repeat(1024)),
             serde_json::json!(42),
         ] {
             let err = validate_metadata_blind_index_json_value(&value, metadata_key).unwrap_err();

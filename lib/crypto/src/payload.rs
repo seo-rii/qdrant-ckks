@@ -18,6 +18,8 @@ const CLIENT_PAYLOAD_ALGORITHM: &str = "AES-256-GCM";
 const CLIENT_PAYLOAD_KDF_DOMAIN: &str = "qdrant-sec/client-payload-text/v1";
 const CLIENT_PAYLOAD_SIGNATURE_DOMAIN: &str = "qdrant-sec/client-payload-signature/v1";
 const CLIENT_PAYLOAD_SIGNATURE_ALGORITHM: &str = "ed25519";
+const BASE64URL_NOPAD_12_BYTE_LEN: usize = 16;
+const BASE64URL_NOPAD_64_BYTE_LEN: usize = 86;
 const CRYPTO_SCHEMA_VERSION: u16 = 1;
 const DEFAULT_ENCRYPTION_EPOCH: u64 = 0;
 
@@ -270,6 +272,11 @@ impl ClientPayloadNonceReplayKey {
         rk_epoch
             .parse::<u64>()
             .map_err(|_| PayloadEncryptionError::MalformedClientNonceReplayCacheKey)?;
+        validate_base64url_nopad_encoded_len(
+            nonce,
+            BASE64URL_NOPAD_12_BYTE_LEN,
+            PayloadEncryptionError::MalformedClientNonceReplayCacheKey,
+        )?;
         let nonce = BASE64URL_NOPAD
             .decode(nonce.as_bytes())
             .map_err(|_| PayloadEncryptionError::MalformedClientNonceReplayCacheKey)?;
@@ -904,6 +911,11 @@ fn validate_client_payload_value_inner(
             envelope.aad.schema_version,
         ));
     }
+    validate_base64url_nopad_encoded_len(
+        &envelope.nonce,
+        BASE64URL_NOPAD_12_BYTE_LEN,
+        PayloadEncryptionError::MalformedEnvelope(context.field_path.to_string()),
+    )?;
     let nonce = BASE64URL_NOPAD
         .decode(envelope.nonce.as_bytes())
         .map_err(|_| PayloadEncryptionError::MalformedEnvelope(context.field_path.to_string()))?;
@@ -967,11 +979,21 @@ pub fn client_payload_envelope_key(
     let Some(signature) = envelope.signature else {
         return Ok(None);
     };
+    validate_base64url_nopad_encoded_len(
+        &envelope.nonce,
+        BASE64URL_NOPAD_12_BYTE_LEN,
+        PayloadEncryptionError::MalformedEnvelope(field_path.to_string()),
+    )?;
     let ciphertext = BASE64URL_NOPAD
         .decode(envelope.ciphertext.as_bytes())
         .map_err(|_| PayloadEncryptionError::MalformedEnvelope(field_path.to_string()))?;
     let ciphertext_digest = Sha256::digest(&ciphertext);
     let ciphertext_sha256_b64 = BASE64URL_NOPAD.encode(ciphertext_digest.as_ref());
+    validate_base64url_nopad_encoded_len(
+        &signature.sig,
+        BASE64URL_NOPAD_64_BYTE_LEN,
+        PayloadEncryptionError::MalformedEnvelope(field_path.to_string()),
+    )?;
     let signature_bytes = BASE64URL_NOPAD
         .decode(signature.sig.as_bytes())
         .map_err(|_| PayloadEncryptionError::MalformedEnvelope(field_path.to_string()))?;
@@ -1088,6 +1110,11 @@ pub fn client_payload_nonce_replay_key(
     let rk_epoch = envelope
         .rk_epoch
         .ok_or_else(|| PayloadEncryptionError::MalformedEnvelope(field_path.to_string()))?;
+    validate_base64url_nopad_encoded_len(
+        &envelope.nonce,
+        BASE64URL_NOPAD_12_BYTE_LEN,
+        PayloadEncryptionError::MalformedEnvelope(field_path.to_string()),
+    )?;
     let nonce = BASE64URL_NOPAD
         .decode(envelope.nonce.as_bytes())
         .map_err(|_| PayloadEncryptionError::MalformedEnvelope(field_path.to_string()))?;
@@ -1179,6 +1206,11 @@ fn validate_client_payload_signature(
         ));
     }
     validate_resource_key_id(&signature.key_id)?;
+    validate_base64url_nopad_encoded_len(
+        &signature.sig,
+        BASE64URL_NOPAD_64_BYTE_LEN,
+        PayloadEncryptionError::MalformedEnvelope(envelope.aad.field_path.clone()),
+    )?;
     let signature_bytes = BASE64URL_NOPAD
         .decode(signature.sig.as_bytes())
         .map_err(|_| PayloadEncryptionError::MalformedEnvelope(envelope.aad.field_path.clone()))?;
@@ -1325,6 +1357,17 @@ fn payload_metadata_aad(kind: &str, schema_version: u16, encryption_epoch: u64) 
     aad
 }
 
+fn validate_base64url_nopad_encoded_len(
+    encoded: &str,
+    expected_len: usize,
+    error: PayloadEncryptionError,
+) -> Result<(), PayloadEncryptionError> {
+    if encoded.len() != expected_len {
+        return Err(error);
+    }
+    Ok(())
+}
+
 fn extract_envelope(
     value: &Value,
     field: &str,
@@ -1378,5 +1421,87 @@ fn json_type_name(value: &Value) -> &'static str {
         Value::String(_) => "string",
         Value::Array(_) => "array",
         Value::Object(_) => "object",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn client_payload_context() -> ClientPayloadValidationContext<'static> {
+        ClientPayloadValidationContext {
+            collection_id: "collection-crypto-id",
+            point_id: "1",
+            field_path: "document.body",
+            expected_key_id: Some("tenant-a:client-rk"),
+            expected_rk_id: Some("tenant-a:client-rk"),
+            min_rk_epoch: Some(3),
+            max_rk_epoch: Some(3),
+            key_id_required: true,
+            signature_required: false,
+            signature_verification: None,
+        }
+    }
+
+    fn valid_client_payload_value() -> Value {
+        serde_json::json!({
+            CLIENT_ENCRYPTED_PAYLOAD_MARKER: {
+                "version": 1,
+                "kind": PAYLOAD_TEXT_KIND,
+                "algorithm": CLIENT_PAYLOAD_ALGORITHM,
+                "key_id": "tenant-a:client-rk",
+                "rk_id": "tenant-a:client-rk",
+                "rk_epoch": 3,
+                "kdf_domain": CLIENT_PAYLOAD_KDF_DOMAIN,
+                "aad": {
+                    "collection_id": "collection-crypto-id",
+                    "point_id": "1",
+                    "field_path": "document.body",
+                    "schema_version": 1
+                },
+                "nonce": BASE64URL_NOPAD.encode(&[1_u8; 12]),
+                "ciphertext": BASE64URL_NOPAD.encode(&[2_u8; 16]),
+                "signature": {
+                    "alg": CLIENT_PAYLOAD_SIGNATURE_ALGORITHM,
+                    "key_id": "tenant-a:signing",
+                    "sig": BASE64URL_NOPAD.encode(&[3_u8; 64])
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn client_payload_rejects_oversized_fixed_base64_fields_before_decode() {
+        let mut nonce_value = valid_client_payload_value();
+        nonce_value
+            .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+            .and_then(Value::as_object_mut)
+            .unwrap()
+            .insert("nonce".to_string(), Value::String("A".repeat(1024)));
+        assert!(matches!(
+            validate_client_payload_value(&nonce_value, client_payload_context()),
+            Err(PayloadEncryptionError::MalformedEnvelope(field)) if field == "document.body",
+        ));
+        assert!(matches!(
+            client_payload_nonce_replay_key(&nonce_value, "document.body"),
+            Err(PayloadEncryptionError::MalformedEnvelope(field)) if field == "document.body",
+        ));
+
+        let mut signature_value = valid_client_payload_value();
+        signature_value
+            .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+            .and_then(Value::as_object_mut)
+            .and_then(|envelope| envelope.get_mut("signature"))
+            .and_then(Value::as_object_mut)
+            .unwrap()
+            .insert("sig".to_string(), Value::String("A".repeat(1024)));
+        assert!(matches!(
+            validate_client_payload_value(&signature_value, client_payload_context()),
+            Err(PayloadEncryptionError::MalformedEnvelope(field)) if field == "document.body",
+        ));
+        assert!(matches!(
+            client_payload_envelope_key(&signature_value, "document.body"),
+            Err(PayloadEncryptionError::MalformedEnvelope(field)) if field == "document.body",
+        ));
     }
 }
