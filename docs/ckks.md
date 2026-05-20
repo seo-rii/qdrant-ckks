@@ -463,8 +463,8 @@ accepts only `key_id`, `material_fingerprint_id`, and `retired_materials`;
 options; `metadata/blind-index-hmac@v1` accepts only `key_id`,
 `expected_rk_id`, `min_rk_epoch`, and `max_rk_epoch`; `vector/openfhe-ckks@v1`
 accepts only `key_id`, `material_fingerprint_id`, `profile`,
-`crypto_context_b64`, and `public_key_b64`. Unknown options fail startup/runtime
-validation instead of being silently ignored.
+`crypto_context_b64`, `public_key_b64`, and `allow_plaintext_queries`. Unknown
+options fail startup/runtime validation instead of being silently ignored.
 
 Provider `materials` roles are also allowlisted. Server-side payload AEAD and
 OpenFHE CKKS vector-envelope providers accept only `materials.sym_key`;
@@ -497,6 +497,7 @@ crypto:
         profile: ckks-128-n16384-d4-scale50
         crypto_context_b64: base64url-no-pad-openfhe-context
         public_key_b64: base64url-no-pad-openfhe-public-key
+        allow_plaintext_queries: false
 ```
 
 Direct MK/RK materials must set `source` explicitly; qdrant-sec does not infer
@@ -1004,10 +1005,11 @@ reported security below 128 bits and rejects non-finite or negative noise budget
 metadata.
 
 Nearest-neighbor search over an encrypted vector name is implemented for
-REST/gRPC dense query vectors and root direct point-id nearest `query` or
-`query/groups` requests when runtime `crypto` settings are available on the
-serving node. This includes legacy `search` requests and root direct
-nearest-neighbor `query` requests. For raw dense query vectors, Qdrant scrolls
+client-encrypted CKKS query envelopes and root direct point-id nearest `query`
+or `query/groups` requests when runtime `crypto` settings are available on the
+serving node. Raw dense REST/gRPC query vectors are rejected by default for
+`vector/openfhe-ckks@v1`; setting `allow_plaintext_queries: true` explicitly
+opts into a server-side query plaintext TCB. In that opt-in mode, Qdrant scrolls
 the encrypted sidecar payloads,
 validates each CKKS envelope against the active OpenFHE public material/context
 digest, sends `encrypt_query` to the bridge, and then sends

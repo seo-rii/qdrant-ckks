@@ -2966,6 +2966,7 @@ esac
                         "profile": qdrant_sec::CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
                         "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
                         "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                        "allow_plaintext_queries": true,
                     }),
                 },
             )]),
@@ -3151,6 +3152,41 @@ esac
         let serialized = serde_json::to_string(&payload).unwrap();
         assert!(!serialized.contains("0.125"));
         assert!(!serialized.contains("-42.5"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vector_write_plan_rejects_plaintext_query_without_opt_in() {
+        let bridge = fake_openfhe_bridge();
+        let mut settings = vector_runtime_settings(&bridge.path().join("openfhe-bridge"));
+        settings
+            .crypto
+            .instances
+            .get_mut("docs_vector_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .remove("allow_plaintext_queries");
+        let params = encrypted_vector_params();
+        let plan = vector_write_plan_for_collection_with_crypto_id(
+            &settings,
+            "docs",
+            "docs-crypto-id",
+            &params,
+        )
+        .unwrap()
+        .unwrap();
+
+        let err = plan
+            .score_encrypted_query_batch("docs", "embedding", &[], &[0.125, -42.5])
+            .expect_err("raw dense CKKS query must require explicit plaintext-query opt-in");
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("does not allow plaintext query vectors")
+                    && description.contains("client-encrypted CKKS query")
+        ));
     }
 
     #[cfg(unix)]

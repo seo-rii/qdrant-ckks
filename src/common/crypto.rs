@@ -157,6 +157,7 @@ const SIGNATURE_PUBLIC_KEYS_OPTION: &str = "signature_public_keys";
 const CKKS_PROFILE_OPTION: &str = "profile";
 const CKKS_CRYPTO_CONTEXT_B64_OPTION: &str = "crypto_context_b64";
 const CKKS_PUBLIC_KEY_B64_OPTION: &str = "public_key_b64";
+const ALLOW_PLAINTEXT_QUERIES_OPTION: &str = "allow_plaintext_queries";
 const VAULT_KV2_RESPONSE_MAX_BYTES: u64 = 64 * 1024;
 const VAULT_TRANSIT_RESPONSE_MAX_BYTES: u64 = 64 * 1024;
 const PAYLOAD_AES_GCM_ALLOWED_OPTIONS: &[&str] = &[
@@ -179,6 +180,7 @@ const VECTOR_OPENFHE_CKKS_ALLOWED_OPTIONS: &[&str] = &[
     CKKS_PROFILE_OPTION,
     CKKS_CRYPTO_CONTEXT_B64_OPTION,
     CKKS_PUBLIC_KEY_B64_OPTION,
+    ALLOW_PLAINTEXT_QUERIES_OPTION,
 ];
 const VECTOR_OPENFHE_CKKS_ALLOWED_MATERIAL_ROLES: &[&str] = &[PAYLOAD_SYM_KEY_ROLE];
 const OPENFHE_BACKEND_KIND_PROCESS: &str = "process";
@@ -785,6 +787,7 @@ struct VectorWriteRule {
     distance: Distance,
     encryptor: CkksVectorEncryptor<CommandOpenFheBackend>,
     public_material: CkksPublicMaterial,
+    allow_plaintext_queries: bool,
 }
 
 pub(crate) struct VectorWritePlan {
@@ -850,6 +853,11 @@ impl VectorWritePlan {
         else {
             return Ok(None);
         };
+        if !rule.allow_plaintext_queries {
+            return Err(StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' does not allow plaintext query vectors; use a client-encrypted CKKS query envelope or stored point-id query",
+            )));
+        }
         let query_values = query_values
             .iter()
             .map(|value| *value as f64)
@@ -1076,6 +1084,16 @@ fn generic_vector_write_plan(
                 rule.instance
             ))
         })?;
+        let allow_plaintext_queries = match instance.options.get(ALLOW_PLAINTEXT_QUERIES_OPTION) {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(value)) => *value,
+            Some(_) => {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {} {ALLOW_PLAINTEXT_QUERIES_OPTION} option must be a boolean",
+                    rule.instance
+                )));
+            }
+        };
 
         let key_id = resolve_payload_key_id(collection_name, encryption, &rule.instance, instance)
             .map_err(|err| {
@@ -1152,6 +1170,7 @@ fn generic_vector_write_plan(
                 distance,
                 encryptor,
                 public_material: public_material.clone(),
+                allow_plaintext_queries,
             });
         }
     }
@@ -2291,6 +2310,15 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                         reason: format!("decoded value must be at most {max_decoded_len} bytes"),
                     });
                 }
+            }
+            if let Some(value) = instance.options.get(ALLOW_PLAINTEXT_QUERIES_OPTION)
+                && !matches!(value, Value::Bool(_) | Value::Null)
+            {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: ALLOW_PLAINTEXT_QUERIES_OPTION.to_string(),
+                    reason: "expected a boolean".to_string(),
+                });
             }
         }
 
@@ -4522,6 +4550,14 @@ fn validate_generic_collection_crypto_runtime(
                 rule.instance
             ))
         })?;
+        if let Some(value) = instance.options.get(ALLOW_PLAINTEXT_QUERIES_OPTION)
+            && !matches!(value, Value::Bool(_) | Value::Null)
+        {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} vector crypto instance {} {ALLOW_PLAINTEXT_QUERIES_OPTION} option must be a boolean",
+                rule.instance
+            )));
+        }
 
         let instance_key_id = match instance.options.get("key_id") {
             None | Some(Value::Null) => None,
@@ -7401,7 +7437,26 @@ mod tests {
                 if option == "materials.client_key"
         ));
 
-        let bridge_program = std::env::current_exe().unwrap().display().to_string();
+        let bridge_dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-vector-options-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let bridge_path = bridge_dir.path().join("openfhe-bridge");
+        std::fs::write(&bridge_path, b"#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut dir_permissions = std::fs::metadata(bridge_dir.path()).unwrap().permissions();
+            dir_permissions.set_mode(0o700);
+            std::fs::set_permissions(bridge_dir.path(), dir_permissions).unwrap();
+
+            let mut permissions = std::fs::metadata(&bridge_path).unwrap().permissions();
+            permissions.set_mode(0o700);
+            std::fs::set_permissions(&bridge_path, permissions).unwrap();
+        }
+        let bridge_program = bridge_path.display().to_string();
+        let bridge_sha256_b64 = BASE64URL_NOPAD.encode(&Sha256::digest(b"#!/bin/sh\nexit 0\n"));
         let vector_with_payload_option = CryptoSettings {
             allow_inline_key_material: true,
             instances: HashMap::from([(
@@ -7438,7 +7493,7 @@ mod tests {
                 CryptoBackendConfig {
                     kind: "process".to_string(),
                     program: Some(bridge_program),
-                    sha256_b64: Some(current_exe_sha256_b64()),
+                    sha256_b64: Some(bridge_sha256_b64),
                     signature_public_key_b64: None,
                     signature_b64: None,
                     size: None,
@@ -7446,11 +7501,15 @@ mod tests {
                 },
             )]),
         };
-        assert!(matches!(
-            validate_crypto_settings(&vector_with_payload_option),
-            Err(CryptoSetupError::InvalidInstanceOption { option, .. })
-                if option == RETIRED_MATERIALS_OPTION
-        ));
+        let result = validate_crypto_settings(&vector_with_payload_option);
+        assert!(
+            matches!(
+                result,
+                Err(CryptoSetupError::InvalidInstanceOption { ref option, .. })
+                    if option == RETIRED_MATERIALS_OPTION
+            ),
+            "unexpected validation result: {result:?}",
+        );
 
         let mut vector_with_extra_material_role = vector_with_payload_option;
         vector_with_extra_material_role
