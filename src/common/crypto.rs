@@ -1439,18 +1439,7 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
 
     let mut backends = BTreeMap::new();
     for (backend_name, backend) in &settings.crypto.backends {
-        backends.insert(
-            backend_name,
-            json!({
-                "kind": backend.kind,
-                "program": backend.program,
-                "sha256_b64": backend.sha256_b64,
-                "signature_public_key_b64": backend.signature_public_key_b64,
-                "signature_b64": backend.signature_b64,
-                "size": backend.size,
-                "timeout_ms": backend.timeout_ms,
-            }),
-        );
+        backends.insert(backend_name, sanitized_crypto_backend_policy(backend));
     }
 
     let view = json!({
@@ -1527,6 +1516,32 @@ fn public_material_b64_fingerprint(value: &serde_json::Value) -> serde_json::Val
     let digest = Sha256::digest(value.as_bytes());
     json!({
         "kind": "base64url-public-material",
+        "encoded_len": value.len(),
+        "encoded_sha256_b64": BASE64URL_NOPAD.encode(&digest),
+    })
+}
+
+fn sanitized_crypto_backend_policy(backend: &CryptoBackendConfig) -> serde_json::Value {
+    json!({
+        "kind": backend.kind,
+        "program": backend.program,
+        "sha256_b64": fixed_base64url_policy_fingerprint(backend.sha256_b64.as_deref()),
+        "signature_public_key_b64": fixed_base64url_policy_fingerprint(
+            backend.signature_public_key_b64.as_deref(),
+        ),
+        "signature_b64": fixed_base64url_policy_fingerprint(backend.signature_b64.as_deref()),
+        "size": backend.size,
+        "timeout_ms": backend.timeout_ms,
+    })
+}
+
+fn fixed_base64url_policy_fingerprint(value: Option<&str>) -> serde_json::Value {
+    let Some(value) = value else {
+        return Value::Null;
+    };
+    let digest = Sha256::digest(value.as_bytes());
+    json!({
+        "kind": "base64url-fixed-policy",
         "encoded_len": value.len(),
         "encoded_sha256_b64": BASE64URL_NOPAD.encode(&digest),
     })
@@ -7618,6 +7633,36 @@ mod tests {
             ..Settings::new(None).unwrap()
         };
         let fingerprint = crypto_runtime_capability_fingerprint(&settings);
+        let backend = settings.crypto.backends.get("openfhe_bridge_v1").unwrap();
+        let raw_pin_b64 = backend.sha256_b64.as_ref().unwrap();
+        let sanitized_backend = serde_json::to_string(&sanitized_crypto_backend_policy(backend))
+            .expect("sanitized backend policy must serialize");
+        assert!(
+            !sanitized_backend.contains(raw_pin_b64),
+            "backend fingerprint view must not serialize raw pin strings",
+        );
+        assert!(sanitized_backend.contains("base64url-fixed-policy"));
+
+        let mut peer_with_oversized_pin = settings.clone();
+        let oversized_pin_b64 = "A".repeat(10_000);
+        peer_with_oversized_pin
+            .crypto
+            .backends
+            .get_mut("openfhe_bridge_v1")
+            .unwrap()
+            .sha256_b64 = Some(oversized_pin_b64);
+        let sanitized_oversized_backend = serde_json::to_string(&sanitized_crypto_backend_policy(
+            peer_with_oversized_pin
+                .crypto
+                .backends
+                .get("openfhe_bridge_v1")
+                .unwrap(),
+        ))
+        .expect("sanitized oversized backend policy must serialize");
+        assert!(
+            sanitized_oversized_backend.len() < 1_000,
+            "backend fingerprint view must remain bounded for oversized pins",
+        );
 
         let mut peer_with_different_pin = settings.clone();
         peer_with_different_pin
