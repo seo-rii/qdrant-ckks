@@ -199,6 +199,8 @@ const CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_ENCODED_BYTES: usize =
 const CKKS_GROUPED_SEARCH_CANDIDATE_OVERSAMPLING: usize = 32;
 const CKKS_GROUPED_SEARCH_MAX_CANDIDATES: usize = 4096;
 const CKKS_SCORING_SOURCE_BATCH_MAX: usize = 32;
+const CKKS_MATRIX_SAMPLE_MAX: usize = 512;
+const CKKS_MATRIX_SCORE_PAIR_MAX: usize = CKKS_MATRIX_SAMPLE_MAX * CKKS_MATRIX_SAMPLE_MAX;
 
 static CKKS_SIDECAR_HNSW_GRAPH_CACHE: LazyLock<Mutex<CkksSidecarHnswGraphCache>> =
     LazyLock::new(|| Mutex::new(CkksSidecarHnswGraphCache::default()));
@@ -3382,6 +3384,35 @@ fn ckks_grouped_candidate_limit(
         .saturating_mul(CKKS_GROUPED_SEARCH_CANDIDATE_OVERSAMPLING)
         .min(CKKS_GROUPED_SEARCH_MAX_CANDIDATES)
         .max(requested_hits))
+}
+
+fn ensure_ckks_matrix_budget(
+    sample_size: usize,
+    limit_per_sample: usize,
+) -> Result<(), StorageError> {
+    if sample_size > CKKS_MATRIX_SAMPLE_MAX {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector matrix sample size must be at most {CKKS_MATRIX_SAMPLE_MAX}",
+        )));
+    }
+    let score_pairs = sample_size.checked_mul(sample_size).ok_or_else(|| {
+        StorageError::bad_input("encrypted vector matrix scoring budget is too large")
+    })?;
+    if score_pairs > CKKS_MATRIX_SCORE_PAIR_MAX {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector matrix scoring pairs must be at most {CKKS_MATRIX_SCORE_PAIR_MAX}",
+        )));
+    }
+    let response_pairs = sample_size.checked_mul(limit_per_sample).ok_or_else(|| {
+        StorageError::bad_input("encrypted vector matrix response budget is too large")
+    })?;
+    if response_pairs > CKKS_MATRIX_SCORE_PAIR_MAX {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector matrix response pairs must be at most {CKKS_MATRIX_SCORE_PAIR_MAX}",
+        )));
+    }
+
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7640,6 +7671,7 @@ async fn ckks_vector_search_points_matrix(
     if request.sample_size == 0 || request.limit_per_sample == 0 {
         return Ok(CollectionSearchMatrixResponse::default());
     }
+    ensure_ckks_matrix_budget(request.sample_size, request.limit_per_sample)?;
 
     let vector_name = request.using.as_str();
     let distance = plan.distance_for_vector(vector_name).ok_or_else(|| {
@@ -8996,6 +9028,33 @@ mod tests {
             query_values: source.as_slice(),
         };
         assert_eq!(ckks_sidecar_scoring_source_batches(&scoring), 1);
+    }
+
+    #[test]
+    fn ckks_matrix_budget_rejects_quadratic_scoring_cost() {
+        ensure_ckks_matrix_budget(CKKS_MATRIX_SAMPLE_MAX, 1).unwrap();
+        ensure_ckks_matrix_budget(1, CKKS_MATRIX_SCORE_PAIR_MAX).unwrap();
+
+        let err = ensure_ckks_matrix_budget(CKKS_MATRIX_SAMPLE_MAX + 1, 1)
+            .expect_err("sample above matrix budget must fail");
+        assert!(
+            format!("{err}").contains("sample size"),
+            "unexpected error: {err}",
+        );
+
+        let err = ensure_ckks_matrix_budget(CKKS_MATRIX_SAMPLE_MAX, CKKS_MATRIX_SAMPLE_MAX + 1)
+            .expect_err("response pairs above matrix budget must fail");
+        assert!(
+            format!("{err}").contains("response pairs"),
+            "unexpected error: {err}",
+        );
+
+        let err =
+            ensure_ckks_matrix_budget(usize::MAX, 2).expect_err("overflowing sample must fail");
+        assert!(
+            format!("{err}").contains("sample size"),
+            "unexpected error: {err}",
+        );
     }
 
     #[test]
