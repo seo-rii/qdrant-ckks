@@ -49,7 +49,9 @@ use crate::common::auth::Auth;
 use crate::common::collections::*;
 use crate::common::crypto::validate_recovered_collection_crypto_config;
 use crate::common::http_client::HttpClient;
-use crate::common::snapshots::try_take_partial_snapshot_recovery_lock;
+use crate::common::snapshots::{
+    try_take_partial_snapshot_recovery_lock, validate_snapshot_url_api_key_policy,
+};
 use crate::settings::Settings;
 
 #[derive(Deserialize, Serialize, JsonSchema, Validate)]
@@ -290,6 +292,11 @@ async fn recover_from_snapshot(
     let future = async move {
         let settings = settings.get_ref().clone();
         let snapshot_recover = request.into_inner();
+        validate_snapshot_url_api_key_policy(
+            &snapshot_recover.location,
+            snapshot_recover.api_key.as_deref(),
+            "collection snapshot recovery",
+        )?;
         let http_client = http_client.client(snapshot_recover.api_key.as_deref())?;
 
         do_recover_from_snapshot(
@@ -848,6 +855,11 @@ async fn recover_partial_snapshot_from(
             let collection = toc.get_collection(&collection_pass).await?;
             collection.assert_shard_exists(shard_id).await?;
 
+            validate_snapshot_url_api_key_policy(
+                &peer_url,
+                api_key.as_deref(),
+                "partial snapshot recover_from",
+            )?;
             let http_client = http_client.client(api_key.as_deref())?;
 
             let encoded_collection_name = urlencoding::encode(&collection_name);

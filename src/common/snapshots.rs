@@ -11,6 +11,7 @@ use collection::operations::verification::VerificationPass;
 use collection::shards::replica_set::replica_set_state::ReplicaState;
 use collection::shards::shard::ShardId;
 use collection::shards::transfer::RecoveryStage;
+use reqwest::Url;
 use shard::snapshots::snapshot_data::SnapshotData;
 use shard::snapshots::snapshot_manifest::{RecoveryType, SnapshotManifest};
 use storage::content_manager::errors::StorageError;
@@ -25,6 +26,20 @@ use super::auth::Auth;
 use super::crypto::validate_recovered_collection_crypto_config;
 use super::http_client::HttpClient;
 use crate::settings::Settings;
+
+pub fn validate_snapshot_url_api_key_policy(
+    url: &Url,
+    api_key: Option<&str>,
+    operation: &str,
+) -> Result<(), StorageError> {
+    if api_key.is_some() && matches!(url.scheme(), "http" | "https") {
+        return Err(StorageError::bad_input(format!(
+            "{operation} does not allow api_key with caller-provided snapshot URL {url}; configure a trusted peer transfer or host allowlist before forwarding credentials",
+        )));
+    }
+
+    Ok(())
+}
 
 /// # Cancel safety
 ///
@@ -212,6 +227,11 @@ pub async fn recover_shard_snapshot(
 
                         return Err(StorageError::bad_input(description));
                     }
+                    validate_snapshot_url_api_key_policy(
+                        &url,
+                        api_key.as_deref(),
+                        "shard snapshot recovery",
+                    )?;
 
                     recovery_progress
                         .lock()
@@ -535,6 +555,28 @@ mod tests {
             &config_with_params(CollectionParams::empty()),
         )
         .expect("plaintext recovery should not require crypto runtime settings");
+    }
+
+    #[test]
+    fn snapshot_url_recovery_rejects_api_key_for_caller_provided_http_urls() {
+        let http_url = Url::parse("http://example.test/snapshots/docs.snapshot").unwrap();
+        let err =
+            validate_snapshot_url_api_key_policy(&http_url, Some("secret"), "snapshot recovery")
+                .expect_err("api_key must not be forwarded to caller-provided HTTP URLs");
+        assert!(err.to_string().contains("does not allow api_key"));
+
+        let https_url = Url::parse("https://example.test/snapshots/docs.snapshot").unwrap();
+        let err =
+            validate_snapshot_url_api_key_policy(&https_url, Some("secret"), "snapshot recovery")
+                .expect_err("api_key must not be forwarded to caller-provided HTTPS URLs");
+        assert!(err.to_string().contains("does not allow api_key"));
+
+        validate_snapshot_url_api_key_policy(&http_url, None, "snapshot recovery")
+            .expect("URL recovery without forwarded credentials is allowed");
+
+        let file_url = Url::parse("file:///tmp/docs.snapshot").unwrap();
+        validate_snapshot_url_api_key_policy(&file_url, Some("secret"), "snapshot recovery")
+            .expect("non-network snapshot locations do not forward HTTP credentials");
     }
 
     #[test]
