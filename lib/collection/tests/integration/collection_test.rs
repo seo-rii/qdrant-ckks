@@ -7352,6 +7352,38 @@ async fn encrypted_vector_rejects_plaintext_vector_reads() {
             if description.contains("cannot return encrypted vector")
                 && description.contains("ciphertext read path returns payload sidecar only")
     ));
+
+    let err = collection
+        .core_search_batch(
+            CoreSearchRequestBatch {
+                searches: vec![
+                    SearchRequestInternal {
+                        vector: vec![1.0, 0.0, 0.0, 0.0].into(),
+                        with_payload: None,
+                        with_vector: Some(WithVector::Bool(true)),
+                        filter: None,
+                        params: None,
+                        limit: 1,
+                        offset: None,
+                        score_threshold: None,
+                    }
+                    .into(),
+                ],
+            },
+            None,
+            ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot return encrypted vector")
+                && description.contains("ciphertext read path returns payload sidecar only")
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread")]

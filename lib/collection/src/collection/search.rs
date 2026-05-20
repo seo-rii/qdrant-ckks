@@ -70,6 +70,10 @@ impl Collection {
         self.ensure_crypto_migration_allows_regular_operation("reads")
             .await?;
         for search in &request.searches {
+            self.ensure_with_vector_does_not_touch_encrypted_vector(
+                &search.with_vector.clone().unwrap_or_default(),
+            )
+            .await?;
             self.ensure_filter_does_not_touch_encrypted_payload(search.filter.as_ref())
                 .await?;
         }
