@@ -667,11 +667,8 @@ impl PayloadWritePlan {
         for rule in &self.rules {
             match rule {
                 PayloadWriteRule::ServerEncrypt { encryptor, policy } => {
-                    decrypted += encryptor.decrypt_selected_fields_if_encrypted(
-                        point_id,
-                        &mut payload.0,
-                        policy,
-                    )?;
+                    decrypted +=
+                        encryptor.decrypt_selected_fields(point_id, &mut payload.0, policy)?;
                 }
                 PayloadWriteRule::ClientEnvelope { .. } => {}
             }
@@ -13233,6 +13230,22 @@ mod tests {
         );
         assert_eq!(payload.0.get("tenant_id").unwrap(), &json!("acme"));
         assert_eq!(payload.0.get("body").unwrap(), &json!("public"));
+
+        let mut plaintext_payload = Payload(
+            json!({
+                "tenant_id": "plaintext invariant violation",
+                "body": "public",
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        assert!(matches!(
+            plan.decrypt_server_payload_for_read("1", &mut plaintext_payload),
+            Err(PayloadWriteSetupError::Payload(
+                PayloadEncryptionError::ExpectedEncryptedEnvelope { field, .. },
+            )) if field == "tenant_id"
+        ));
     }
 
     #[test]

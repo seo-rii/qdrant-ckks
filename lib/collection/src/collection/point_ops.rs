@@ -9,11 +9,10 @@ use futures::stream::FuturesUnordered;
 use futures::{StreamExt as _, TryFutureExt, TryStreamExt as _, future};
 use itertools::Itertools;
 use qdrant_sec::{
-    CKKS_SCHEME, CLIENT_ENCRYPTED_PAYLOAD_MARKER, CLIENT_PAYLOAD_ENVELOPE_BINDING,
-    ClientPayloadNonceReplayKey, ClientPayloadValidationContext, ENCRYPTED_CKKS_VECTOR_MARKER,
-    ENCRYPTED_PAYLOAD_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD, EncryptedCkksVector,
-    METADATA_EXACT_MATCH_TOKEN_BINDING, METADATA_VALUE_BINDING, PAYLOAD_FIELD_BINDING,
-    ServerPayloadValidationContext, ServerPayloadVerifiedEnvelopeKey,
+    CKKS_SCHEME, CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadNonceReplayKey,
+    ClientPayloadValidationContext, ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD,
+    EncryptedCkksVector, METADATA_EXACT_MATCH_TOKEN_BINDING, METADATA_VALUE_BINDING,
+    PAYLOAD_FIELD_BINDING, ServerPayloadValidationContext, ServerPayloadVerifiedEnvelopeKey,
     ckks_vector_sidecar_envelope_key, client_payload_envelope_key, client_payload_nonce_replay_key,
     is_client_encrypted_payload_value, is_encrypted_payload_value, server_payload_envelope_key,
     validate_client_payload_value_after_runtime_verification,
@@ -2608,7 +2607,6 @@ pub(super) struct PayloadRedactionPlan {
 
 #[derive(Debug)]
 enum PayloadRedactionKind {
-    EncryptedMarker,
     AnyValue,
 }
 
@@ -2647,7 +2645,7 @@ impl Collection {
                             ))
                         })?;
                         plan.encrypted_payload_paths
-                            .push((json_path, PayloadRedactionKind::EncryptedMarker));
+                            .push((json_path, PayloadRedactionKind::AnyValue));
                     }
                 }
                 (
@@ -2733,9 +2731,7 @@ fn redact_encrypted_json_value_at_path(
     kind: &PayloadRedactionKind,
 ) {
     let Some((head, tail)) = path.split_first() else {
-        if matches!(kind, PayloadRedactionKind::AnyValue)
-            || should_redact_encrypted_payload_value(value)
-        {
+        if matches!(kind, PayloadRedactionKind::AnyValue) {
             *value = encrypted_payload_redaction_value();
         }
         return;
@@ -2759,17 +2755,6 @@ fn redact_encrypted_json_value_at_path(
         }
         _ => {}
     }
-}
-
-fn should_redact_encrypted_payload_value(value: &serde_json::Value) -> bool {
-    if is_encrypted_payload_value(value) || is_client_encrypted_payload_value(value) {
-        return true;
-    }
-
-    value.as_object().is_some_and(|object| {
-        object.contains_key(ENCRYPTED_PAYLOAD_MARKER)
-            || object.contains_key(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
-    })
 }
 
 fn encrypted_payload_redaction_value() -> serde_json::Value {
@@ -3305,5 +3290,38 @@ mod tests {
             let err = validate_metadata_blind_index_json_value(&value, metadata_key).unwrap_err();
             assert!(format!("{err}").contains("metadata blind-index field"));
         }
+    }
+
+    #[test]
+    fn encrypted_payload_redaction_redacts_plaintext_invariant_violation() {
+        let mut payload = Payload(
+            serde_json::json!({
+                "document": {
+                    "body": "plaintext invariant violation",
+                    "title": "public",
+                }
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        let redaction_plan = PayloadRedactionPlan {
+            encrypted_payload_paths: vec![(
+                "document.body".parse().unwrap(),
+                PayloadRedactionKind::AnyValue,
+            )],
+            redact_vector_sidecar: false,
+        };
+
+        redact_encrypted_payload_values(&mut payload, &redaction_plan);
+
+        assert_eq!(
+            payload.0.get("document").unwrap().get("body").unwrap(),
+            &encrypted_payload_redaction_value(),
+        );
+        assert_eq!(
+            payload.0.get("document").unwrap().get("title").unwrap(),
+            &serde_json::json!("public"),
+        );
     }
 }
