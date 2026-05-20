@@ -545,7 +545,7 @@ fn payload_crypto_migration_completion_plan(
         target_epoch,
         active_rk_id: Some(request.active_rk_id),
         retired_rk_id,
-        dry_run: false,
+        dry_run: request.dry_run,
         checkpoints,
     })
 }
@@ -857,13 +857,18 @@ async fn run_payloads_for_crypto_migration(
             checkpoints,
         )
         .map_err(StorageError::from)?;
-        completion_plan
-            .validate_admin_plan_for_config(&encryption)
-            .map_err(|err| {
-                StorageError::bad_input(format!(
-                    "payload crypto migration completion plan is invalid: {err}",
-                ))
-            })?;
+        let completed_plan_is_valid = if dry_run {
+            let mut applyable_plan = completion_plan.clone();
+            applyable_plan.dry_run = false;
+            applyable_plan.validate_admin_plan_for_config(&encryption)
+        } else {
+            completion_plan.validate_admin_plan_for_config(&encryption)
+        };
+        completed_plan_is_valid.map_err(|err| {
+            StorageError::bad_input(format!(
+                "payload crypto migration completion plan is invalid: {err}",
+            ))
+        })?;
         let completed = if dry_run {
             false
         } else {
@@ -1316,6 +1321,30 @@ mod tests {
         assert_eq!(plan.active_rk_id.as_deref(), Some("rk/docs/4"));
         assert_eq!(plan.retired_rk_id.as_deref(), Some("rk/docs/3"));
         plan.validate_admin_plan().unwrap();
+    }
+
+    #[test]
+    fn payload_crypto_migration_dry_run_completion_plan_is_not_applyable() {
+        let plan = payload_crypto_migration_completion_plan(
+            CryptoMigrationState::Rotating,
+            4,
+            RunPayloadCryptoMigration {
+                active_rk_id: "rk/docs/4".to_string(),
+                retired_rk_id: Some("rk/docs/3".to_string()),
+                dry_run: true,
+            },
+            vec![verified_checkpoint()],
+        )
+        .unwrap();
+
+        assert!(plan.dry_run);
+        let err = plan
+            .validate_admin_plan()
+            .expect_err("dry-run completion plans must not be directly applyable");
+        assert_eq!(
+            err.code.as_ref(),
+            "crypto_migration_completion_cannot_be_dry_run"
+        );
     }
 
     #[test]
