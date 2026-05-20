@@ -427,6 +427,14 @@ pub async fn do_core_search_batch_points(
             mode
         })
         .collect::<Vec<_>>();
+    preflight_payload_decrypt_modes_for_read(
+        toc,
+        collection_name,
+        &encrypted_payload_read_modes,
+        runtime_settings,
+        &auth,
+    )
+    .await?;
 
     if let Some(settings) = runtime_settings
         && let Some(mut results) = try_ckks_vector_search_batch_points(
@@ -2976,6 +2984,14 @@ pub async fn do_search_point_groups(
     runtime_settings: Option<&Settings>,
 ) -> Result<GroupsResult, StorageError> {
     let encrypted_payload_read_mode = encrypted_payload_read_mode(request.with_payload.as_ref());
+    preflight_payload_decrypt_for_read(
+        toc,
+        collection_name,
+        encrypted_payload_read_mode,
+        runtime_settings,
+        &auth,
+    )
+    .await?;
     request_raw_encrypted_payload_for_collection_read(
         &mut request.with_payload,
         encrypted_payload_read_mode,
@@ -3489,6 +3505,14 @@ pub async fn do_recommend_batch_points(
             mode
         })
         .collect::<Vec<_>>();
+    preflight_payload_decrypt_modes_for_read(
+        toc,
+        collection_name,
+        &encrypted_payload_read_modes,
+        runtime_settings,
+        &auth,
+    )
+    .await?;
 
     if let Some(settings) = runtime_settings
         && let Some(mut results) = try_ckks_vector_recommend_batch_points(
@@ -4003,6 +4027,14 @@ pub async fn do_recommend_point_groups(
     runtime_settings: Option<&Settings>,
 ) -> Result<GroupsResult, StorageError> {
     let encrypted_payload_read_mode = encrypted_payload_read_mode(request.with_payload.as_ref());
+    preflight_payload_decrypt_for_read(
+        toc,
+        collection_name,
+        encrypted_payload_read_mode,
+        runtime_settings,
+        &auth,
+    )
+    .await?;
     request_raw_encrypted_payload_for_collection_read(
         &mut request.with_payload,
         encrypted_payload_read_mode,
@@ -4313,6 +4345,14 @@ pub async fn do_discover_batch_points(
             mode
         })
         .collect::<Vec<_>>();
+    preflight_payload_decrypt_modes_for_read(
+        toc,
+        collection_name,
+        &encrypted_payload_read_modes,
+        runtime_settings,
+        &auth,
+    )
+    .await?;
 
     if let Some(settings) = runtime_settings
         && let Some(mut results) = try_ckks_vector_discover_batch_points(
@@ -4851,6 +4891,38 @@ async fn payload_decrypt_plan_for_read(
     Ok(plan)
 }
 
+async fn preflight_payload_decrypt_for_read(
+    toc: &TableOfContent,
+    collection_name: &str,
+    mode: EncryptedPayloadReadMode,
+    runtime_settings: Option<&Settings>,
+    auth: &Auth,
+) -> Result<(), StorageError> {
+    let _ =
+        payload_decrypt_plan_for_read(toc, collection_name, mode, runtime_settings, auth).await?;
+    Ok(())
+}
+
+async fn preflight_payload_decrypt_modes_for_read(
+    toc: &TableOfContent,
+    collection_name: &str,
+    modes: &[EncryptedPayloadReadMode],
+    runtime_settings: Option<&Settings>,
+    auth: &Auth,
+) -> Result<(), StorageError> {
+    if modes.contains(&EncryptedPayloadReadMode::Decrypted) {
+        preflight_payload_decrypt_for_read(
+            toc,
+            collection_name,
+            EncryptedPayloadReadMode::Decrypted,
+            runtime_settings,
+            auth,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 fn decrypt_payloads_for_read<'a>(
     collection_name: &str,
     plan: &PayloadWritePlan,
@@ -5004,6 +5076,14 @@ pub async fn do_get_points(
     .await?;
 
     let encrypted_payload_read_mode = encrypted_payload_read_mode(request.with_payload.as_ref());
+    preflight_payload_decrypt_for_read(
+        toc,
+        collection_name,
+        encrypted_payload_read_mode,
+        runtime_settings,
+        &auth,
+    )
+    .await?;
     request_raw_encrypted_payload_for_collection_read(
         &mut request.with_payload,
         encrypted_payload_read_mode,
@@ -5057,6 +5137,14 @@ pub async fn do_scroll_points(
     .await?;
 
     let encrypted_payload_read_mode = encrypted_payload_read_mode(request.with_payload.as_ref());
+    preflight_payload_decrypt_for_read(
+        toc,
+        collection_name,
+        encrypted_payload_read_mode,
+        runtime_settings,
+        &auth,
+    )
+    .await?;
     request_raw_encrypted_payload_for_collection_read(
         &mut request.with_payload,
         encrypted_payload_read_mode,
@@ -5541,6 +5629,14 @@ pub async fn do_query_batch_points(
             mode
         })
         .collect::<Vec<_>>();
+    preflight_payload_decrypt_modes_for_read(
+        toc,
+        collection_name,
+        &encrypted_payload_read_modes,
+        runtime_settings,
+        &auth,
+    )
+    .await?;
 
     if let Some(settings) = runtime_settings {
         let collection_pass = auth.check_collection_access(
@@ -6145,6 +6241,14 @@ pub async fn do_query_point_groups(
     runtime_settings: Option<&Settings>,
 ) -> Result<GroupsResult, StorageError> {
     let encrypted_payload_read_mode = request.with_payload.encrypted_payload_read_mode();
+    preflight_payload_decrypt_for_read(
+        toc,
+        collection_name,
+        encrypted_payload_read_mode,
+        runtime_settings,
+        &auth,
+    )
+    .await?;
     request_raw_encrypted_payload_for_required_collection_read(
         &mut request.with_payload,
         encrypted_payload_read_mode,
