@@ -185,6 +185,7 @@ const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
 const BASE64URL_NOPAD_64_BYTE_LEN: usize = 86;
 const MAX_CLIENT_SIGNATURE_PUBLIC_KEYS: usize = 8;
 const MAX_REMOTE_WRAPPED_RESOURCE_KEY_BYTES: usize = 16 * 1024;
+const MAX_OPENFHE_BRIDGE_PROGRAM_BYTES: u64 = 64 * 1024 * 1024;
 const METADATA_BLIND_INDEX_ALLOWED_OPTIONS: &[&str] = &[
     "key_id",
     EXPECTED_RK_ID_OPTION,
@@ -3374,8 +3375,7 @@ fn validate_backend_program_path_with_sha256(
             return Err(invalid_program());
         }
 
-        let bytes = read_backend_program_for_sha256(backend_name, program)?;
-        let actual = Sha256::digest(&bytes);
+        let actual = hash_backend_program_for_sha256(backend_name, program)?;
         if actual[..] != expected[..] {
             return Err(invalid_program());
         }
@@ -3385,10 +3385,10 @@ fn validate_backend_program_path_with_sha256(
 }
 
 #[cfg(unix)]
-fn read_backend_program_for_sha256(
+fn hash_backend_program_for_sha256(
     backend_name: &str,
     program: &str,
-) -> Result<Vec<u8>, CryptoSetupError> {
+) -> Result<[u8; 32], CryptoSetupError> {
     use std::os::unix::fs::OpenOptionsExt;
 
     let invalid_program = || CryptoSetupError::InvalidBackendProgram {
@@ -3401,25 +3401,57 @@ fn read_backend_program_for_sha256(
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .open(program)
         .map_err(|_| invalid_program())?;
-    if !file.metadata().map_err(|_| invalid_program())?.is_file() {
+    let metadata = file.metadata().map_err(|_| invalid_program())?;
+    if !metadata.is_file() || metadata.len() > MAX_OPENFHE_BRIDGE_PROGRAM_BYTES {
         return Err(invalid_program());
     }
 
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .map_err(|_| invalid_program())?;
-    Ok(bytes)
+    hash_backend_program_reader(backend_name, program, &mut file)
 }
 
 #[cfg(not(unix))]
-fn read_backend_program_for_sha256(
+fn hash_backend_program_for_sha256(
     backend_name: &str,
     program: &str,
-) -> Result<Vec<u8>, CryptoSetupError> {
-    fs::read(program).map_err(|_| CryptoSetupError::InvalidBackendProgram {
+) -> Result<[u8; 32], CryptoSetupError> {
+    let invalid_program = || CryptoSetupError::InvalidBackendProgram {
         backend: backend_name.to_string(),
         program: program.to_string(),
-    })
+    };
+    let mut file = fs::File::open(program).map_err(|_| invalid_program())?;
+    let metadata = file.metadata().map_err(|_| invalid_program())?;
+    if !metadata.is_file() || metadata.len() > MAX_OPENFHE_BRIDGE_PROGRAM_BYTES {
+        return Err(invalid_program());
+    }
+    hash_backend_program_reader(backend_name, program, &mut file)
+}
+
+fn hash_backend_program_reader(
+    backend_name: &str,
+    program: &str,
+    reader: &mut impl Read,
+) -> Result<[u8; 32], CryptoSetupError> {
+    let invalid_program = || CryptoSetupError::InvalidBackendProgram {
+        backend: backend_name.to_string(),
+        program: program.to_string(),
+    };
+    let mut hasher = Sha256::new();
+    let mut total_read: u64 = 0;
+    let mut buffer = [0u8; 16 * 1024];
+    loop {
+        let read = reader.read(&mut buffer).map_err(|_| invalid_program())?;
+        if read == 0 {
+            break;
+        }
+        total_read = total_read
+            .checked_add(read as u64)
+            .ok_or_else(invalid_program)?;
+        if total_read > MAX_OPENFHE_BRIDGE_PROGRAM_BYTES {
+            return Err(invalid_program());
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher.finalize().into())
 }
 
 fn generic_payload_write_plan(
@@ -9607,6 +9639,46 @@ mod tests {
                 backend: "openfhe_local".to_string(),
             }),
         );
+
+        assert!(matches!(
+            validate_backend(
+                "openfhe_local",
+                &CryptoBackendConfig {
+                    kind: "process_pool".to_string(),
+                    program: Some(bridge_path.to_string_lossy().to_string()),
+                    sha256_b64: Some(BASE64URL_NOPAD.encode(&[0_u8; 32])),
+                    signature_public_key_b64: None,
+                    signature_b64: None,
+                    size: Some(1),
+                    timeout_ms: Some(5_000),
+                },
+            ),
+            Err(CryptoSetupError::InvalidBackendProgram { .. }),
+        ));
+    }
+
+    #[test]
+    fn validate_backend_rejects_oversized_bridge_program_before_hash() {
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-bridge-oversized-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let bridge_path = dir.path().join("openfhe-bridge");
+        let file = std::fs::File::create(&bridge_path).unwrap();
+        file.set_len(MAX_OPENFHE_BRIDGE_PROGRAM_BYTES + 1).unwrap();
+        drop(file);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut dir_permissions = std::fs::metadata(dir.path()).unwrap().permissions();
+            dir_permissions.set_mode(0o700);
+            std::fs::set_permissions(dir.path(), dir_permissions).unwrap();
+
+            let mut permissions = std::fs::metadata(&bridge_path).unwrap().permissions();
+            permissions.set_mode(0o700);
+            std::fs::set_permissions(&bridge_path, permissions).unwrap();
+        }
 
         assert!(matches!(
             validate_backend(

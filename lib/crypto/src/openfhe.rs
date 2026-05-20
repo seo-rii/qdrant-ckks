@@ -25,6 +25,7 @@ const DEFAULT_BRIDGE_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 const MIN_OPENFHE_SECURITY_LEVEL_BITS: u16 = 128;
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
+const MAX_BRIDGE_PROGRAM_SHA256_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BridgeSandbox {
@@ -414,8 +415,8 @@ fn validate_bridge_program_sha256_b64(
     expected_sha256_b64: &str,
 ) -> Result<(), CkksError> {
     let expected = decode_bridge_sha256_pin(path, expected_sha256_b64)?;
-    let bytes = read_bridge_program_for_sha256(path)?;
-    validate_bridge_sha256_bytes(path, &expected, &bytes)
+    let actual = hash_bridge_program_for_sha256(path)?;
+    validate_bridge_sha256_digest(path, &expected, &actual)
 }
 
 fn decode_bridge_sha256_pin(path: &Path, expected_sha256_b64: &str) -> Result<Vec<u8>, CkksError> {
@@ -443,12 +444,11 @@ fn decode_bridge_sha256_pin(path: &Path, expected_sha256_b64: &str) -> Result<Ve
     Ok(expected)
 }
 
-fn validate_bridge_sha256_bytes(
+fn validate_bridge_sha256_digest(
     path: &Path,
     expected: &[u8],
-    bytes: &[u8],
+    actual: &[u8],
 ) -> Result<(), CkksError> {
-    let actual = Sha256::digest(&bytes);
     if actual[..] != expected[..] {
         return Err(CkksError::Backend(format!(
             "OpenFHE bridge sha256 pin does not match: {}",
@@ -518,6 +518,7 @@ fn checked_bridge_spawn_program(
             program.display(),
         )));
     }
+    validate_bridge_program_size(program, metadata.len())?;
 
     let mut prefix = [0u8; 2];
     let prefix_len = file.read(&mut prefix).map_err(|err| {
@@ -530,14 +531,8 @@ fn checked_bridge_spawn_program(
 
     if let Some(expected_sha256_b64) = expected_sha256_b64 {
         let expected = decode_bridge_sha256_pin(program, expected_sha256_b64)?;
-        let mut bytes = prefix[..prefix_len].to_vec();
-        file.read_to_end(&mut bytes).map_err(|err| {
-            CkksError::Backend(format!(
-                "failed to read OpenFHE bridge program {} for checked spawn sha256 pinning: {err}",
-                program.display(),
-            ))
-        })?;
-        validate_bridge_sha256_bytes(program, &expected, &bytes)?;
+        let actual = hash_bridge_program_reader(program, &mut file, &prefix[..prefix_len])?;
+        validate_bridge_sha256_digest(program, &expected, &actual)?;
     }
     if is_shebang_script {
         // Shebang interpreters reopen /proc/self/fd/<fd> after exec. Keep the
@@ -587,7 +582,7 @@ fn checked_bridge_spawn_program(
 }
 
 #[cfg(unix)]
-fn read_bridge_program_for_sha256(path: &Path) -> Result<Vec<u8>, CkksError> {
+fn hash_bridge_program_for_sha256(path: &Path) -> Result<[u8; 32], CkksError> {
     use std::fs::OpenOptions;
     use std::os::unix::fs::OpenOptionsExt;
 
@@ -613,25 +608,87 @@ fn read_bridge_program_for_sha256(path: &Path) -> Result<Vec<u8>, CkksError> {
             path.display(),
         )));
     }
+    validate_bridge_program_size(path, metadata.len())?;
 
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).map_err(|err| {
+    hash_bridge_program_reader(path, &mut file, &[])
+}
+
+#[cfg(not(unix))]
+fn hash_bridge_program_for_sha256(path: &Path) -> Result<[u8; 32], CkksError> {
+    let mut file = std::fs::File::open(path).map_err(|err| {
         CkksError::Backend(format!(
             "failed to read OpenFHE bridge program {} for sha256 pinning: {err}",
             path.display(),
         ))
     })?;
-    Ok(bytes)
-}
-
-#[cfg(not(unix))]
-fn read_bridge_program_for_sha256(path: &Path) -> Result<Vec<u8>, CkksError> {
-    std::fs::read(path).map_err(|err| {
+    let metadata = file.metadata().map_err(|err| {
         CkksError::Backend(format!(
-            "failed to read OpenFHE bridge program {} for sha256 pinning: {err}",
+            "failed to inspect OpenFHE bridge program {} for sha256 pinning: {err}",
             path.display(),
         ))
-    })
+    })?;
+    if !metadata.is_file() {
+        return Err(CkksError::Backend(format!(
+            "OpenFHE bridge program must remain a regular file while hashing sha256 pin: {}",
+            path.display(),
+        )));
+    }
+    validate_bridge_program_size(path, metadata.len())?;
+    hash_bridge_program_reader(path, &mut file, &[])
+}
+
+fn validate_bridge_program_size(path: &Path, size: u64) -> Result<(), CkksError> {
+    if size > MAX_BRIDGE_PROGRAM_SHA256_BYTES {
+        return Err(CkksError::Backend(format!(
+            "OpenFHE bridge program exceeds {MAX_BRIDGE_PROGRAM_SHA256_BYTES} bytes while hashing sha256 pin: {}",
+            path.display(),
+        )));
+    }
+    Ok(())
+}
+
+fn hash_bridge_program_reader(
+    path: &Path,
+    reader: &mut impl Read,
+    initial_bytes: &[u8],
+) -> Result<[u8; 32], CkksError> {
+    let mut hasher = Sha256::new();
+    let mut total_read = initial_bytes.len() as u64;
+    if total_read > MAX_BRIDGE_PROGRAM_SHA256_BYTES {
+        return Err(CkksError::Backend(format!(
+            "OpenFHE bridge program exceeds {MAX_BRIDGE_PROGRAM_SHA256_BYTES} bytes while hashing sha256 pin: {}",
+            path.display(),
+        )));
+    }
+    hasher.update(initial_bytes);
+
+    let mut buffer = [0u8; 16 * 1024];
+    loop {
+        let read = reader.read(&mut buffer).map_err(|err| {
+            CkksError::Backend(format!(
+                "failed to read OpenFHE bridge program {} for sha256 pinning: {err}",
+                path.display(),
+            ))
+        })?;
+        if read == 0 {
+            break;
+        }
+        total_read = total_read.checked_add(read as u64).ok_or_else(|| {
+            CkksError::Backend(format!(
+                "OpenFHE bridge program exceeds {MAX_BRIDGE_PROGRAM_SHA256_BYTES} bytes while hashing sha256 pin: {}",
+                path.display(),
+            ))
+        })?;
+        if total_read > MAX_BRIDGE_PROGRAM_SHA256_BYTES {
+            return Err(CkksError::Backend(format!(
+                "OpenFHE bridge program exceeds {MAX_BRIDGE_PROGRAM_SHA256_BYTES} bytes while hashing sha256 pin: {}",
+                path.display(),
+            )));
+        }
+        hasher.update(&buffer[..read]);
+    }
+
+    Ok(hasher.finalize().into())
 }
 
 impl Drop for CommandOpenFheBackend {
@@ -2211,5 +2268,40 @@ mod tests {
         let err = CommandOpenFheBackend::new_checked_with_sha256_b64(&program, "A".repeat(1024))
             .expect_err("oversized sha256 pin must fail before bridge hash validation");
         assert!(format!("{err}").contains("must decode to 32 bytes"));
+    }
+
+    #[test]
+    fn checked_bridge_sha256_pin_rejects_oversized_program_before_hash() {
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-openfhe-oversized-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        #[cfg(unix)]
+        {
+            let mut dir_permissions = std::fs::metadata(dir.path()).unwrap().permissions();
+            dir_permissions.set_mode(0o700);
+            std::fs::set_permissions(dir.path(), dir_permissions).unwrap();
+        }
+
+        let program = dir.path().join("openfhe-bridge");
+        let file = std::fs::File::create(&program).unwrap();
+        file.set_len(MAX_BRIDGE_PROGRAM_SHA256_BYTES + 1).unwrap();
+        drop(file);
+        #[cfg(unix)]
+        {
+            let mut permissions = std::fs::metadata(&program).unwrap().permissions();
+            permissions.set_mode(0o700);
+            std::fs::set_permissions(&program, permissions).unwrap();
+        }
+
+        let err = CommandOpenFheBackend::new_checked_with_sha256_b64(
+            &program,
+            BASE64URL_NOPAD.encode(&[0u8; 32]),
+        )
+        .expect_err("oversized bridge program must fail before full-file hash allocation");
+        assert!(format!("{err}").contains("exceeds"));
     }
 }
