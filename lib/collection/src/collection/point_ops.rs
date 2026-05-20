@@ -62,6 +62,19 @@ fn crypto_migration_regular_operation_error(
     ))
 }
 
+fn ensure_crypto_migration_state_allows_regular_operation(
+    migration_state: CryptoMigrationState,
+    operation_kind: &str,
+) -> CollectionResult<()> {
+    if migration_state != CryptoMigrationState::Active {
+        return Err(crypto_migration_regular_operation_error(
+            migration_state,
+            operation_kind,
+        ));
+    }
+    Ok(())
+}
+
 impl Collection {
     pub(crate) async fn backfill_client_payload_nonce_replay_cache_from_storage(
         &self,
@@ -657,6 +670,9 @@ impl Collection {
         ordering: WriteOrdering,
         hw_measurement_acc: HwMeasurementAcc,
     ) -> CollectionResult<UpdateResult> {
+        self.ensure_crypto_migration_allows_regular_operation("peer writes")
+            .await?;
+
         let shard_holder = self.shards_holder.clone().read_owned().await;
 
         let result = self.update_runtime.spawn(async move {
@@ -716,12 +732,12 @@ impl Collection {
             )
         };
         if let Some(encryption) = encryption.as_ref()
-            && encryption.migration_state != CryptoMigrationState::Active
-        {
-            return Err(crypto_migration_regular_operation_error(
+            && let Err(err) = ensure_crypto_migration_state_allows_regular_operation(
                 encryption.migration_state,
                 "writes",
-            ));
+            )
+        {
+            return Err(err);
         }
         if encryption.is_some() {
             match &operation {
@@ -1929,14 +1945,10 @@ impl Collection {
         else {
             return Ok(());
         };
-        if encryption.migration_state != CryptoMigrationState::Active {
-            return Err(crypto_migration_regular_operation_error(
-                encryption.migration_state,
-                operation_kind,
-            ));
-        }
-
-        Ok(())
+        ensure_crypto_migration_state_allows_regular_operation(
+            encryption.migration_state,
+            operation_kind,
+        )
     }
 
     pub async fn scroll_by(
@@ -3141,6 +3153,28 @@ mod tests {
                 instance: "docs_vector_v1".to_string(),
                 binding: Some("vector-envelope/v1".to_string()),
             }],
+        }
+    }
+
+    #[test]
+    fn crypto_migration_state_guard_rejects_peer_writes_outside_active() {
+        ensure_crypto_migration_state_allows_regular_operation(
+            CryptoMigrationState::Active,
+            "peer writes",
+        )
+        .unwrap();
+
+        for state in [
+            CryptoMigrationState::Disabled,
+            CryptoMigrationState::Encrypting,
+            CryptoMigrationState::Rotating,
+            CryptoMigrationState::Decrypting,
+        ] {
+            let err = ensure_crypto_migration_state_allows_regular_operation(state, "peer writes")
+                .unwrap_err();
+            assert!(
+                format!("{err}").contains("regular peer writes require migration_state=active")
+            );
         }
     }
 
