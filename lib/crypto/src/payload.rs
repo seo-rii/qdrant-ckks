@@ -20,8 +20,22 @@ const CLIENT_PAYLOAD_SIGNATURE_DOMAIN: &str = "qdrant-sec/client-payload-signatu
 const CLIENT_PAYLOAD_SIGNATURE_ALGORITHM: &str = "ed25519";
 const BASE64URL_NOPAD_12_BYTE_LEN: usize = 16;
 const BASE64URL_NOPAD_64_BYTE_LEN: usize = 86;
+const CLIENT_PAYLOAD_CIPHERTEXT_MAX_BYTES: usize = 1024 * 1024;
+const CLIENT_PAYLOAD_CIPHERTEXT_MAX_B64_LEN: usize =
+    base64url_nopad_encoded_len(CLIENT_PAYLOAD_CIPHERTEXT_MAX_BYTES);
 const CRYPTO_SCHEMA_VERSION: u16 = 1;
 const DEFAULT_ENCRYPTION_EPOCH: u64 = 0;
+
+const fn base64url_nopad_encoded_len(decoded_len: usize) -> usize {
+    let full_groups = decoded_len / 3;
+    let remainder = decoded_len % 3;
+    let base_len = full_groups * 4;
+    match remainder {
+        0 => base_len,
+        1 => base_len + 2,
+        _ => base_len + 3,
+    }
+}
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum PayloadEncryptionError {
@@ -71,6 +85,8 @@ pub enum PayloadEncryptionError {
     UnsupportedClientSignatureAlgorithm(String),
     #[error("payload field client envelope signature verification failed")]
     InvalidClientSignature,
+    #[error("payload field client envelope ciphertext exceeds maximum size: {0}")]
+    ClientCiphertextTooLarge(String),
     #[error("payload field encrypted envelope does not match runtime verification proof")]
     RuntimeEnvelopeProofMismatch,
     #[error("payload field contains unsupported qdrant crypto schema version: {0}")]
@@ -798,7 +814,7 @@ pub fn validate_client_payload_value(
     if context.signature_required && context.signature_verification.is_none() {
         return Err(PayloadEncryptionError::InvalidClientSignature);
     }
-    validate_client_payload_value_inner(value, context)
+    validate_client_payload_value_inner(value, context).map(|_| ())
 }
 
 /// Validate a client envelope after an ingress runtime plan already verified its
@@ -808,14 +824,13 @@ pub fn validate_client_payload_value_after_runtime_verification(
     context: ClientPayloadValidationContext<'_>,
     verified_envelope_key: &ClientPayloadVerifiedEnvelopeKey,
 ) -> Result<(), PayloadEncryptionError> {
-    validate_client_payload_value_inner(value, context)?;
-    let envelope_key =
-        client_payload_envelope_key(value, context.field_path)?.ok_or_else(|| {
-            PayloadEncryptionError::ExpectedEncryptedEnvelope {
-                field: context.field_path.to_string(),
-                found: json_type_name(value),
-            }
-        })?;
+    let validated = validate_client_payload_value_inner(value, context)?;
+    let envelope_key = client_payload_envelope_key_from_validated(validated).ok_or_else(|| {
+        PayloadEncryptionError::ExpectedEncryptedEnvelope {
+            field: context.field_path.to_string(),
+            found: json_type_name(value),
+        }
+    })?;
     if verified_envelope_key.envelope_key() != &envelope_key {
         return Err(PayloadEncryptionError::RuntimeEnvelopeProofMismatch);
     }
@@ -825,7 +840,7 @@ pub fn validate_client_payload_value_after_runtime_verification(
 fn validate_client_payload_value_inner(
     value: &Value,
     context: ClientPayloadValidationContext<'_>,
-) -> Result<(), PayloadEncryptionError> {
+) -> Result<ValidatedClientPayloadEnvelope, PayloadEncryptionError> {
     let envelope = extract_client_envelope(value, context.field_path)?.ok_or_else(|| {
         PayloadEncryptionError::ExpectedEncryptedEnvelope {
             field: context.field_path.to_string(),
@@ -924,21 +939,19 @@ fn validate_client_payload_value_inner(
             context.field_path.to_string(),
         ));
     }
-    let ciphertext = BASE64URL_NOPAD
-        .decode(envelope.ciphertext.as_bytes())
-        .map_err(|_| PayloadEncryptionError::MalformedEnvelope(context.field_path.to_string()))?;
-    if ciphertext.len() < 16 {
-        return Err(PayloadEncryptionError::MalformedEnvelope(
-            context.field_path.to_string(),
-        ));
-    }
-    validate_client_payload_signature(
+    let ciphertext_sha256_b64 =
+        client_payload_ciphertext_digest_b64(context.field_path, &envelope.ciphertext)?;
+    let signature_sha256_b64 = validate_client_payload_signature(
         &envelope,
         context.signature_required,
         context.signature_verification,
     )?;
 
-    Ok(())
+    Ok(ValidatedClientPayloadEnvelope {
+        envelope,
+        ciphertext_sha256_b64,
+        signature_sha256_b64,
+    })
 }
 
 pub fn validate_client_payload_value_for_runtime(
@@ -948,14 +961,13 @@ pub fn validate_client_payload_value_for_runtime(
     if context.signature_verification.is_none() {
         return Err(PayloadEncryptionError::InvalidClientSignature);
     }
-    validate_client_payload_value(value, context)?;
-    let envelope_key =
-        client_payload_envelope_key(value, context.field_path)?.ok_or_else(|| {
-            PayloadEncryptionError::ExpectedEncryptedEnvelope {
-                field: context.field_path.to_string(),
-                found: json_type_name(value),
-            }
-        })?;
+    let validated = validate_client_payload_value_inner(value, context)?;
+    let envelope_key = client_payload_envelope_key_from_validated(validated).ok_or_else(|| {
+        PayloadEncryptionError::ExpectedEncryptedEnvelope {
+            field: context.field_path.to_string(),
+            found: json_type_name(value),
+        }
+    })?;
 
     Ok(ClientPayloadVerifiedEnvelopeKey { envelope_key })
 }
@@ -984,21 +996,14 @@ pub fn client_payload_envelope_key(
         BASE64URL_NOPAD_12_BYTE_LEN,
         PayloadEncryptionError::MalformedEnvelope(field_path.to_string()),
     )?;
-    let ciphertext = BASE64URL_NOPAD
-        .decode(envelope.ciphertext.as_bytes())
-        .map_err(|_| PayloadEncryptionError::MalformedEnvelope(field_path.to_string()))?;
-    let ciphertext_digest = Sha256::digest(&ciphertext);
-    let ciphertext_sha256_b64 = BASE64URL_NOPAD.encode(ciphertext_digest.as_ref());
+    let ciphertext_sha256_b64 =
+        client_payload_ciphertext_digest_b64(field_path, &envelope.ciphertext)?;
     validate_base64url_nopad_encoded_len(
         &signature.sig,
         BASE64URL_NOPAD_64_BYTE_LEN,
         PayloadEncryptionError::MalformedEnvelope(field_path.to_string()),
     )?;
-    let signature_bytes = BASE64URL_NOPAD
-        .decode(signature.sig.as_bytes())
-        .map_err(|_| PayloadEncryptionError::MalformedEnvelope(field_path.to_string()))?;
-    let signature_digest = Sha256::digest(&signature_bytes);
-    let signature_sha256_b64 = BASE64URL_NOPAD.encode(signature_digest.as_ref());
+    let signature_sha256_b64 = client_payload_signature_digest_b64(field_path, &signature.sig)?;
 
     Ok(Some(ClientPayloadEnvelopeKey {
         collection_id: envelope.aad.collection_id,
@@ -1012,6 +1017,71 @@ pub fn client_payload_envelope_key(
         signature_key_id: signature.key_id,
         signature_sha256_b64,
     }))
+}
+
+fn client_payload_envelope_key_from_validated(
+    validated: ValidatedClientPayloadEnvelope,
+) -> Option<ClientPayloadEnvelopeKey> {
+    let key_id = validated.envelope.key_id?;
+    let rk_id = validated.envelope.rk_id?;
+    let rk_epoch = validated.envelope.rk_epoch?;
+    let signature = validated.envelope.signature?;
+    let signature_sha256_b64 = validated.signature_sha256_b64?;
+
+    Some(ClientPayloadEnvelopeKey {
+        collection_id: validated.envelope.aad.collection_id,
+        point_id: validated.envelope.aad.point_id,
+        field_path: validated.envelope.aad.field_path,
+        key_id,
+        rk_id,
+        rk_epoch,
+        nonce: validated.envelope.nonce,
+        ciphertext_sha256_b64: validated.ciphertext_sha256_b64,
+        signature_key_id: signature.key_id,
+        signature_sha256_b64,
+    })
+}
+
+fn client_payload_ciphertext_digest_b64(
+    field_path: &str,
+    ciphertext_b64: &str,
+) -> Result<String, PayloadEncryptionError> {
+    if ciphertext_b64.len() > CLIENT_PAYLOAD_CIPHERTEXT_MAX_B64_LEN {
+        return Err(PayloadEncryptionError::ClientCiphertextTooLarge(
+            field_path.to_string(),
+        ));
+    }
+    let ciphertext = BASE64URL_NOPAD
+        .decode(ciphertext_b64.as_bytes())
+        .map_err(|_| PayloadEncryptionError::MalformedEnvelope(field_path.to_string()))?;
+    if ciphertext.len() < 16 {
+        return Err(PayloadEncryptionError::MalformedEnvelope(
+            field_path.to_string(),
+        ));
+    }
+    if ciphertext.len() > CLIENT_PAYLOAD_CIPHERTEXT_MAX_BYTES {
+        return Err(PayloadEncryptionError::ClientCiphertextTooLarge(
+            field_path.to_string(),
+        ));
+    }
+    let ciphertext_digest = Sha256::digest(&ciphertext);
+    Ok(BASE64URL_NOPAD.encode(ciphertext_digest.as_ref()))
+}
+
+fn client_payload_signature_digest_b64(
+    field_path: &str,
+    signature_b64: &str,
+) -> Result<String, PayloadEncryptionError> {
+    validate_base64url_nopad_encoded_len(
+        signature_b64,
+        BASE64URL_NOPAD_64_BYTE_LEN,
+        PayloadEncryptionError::MalformedEnvelope(field_path.to_string()),
+    )?;
+    let signature_bytes = BASE64URL_NOPAD
+        .decode(signature_b64.as_bytes())
+        .map_err(|_| PayloadEncryptionError::MalformedEnvelope(field_path.to_string()))?;
+    let signature_digest = Sha256::digest(&signature_bytes);
+    Ok(BASE64URL_NOPAD.encode(signature_digest.as_ref()))
 }
 
 pub fn server_payload_envelope_key(
@@ -1164,6 +1234,12 @@ struct ClientPayloadEnvelope {
     signature: Option<ClientPayloadSignature>,
 }
 
+struct ValidatedClientPayloadEnvelope {
+    envelope: ClientPayloadEnvelope,
+    ciphertext_sha256_b64: String,
+    signature_sha256_b64: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ClientPayloadAad {
@@ -1186,12 +1262,12 @@ fn validate_client_payload_signature(
     envelope: &ClientPayloadEnvelope,
     signature_required: bool,
     signature_verification: Option<ClientPayloadSignatureVerification<'_>>,
-) -> Result<(), PayloadEncryptionError> {
+) -> Result<Option<String>, PayloadEncryptionError> {
     let Some(signature) = &envelope.signature else {
         return if signature_required || signature_verification.is_some() {
             Err(PayloadEncryptionError::MissingClientSignature)
         } else {
-            Ok(())
+            Ok(None)
         };
     };
 
@@ -1206,11 +1282,8 @@ fn validate_client_payload_signature(
         ));
     }
     validate_resource_key_id(&signature.key_id)?;
-    validate_base64url_nopad_encoded_len(
-        &signature.sig,
-        BASE64URL_NOPAD_64_BYTE_LEN,
-        PayloadEncryptionError::MalformedEnvelope(envelope.aad.field_path.clone()),
-    )?;
+    let signature_sha256_b64 =
+        client_payload_signature_digest_b64(&envelope.aad.field_path, &signature.sig)?;
     let signature_bytes = BASE64URL_NOPAD
         .decode(signature.sig.as_bytes())
         .map_err(|_| PayloadEncryptionError::MalformedEnvelope(envelope.aad.field_path.clone()))?;
@@ -1233,7 +1306,7 @@ fn validate_client_payload_signature(
             .map_err(|_| PayloadEncryptionError::InvalidClientSignature)?;
     }
 
-    Ok(())
+    Ok(Some(signature_sha256_b64))
 }
 
 fn client_payload_signature_message_for_envelope(envelope: &ClientPayloadEnvelope) -> Vec<u8> {
@@ -1502,6 +1575,24 @@ mod tests {
         assert!(matches!(
             client_payload_envelope_key(&signature_value, "document.body"),
             Err(PayloadEncryptionError::MalformedEnvelope(field)) if field == "document.body",
+        ));
+
+        let mut ciphertext_value = valid_client_payload_value();
+        ciphertext_value
+            .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+            .and_then(Value::as_object_mut)
+            .unwrap()
+            .insert(
+                "ciphertext".to_string(),
+                Value::String("A".repeat(CLIENT_PAYLOAD_CIPHERTEXT_MAX_B64_LEN + 1)),
+            );
+        assert!(matches!(
+            validate_client_payload_value(&ciphertext_value, client_payload_context()),
+            Err(PayloadEncryptionError::ClientCiphertextTooLarge(field)) if field == "document.body",
+        ));
+        assert!(matches!(
+            client_payload_envelope_key(&ciphertext_value, "document.body"),
+            Err(PayloadEncryptionError::ClientCiphertextTooLarge(field)) if field == "document.body",
         ));
     }
 }
