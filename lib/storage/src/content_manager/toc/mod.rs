@@ -268,7 +268,14 @@ impl TableOfContent {
         let mut collections: HashMap<String, Arc<Collection>> = Default::default();
         general_runtime.block_on(async {
             while let Some((collection_name, collection)) = collection_stream.next().await {
-                collections.insert(collection_name, Arc::new(collection));
+                match collection {
+                    Ok(collection) => {
+                        collections.insert(collection_name, Arc::new(collection));
+                    }
+                    Err(err) => {
+                        log::error!("Failed to load collection {collection_name}: {err}");
+                    }
+                }
             }
         });
 

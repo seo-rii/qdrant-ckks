@@ -151,7 +151,8 @@ async fn _test_snapshot_and_recover_collection(node_type: NodeType) {
         ResourceBudget::default(),
         None,
     )
-    .await;
+    .await
+    .unwrap();
 
     let query_vector = vec![1.0, 0.0, 0.0, 0.0];
 

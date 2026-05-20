@@ -145,7 +145,8 @@ async fn _test_snapshot_collection(node_type: NodeType) {
         ResourceBudget::default(),
         None,
     )
-    .await;
+    .await
+    .unwrap();
 
     {
         let shards_holder = &recovered_collection.shards_holder.read().await;

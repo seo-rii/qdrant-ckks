@@ -175,4 +175,5 @@ pub async fn load_local_collection(
         None,
     )
     .await
+    .unwrap()
 }

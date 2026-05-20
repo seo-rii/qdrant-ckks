@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use ahash::AHashSet;
 use api::rest::SearchRequestInternal;
+use collection::collection::Collection;
 use collection::collection::distance_matrix::CollectionSearchMatrixRequest;
 use collection::config::{
     CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams,
@@ -40,7 +41,9 @@ use collection::operations::vector_ops::{
 };
 use collection::operations::vector_params_builder::VectorParamsBuilder;
 use collection::recommendations::{recommend_batch_by, recommend_by};
+use collection::shards::channel_service::ChannelService;
 use collection::shards::replica_set::replica_set_state::{ReplicaSetState, ReplicaState};
+use common::budget::ResourceBudget;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use common::types::{DetailsLevel, TelemetryDetail};
 use data_encoding::BASE64URL_NOPAD;
@@ -76,8 +79,9 @@ use shard::search::CoreSearchRequestBatch;
 use tempfile::Builder;
 
 use crate::common::{
-    N_SHARDS, TEST_OPTIMIZERS_CONFIG, encrypted_collection_fixture, load_local_collection,
-    new_local_collection, simple_collection_fixture,
+    N_SHARDS, REST_PORT, TEST_OPTIMIZERS_CONFIG, dummy_abort_shard_transfer,
+    dummy_on_replica_failure, dummy_request_shard_transfer, encrypted_collection_fixture,
+    load_local_collection, new_local_collection, simple_collection_fixture,
 };
 
 fn runtime_verified_client_envelopes_for_operation(
@@ -1927,7 +1931,6 @@ async fn server_encrypted_collection_load_ignores_malformed_client_nonce_cache()
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[should_panic(expected = "can't load client payload nonce replay cache")]
 async fn client_encrypted_collection_load_rejects_malformed_client_nonce_cache() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let snapshots_path = collection_dir.path().join("snapshots");
@@ -1947,7 +1950,31 @@ async fn client_encrypted_collection_load_rejects_malformed_client_nonce_cache()
         fs::set_permissions(&cache_path, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
 
-    let _ = load_local_collection("test".to_string(), collection_dir.path(), &snapshots_path).await;
+    let err = match Collection::load(
+        "test".to_string(),
+        0,
+        collection_dir.path(),
+        &snapshots_path,
+        Default::default(),
+        ChannelService::new(REST_PORT, false, None, None),
+        dummy_on_replica_failure(),
+        dummy_request_shard_transfer(),
+        dummy_abort_shard_transfer(),
+        None,
+        None,
+        ResourceBudget::default(),
+        None,
+    )
+    .await
+    {
+        Ok(collection) => {
+            collection.stop_gracefully().await;
+            panic!("client encrypted collection load must reject malformed nonce cache")
+        }
+        Err(err) => err,
+    };
+    assert!(format!("{err:?}").contains("client payload nonce replay cache"));
+    assert!(format!("{err:?}").contains("malformed entry"));
 }
 
 #[tokio::test(flavor = "multi_thread")]

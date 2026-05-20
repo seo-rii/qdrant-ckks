@@ -399,7 +399,7 @@ impl Collection {
         update_runtime: Option<Handle>,
         optimizer_resource_budget: ResourceBudget,
         optimizers_overwrite: Option<OptimizersConfigDiff>,
-    ) -> Self {
+    ) -> CollectionResult<Self> {
         let start_time = std::time::Instant::now();
         let stored_version = CollectionVersion::load(path)
             .expect("Can't read collection version")
@@ -508,9 +508,7 @@ impl Collection {
             optimizer_resource_budget,
             collection_stats_cache,
             client_payload_nonce_replay_cache: Mutex::new(if has_client_envelope_rules {
-                ClientPayloadNonceReplayCache::load(path).unwrap_or_else(|err| {
-                    panic!("can't load client payload nonce replay cache: {err}")
-                })
+                ClientPayloadNonceReplayCache::load(path)?
             } else {
                 ClientPayloadNonceReplayCache::default()
             }),
@@ -521,13 +519,10 @@ impl Collection {
         if has_client_envelope_rules {
             collection
                 .backfill_client_payload_nonce_replay_cache_from_storage()
-                .await
-                .unwrap_or_else(|err| {
-                    panic!("can't backfill client payload nonce replay cache: {err}")
-                });
+                .await?;
         }
 
-        collection
+        Ok(collection)
     }
 
     pub async fn stop_gracefully(&self) {
