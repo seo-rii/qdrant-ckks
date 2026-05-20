@@ -149,6 +149,43 @@ enum CkksSidecarHnswQuery<'a> {
     },
 }
 
+fn ckks_sidecar_scoring_source_batches(scoring: &CkksSidecarScoring<'_>) -> usize {
+    match scoring {
+        CkksSidecarScoring::Nearest { .. }
+        | CkksSidecarScoring::NearestResolved { .. }
+        | CkksSidecarScoring::StoredNearest { .. }
+        | CkksSidecarScoring::NearestMmr { .. } => 1,
+        CkksSidecarScoring::RecommendAverageVectorResolved {
+            positives,
+            negatives,
+        } => positives.len().saturating_add(negatives.len()),
+        CkksSidecarScoring::RecommendBestScore {
+            positives,
+            negatives,
+        } => positives.len().saturating_add(negatives.len()),
+        CkksSidecarScoring::RecommendBestScoreResolved {
+            positives,
+            negatives,
+        } => positives.len().saturating_add(negatives.len()),
+        CkksSidecarScoring::RecommendSumScores {
+            positives,
+            negatives,
+        } => positives.len().saturating_add(negatives.len()),
+        CkksSidecarScoring::RecommendSumScoresResolved {
+            positives,
+            negatives,
+        } => positives.len().saturating_add(negatives.len()),
+        CkksSidecarScoring::Discover { pairs, .. } => {
+            1usize.saturating_add(pairs.len().saturating_mul(2))
+        }
+        CkksSidecarScoring::DiscoverResolved { pairs, .. } => {
+            1usize.saturating_add(pairs.len().saturating_mul(2))
+        }
+        CkksSidecarScoring::Context { pairs } => pairs.len().saturating_mul(2),
+        CkksSidecarScoring::ContextResolved { pairs } => pairs.len().saturating_mul(2),
+    }
+}
+
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_CAPACITY: usize = 16;
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_DIR: &str = "ckks_sidecar_hnsw_graphs";
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_VERSION: u8 = 1;
@@ -161,6 +198,7 @@ const CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_ENCODED_BYTES: usize =
     (CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_BYTES + 2) / 3 * 4;
 const CKKS_GROUPED_SEARCH_CANDIDATE_OVERSAMPLING: usize = 32;
 const CKKS_GROUPED_SEARCH_MAX_CANDIDATES: usize = 4096;
+const CKKS_SCORING_SOURCE_BATCH_MAX: usize = 32;
 
 static CKKS_SIDECAR_HNSW_GRAPH_CACHE: LazyLock<Mutex<CkksSidecarHnswGraphCache>> =
     LazyLock::new(|| Mutex::new(CkksSidecarHnswGraphCache::default()));
@@ -845,6 +883,12 @@ async fn ckks_vector_search_points_with_scoring(
             Order::LargeBetter
         }
     };
+    let source_batches = ckks_sidecar_scoring_source_batches(&scoring);
+    if source_batches > CKKS_SCORING_SOURCE_BATCH_MAX {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' CKKS query uses {source_batches} scoring source batches; maximum is {CKKS_SCORING_SOURCE_BATCH_MAX}",
+        )));
+    }
     let with_vector = with_vector.unwrap_or_default();
     if with_vector.is_enabled() {
         return Err(StorageError::bad_input(format!(
@@ -8920,6 +8964,38 @@ mod tests {
             format!("{err}").contains("too large"),
             "unexpected error: {err}",
         );
+    }
+
+    #[test]
+    fn ckks_sidecar_scoring_source_batches_counts_expensive_sources() {
+        let source = vec![0.0_f32, 1.0];
+        let positives = (0..20).map(|_| source.as_slice()).collect::<Vec<_>>();
+        let negatives = (0..13).map(|_| source.as_slice()).collect::<Vec<_>>();
+        let scoring = CkksSidecarScoring::RecommendSumScores {
+            positives,
+            negatives,
+        };
+        assert_eq!(
+            ckks_sidecar_scoring_source_batches(&scoring),
+            CKKS_SCORING_SOURCE_BATCH_MAX + 1,
+        );
+
+        let pairs = (0..16)
+            .map(|_| (source.as_slice(), source.as_slice()))
+            .collect::<Vec<_>>();
+        let scoring = CkksSidecarScoring::Discover {
+            target: source.as_slice(),
+            pairs,
+        };
+        assert_eq!(
+            ckks_sidecar_scoring_source_batches(&scoring),
+            CKKS_SCORING_SOURCE_BATCH_MAX + 1,
+        );
+
+        let scoring = CkksSidecarScoring::Nearest {
+            query_values: source.as_slice(),
+        };
+        assert_eq!(ckks_sidecar_scoring_source_batches(&scoring), 1);
     }
 
     #[test]
