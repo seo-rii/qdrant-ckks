@@ -8,12 +8,13 @@ use data_encoding::BASE64URL_NOPAD;
 #[cfg(target_os = "linux")]
 use qdrant_sec::linux_landlock_write_deny_supported_for_tests;
 use qdrant_sec::{
-    AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CkksBatchEncryptionInput,
-    CkksEncryptedQueryScoreBatchInput, CkksEncryptionInput, CkksError, CkksParameters,
-    CkksPlaintextQueryScoreBatchInput, CkksPlaintextQueryScoreInput, CkksPublicMaterial,
-    CkksVectorBackend, CkksVectorBatchItem, CkksVectorEncryptor, CommandOpenFheBackend,
-    ENCRYPTED_CKKS_VECTOR_MARKER, EncryptedCkksVector, EncryptionContext, EncryptionError,
-    SecretKey, ckks_vector_sidecar_envelope_key,
+    AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+    CKKS_PUBLIC_MATERIAL_MAX_CRYPTO_CONTEXT_BYTES, CKKS_PUBLIC_MATERIAL_MAX_PUBLIC_KEY_BYTES,
+    CkksBatchEncryptionInput, CkksEncryptedQueryScoreBatchInput, CkksEncryptionInput, CkksError,
+    CkksParameters, CkksPlaintextQueryScoreBatchInput, CkksPlaintextQueryScoreInput,
+    CkksPublicMaterial, CkksVectorBackend, CkksVectorBatchItem, CkksVectorEncryptor,
+    CommandOpenFheBackend, ENCRYPTED_CKKS_VECTOR_MARKER, EncryptedCkksVector, EncryptionContext,
+    EncryptionError, SecretKey, ckks_vector_sidecar_envelope_key,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -41,6 +42,23 @@ impl CkksVectorBackend for SealedTestBackend {
         serde_json::to_vec(&envelope)
             .map_err(|err| CkksError::Backend(format!("test envelope failed: {err}")))
     }
+}
+
+#[test]
+fn ckks_public_material_rejects_oversized_context_and_public_key() {
+    let oversized_context = vec![1u8; CKKS_PUBLIC_MATERIAL_MAX_CRYPTO_CONTEXT_BYTES + 1];
+    assert!(matches!(
+        CkksPublicMaterial::new(oversized_context, vec![1u8]),
+        Err(CkksError::InvalidContext(message))
+            if message.contains("crypto_context") && message.contains("at most")
+    ));
+
+    let oversized_public_key = vec![2u8; CKKS_PUBLIC_MATERIAL_MAX_PUBLIC_KEY_BYTES + 1];
+    assert!(matches!(
+        CkksPublicMaterial::new(vec![1u8], oversized_public_key),
+        Err(CkksError::InvalidContext(message))
+            if message.contains("public_key") && message.contains("at most")
+    ));
 }
 
 #[derive(Clone, Debug)]

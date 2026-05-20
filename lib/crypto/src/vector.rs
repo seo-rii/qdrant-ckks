@@ -13,6 +13,8 @@ use crate::aead::{
 
 pub const CKKS_SCHEME: &str = "openfhe-ckks";
 pub const CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50: &str = "ckks-128-n16384-d4-scale50";
+pub const CKKS_PUBLIC_MATERIAL_MAX_CRYPTO_CONTEXT_BYTES: usize = 4 * 1024 * 1024;
+pub const CKKS_PUBLIC_MATERIAL_MAX_PUBLIC_KEY_BYTES: usize = 4 * 1024 * 1024;
 pub const ENCRYPTED_VECTOR_SIDECAR_FIELD: &str = "$qdrant_sec_vectors";
 pub const ENCRYPTED_CKKS_VECTOR_MARKER: &str = "$qdrant_sec_ckks_vector";
 const VERSION: u8 = 1;
@@ -133,10 +135,20 @@ impl CkksPublicMaterial {
                 "crypto_context must not be empty".to_string(),
             ));
         }
+        if crypto_context.len() > CKKS_PUBLIC_MATERIAL_MAX_CRYPTO_CONTEXT_BYTES {
+            return Err(CkksError::InvalidContext(format!(
+                "crypto_context must be at most {CKKS_PUBLIC_MATERIAL_MAX_CRYPTO_CONTEXT_BYTES} bytes",
+            )));
+        }
         if public_key.is_empty() {
             return Err(CkksError::InvalidContext(
                 "public_key must not be empty".to_string(),
             ));
+        }
+        if public_key.len() > CKKS_PUBLIC_MATERIAL_MAX_PUBLIC_KEY_BYTES {
+            return Err(CkksError::InvalidContext(format!(
+                "public_key must be at most {CKKS_PUBLIC_MATERIAL_MAX_PUBLIC_KEY_BYTES} bytes",
+            )));
         }
 
         Ok(Self {

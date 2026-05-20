@@ -12,11 +12,13 @@ use collection::config::{
 };
 use data_encoding::{BASE64, BASE64URL_NOPAD};
 use qdrant_sec::{
-    AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_VECTOR_KEY_DOMAIN,
-    CLIENT_PAYLOAD_ENVELOPE_BINDING, CkksParameters, CkksPublicMaterial, CkksVectorEncryptor,
-    CkksVectorVerifiedSidecarKey, ClientPayloadNonceReplayKey, ClientPayloadSignatureVerification,
-    ClientPayloadValidationContext, ClientPayloadVerifiedEnvelopeKey, CommandOpenFheBackend,
-    EncryptedCkksVector, ExistingPayloadMode, LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_B64_LEN,
+    AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+    CKKS_PUBLIC_MATERIAL_MAX_CRYPTO_CONTEXT_BYTES, CKKS_PUBLIC_MATERIAL_MAX_PUBLIC_KEY_BYTES,
+    CKKS_VECTOR_KEY_DOMAIN, CLIENT_PAYLOAD_ENVELOPE_BINDING, CkksParameters, CkksPublicMaterial,
+    CkksVectorEncryptor, CkksVectorVerifiedSidecarKey, ClientPayloadNonceReplayKey,
+    ClientPayloadSignatureVerification, ClientPayloadValidationContext,
+    ClientPayloadVerifiedEnvelopeKey, CommandOpenFheBackend, EncryptedCkksVector,
+    ExistingPayloadMode, LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_B64_LEN,
     LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_LEN, LocalMasterKeyProvider, METADATA_AES_GCM_PROVIDER,
     METADATA_BLIND_INDEX_PROVIDER, METADATA_EXACT_MATCH_TOKEN_BINDING, METADATA_VALUE_BINDING,
     MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER,
@@ -1021,10 +1023,16 @@ fn generic_vector_write_plan(
                 rule.instance
             )));
         }
-        let crypto_context =
-            required_base64url_option(instance, &rule.instance, CKKS_CRYPTO_CONTEXT_B64_OPTION)?;
-        let public_key =
-            required_base64url_option(instance, &rule.instance, CKKS_PUBLIC_KEY_B64_OPTION)?;
+        let crypto_context = required_ckks_public_material_option(
+            instance,
+            &rule.instance,
+            CKKS_CRYPTO_CONTEXT_B64_OPTION,
+        )?;
+        let public_key = required_ckks_public_material_option(
+            instance,
+            &rule.instance,
+            CKKS_PUBLIC_KEY_B64_OPTION,
+        )?;
         let public_material = CkksPublicMaterial::new(crypto_context, public_key).map_err(|err| {
             StorageError::bad_input(format!(
                 "collection {collection_name} vector crypto instance {} public material is invalid: {err}",
@@ -1155,17 +1163,47 @@ fn required_string_option<'a>(
     }
 }
 
-fn required_base64url_option(
+fn required_base64url_option_with_max(
+    instance: &CryptoInstanceConfig,
+    instance_id: &str,
+    option: &str,
+    max_decoded_len: Option<usize>,
+) -> Result<Vec<u8>, StorageError> {
+    let value = required_string_option(instance, instance_id, option)?;
+    if let Some(max_decoded_len) = max_decoded_len {
+        let max_encoded_len = base64url_nopad_encoded_len(max_decoded_len);
+        if value.len() > max_encoded_len {
+            return Err(StorageError::bad_input(format!(
+                "crypto instance {instance_id} option {option} must decode to at most {max_decoded_len} bytes",
+            )));
+        }
+    }
+    let decoded = BASE64URL_NOPAD.decode(value.as_bytes()).map_err(|_| {
+        StorageError::bad_input(format!(
+            "crypto instance {instance_id} option {option} must be base64url without padding",
+        ))
+    })?;
+    if let Some(max_decoded_len) = max_decoded_len
+        && decoded.len() > max_decoded_len
+    {
+        return Err(StorageError::bad_input(format!(
+            "crypto instance {instance_id} option {option} must decode to at most {max_decoded_len} bytes",
+        )));
+    }
+    Ok(decoded)
+}
+
+fn required_ckks_public_material_option(
     instance: &CryptoInstanceConfig,
     instance_id: &str,
     option: &str,
 ) -> Result<Vec<u8>, StorageError> {
-    let value = required_string_option(instance, instance_id, option)?;
-    BASE64URL_NOPAD.decode(value.as_bytes()).map_err(|_| {
-        StorageError::bad_input(format!(
-            "crypto instance {instance_id} option {option} must be base64url without padding",
-        ))
-    })
+    let max_decoded_len = match option {
+        CKKS_CRYPTO_CONTEXT_B64_OPTION => CKKS_PUBLIC_MATERIAL_MAX_CRYPTO_CONTEXT_BYTES,
+        CKKS_PUBLIC_KEY_B64_OPTION => CKKS_PUBLIC_MATERIAL_MAX_PUBLIC_KEY_BYTES,
+        _ => unreachable!("unsupported CKKS public material option"),
+    };
+    required_base64url_option_with_max(instance, instance_id, option, Some(max_decoded_len))
 }
 
 fn openfhe_backend_from_config(
@@ -1467,7 +1505,31 @@ fn sanitized_crypto_instance_options(instance: &CryptoInstanceConfig) -> serde_j
             .expect("signature_public_keys option still exists") =
             serde_json::Value::Object(verifier_fingerprint.into_iter().collect());
     }
+    if instance.provider == VECTOR_OPENFHE_CKKS_PROVIDER
+        && let Some(options_object) = options.as_object_mut()
+    {
+        for option in [CKKS_CRYPTO_CONTEXT_B64_OPTION, CKKS_PUBLIC_KEY_B64_OPTION] {
+            if let Some(value) = options_object.get_mut(option) {
+                *value = public_material_b64_fingerprint(value);
+            }
+        }
+    }
     options
+}
+
+fn public_material_b64_fingerprint(value: &serde_json::Value) -> serde_json::Value {
+    let Some(value) = value.as_str() else {
+        return json!({
+            "kind": "invalid",
+            "json_type": public_key_b64_type(value),
+        });
+    };
+    let digest = Sha256::digest(value.as_bytes());
+    json!({
+        "kind": "base64url-public-material",
+        "encoded_len": value.len(),
+        "encoded_sha256_b64": BASE64URL_NOPAD.encode(&digest),
+    })
 }
 
 fn public_key_b64_type(value: &serde_json::Value) -> &'static str {
@@ -2043,6 +2105,19 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                         reason: "expected a base64url string".to_string(),
                     });
                 };
+                let max_decoded_len = match option {
+                    CKKS_CRYPTO_CONTEXT_B64_OPTION => CKKS_PUBLIC_MATERIAL_MAX_CRYPTO_CONTEXT_BYTES,
+                    CKKS_PUBLIC_KEY_B64_OPTION => CKKS_PUBLIC_MATERIAL_MAX_PUBLIC_KEY_BYTES,
+                    _ => unreachable!("unsupported CKKS public material option"),
+                };
+                let max_encoded_len = base64url_nopad_encoded_len(max_decoded_len);
+                if encoded.len() > max_encoded_len {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: option.to_string(),
+                        reason: format!("decoded value must be at most {max_decoded_len} bytes"),
+                    });
+                }
                 let decoded = BASE64URL_NOPAD.decode(encoded.as_bytes()).map_err(|_| {
                     CryptoSetupError::InvalidInstanceOption {
                         instance: instance_name.clone(),
@@ -2055,6 +2130,13 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                         instance: instance_name.clone(),
                         option: option.to_string(),
                         reason: "decoded value must not be empty".to_string(),
+                    });
+                }
+                if decoded.len() > max_decoded_len {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: option.to_string(),
+                        reason: format!("decoded value must be at most {max_decoded_len} bytes"),
                     });
                 }
             }
@@ -3980,10 +4062,16 @@ fn validate_generic_collection_crypto_runtime(
                 rule.instance
             )));
         }
-        let crypto_context =
-            required_base64url_option(instance, &rule.instance, CKKS_CRYPTO_CONTEXT_B64_OPTION)?;
-        let public_key =
-            required_base64url_option(instance, &rule.instance, CKKS_PUBLIC_KEY_B64_OPTION)?;
+        let crypto_context = required_ckks_public_material_option(
+            instance,
+            &rule.instance,
+            CKKS_CRYPTO_CONTEXT_B64_OPTION,
+        )?;
+        let public_key = required_ckks_public_material_option(
+            instance,
+            &rule.instance,
+            CKKS_PUBLIC_KEY_B64_OPTION,
+        )?;
         CkksPublicMaterial::new(crypto_context, public_key).map_err(|err| {
             StorageError::bad_input(format!(
                 "collection {collection_name} vector crypto instance {} public material is invalid: {err}",
@@ -7668,6 +7756,42 @@ mod tests {
             ..Settings::new(None).unwrap()
         };
         let fingerprint = crypto_runtime_capability_fingerprint(&settings);
+        let raw_context_b64 = BASE64URL_NOPAD.encode(b"openfhe context");
+        let raw_public_key_b64 = BASE64URL_NOPAD.encode(b"openfhe public key");
+        let sanitized_options = serde_json::to_string(&sanitized_crypto_instance_options(
+            settings.crypto.instances.get("docs_vector_v1").unwrap(),
+        ))
+        .unwrap();
+        assert!(!sanitized_options.contains(&raw_context_b64));
+        assert!(!sanitized_options.contains(&raw_public_key_b64));
+        assert!(sanitized_options.contains("base64url-public-material"));
+
+        let mut peer_with_oversized_context = settings.clone();
+        peer_with_oversized_context
+            .crypto
+            .instances
+            .get_mut("docs_vector_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                CKKS_CRYPTO_CONTEXT_B64_OPTION.to_string(),
+                json!("A".repeat(10_000)),
+            );
+        let sanitized_oversized_options =
+            serde_json::to_string(&sanitized_crypto_instance_options(
+                peer_with_oversized_context
+                    .crypto
+                    .instances
+                    .get("docs_vector_v1")
+                    .unwrap(),
+            ))
+            .unwrap();
+        assert!(
+            sanitized_oversized_options.len() < 1_000,
+            "CKKS public material fingerprint view must remain bounded for oversized options",
+        );
 
         let mut peer_with_different_context = settings.clone();
         peer_with_different_context
@@ -12279,6 +12403,11 @@ mod tests {
 
     #[test]
     fn validate_collection_crypto_runtime_accepts_generic_payload_and_vector_rules() {
+        let bridge_program = std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let bridge_sha256_b64 = current_exe_sha256_b64();
         let settings = Settings {
             crypto: CryptoSettings {
                 allow_inline_key_material: true,
@@ -12347,8 +12476,8 @@ mod tests {
                     "openfhe_local".to_string(),
                     CryptoBackendConfig {
                         kind: "process_pool".to_string(),
-                        program: Some("/usr/local/bin/openfhe-bridge".to_string()),
-                        sha256_b64: Some(BASE64URL_NOPAD.encode(&[17_u8; 32])),
+                        program: Some(bridge_program),
+                        sha256_b64: Some(bridge_sha256_b64),
                         signature_public_key_b64: None,
                         signature_b64: None,
                         size: Some(1),
@@ -12391,6 +12520,41 @@ mod tests {
         );
 
         validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap();
+
+        let mut settings_with_oversized_context = settings.clone();
+        settings_with_oversized_context
+            .crypto
+            .instances
+            .get_mut("docs_vector_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                CKKS_CRYPTO_CONTEXT_B64_OPTION.to_string(),
+                json!("A".repeat(
+                    base64url_nopad_encoded_len(CKKS_PUBLIC_MATERIAL_MAX_CRYPTO_CONTEXT_BYTES) + 1
+                )),
+            );
+        assert!(matches!(
+            validate_crypto_settings(&settings_with_oversized_context.crypto),
+            Err(CryptoSetupError::InvalidInstanceOption { instance, option, reason })
+                if instance == "docs_vector_v1"
+                    && option == CKKS_CRYPTO_CONTEXT_B64_OPTION
+                    && reason.contains("at most")
+        ));
+        let err = validate_collection_crypto_runtime_inner(
+            &settings_with_oversized_context,
+            "docs",
+            &params,
+        )
+        .expect_err("oversized CKKS context must fail before bridge construction");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains(CKKS_CRYPTO_CONTEXT_B64_OPTION)
+                    && description.contains("at most")),
+            "unexpected error: {err:?}",
+        );
 
         for distance in [Distance::Cosine, Distance::Euclid, Distance::Manhattan] {
             let params = with_embedding_vector(

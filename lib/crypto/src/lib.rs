@@ -44,7 +44,8 @@ pub use payload::{
     validate_server_payload_value_after_runtime_encryption, validate_server_payload_value_metadata,
 };
 pub use vector::{
-    CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_SCHEME, CkksBatchEncryptionInput,
+    CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_PUBLIC_MATERIAL_MAX_CRYPTO_CONTEXT_BYTES,
+    CKKS_PUBLIC_MATERIAL_MAX_PUBLIC_KEY_BYTES, CKKS_SCHEME, CkksBatchEncryptionInput,
     CkksEncryptedQueryScoreBatchInput, CkksEncryptedQueryScoreBatchItem,
     CkksEncryptedQueryScoreInput, CkksEncryptionInput, CkksError, CkksParameters,
     CkksPlaintextQueryScoreBatchInput, CkksPlaintextQueryScoreInput, CkksPublicMaterial,
