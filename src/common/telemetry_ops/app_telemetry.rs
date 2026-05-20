@@ -71,7 +71,7 @@ pub struct AppBuildTelemetry {
     pub jwt_rbac: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hide_jwt_dashboard: Option<bool>,
-    #[anonymize(false)]
+    #[anonymize(value = None)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub crypto_runtime_capability_fingerprint: Option<String>,
     pub startup: DateTime<Utc>,
@@ -266,6 +266,9 @@ mod tests {
             &settings,
         );
         assert!(low_detail.crypto_runtime_capability_fingerprint.is_none());
+
+        let anonymized = telemetry.anonymize();
+        assert!(anonymized.crypto_runtime_capability_fingerprint.is_none());
     }
 
     #[test]
