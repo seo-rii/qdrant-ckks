@@ -7,9 +7,7 @@ use qdrant_sec::{
 };
 use segment::common::operation_error::OperationError;
 use segment::id_tracker::IdTracker as _;
-use segment::index::hnsw_index::ckks_ciphertext_graph::{
-    CkksCiphertextIndexedRecord, ckks_ciphertext_from_payload,
-};
+use segment::index::hnsw_index::ckks_ciphertext_graph::ckks_ciphertext_indexed_record_from_payload;
 use segment::index::{PayloadIndex as _, VectorIndexEnum};
 use segment::types::{Payload, ShardKey};
 use shard::locked_segment::LockedSegment;
@@ -59,13 +57,17 @@ impl LocalShard {
                 else {
                     continue;
                 };
-                let ciphertext =
-                    ckks_ciphertext_from_payload(&payload, vector_name).map_err(|err| {
-                        CollectionError::service_error(format!(
-                            "stored CKKS vector sidecar entry '{vector_name}' failed validation: {err}",
-                        ))
-                    })?;
-                let Some(ciphertext) = ciphertext else {
+                let indexed_record = ckks_ciphertext_indexed_record_from_payload(
+                    point_offset,
+                    &payload,
+                    vector_name,
+                )
+                .map_err(|err| {
+                    CollectionError::service_error(format!(
+                        "stored CKKS vector sidecar entry '{vector_name}' failed validation: {err}",
+                    ))
+                })?;
+                let Some(indexed_record) = indexed_record else {
                     return Err(CollectionError::service_error(format!(
                         "stored CKKS vector sidecar entry '{vector_name}' disappeared during validation",
                     )));
@@ -76,10 +78,7 @@ impl LocalShard {
                         id,
                         shard_key: shard_key.clone(),
                         point_id: id.to_string(),
-                        indexed_record: CkksCiphertextIndexedRecord::new(
-                            point_offset,
-                            ciphertext.as_bytes().to_vec(),
-                        ),
+                        indexed_record,
                         encrypted,
                     },
                 );
@@ -107,7 +106,7 @@ impl LocalShard {
                     stale_artifact = true;
                     break;
                 };
-                if record.encrypted.envelope.ciphertext.as_bytes() != indexed_record.ciphertext {
+                if record.indexed_record.sidecar_identity != indexed_record.sidecar_identity {
                     stale_artifact = true;
                     break;
                 }

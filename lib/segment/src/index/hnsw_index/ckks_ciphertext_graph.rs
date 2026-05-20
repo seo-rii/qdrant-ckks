@@ -54,6 +54,7 @@ pub struct CkksCiphertextHnswRecordHit<'a, C> {
 pub struct CkksCiphertextIndexedRecord {
     pub point_offset: PointOffsetType,
     pub ciphertext: Vec<u8>,
+    pub sidecar_identity: Vec<u8>,
 }
 
 #[derive(Clone, Debug)]
@@ -282,7 +283,20 @@ impl CkksCiphertextIndexedRecord {
     pub fn new(point_offset: PointOffsetType, ciphertext: Vec<u8>) -> Self {
         Self {
             point_offset,
+            sidecar_identity: ciphertext.clone(),
             ciphertext,
+        }
+    }
+
+    pub fn new_with_sidecar_identity(
+        point_offset: PointOffsetType,
+        ciphertext: Vec<u8>,
+        sidecar_identity: Vec<u8>,
+    ) -> Self {
+        Self {
+            point_offset,
+            ciphertext,
+            sidecar_identity,
         }
     }
 }
@@ -497,14 +511,35 @@ pub fn ckks_ciphertext_records_from_payload_index(
     let mut records = Vec::new();
     for point_offset in id_tracker.point_mappings().iter_internal() {
         let payload = payload_index.get_payload_sequential(point_offset, hw_counter)?;
-        if let Some(ciphertext) = ckks_ciphertext_from_payload(&payload, vector_name)? {
-            records.push(CkksCiphertextIndexedRecord::new(
-                point_offset,
-                ciphertext.as_bytes().to_vec(),
-            ));
+        if let Some(record) =
+            ckks_ciphertext_indexed_record_from_payload(point_offset, &payload, vector_name)?
+        {
+            records.push(record);
         }
     }
     Ok(records)
+}
+
+pub fn ckks_ciphertext_indexed_record_from_payload(
+    point_offset: PointOffsetType,
+    payload: &Payload,
+    vector_name: &str,
+) -> OperationResult<Option<CkksCiphertextIndexedRecord>> {
+    let Some(ciphertext) = ckks_ciphertext_from_payload(payload, vector_name)? else {
+        return Ok(None);
+    };
+    let Some(sidecar_identity) =
+        ckks_ciphertext_sidecar_identity_from_payload(payload, vector_name)?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(
+        CkksCiphertextIndexedRecord::new_with_sidecar_identity(
+            point_offset,
+            ciphertext.as_bytes().to_vec(),
+            sidecar_identity,
+        ),
+    ))
 }
 
 pub fn ckks_ciphertext_from_payload<'a>(
@@ -649,6 +684,77 @@ pub fn ckks_ciphertext_from_payload<'a>(
         )));
     }
     Ok(Some(ciphertext))
+}
+
+fn ckks_ciphertext_sidecar_identity_from_payload(
+    payload: &Payload,
+    vector_name: &str,
+) -> OperationResult<Option<Vec<u8>>> {
+    let Some(ciphertext) = ckks_ciphertext_from_payload(payload, vector_name)? else {
+        return Ok(None);
+    };
+    let marker = payload
+        .0
+        .get(CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD)
+        .and_then(serde_json::Value::as_object)
+        .and_then(|sidecar| sidecar.get(vector_name))
+        .and_then(serde_json::Value::as_object)
+        .and_then(|value| value.get(CKKS_VECTOR_SIDECAR_MARKER))
+        .and_then(serde_json::Value::as_object)
+        .expect("CKKS sidecar marker was validated above");
+    let envelope = marker
+        .get("envelope")
+        .and_then(serde_json::Value::as_object)
+        .expect("CKKS sidecar envelope was validated above");
+
+    let mut digest = Sha256::new();
+    digest.update(b"qdrant-sec/ckks-ciphertext-sidecar-identity/v1");
+    update_digest_str(&mut digest, vector_name);
+    update_digest_u64(
+        &mut digest,
+        marker
+            .get("version")
+            .and_then(serde_json::Value::as_u64)
+            .expect("marker version was validated above"),
+    );
+    update_digest_str(
+        &mut digest,
+        marker
+            .get("scheme")
+            .and_then(serde_json::Value::as_str)
+            .expect("marker scheme was validated above"),
+    );
+    update_digest_u64(
+        &mut digest,
+        envelope
+            .get("version")
+            .and_then(serde_json::Value::as_u64)
+            .expect("envelope version was validated above"),
+    );
+    for field in [
+        "algorithm",
+        "key_id",
+        "material_fingerprint",
+        "rk_id",
+        "nonce",
+    ] {
+        update_digest_str(
+            &mut digest,
+            envelope
+                .get(field)
+                .and_then(serde_json::Value::as_str)
+                .expect("required envelope field was validated above"),
+        );
+    }
+    update_digest_u64(
+        &mut digest,
+        envelope
+            .get("rk_epoch")
+            .and_then(serde_json::Value::as_u64)
+            .expect("rk_epoch was validated above"),
+    );
+    update_digest_str(&mut digest, ciphertext);
+    Ok(Some(digest.finalize().to_vec()))
 }
 
 impl<C> CkksCiphertextHnswIndex<C> {
@@ -1020,10 +1126,19 @@ fn ckks_ciphertext_records_digest(records: &[CkksCiphertextIndexedRecord]) -> St
     digest.update(b"qdrant-sec/ckks-ciphertext-hnsw-records/v1");
     for record in records {
         digest.update(record.point_offset.to_le_bytes());
-        digest.update((record.ciphertext.len() as u64).to_le_bytes());
-        digest.update(&record.ciphertext);
+        digest.update((record.sidecar_identity.len() as u64).to_le_bytes());
+        digest.update(&record.sidecar_identity);
     }
     BASE64URL_NOPAD.encode(&digest.finalize())
+}
+
+fn update_digest_str(digest: &mut Sha256, value: &str) {
+    digest.update((value.len() as u64).to_le_bytes());
+    digest.update(value.as_bytes());
+}
+
+fn update_digest_u64(digest: &mut Sha256, value: u64) {
+    digest.update(value.to_le_bytes());
 }
 
 fn ckks_ciphertext_records_have_unique_offsets(records: &[CkksCiphertextIndexedRecord]) -> bool {
@@ -2106,6 +2221,37 @@ mod tests {
         assert!(
             reopened.is_none(),
             "ciphertext digest mismatch should trigger rebuild/fallback instead of hard-failing",
+        );
+    }
+
+    #[test]
+    fn ciphertext_vector_index_digest_tracks_full_sidecar_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let graph_file = CkksCiphertextVectorIndex::graph_file_path(directory.path());
+        let mut index = CkksCiphertextVectorIndex::from_graph(
+            vec![CkksCiphertextIndexedRecord::new_with_sidecar_identity(
+                0,
+                b"same-ciphertext".to_vec(),
+                b"rk-epoch-1".to_vec(),
+            )],
+            CkksCiphertextHnswGraph::from_validated_links(vec![Vec::new()]).unwrap(),
+        )
+        .unwrap();
+        index.persist_graph_file(&graph_file).unwrap();
+
+        let reopened = CkksCiphertextVectorIndex::open_graph_file(
+            vec![CkksCiphertextIndexedRecord::new_with_sidecar_identity(
+                0,
+                b"same-ciphertext".to_vec(),
+                b"rk-epoch-2".to_vec(),
+            )],
+            &graph_file,
+        )
+        .unwrap();
+
+        assert!(
+            reopened.is_none(),
+            "sidecar identity changes must invalidate graph files even when ciphertext bytes match",
         );
     }
 
