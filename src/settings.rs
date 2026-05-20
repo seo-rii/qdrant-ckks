@@ -279,6 +279,8 @@ pub struct CryptoMaterialConfig {
     #[serde(default)]
     pub vault_field: Option<String>,
     #[serde(default)]
+    pub expected_host: Option<String>,
+    #[serde(default)]
     #[validate(custom(function = "validate_crypto_runtime_identifier"))]
     pub wrapped_by: Option<String>,
     #[serde(default)]
@@ -305,6 +307,7 @@ impl fmt::Debug for CryptoMaterialConfig {
             .field("fd", &self.fd)
             .field("value_b64", &self.value_b64.as_ref().map(|_| "[redacted]"))
             .field("vault_field", &self.vault_field)
+            .field("expected_host", &self.expected_host)
             .field("wrapped_by", &self.wrapped_by)
             .field("wrap_algorithm", &self.wrap_algorithm)
             .field("nonce", &self.nonce.as_ref().map(|_| "[redacted]"))

@@ -528,8 +528,13 @@ Vault token value must be non-empty and a valid HTTP header value. The URL must
 use HTTPS; loopback HTTP is accepted only for tests/dev. Query strings and
 fragments are rejected so Vault tokens or field selectors are not accidentally
 placed in config URLs. Username/password URL credentials are also rejected; use
-the `env` token source instead. Vault material fetches do not follow HTTP
-redirects; redirects must be resolved in the configured, validated URL.
+the `env` token source instead. Non-loopback Vault URLs must also set
+`expected_host` to the exact configured URL authority, including port when a
+non-default port is used. Qdrant rejects the material before loading the Vault
+token if `expected_host` is missing or does not match, so a config drift cannot
+silently redirect Vault credentials or RK material to an attacker-controlled
+host. Vault material fetches do not follow HTTP redirects; redirects must be
+resolved in the configured, validated URL.
 Vault-backed material keeps the MK/RK out of config files, but the Vault token
 source, Vault policy, and Vault availability become part of the key-management
 TCB and must be identical across nodes that can write encrypted collections.
@@ -540,7 +545,10 @@ When a wrapping material uses `source: aws_kms`, it must be
 `${env}_SESSION_TOKEN`, and optional `${env}_ENDPOINT_URL`. The endpoint
 defaults to `https://kms.${region}.amazonaws.com/`; custom endpoints must use
 HTTPS except loopback HTTP for tests/dev and must not include credentials, path,
-query, or fragment components. Qdrant signs AWS KMS `Encrypt`/`Decrypt`
+query, or fragment components. Remote custom endpoints require `expected_host`
+and the endpoint authority must match it exactly. If `expected_host` is set for
+the default AWS endpoint, the computed `kms.${region}.amazonaws.com` authority
+must also match. Qdrant signs AWS KMS `Encrypt`/`Decrypt`
 requests with SigV4, sends RK plaintext only inside those KMS calls, records
 `wrapped_symmetric_key_32.wrap_algorithm: aws-kms`, and stores the returned KMS
 ciphertext blob as `wrapped_key_b64`. AWS KMS material is only valid for
@@ -554,9 +562,11 @@ plaintext only to Vault Transit for wrap/unwrap. The config never contains the
 MK bytes, and `wrapped_symmetric_key_32.wrap_algorithm` becomes
 `vault-transit`. As with Vault KV v2, the URL must use HTTPS except loopback
 HTTP for tests/dev, credentials/query/fragment components are rejected, and
-`env` must name the Vault token environment variable. Vault Transit material is
-only valid for MK/KEK wrapping; it cannot be used as a direct server-side
-payload/vector RK source.
+`env` must name the Vault token environment variable. Non-loopback Vault
+Transit URLs require `expected_host` with the exact URL authority for the same
+host-pinning reason as Vault KV v2. Vault Transit material is only valid for
+MK/KEK wrapping; it cannot be used as a direct server-side payload/vector RK
+source.
 When a material uses `source: fd`, the `fd` must reference an already-open Unix
 file descriptor containing the base64url-no-pad 32-byte material. Qdrant
 marks the descriptor close-on-exec during validation and duplicates it with
