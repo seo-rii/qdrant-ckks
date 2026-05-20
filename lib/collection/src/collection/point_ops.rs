@@ -2822,8 +2822,45 @@ fn validate_filter_metadata_blind_index_tokens(
     metadata_path: &JsonPath,
     metadata_key: &str,
 ) -> CollectionResult<()> {
-    for condition in filter.iter_conditions() {
-        validate_condition_metadata_blind_index_tokens(condition, metadata_path, metadata_key)?;
+    validate_filter_metadata_blind_index_tokens_with_polarity(
+        filter,
+        metadata_path,
+        metadata_key,
+        false,
+    )
+}
+
+fn validate_filter_metadata_blind_index_tokens_with_polarity(
+    filter: &Filter,
+    metadata_path: &JsonPath,
+    metadata_key: &str,
+    negative_context: bool,
+) -> CollectionResult<()> {
+    for condition in filter.must.iter().chain(filter.should.iter()).flatten() {
+        validate_condition_metadata_blind_index_tokens(
+            condition,
+            metadata_path,
+            metadata_key,
+            negative_context,
+        )?;
+    }
+    if let Some(min_should) = filter.min_should.as_ref() {
+        for condition in &min_should.conditions {
+            validate_condition_metadata_blind_index_tokens(
+                condition,
+                metadata_path,
+                metadata_key,
+                negative_context,
+            )?;
+        }
+    }
+    for condition in filter.must_not.iter().flatten() {
+        validate_condition_metadata_blind_index_tokens(
+            condition,
+            metadata_path,
+            metadata_key,
+            true,
+        )?;
     }
     Ok(())
 }
@@ -2832,9 +2869,27 @@ fn validate_condition_metadata_blind_index_tokens(
     condition: &Condition,
     metadata_path: &JsonPath,
     metadata_key: &str,
+    negative_context: bool,
 ) -> CollectionResult<()> {
     match condition {
         Condition::Field(field_condition) if field_condition.key.compatible(metadata_path) => {
+            if negative_context {
+                return Err(CollectionError::bad_input(format!(
+                    "metadata blind-index field '{metadata_key}' filters must use positive exact-match token strings",
+                )));
+            }
+            if field_condition.range.is_some()
+                || field_condition.geo_bounding_box.is_some()
+                || field_condition.geo_radius.is_some()
+                || field_condition.geo_polygon.is_some()
+                || field_condition.values_count.is_some()
+                || field_condition.is_empty.is_some()
+                || field_condition.is_null.is_some()
+            {
+                return Err(CollectionError::bad_input(format!(
+                    "metadata blind-index field '{metadata_key}' filters must use exact-match token strings only",
+                )));
+            }
             let Some(match_condition) = field_condition.r#match.as_ref() else {
                 return Err(CollectionError::bad_input(format!(
                     "metadata blind-index field '{metadata_key}' filters must use exact-match token strings",
@@ -2862,17 +2917,9 @@ fn validate_condition_metadata_blind_index_tokens(
                         "metadata blind-index field '{metadata_key}' filters must use string tokens",
                     ))),
                 },
-                Match::Except(except) => match &except.except {
-                    AnyVariants::Strings(tokens) => {
-                        for token in tokens {
-                            validate_metadata_blind_index_token(token, metadata_key)?;
-                        }
-                        Ok(())
-                    }
-                    AnyVariants::Integers(_) => Err(CollectionError::bad_input(format!(
-                        "metadata blind-index field '{metadata_key}' filters must use string tokens",
-                    ))),
-                },
+                Match::Except(_) => Err(CollectionError::bad_input(format!(
+                    "metadata blind-index field '{metadata_key}' filters must use positive exact-match token strings",
+                ))),
                 Match::Text(_) | Match::TextAny(_) | Match::Phrase(_) => {
                     Err(CollectionError::bad_input(format!(
                         "metadata blind-index field '{metadata_key}' filters must use exact-match token strings",
@@ -2901,15 +2948,19 @@ fn validate_condition_metadata_blind_index_tokens(
                     "metadata blind-index field '{metadata_key}' filters must use exact-match token strings",
                 )));
             }
-            validate_filter_metadata_blind_index_tokens(
+            validate_filter_metadata_blind_index_tokens_with_polarity(
                 nested.filter(),
                 metadata_path,
                 metadata_key,
+                negative_context,
             )
         }
-        Condition::Filter(filter) => {
-            validate_filter_metadata_blind_index_tokens(filter, metadata_path, metadata_key)
-        }
+        Condition::Filter(filter) => validate_filter_metadata_blind_index_tokens_with_polarity(
+            filter,
+            metadata_path,
+            metadata_key,
+            negative_context,
+        ),
     }
 }
 
@@ -2971,7 +3022,7 @@ fn condition_touches_encrypted_vector<'a>(
 
 #[cfg(test)]
 mod tests {
-    use segment::types::{FieldCondition, IsEmptyCondition, Match, ValueVariants};
+    use segment::types::{FieldCondition, IsEmptyCondition, Match, ValueVariants, ValuesCount};
 
     use super::*;
     use crate::config::{CollectionEncryptionConfig, EncryptionRuleRef};
@@ -3053,10 +3104,22 @@ mod tests {
     fn metadata_blind_index_filter_rejects_non_exact_match_conditions() {
         let metadata_path = "body__blind_eq".parse::<JsonPath>().unwrap();
         let metadata_key = "body__blind_eq";
+        let token = blind_index_token(3);
 
         for filter in [
             blind_index_filter(metadata_key, Match::new_text("plaintext")),
             blind_index_filter(metadata_key, Match::new_value(ValueVariants::Integer(42))),
+            blind_index_filter(
+                metadata_key,
+                serde_json::from_value(serde_json::json!({ "except": [token.clone()] })).unwrap(),
+            ),
+            Filter::new_must_not(Condition::Field(FieldCondition::new_match(
+                metadata_key.parse().unwrap(),
+                token.clone().into(),
+            ))),
+            Filter::new_must(Condition::Filter(Filter::new_must_not(Condition::Field(
+                FieldCondition::new_match(metadata_key.parse().unwrap(), token.clone().into()),
+            )))),
             Filter::new_must(Condition::IsEmpty(IsEmptyCondition::from(
                 metadata_key.parse::<JsonPath>().unwrap(),
             ))),
@@ -3066,6 +3129,29 @@ mod tests {
                     .unwrap_err();
             assert!(format!("{err}").contains("metadata blind-index field"));
         }
+    }
+
+    #[test]
+    fn metadata_blind_index_filter_rejects_mixed_field_predicates() {
+        let metadata_path = "body__blind_eq".parse::<JsonPath>().unwrap();
+        let metadata_key = "body__blind_eq";
+        let token = blind_index_token(4);
+        let mut field_condition =
+            FieldCondition::new_match(metadata_key.parse().unwrap(), token.into());
+        field_condition.values_count = Some(ValuesCount {
+            lt: None,
+            gt: None,
+            gte: Some(1),
+            lte: None,
+        });
+
+        let err = validate_filter_metadata_blind_index_tokens(
+            &Filter::new_must(Condition::Field(field_condition)),
+            &metadata_path,
+            metadata_key,
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("exact-match token strings only"));
     }
 
     #[test]
