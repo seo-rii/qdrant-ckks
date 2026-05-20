@@ -2599,8 +2599,14 @@ pub(super) fn ensure_encrypted_payload_read_mode_is_supported(
 
 #[derive(Debug, Default)]
 pub(super) struct PayloadRedactionPlan {
-    encrypted_payload_paths: Vec<(String, JsonPath)>,
+    encrypted_payload_paths: Vec<(JsonPath, PayloadRedactionKind)>,
     redact_vector_sidecar: bool,
+}
+
+#[derive(Debug)]
+enum PayloadRedactionKind {
+    EncryptedMarker,
+    AnyValue,
 }
 
 impl PayloadRedactionPlan {
@@ -2637,7 +2643,22 @@ impl Collection {
                                 "encrypted payload field path '{path}' is invalid: {err:?}",
                             ))
                         })?;
-                        plan.encrypted_payload_paths.push((path.clone(), json_path));
+                        plan.encrypted_payload_paths
+                            .push((json_path, PayloadRedactionKind::EncryptedMarker));
+                    }
+                }
+                (
+                    EncryptionSelector::MetadataKeys { keys },
+                    Some(METADATA_EXACT_MATCH_TOKEN_BINDING),
+                ) => {
+                    for key in keys {
+                        let json_path = key.parse::<JsonPath>().map_err(|err| {
+                            CollectionError::bad_input(format!(
+                                "metadata blind-index field path '{key}' is invalid: {err:?}",
+                            ))
+                        })?;
+                        plan.encrypted_payload_paths
+                            .push((json_path, PayloadRedactionKind::AnyValue));
                     }
                 }
                 (EncryptionSelector::VectorNames { .. }, _) => {
@@ -2690,9 +2711,9 @@ fn apply_encrypted_payload_read_mode_to_records(
 }
 
 fn redact_encrypted_payload_values(payload: &mut Payload, redaction_plan: &PayloadRedactionPlan) {
-    for (_, encrypted_path) in &redaction_plan.encrypted_payload_paths {
+    for (encrypted_path, kind) in &redaction_plan.encrypted_payload_paths {
         if let Some(value) = payload.0.get_mut(&encrypted_path.first_key) {
-            redact_encrypted_json_value_at_path(value, &encrypted_path.rest);
+            redact_encrypted_json_value_at_path(value, &encrypted_path.rest, kind);
         }
     }
 
@@ -2703,9 +2724,15 @@ fn redact_encrypted_payload_values(payload: &mut Payload, redaction_plan: &Paylo
     }
 }
 
-fn redact_encrypted_json_value_at_path(value: &mut serde_json::Value, path: &[JsonPathItem]) {
+fn redact_encrypted_json_value_at_path(
+    value: &mut serde_json::Value,
+    path: &[JsonPathItem],
+    kind: &PayloadRedactionKind,
+) {
     let Some((head, tail)) = path.split_first() else {
-        if should_redact_encrypted_payload_value(value) {
+        if matches!(kind, PayloadRedactionKind::AnyValue)
+            || should_redact_encrypted_payload_value(value)
+        {
             *value = encrypted_payload_redaction_value();
         }
         return;
@@ -2714,17 +2741,17 @@ fn redact_encrypted_json_value_at_path(value: &mut serde_json::Value, path: &[Js
     match (head, value) {
         (JsonPathItem::Key(key), serde_json::Value::Object(object)) => {
             if let Some(value) = object.get_mut(key) {
-                redact_encrypted_json_value_at_path(value, tail);
+                redact_encrypted_json_value_at_path(value, tail, kind);
             }
         }
         (JsonPathItem::Index(index), serde_json::Value::Array(values)) => {
             if let Some(value) = values.get_mut(*index) {
-                redact_encrypted_json_value_at_path(value, tail);
+                redact_encrypted_json_value_at_path(value, tail, kind);
             }
         }
         (JsonPathItem::WildcardIndex, serde_json::Value::Array(values)) => {
             for value in values {
-                redact_encrypted_json_value_at_path(value, tail);
+                redact_encrypted_json_value_at_path(value, tail, kind);
             }
         }
         _ => {}

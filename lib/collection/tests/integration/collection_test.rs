@@ -2898,6 +2898,49 @@ async fn encrypted_payload_blind_index_token_filter_is_searchable() {
         .unwrap();
     assert_eq!(records.points.len(), 1);
     assert_eq!(records.points[0].id, 1.into());
+    assert_eq!(
+        records.points[0]
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.0.get("document_body__blind_eq"))
+            .and_then(|value| value.as_str()),
+        Some(token.as_str()),
+    );
+
+    let redacted_records = collection
+        .scroll_by(
+            ScrollRequestInternal {
+                offset: None,
+                limit: Some(10),
+                filter: Some(blind_filter.clone()),
+                with_payload: Some(WithPayloadInterface::Encrypted(
+                    PayloadEncryptedReadPolicy {
+                        encrypted_payload: EncryptedPayloadReadMode::Redacted,
+                    },
+                )),
+                with_vector: false.into(),
+                order_by: None,
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(redacted_records.points.len(), 1);
+    assert_eq!(
+        redacted_records.points[0]
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.0.get("document_body__blind_eq")),
+        Some(&serde_json::json!({
+            "$qdrant_sec_redacted": true,
+            "reason": "encrypted_payload",
+        })),
+    );
+    let redacted_serialized = serde_json::to_string(&redacted_records.points[0].payload).unwrap();
+    assert!(!redacted_serialized.contains(&token));
 
     let count = collection
         .count(
@@ -2925,7 +2968,9 @@ async fn encrypted_payload_blind_index_token_filter_is_searchable() {
                 offset: 0,
                 params: None,
                 with_vector: WithVector::Bool(false),
-                with_payload: WithPayloadInterface::Bool(false),
+                with_payload: WithPayloadInterface::Encrypted(PayloadEncryptedReadPolicy {
+                    encrypted_payload: EncryptedPayloadReadMode::Redacted,
+                }),
             },
             None,
             ShardSelectorInternal::All,
@@ -2936,6 +2981,16 @@ async fn encrypted_payload_blind_index_token_filter_is_searchable() {
         .unwrap();
     assert_eq!(query_records.len(), 1);
     assert_eq!(query_records[0].id, 1.into());
+    assert_eq!(
+        query_records[0]
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.0.get("document_body__blind_eq")),
+        Some(&serde_json::json!({
+            "$qdrant_sec_redacted": true,
+            "reason": "encrypted_payload",
+        })),
+    );
 
     let invalid_blind_filter = Filter::new_must(Condition::Field(FieldCondition::new_match(
         "document_body__blind_eq".parse().unwrap(),
@@ -2962,7 +3017,7 @@ async fn encrypted_payload_blind_index_token_filter_is_searchable() {
         err,
         CollectionError::BadInput { description }
             if description.contains("metadata blind-index field 'document_body__blind_eq'")
-                && description.contains("base64url")
+                && description.contains("32 bytes")
     ));
 }
 
