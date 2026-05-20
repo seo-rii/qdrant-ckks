@@ -57,9 +57,9 @@ use qdrant_sec::{
     ENCRYPTED_VECTOR_SIDECAR_FIELD, ExistingPayloadMode, METADATA_EXACT_MATCH_TOKEN_BINDING,
     METADATA_VALUE_BINDING, PAYLOAD_TEXT_ENVELOPE_KIND, PAYLOAD_TEXT_KEY_DOMAIN,
     PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey, ServerPayloadValidationContext,
-    ckks_vector_verified_sidecar_delete_key, client_payload_signature_message,
-    is_client_encrypted_payload_value, is_encrypted_payload_value,
-    validate_client_payload_value_for_runtime, validate_server_payload_value_metadata,
+    client_payload_signature_message, is_client_encrypted_payload_value,
+    is_encrypted_payload_value, validate_client_payload_value_for_runtime,
+    validate_server_payload_value_metadata,
 };
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -6978,12 +6978,13 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
     ));
     let delete_points = vec![1.into()];
     let delete_target = ckks_vector_sidecar_delete_target(Some(&delete_points), None).unwrap();
-    let wrong_collection_delete_key = ckks_vector_verified_sidecar_delete_key(
-        "other-collection",
-        DEFAULT_VECTOR_NAME,
-        delete_target.clone(),
-    )
-    .unwrap();
+    let wrong_collection_delete_provenance =
+        CollectionUpdateProvenance::runtime_encrypted_vector_deletes_for_target(
+            "other-collection",
+            vec![DEFAULT_VECTOR_NAME.to_string()],
+            delete_target.clone(),
+        )
+        .unwrap();
     let err = collection
         .update_from_client(
             delete_sidecar.clone(),
@@ -6992,9 +6993,7 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::runtime_encrypted_vector_deletes(vec![
-                wrong_collection_delete_key,
-            ]),
+            wrong_collection_delete_provenance,
         )
         .await
         .unwrap_err();
@@ -7004,12 +7003,13 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
             if description.contains("can only be removed by runtime delete_vectors")
                 && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
     ));
-    let verified_delete_key = ckks_vector_verified_sidecar_delete_key(
-        &collection_crypto_id,
-        DEFAULT_VECTOR_NAME,
-        delete_target.clone(),
-    )
-    .unwrap();
+    let verified_delete_provenance =
+        CollectionUpdateProvenance::runtime_encrypted_vector_deletes_for_target(
+            &collection_crypto_id,
+            vec![DEFAULT_VECTOR_NAME.to_string()],
+            delete_target.clone(),
+        )
+        .unwrap();
     let wrong_point_delete_sidecar =
         CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(DeletePayloadOp {
             keys: vec![encrypted_sidecar_delete_key.clone()],
@@ -7024,9 +7024,7 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::runtime_encrypted_vector_deletes(vec![
-                verified_delete_key.clone(),
-            ]),
+            verified_delete_provenance.clone(),
         )
         .await
         .unwrap_err();
@@ -7050,9 +7048,7 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::runtime_encrypted_vector_deletes(vec![
-                verified_delete_key.clone(),
-            ]),
+            verified_delete_provenance.clone(),
         )
         .await
         .unwrap_err();
@@ -7064,12 +7060,13 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
     ));
     let filter_delete_target = ckks_vector_sidecar_delete_target(None, Some(&Filter::default()))
         .expect("filter delete target");
-    let filter_verified_delete_key = ckks_vector_verified_sidecar_delete_key(
-        &collection_crypto_id,
-        DEFAULT_VECTOR_NAME,
-        filter_delete_target,
-    )
-    .unwrap();
+    let filter_delete_provenance =
+        CollectionUpdateProvenance::runtime_encrypted_vector_deletes_for_target(
+            &collection_crypto_id,
+            vec![DEFAULT_VECTOR_NAME.to_string()],
+            filter_delete_target,
+        )
+        .unwrap();
     let different_filter_delete_sidecar =
         CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(DeletePayloadOp {
             keys: vec![encrypted_sidecar_delete_key.clone()],
@@ -7092,9 +7089,7 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::runtime_encrypted_vector_deletes(vec![
-                filter_verified_delete_key,
-            ]),
+            filter_delete_provenance,
         )
         .await
         .unwrap_err();
@@ -7112,7 +7107,7 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
             WriteOrdering::default(),
             None,
             HwMeasurementAcc::new(),
-            CollectionUpdateProvenance::runtime_encrypted_vector_deletes(vec![verified_delete_key]),
+            verified_delete_provenance,
         )
         .await
         .unwrap_err();

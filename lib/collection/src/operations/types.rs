@@ -24,7 +24,7 @@ use qdrant_sec::{
     CkksVectorSidecarDeleteTarget, CkksVectorSidecarEnvelopeKey,
     CkksVectorVerifiedSidecarDeleteKey, CkksVectorVerifiedSidecarKey, ClientPayloadEnvelopeKey,
     ClientPayloadVerifiedEnvelopeKey, ENCRYPTED_VECTOR_SIDECAR_FIELD, ServerPayloadEnvelopeKey,
-    ServerPayloadVerifiedEnvelopeKey,
+    ServerPayloadVerifiedEnvelopeKey, ckks_vector_verified_sidecar_delete_key,
 };
 use schemars::JsonSchema;
 use segment::common::anonymize::Anonymize;
@@ -245,19 +245,27 @@ impl CollectionUpdateProvenance {
         }
     }
 
-    pub fn runtime_encrypted_vector_deletes(
-        verified_delete_keys: impl IntoIterator<Item = CkksVectorVerifiedSidecarDeleteKey>,
-    ) -> Self {
+    pub fn runtime_encrypted_vector_deletes_for_target(
+        collection_id: &str,
+        vector_names: impl IntoIterator<Item = String>,
+        target: CkksVectorSidecarDeleteTarget,
+    ) -> Result<Self, qdrant_sec::CkksError> {
+        let verified_delete_keys = vector_names
+            .into_iter()
+            .map(|vector_name| {
+                ckks_vector_verified_sidecar_delete_key(collection_id, vector_name, target.clone())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let verified = RuntimeEncryptedVectorSidecarDeletes::from_verified(verified_delete_keys);
         if verified.verified_delete_keys.is_empty() {
-            return Self::client_plaintext();
+            return Ok(Self::client_plaintext());
         }
-        Self {
+        Ok(Self {
             server_envelopes: None,
             vector_sidecars: None,
             vector_sidecar_deletes: Some(verified),
             verified_client_envelopes: None,
-        }
+        })
     }
 
     pub fn runtime_verified_client_envelopes(
@@ -2283,7 +2291,11 @@ impl PeerMetadata {
 
 #[cfg(test)]
 mod tests {
-    use super::PeerMetadata;
+    use qdrant_sec::ENCRYPTED_VECTOR_SIDECAR_FIELD;
+    use segment::json_path::{JsonPath, JsonPathItem};
+    use segment::types::PointIdType;
+
+    use super::{CollectionUpdateProvenance, PeerMetadata, ckks_vector_sidecar_delete_target};
 
     #[test]
     fn peer_metadata_treats_empty_crypto_runtime_fingerprint_as_missing() {
@@ -2291,5 +2303,42 @@ mod tests {
             PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(String::new()));
 
         assert_eq!(metadata.crypto_runtime_capability_fingerprint(), None);
+    }
+
+    #[test]
+    fn runtime_encrypted_vector_delete_provenance_is_bound_to_target() {
+        let point_ids: Vec<PointIdType> = vec![42.into(), 7.into()];
+        let target = ckks_vector_sidecar_delete_target(Some(&point_ids), None).unwrap();
+        let provenance = CollectionUpdateProvenance::runtime_encrypted_vector_deletes_for_target(
+            "collection-uuid",
+            vec!["embedding".to_string()],
+            target.clone(),
+        )
+        .expect("valid target-bound delete provenance");
+        let key = JsonPath {
+            first_key: ENCRYPTED_VECTOR_SIDECAR_FIELD.to_string(),
+            rest: vec![JsonPathItem::Key("embedding".to_string())],
+        };
+
+        assert!(provenance.allows_vector_sidecar_delete_key("collection-uuid", &key, &target));
+        assert!(!provenance.allows_vector_sidecar_delete_key("other-collection", &key, &target));
+
+        let other_key = JsonPath {
+            first_key: ENCRYPTED_VECTOR_SIDECAR_FIELD.to_string(),
+            rest: vec![JsonPathItem::Key("other-vector".to_string())],
+        };
+        assert!(!provenance.allows_vector_sidecar_delete_key(
+            "collection-uuid",
+            &other_key,
+            &target
+        ));
+
+        let other_point_ids: Vec<PointIdType> = vec![99.into()];
+        let other_target = ckks_vector_sidecar_delete_target(Some(&other_point_ids), None).unwrap();
+        assert!(!provenance.allows_vector_sidecar_delete_key(
+            "collection-uuid",
+            &key,
+            &other_target
+        ));
     }
 }

@@ -21,10 +21,9 @@ use collection::operations::verification::*;
 use collection::shards::shard::ShardId;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use qdrant_sec::{
-    CkksVectorSidecarDeleteTarget, CkksVectorVerifiedSidecarDeleteKey,
-    CkksVectorVerifiedSidecarKey, ClientPayloadNonceReplayKey, ClientPayloadVerifiedEnvelopeKey,
-    ENCRYPTED_VECTOR_SIDECAR_FIELD, METADATA_VALUE_BINDING, PayloadEncryptionError,
-    ServerPayloadVerifiedEnvelopeKey, ckks_vector_verified_sidecar_delete_key,
+    CkksVectorSidecarDeleteTarget, CkksVectorVerifiedSidecarKey, ClientPayloadNonceReplayKey,
+    ClientPayloadVerifiedEnvelopeKey, ENCRYPTED_VECTOR_SIDECAR_FIELD, METADATA_VALUE_BINDING,
+    PayloadEncryptionError, ServerPayloadVerifiedEnvelopeKey,
 };
 use schemars::JsonSchema;
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
@@ -630,7 +629,7 @@ pub async fn do_delete_vectors(
     let vector_names: Vec<_> = vector.into_iter().collect();
     let encrypted_sidecar_delete_target =
         ckks_vector_sidecar_delete_target(points.as_deref(), filter.as_ref());
-    let (vector_names, encrypted_sidecar_keys, encrypted_sidecar_delete_keys) =
+    let (vector_names, encrypted_sidecar_keys, encrypted_sidecar_delete_provenance) =
         split_encrypted_vector_delete_names(
             toc,
             &collection_name,
@@ -668,9 +667,7 @@ pub async fn do_delete_vectors(
                     shard_key.clone(),
                     auth.clone(),
                     hw_measurement_acc.clone(),
-                    CollectionUpdateProvenance::runtime_encrypted_vector_deletes(
-                        encrypted_sidecar_delete_keys.clone(),
-                    ),
+                    encrypted_sidecar_delete_provenance.clone(),
                 )
                 .await?,
             );
@@ -718,9 +715,7 @@ pub async fn do_delete_vectors(
                     shard_key.clone(),
                     auth.clone(),
                     hw_measurement_acc.clone(),
-                    CollectionUpdateProvenance::runtime_encrypted_vector_deletes(
-                        encrypted_sidecar_delete_keys.clone(),
-                    ),
+                    encrypted_sidecar_delete_provenance.clone(),
                 )
                 .await?,
             );
@@ -2275,14 +2270,7 @@ async fn split_encrypted_vector_delete_names(
     auth: &Auth,
     vector_names: Vec<String>,
     delete_target: Option<&CkksVectorSidecarDeleteTarget>,
-) -> Result<
-    (
-        Vec<String>,
-        Vec<JsonPath>,
-        Vec<CkksVectorVerifiedSidecarDeleteKey>,
-    ),
-    StorageError,
-> {
+) -> Result<(Vec<String>, Vec<JsonPath>, CollectionUpdateProvenance), StorageError> {
     let collection_pass =
         auth.check_collection_access(collection_name, AccessRequirements::new(), "delete_vectors")?;
     let collection = toc.get_collection(&collection_pass).await?;
@@ -2291,7 +2279,11 @@ async fn split_encrypted_vector_delete_names(
         .stable_crypto_id(collection_name)
         .map_err(|err| StorageError::bad_input(err.to_string()))?;
     let Some(encryption) = collection_config.params.effective_encryption() else {
-        return Ok((vector_names, Vec::new(), Vec::new()));
+        return Ok((
+            vector_names,
+            Vec::new(),
+            CollectionUpdateProvenance::client_plaintext(),
+        ));
     };
 
     let encrypted_names: std::collections::HashSet<_> = encryption
@@ -2306,36 +2298,42 @@ async fn split_encrypted_vector_delete_names(
 
     let mut plaintext_vector_names = Vec::new();
     let mut encrypted_sidecar_keys = Vec::new();
-    let mut encrypted_sidecar_delete_keys = Vec::new();
+    let mut encrypted_sidecar_vector_names = Vec::new();
     for vector_name in vector_names {
         if encrypted_names.contains(&vector_name) {
-            let Some(delete_target) = delete_target else {
+            if delete_target.is_none() {
                 return Err(StorageError::bad_request("No filter or points provided"));
-            };
-            let verified_delete_key = ckks_vector_verified_sidecar_delete_key(
-                &collection_crypto_id,
-                &vector_name,
-                delete_target.clone(),
-            )
-            .map_err(|err| {
-                StorageError::bad_input(format!(
-                    "encrypted vector sidecar delete proof for '{vector_name}' is invalid: {err}",
-                ))
-            })?;
+            }
             encrypted_sidecar_keys.push(JsonPath {
                 first_key: ENCRYPTED_VECTOR_SIDECAR_FIELD.to_string(),
-                rest: vec![JsonPathItem::Key(vector_name)],
+                rest: vec![JsonPathItem::Key(vector_name.clone())],
             });
-            encrypted_sidecar_delete_keys.push(verified_delete_key);
+            encrypted_sidecar_vector_names.push(vector_name);
         } else {
             plaintext_vector_names.push(vector_name);
         }
     }
+    let encrypted_sidecar_delete_provenance = if encrypted_sidecar_vector_names.is_empty() {
+        CollectionUpdateProvenance::client_plaintext()
+    } else {
+        CollectionUpdateProvenance::runtime_encrypted_vector_deletes_for_target(
+            &collection_crypto_id,
+            encrypted_sidecar_vector_names,
+            delete_target
+                .expect("encrypted sidecar vector names require delete target")
+                .clone(),
+        )
+        .map_err(|err| {
+            StorageError::bad_input(format!(
+                "encrypted vector sidecar delete provenance is invalid: {err}",
+            ))
+        })?
+    };
 
     Ok((
         plaintext_vector_names,
         encrypted_sidecar_keys,
-        encrypted_sidecar_delete_keys,
+        encrypted_sidecar_delete_provenance,
     ))
 }
 
