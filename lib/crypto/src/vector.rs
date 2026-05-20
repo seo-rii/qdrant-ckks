@@ -21,6 +21,8 @@ const VERSION: u8 = 1;
 const CRYPTO_SCHEMA_VERSION: u16 = 1;
 const DEFAULT_ENCRYPTION_EPOCH: u64 = 0;
 const MAX_VECTOR_NAME_LEN: usize = 255;
+const CKKS_VECTOR_CIPHERTEXT_MAX_BYTES: usize = 16 * 1024 * 1024;
+const CKKS_VECTOR_CIPHERTEXT_MAX_B64_LEN: usize = (CKKS_VECTOR_CIPHERTEXT_MAX_BYTES + 2) / 3 * 4;
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum CkksError {
@@ -479,6 +481,33 @@ fn validate_vector_name(vector_name: impl Into<String>) -> Result<String, CkksEr
     Ok(vector_name)
 }
 
+fn validate_raw_ciphertext_size(ciphertext: &[u8]) -> Result<(), CkksError> {
+    if ciphertext.len() > CKKS_VECTOR_CIPHERTEXT_MAX_BYTES {
+        return Err(CkksError::MalformedEnvelope(
+            "stored ciphertext exceeds maximum size".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn decode_stored_ciphertext(ciphertext_b64: &str) -> Result<Vec<u8>, CkksError> {
+    if ciphertext_b64.len() > CKKS_VECTOR_CIPHERTEXT_MAX_B64_LEN {
+        return Err(CkksError::MalformedEnvelope(
+            "stored ciphertext exceeds maximum size".to_string(),
+        ));
+    }
+    let ciphertext = BASE64URL_NOPAD
+        .decode(ciphertext_b64.as_bytes())
+        .map_err(|_| CkksError::MalformedEnvelope("stored ciphertext is invalid".to_string()))?;
+    if ciphertext.is_empty() {
+        return Err(CkksError::MalformedEnvelope(
+            "stored ciphertext is empty".to_string(),
+        ));
+    }
+    validate_raw_ciphertext_size(&ciphertext)?;
+    Ok(ciphertext)
+}
+
 pub fn encrypted_ckks_vector_payload_value(
     encrypted: &EncryptedCkksVector,
 ) -> Result<Value, CkksError> {
@@ -515,14 +544,7 @@ pub fn ckks_vector_sidecar_envelope_key(
         return Err(CkksError::UnsupportedScheme(encrypted.scheme));
     }
     validate_encrypted_envelope_metadata(&encrypted.envelope)?;
-    let ciphertext = BASE64URL_NOPAD
-        .decode(encrypted.envelope.ciphertext.as_bytes())
-        .map_err(|_| CkksError::MalformedEnvelope("stored ciphertext is invalid".to_string()))?;
-    if ciphertext.is_empty() {
-        return Err(CkksError::MalformedEnvelope(
-            "stored ciphertext is empty".to_string(),
-        ));
-    }
+    let ciphertext = decode_stored_ciphertext(&encrypted.envelope.ciphertext)?;
     let ciphertext_sha256_b64 = BASE64URL_NOPAD.encode(Sha256::digest(&ciphertext).as_ref());
 
     Ok(Some(CkksVectorSidecarEnvelopeKey {
@@ -774,6 +796,7 @@ where
         if ciphertext.is_empty() {
             return Err(CkksError::EmptyCiphertext);
         }
+        validate_raw_ciphertext_size(ciphertext)?;
 
         let envelope = self.metadata_keyring.encrypt_with_aad_suffix(
             serde_json::to_vec(&VerifiedCkksVector {
@@ -952,18 +975,7 @@ where
     }
 
     fn decode_verified_ciphertext(verified: &VerifiedCkksVector) -> Result<Vec<u8>, CkksError> {
-        let ciphertext = BASE64URL_NOPAD
-            .decode(verified.ciphertext.as_bytes())
-            .map_err(|_| {
-                CkksError::MalformedEnvelope("stored ciphertext is invalid".to_string())
-            })?;
-        if ciphertext.is_empty() {
-            return Err(CkksError::MalformedEnvelope(
-                "stored ciphertext is empty".to_string(),
-            ));
-        }
-
-        Ok(ciphertext)
+        decode_stored_ciphertext(&verified.ciphertext)
     }
 
     pub fn score_plaintext_query(

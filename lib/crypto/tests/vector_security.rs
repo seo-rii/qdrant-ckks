@@ -44,6 +44,15 @@ impl CkksVectorBackend for SealedTestBackend {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct OversizedCiphertextBackend;
+
+impl CkksVectorBackend for OversizedCiphertextBackend {
+    fn encrypt(&self, _input: CkksEncryptionInput<'_>) -> Result<Vec<u8>, CkksError> {
+        Ok(vec![7_u8; 17 * 1024 * 1024])
+    }
+}
+
 #[test]
 fn ckks_public_material_rejects_oversized_context_and_public_key() {
     let oversized_context = vec![1u8; CKKS_PUBLIC_MATERIAL_MAX_CRYPTO_CONTEXT_BYTES + 1];
@@ -276,6 +285,52 @@ fn encrypt_sidecar_payload_value_returns_runtime_verified_proof() {
     .unwrap()
     .unwrap();
     assert_ne!(proof.envelope_key(), &tampered_key);
+}
+
+#[test]
+fn ckks_vector_rejects_oversized_ciphertext_at_seal_and_proof_boundaries() {
+    let oversized_encryptor = test_ckks_encryptor(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        OversizedCiphertextBackend,
+    )
+    .unwrap();
+
+    let err = oversized_encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0, 2.0])
+        .unwrap_err();
+    assert!(
+        matches!(err, CkksError::MalformedEnvelope(ref message) if message.contains("maximum size")),
+        "{err:?}",
+    );
+
+    let (mut value, _) = encryptor()
+        .with_collection_identity("collection-uuid-1")
+        .unwrap()
+        .encrypt_sidecar_payload_value("docs", "point-1", &public_material(), &[1.0, 2.0])
+        .unwrap();
+    value
+        .get_mut(ENCRYPTED_CKKS_VECTOR_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut("envelope")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert(
+            "ciphertext".to_string(),
+            serde_json::Value::String(BASE64URL_NOPAD.encode(&vec![8_u8; 17 * 1024 * 1024])),
+        );
+
+    let err = ckks_vector_sidecar_envelope_key(&value, "collection-uuid-1", "point-1", "embedding")
+        .unwrap_err();
+    assert!(
+        matches!(err, CkksError::MalformedEnvelope(ref message) if message.contains("maximum size")),
+        "{err:?}",
+    );
 }
 
 #[test]
