@@ -49,6 +49,9 @@ use crate::operations::{CollectionUpdateOperations, OperationWithClockTag};
 use crate::shards::shard::ShardId;
 use crate::shards::shard_trait::WaitUntil;
 
+const METADATA_BLIND_INDEX_MATCH_ANY_MAX_TOKENS: usize = 64;
+const METADATA_BLIND_INDEX_FILTER_MAX_TOKENS: usize = 256;
+
 fn crypto_migration_regular_operation_error(
     migration_state: CryptoMigrationState,
     operation_kind: &str,
@@ -2849,11 +2852,13 @@ fn validate_filter_metadata_blind_index_tokens(
     metadata_path: &JsonPath,
     metadata_key: &str,
 ) -> CollectionResult<()> {
+    let mut token_count = 0;
     validate_filter_metadata_blind_index_tokens_with_polarity(
         filter,
         metadata_path,
         metadata_key,
         false,
+        &mut token_count,
     )
 }
 
@@ -2862,6 +2867,7 @@ fn validate_filter_metadata_blind_index_tokens_with_polarity(
     metadata_path: &JsonPath,
     metadata_key: &str,
     negative_context: bool,
+    token_count: &mut usize,
 ) -> CollectionResult<()> {
     for condition in filter.must.iter().chain(filter.should.iter()).flatten() {
         validate_condition_metadata_blind_index_tokens(
@@ -2869,6 +2875,7 @@ fn validate_filter_metadata_blind_index_tokens_with_polarity(
             metadata_path,
             metadata_key,
             negative_context,
+            token_count,
         )?;
     }
     if let Some(min_should) = filter.min_should.as_ref() {
@@ -2878,6 +2885,7 @@ fn validate_filter_metadata_blind_index_tokens_with_polarity(
                 metadata_path,
                 metadata_key,
                 negative_context,
+                token_count,
             )?;
         }
     }
@@ -2887,6 +2895,7 @@ fn validate_filter_metadata_blind_index_tokens_with_polarity(
             metadata_path,
             metadata_key,
             true,
+            token_count,
         )?;
     }
     Ok(())
@@ -2897,6 +2906,7 @@ fn validate_condition_metadata_blind_index_tokens(
     metadata_path: &JsonPath,
     metadata_key: &str,
     negative_context: bool,
+    token_count: &mut usize,
 ) -> CollectionResult<()> {
     match condition {
         Condition::Field(field_condition) if field_condition.key.compatible(metadata_path) => {
@@ -2925,7 +2935,7 @@ fn validate_condition_metadata_blind_index_tokens(
             match match_condition {
                 Match::Value(value) => match &value.value {
                     ValueVariants::String(token) => {
-                        validate_metadata_blind_index_token(token, metadata_key)
+                        validate_metadata_blind_index_filter_token(token, metadata_key, token_count)
                     }
                     ValueVariants::Integer(_) | ValueVariants::Bool(_) => {
                         Err(CollectionError::bad_input(format!(
@@ -2935,8 +2945,24 @@ fn validate_condition_metadata_blind_index_tokens(
                 },
                 Match::Any(any) => match &any.any {
                     AnyVariants::Strings(tokens) => {
+                        if tokens.len() > METADATA_BLIND_INDEX_MATCH_ANY_MAX_TOKENS {
+                            return Err(CollectionError::bad_input(format!(
+                                "metadata blind-index field '{metadata_key}' filters must include at most {METADATA_BLIND_INDEX_MATCH_ANY_MAX_TOKENS} token strings per match.any",
+                            )));
+                        }
+                        if token_count.saturating_add(tokens.len())
+                            > METADATA_BLIND_INDEX_FILTER_MAX_TOKENS
+                        {
+                            return Err(CollectionError::bad_input(format!(
+                                "metadata blind-index field '{metadata_key}' filters must include at most {METADATA_BLIND_INDEX_FILTER_MAX_TOKENS} token strings",
+                            )));
+                        }
                         for token in tokens {
-                            validate_metadata_blind_index_token(token, metadata_key)?;
+                            validate_metadata_blind_index_filter_token(
+                                token,
+                                metadata_key,
+                                token_count,
+                            )?;
                         }
                         Ok(())
                     }
@@ -2980,6 +3006,7 @@ fn validate_condition_metadata_blind_index_tokens(
                 metadata_path,
                 metadata_key,
                 negative_context,
+                token_count,
             )
         }
         Condition::Filter(filter) => validate_filter_metadata_blind_index_tokens_with_polarity(
@@ -2987,8 +3014,23 @@ fn validate_condition_metadata_blind_index_tokens(
             metadata_path,
             metadata_key,
             negative_context,
+            token_count,
         ),
     }
+}
+
+fn validate_metadata_blind_index_filter_token(
+    token: &str,
+    metadata_key: &str,
+    token_count: &mut usize,
+) -> CollectionResult<()> {
+    if *token_count >= METADATA_BLIND_INDEX_FILTER_MAX_TOKENS {
+        return Err(CollectionError::bad_input(format!(
+            "metadata blind-index field '{metadata_key}' filters must include at most {METADATA_BLIND_INDEX_FILTER_MAX_TOKENS} token strings",
+        )));
+    }
+    *token_count += 1;
+    validate_metadata_blind_index_token(token, metadata_key)
 }
 
 fn filter_touches_encrypted_payload<'a>(
@@ -3198,6 +3240,50 @@ mod tests {
                     .unwrap_err();
             assert!(format!("{err}").contains("metadata blind-index field"));
         }
+    }
+
+    #[test]
+    fn metadata_blind_index_filter_rejects_oversized_token_lists() {
+        let metadata_path = "body__blind_eq".parse::<JsonPath>().unwrap();
+        let metadata_key = "body__blind_eq";
+        let too_many_any_tokens = (0..=METADATA_BLIND_INDEX_MATCH_ANY_MAX_TOKENS)
+            .map(|idx| blind_index_token(idx as u8))
+            .collect::<Vec<_>>();
+
+        let err = validate_filter_metadata_blind_index_tokens(
+            &blind_index_filter(metadata_key, Match::from(too_many_any_tokens)),
+            &metadata_path,
+            metadata_key,
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains(&format!(
+                "at most {METADATA_BLIND_INDEX_MATCH_ANY_MAX_TOKENS}"
+            )),
+            "{err}"
+        );
+
+        let too_many_total_tokens = (0..=METADATA_BLIND_INDEX_FILTER_MAX_TOKENS)
+            .map(|idx| {
+                Condition::Field(FieldCondition::new_match(
+                    metadata_key.parse().unwrap(),
+                    blind_index_token(idx as u8).into(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let err = validate_filter_metadata_blind_index_tokens(
+            &Filter {
+                must: Some(too_many_total_tokens),
+                ..Filter::new()
+            },
+            &metadata_path,
+            metadata_key,
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains(&format!("at most {METADATA_BLIND_INDEX_FILTER_MAX_TOKENS}")),
+            "{err}"
+        );
     }
 
     #[test]
