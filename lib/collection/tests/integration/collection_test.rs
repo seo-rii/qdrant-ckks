@@ -6830,6 +6830,38 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
                 && description.contains("nonce")
     ));
 
+    let oversized_ciphertext_payload = vector_sidecar_with_raw_parts(
+        DEFAULT_VECTOR_NAME,
+        "tenant-a:docs",
+        serde_json::Value::String("AAAAAAAAAAAAAAAA".to_string()),
+        serde_json::Value::String("A".repeat(23 * 1024 * 1024)),
+    );
+    let oversized_ciphertext_sidecar =
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
+            payload: oversized_ciphertext_payload,
+            points: Some(vec![1.into()]),
+            filter: None,
+            key: None,
+        }));
+    let err = collection
+        .update_from_client(
+            oversized_ciphertext_sidecar,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::default(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("encrypted vector sidecar entry")
+                && description.contains("maximum size")
+    ));
+
     let (mut tampered_payload, tampered_verified_sidecar_key) =
         vector_sidecar(DEFAULT_VECTOR_NAME, "tenant-a:docs");
     let tampered_provenance = vector_sidecar_provenance(tampered_verified_sidecar_key);

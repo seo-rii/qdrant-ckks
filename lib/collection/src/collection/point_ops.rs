@@ -52,6 +52,10 @@ use crate::shards::shard_trait::WaitUntil;
 
 const METADATA_BLIND_INDEX_MATCH_ANY_MAX_TOKENS: usize = 64;
 const METADATA_BLIND_INDEX_FILTER_MAX_TOKENS: usize = 256;
+const CKKS_VECTOR_SIDECAR_NONCE_B64_LEN: usize = 16;
+const CKKS_VECTOR_SIDECAR_CIPHERTEXT_MAX_BYTES: usize = 16 * 1024 * 1024;
+const CKKS_VECTOR_SIDECAR_CIPHERTEXT_MAX_B64_LEN: usize =
+    (CKKS_VECTOR_SIDECAR_CIPHERTEXT_MAX_BYTES + 2) / 3 * 4;
 
 fn crypto_migration_regular_operation_error(
     migration_state: CryptoMigrationState,
@@ -879,6 +883,11 @@ impl Collection {
                             "encrypted vector sidecar entry '{vector_name}' is missing material fingerprint",
                         )));
                     }
+                    if encrypted_vector.envelope.nonce.len() != CKKS_VECTOR_SIDECAR_NONCE_B64_LEN {
+                        return Err(CollectionError::bad_input(format!(
+                            "encrypted vector sidecar entry '{vector_name}' nonce must be 12 bytes",
+                        )));
+                    }
                     let nonce = BASE64URL_NOPAD
                         .decode(encrypted_vector.envelope.nonce.as_bytes())
                         .map_err(|_| {
@@ -891,6 +900,13 @@ impl Collection {
                             "encrypted vector sidecar entry '{vector_name}' nonce must be 12 bytes",
                         )));
                     }
+                    if encrypted_vector.envelope.ciphertext.len()
+                        > CKKS_VECTOR_SIDECAR_CIPHERTEXT_MAX_B64_LEN
+                    {
+                        return Err(CollectionError::bad_input(format!(
+                            "encrypted vector sidecar entry '{vector_name}' ciphertext exceeds maximum size",
+                        )));
+                    }
                     let ciphertext = BASE64URL_NOPAD
                         .decode(encrypted_vector.envelope.ciphertext.as_bytes())
                         .map_err(|_| {
@@ -901,6 +917,11 @@ impl Collection {
                     if ciphertext.len() < 16 {
                         return Err(CollectionError::bad_input(format!(
                             "encrypted vector sidecar entry '{vector_name}' ciphertext is too short",
+                        )));
+                    }
+                    if ciphertext.len() > CKKS_VECTOR_SIDECAR_CIPHERTEXT_MAX_BYTES {
+                        return Err(CollectionError::bad_input(format!(
+                            "encrypted vector sidecar entry '{vector_name}' ciphertext exceeds maximum size",
                         )));
                     }
                     let Some(point_id) = point_id else {
