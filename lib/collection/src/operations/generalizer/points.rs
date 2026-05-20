@@ -17,7 +17,7 @@ impl Generalizer for ScrollRequestInternal {
         Self {
             offset: *offset,
             limit: *limit,
-            filter: filter.clone(),
+            filter: filter.as_ref().map(|filter| filter.remove_details()),
             with_payload: with_payload.clone(),
             with_vector: with_vector.clone(),
             order_by: order_by.clone(),

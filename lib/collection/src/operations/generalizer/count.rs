@@ -6,7 +6,7 @@ impl Generalizer for CountRequestInternal {
     fn remove_details(&self) -> Self {
         let CountRequestInternal { filter, exact } = self;
         Self {
-            filter: filter.clone(),
+            filter: filter.as_ref().map(|filter| filter.remove_details()),
             exact: *exact,
         }
     }

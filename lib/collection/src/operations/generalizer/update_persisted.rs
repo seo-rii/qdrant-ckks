@@ -63,7 +63,7 @@ impl Generalizer for PointOperations {
                 PointOperations::DeletePoints { ids: ids.clone() }
             }
             PointOperations::DeletePointsByFilter(filter) => {
-                PointOperations::DeletePointsByFilter(filter.clone())
+                PointOperations::DeletePointsByFilter(filter.remove_details())
             }
             PointOperations::SyncPoints(sync_operation) => {
                 PointOperations::SyncPoints(sync_operation.remove_details())
@@ -113,7 +113,7 @@ impl Generalizer for ConditionalInsertOperationInternal {
         } = self;
 
         Self {
-            condition: condition.clone(),
+            condition: condition.remove_details(),
             points_op: points_op.remove_details(),
             update_mode: *update_mode,
         }
@@ -192,7 +192,12 @@ impl Generalizer for VectorOperations {
                 VectorOperations::UpdateVectors(update_vectors.remove_details())
             }
             VectorOperations::DeleteVectors(_, _) => self.clone(),
-            VectorOperations::DeleteVectorsByFilter(_, _) => self.clone(),
+            VectorOperations::DeleteVectorsByFilter(filter, vector_names) => {
+                VectorOperations::DeleteVectorsByFilter(
+                    filter.remove_details(),
+                    vector_names.clone(),
+                )
+            }
         }
     }
 }
@@ -206,7 +211,7 @@ impl Generalizer for UpdateVectorsOp {
 
         Self {
             points: points.iter().map(|point| point.remove_details()).collect(),
-            update_filter: update_filter.clone(),
+            update_filter: update_filter.as_ref().map(|filter| filter.remove_details()),
         }
     }
 }
@@ -264,13 +269,18 @@ impl Generalizer for PayloadOps {
                 PayloadOps::SetPayload(set_payload.remove_details())
             }
             PayloadOps::DeletePayload(delete_payload) => {
-                PayloadOps::DeletePayload(delete_payload.clone())
+                let mut delete_payload = delete_payload.clone();
+                delete_payload.filter = delete_payload
+                    .filter
+                    .as_ref()
+                    .map(|filter| filter.remove_details());
+                PayloadOps::DeletePayload(delete_payload)
             }
             PayloadOps::ClearPayload { points } => PayloadOps::ClearPayload {
                 points: points.clone(),
             },
             PayloadOps::ClearPayloadByFilter(filter) => {
-                PayloadOps::ClearPayloadByFilter(filter.clone())
+                PayloadOps::ClearPayloadByFilter(filter.remove_details())
             }
             PayloadOps::OverwritePayload(overwrite_payload) => {
                 PayloadOps::OverwritePayload(overwrite_payload.remove_details())
@@ -291,7 +301,7 @@ impl Generalizer for SetPayloadOp {
         Self {
             payload: payload.remove_details(),
             points: points.clone(),
-            filter: filter.clone(),
+            filter: filter.as_ref().map(|filter| filter.remove_details()),
             key: key.clone(),
         }
     }

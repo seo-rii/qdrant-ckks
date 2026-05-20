@@ -8,6 +8,7 @@ use shard::count::CountRequestInternal;
 use shard::operations::CollectionUpdateOperations;
 use shard::scroll::ScrollRequestInternal;
 
+use crate::operations::generalizer::Generalizer;
 use crate::operations::types::PointRequestInternal;
 use crate::operations::universal_query::shard_query::ShardQueryRequest;
 
@@ -28,7 +29,7 @@ pub trait Loggable {
 
 impl Loggable for CollectionUpdateOperations {
     fn to_log_value(&self) -> Value {
-        to_redacted_log_value(self)
+        to_generalized_redacted_log_value(self)
     }
 
     fn request_name(&self) -> &'static str {
@@ -42,7 +43,7 @@ impl Loggable for CollectionUpdateOperations {
 
 impl Loggable for Vec<ShardQueryRequest> {
     fn to_log_value(&self) -> Value {
-        to_redacted_log_value(self)
+        to_generalized_redacted_log_value(self)
     }
 
     fn request_name(&self) -> &'static str {
@@ -56,7 +57,7 @@ impl Loggable for Vec<ShardQueryRequest> {
 
 impl Loggable for ScrollRequestInternal {
     fn to_log_value(&self) -> Value {
-        to_redacted_log_value(self)
+        to_generalized_redacted_log_value(self)
     }
 
     fn request_name(&self) -> &'static str {
@@ -84,7 +85,7 @@ impl<T: Loggable> Loggable for Arc<T> {
 
 impl Loggable for FacetParams {
     fn to_log_value(&self) -> Value {
-        to_redacted_log_value(self)
+        to_generalized_redacted_log_value(self)
     }
 
     fn request_name(&self) -> &'static str {
@@ -98,7 +99,7 @@ impl Loggable for FacetParams {
 
 impl Loggable for CountRequestInternal {
     fn to_log_value(&self) -> Value {
-        to_redacted_log_value(self)
+        to_generalized_redacted_log_value(self)
     }
 
     fn request_name(&self) -> &'static str {
@@ -112,7 +113,7 @@ impl Loggable for CountRequestInternal {
 
 impl Loggable for PointRequestInternal {
     fn to_log_value(&self) -> Value {
-        to_redacted_log_value(self)
+        to_generalized_redacted_log_value(self)
     }
 
     fn request_name(&self) -> &'static str {
@@ -128,6 +129,11 @@ fn to_redacted_log_value(value: &impl Serialize) -> Value {
     let mut value = serde_json::to_value(value).unwrap_or_default();
     redact_sensitive_log_fields(&mut value);
     value
+}
+
+fn to_generalized_redacted_log_value(value: &(impl Generalizer + Serialize)) -> Value {
+    let generalized = value.remove_details();
+    to_redacted_log_value(&generalized)
 }
 
 fn redact_sensitive_log_fields(value: &mut Value) {
@@ -315,6 +321,8 @@ mod tests {
     use segment::types::{
         Condition, FieldCondition, Filter, Payload, WithPayloadInterface, WithVector,
     };
+    use serde::Serialize;
+    use serde::ser::Serializer;
     use serde_json::json;
     use shard::count::CountRequestInternal;
     use shard::operations::point_ops::{
@@ -324,6 +332,41 @@ mod tests {
     use shard::query::{MmrInternal, ScoringQuery, ShardQueryRequest};
 
     use super::*;
+
+    #[derive(Clone)]
+    struct SerializationProbe {
+        secret: &'static str,
+    }
+
+    impl Generalizer for SerializationProbe {
+        fn remove_details(&self) -> Self {
+            Self {
+                secret: "[redacted]",
+            }
+        }
+    }
+
+    impl Serialize for SerializationProbe {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            assert_ne!(
+                self.secret, "qdrant-sec-serialization-probe-secret",
+                "raw secret-bearing request must be generalized before serde_json materialization",
+            );
+            serializer.serialize_str(self.secret)
+        }
+    }
+
+    #[test]
+    fn generalized_log_projection_serializes_only_redacted_projection() {
+        let value = to_generalized_redacted_log_value(&SerializationProbe {
+            secret: "qdrant-sec-serialization-probe-secret",
+        });
+
+        assert_eq!(value, json!("[redacted]"));
+    }
 
     #[test]
     fn update_log_value_redacts_payloads_and_vectors() {

@@ -36,7 +36,7 @@ impl Generalizer for ShardQueryRequest {
         ShardQueryRequest {
             prefetches: prefetches.iter().map(|p| p.remove_details()).collect(),
             query: query.as_ref().map(|q| q.remove_details()),
-            filter: filter.clone(),
+            filter: filter.as_ref().map(|filter| filter.remove_details()),
             score_threshold: *score_threshold,
             limit: *limit,
             offset: *offset,
@@ -61,7 +61,7 @@ impl Generalizer for ShardPrefetch {
         Self {
             prefetches: prefetches.iter().map(|p| p.remove_details()).collect(),
             query: query.as_ref().map(|q| q.remove_details()),
-            filter: filter.clone(),
+            filter: filter.as_ref().map(|filter| filter.remove_details()),
             score_threshold: *score_threshold,
             limit: *limit,
             params: *params,
@@ -137,8 +137,21 @@ impl Generalizer for VectorInputInternal {
             }
             VectorInputInternal::Id(id) => VectorInputInternal::Id(*id),
             VectorInputInternal::CkksEncryptedQuery(query) => {
-                VectorInputInternal::CkksEncryptedQuery(query.clone())
+                VectorInputInternal::CkksEncryptedQuery(query.remove_details())
             }
+        }
+    }
+}
+
+impl Generalizer for crate::operations::universal_query::collection_query::CkksEncryptedQueryInput {
+    fn remove_details(&self) -> Self {
+        Self {
+            version: self.version,
+            scheme: self.scheme.clone(),
+            security_profile: self.security_profile.clone(),
+            context_digest: self.context_digest.clone(),
+            slots: self.slots,
+            ciphertext: "[redacted]".to_string(),
         }
     }
 }

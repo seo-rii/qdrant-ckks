@@ -1,5 +1,6 @@
 mod count;
 mod facet;
+mod filter;
 mod matrix;
 mod points;
 mod query;
