@@ -16,7 +16,8 @@ use qdrant_sec::{
     CLIENT_PAYLOAD_ENVELOPE_BINDING, CkksParameters, CkksPublicMaterial, CkksVectorEncryptor,
     CkksVectorVerifiedSidecarKey, ClientPayloadNonceReplayKey, ClientPayloadSignatureVerification,
     ClientPayloadValidationContext, ClientPayloadVerifiedEnvelopeKey, CommandOpenFheBackend,
-    EncryptedCkksVector, ExistingPayloadMode, LocalMasterKeyProvider, METADATA_AES_GCM_PROVIDER,
+    EncryptedCkksVector, ExistingPayloadMode, LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_B64_LEN,
+    LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_LEN, LocalMasterKeyProvider, METADATA_AES_GCM_PROVIDER,
     METADATA_BLIND_INDEX_PROVIDER, METADATA_EXACT_MATCH_TOKEN_BINDING, METADATA_VALUE_BINDING,
     MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER,
     PAYLOAD_FIELD_BINDING, PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
@@ -181,6 +182,7 @@ const OPENFHE_BACKEND_SIGNATURE_DOMAIN: &[u8] = b"qdrant-sec/openfhe-bridge-bina
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
 const BASE64URL_NOPAD_64_BYTE_LEN: usize = 86;
 const MAX_CLIENT_SIGNATURE_PUBLIC_KEYS: usize = 8;
+const MAX_REMOTE_WRAPPED_RESOURCE_KEY_BYTES: usize = 16 * 1024;
 const METADATA_BLIND_INDEX_ALLOWED_OPTIONS: &[&str] = &[
     "key_id",
     EXPECTED_RK_ID_OPTION,
@@ -1477,6 +1479,66 @@ fn public_key_b64_type(value: &serde_json::Value) -> &'static str {
         Value::Array(_) => "array",
         Value::Object(_) => "object",
     }
+}
+
+fn base64url_nopad_encoded_len(decoded_len: usize) -> usize {
+    (decoded_len / 3) * 4
+        + match decoded_len % 3 {
+            0 => 0,
+            1 => 2,
+            _ => 3,
+        }
+}
+
+fn validate_wrapped_resource_key_b64(wrapped_key_b64: &str, algorithm: &str) -> Result<(), String> {
+    if algorithm == RESOURCE_KEY_WRAP_ALGORITHM {
+        if wrapped_key_b64.len() != LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_B64_LEN {
+            return Err(format!(
+                "wrapped_key_b64 must be exactly {LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_B64_LEN} base64url characters for {RESOURCE_KEY_WRAP_ALGORITHM}",
+            ));
+        }
+        let decoded = BASE64URL_NOPAD
+            .decode(wrapped_key_b64.as_bytes())
+            .map_err(|_| "wrapped_key_b64 must be base64url without padding".to_string())?;
+        if decoded.len() != LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_LEN {
+            return Err(format!(
+                "wrapped_key_b64 must decode to exactly {LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_LEN} bytes for {RESOURCE_KEY_WRAP_ALGORITHM}",
+            ));
+        }
+        return Ok(());
+    }
+
+    let max_encoded_len = base64url_nopad_encoded_len(MAX_REMOTE_WRAPPED_RESOURCE_KEY_BYTES);
+    if wrapped_key_b64.len() > max_encoded_len {
+        return Err(format!(
+            "wrapped_key_b64 must be at most {max_encoded_len} base64url characters for {algorithm}",
+        ));
+    }
+    let decoded = BASE64URL_NOPAD
+        .decode(wrapped_key_b64.as_bytes())
+        .map_err(|_| "wrapped_key_b64 must be base64url without padding".to_string())?;
+    if decoded.len() > MAX_REMOTE_WRAPPED_RESOURCE_KEY_BYTES {
+        return Err(format!(
+            "wrapped_key_b64 must decode to at most {MAX_REMOTE_WRAPPED_RESOURCE_KEY_BYTES} bytes for {algorithm}",
+        ));
+    }
+    Ok(())
+}
+
+fn decode_remote_wrapped_resource_key(
+    wrapped_key_b64: &str,
+) -> Result<Vec<u8>, qdrant_sec::EncryptionError> {
+    let max_encoded_len = base64url_nopad_encoded_len(MAX_REMOTE_WRAPPED_RESOURCE_KEY_BYTES);
+    if wrapped_key_b64.len() > max_encoded_len {
+        return Err(qdrant_sec::EncryptionError::InvalidCiphertextLength);
+    }
+    let decoded = BASE64URL_NOPAD
+        .decode(wrapped_key_b64.as_bytes())
+        .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)?;
+    if decoded.len() > MAX_REMOTE_WRAPPED_RESOURCE_KEY_BYTES {
+        return Err(qdrant_sec::EncryptionError::InvalidCiphertextLength);
+    }
+    Ok(decoded)
 }
 
 #[allow(
@@ -2890,6 +2952,16 @@ fn validate_wrapped_resource_key_material(
             algorithm: algorithm.to_string(),
         });
     }
+    let wrapped_key = material
+        .wrapped_key_b64
+        .as_deref()
+        .expect("wrapped_key_b64 is present");
+    validate_wrapped_resource_key_b64(wrapped_key, algorithm).map_err(|reason| {
+        CryptoSetupError::InvalidWrappedMaterial {
+            material: material_name.to_string(),
+            reason,
+        }
+    })?;
 
     Ok(())
 }
@@ -4257,6 +4329,12 @@ fn decode_wrapped_resource_key_for_state(
             reason: "missing wrapped_key_b64".to_string(),
         }
     })?;
+    validate_wrapped_resource_key_b64(wrapped_key, algorithm).map_err(|reason| {
+        PayloadWriteSetupError::InvalidWrappedMaterial {
+            material: material_name.to_string(),
+            reason,
+        }
+    })?;
 
     let provider = runtime_master_key_provider(wrapped_by, wrapping_material)?;
     let wrapped = WrappedKeyBlob {
@@ -4354,6 +4432,12 @@ pub fn rewrap_runtime_resource_key_material(
         PayloadWriteSetupError::InvalidWrappedMaterial {
             material: material_name.to_string(),
             reason: "missing wrapped_key_b64".to_string(),
+        }
+    })?;
+    validate_wrapped_resource_key_b64(old_wrapped_key, algorithm).map_err(|reason| {
+        PayloadWriteSetupError::InvalidWrappedMaterial {
+            material: material_name.to_string(),
+            reason,
         }
     })?;
 
@@ -4785,9 +4869,7 @@ impl MasterKeyProvider for AwsKmsMasterKeyProvider {
         if wrapped.mk_id != self.mk_id {
             return Err(qdrant_sec::EncryptionError::MasterKeyMismatch);
         }
-        let ciphertext = BASE64URL_NOPAD
-            .decode(wrapped.wrapped_key.as_bytes())
-            .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)?;
+        let ciphertext = decode_remote_wrapped_resource_key(&wrapped.wrapped_key)?;
         let response = self.call(
             "TrentService.Decrypt",
             json!({
@@ -5068,9 +5150,7 @@ impl MasterKeyProvider for VaultTransitMasterKeyProvider {
         if wrapped.mk_id != self.mk_id {
             return Err(qdrant_sec::EncryptionError::MasterKeyMismatch);
         }
-        let ciphertext_bytes = BASE64URL_NOPAD
-            .decode(wrapped.wrapped_key.as_bytes())
-            .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)?;
+        let ciphertext_bytes = decode_remote_wrapped_resource_key(&wrapped.wrapped_key)?;
         let ciphertext = std::str::from_utf8(&ciphertext_bytes)
             .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)?;
         let response = self
@@ -9013,8 +9093,8 @@ mod tests {
                     kind: WRAPPED_SYMMETRIC_KEY_32_KIND.to_string(),
                     wrapped_by: Some("tenant-a/mk-v1".to_string()),
                     wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
-                    nonce: Some("nonce".to_string()),
-                    wrapped_key_b64: Some("wrapped".to_string()),
+                    nonce: Some(BASE64URL_NOPAD.encode(&[3u8; 12])),
+                    wrapped_key_b64: Some(BASE64URL_NOPAD.encode(&[4u8; 48])),
                     rk_epoch: Some(3),
                     scope: Some("collection:docs".to_string()),
                     ..CryptoMaterialConfig::default()
@@ -9087,6 +9167,58 @@ mod tests {
                 material: "tenant-a/payload-rk-v1".to_string(),
                 reason: "missing scope".to_string(),
             }),
+        );
+    }
+
+    #[test]
+    fn wrapped_resource_key_validation_rejects_oversized_ciphertext() {
+        let local_oversized =
+            BASE64URL_NOPAD.encode(&[7u8; LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_LEN + 1]);
+        let wrapping_material = CryptoMaterialConfig {
+            kind: WRAPPING_KEY_32_KIND.to_string(),
+            source: Some("inline".to_string()),
+            env: None,
+            path: None,
+            value_b64: Some(BASE64URL_NOPAD.encode(&[91u8; 32])),
+            ..CryptoMaterialConfig::default()
+        };
+        let settings = CryptoSettings {
+            allow_inline_key_material: true,
+            materials: HashMap::from([
+                ("tenant-a/mk-v1".to_string(), wrapping_material),
+                (
+                    "tenant-a/payload-rk-v1".to_string(),
+                    CryptoMaterialConfig {
+                        kind: WRAPPED_SYMMETRIC_KEY_32_KIND.to_string(),
+                        wrapped_by: Some("tenant-a/mk-v1".to_string()),
+                        wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
+                        nonce: Some(BASE64URL_NOPAD.encode(&[3u8; 12])),
+                        wrapped_key_b64: Some(local_oversized),
+                        rk_epoch: Some(3),
+                        scope: Some("collection:docs".to_string()),
+                        ..CryptoMaterialConfig::default()
+                    },
+                ),
+            ]),
+            ..CryptoSettings::default()
+        };
+
+        assert!(matches!(
+            validate_crypto_settings(&settings),
+            Err(CryptoSetupError::InvalidWrappedMaterial { material, reason })
+                if material == "tenant-a/payload-rk-v1" && reason.contains("exactly")
+        ));
+
+        let remote_oversized_bytes = vec![9u8; MAX_REMOTE_WRAPPED_RESOURCE_KEY_BYTES + 1];
+        let remote_oversized = BASE64URL_NOPAD.encode(&remote_oversized_bytes);
+        assert!(
+            validate_wrapped_resource_key_b64(&remote_oversized, AWS_KMS_WRAP_ALGORITHM)
+                .unwrap_err()
+                .contains("at most")
+        );
+        assert_eq!(
+            decode_remote_wrapped_resource_key(&remote_oversized),
+            Err(qdrant_sec::EncryptionError::InvalidCiphertextLength),
         );
     }
 
@@ -11638,6 +11770,23 @@ mod tests {
             ]),
             backends: HashMap::new(),
         };
+        let mut oversized_old_wrapped_key_settings = runtime_settings.clone();
+        oversized_old_wrapped_key_settings
+            .materials
+            .get_mut(rk_material)
+            .unwrap()
+            .wrapped_key_b64 =
+            Some(BASE64URL_NOPAD.encode(&[7u8; LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_LEN + 1]));
+        assert!(matches!(
+            rewrap_runtime_resource_key_material(
+                &oversized_old_wrapped_key_settings,
+                rk_material,
+                new_mk_material,
+            ),
+            Err(PayloadWriteSetupError::InvalidWrappedMaterial { material, reason })
+                if material == rk_material && reason.contains("exactly")
+        ));
+
         let old_resource_key = decode_wrapped_resource_key(
             &runtime_settings,
             rk_material,

@@ -16,6 +16,9 @@ const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
 const MAX_KEY_ID_LEN: usize = 128;
 const HKDF_SALT: &[u8] = b"qdrant-sec-aead-master-key-v1";
+const BASE64URL_NOPAD_12_BYTE_LEN: usize = 16;
+pub const LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_LEN: usize = KEY_LEN + TAG_LEN;
+pub const LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_B64_LEN: usize = 64;
 
 pub const PAYLOAD_TEXT_KEY_DOMAIN: &[u8] = b"qdrant-sec/payload-text/v1";
 pub const CKKS_VECTOR_KEY_DOMAIN: &[u8] = b"qdrant-sec/vector-envelope/v1";
@@ -424,6 +427,9 @@ impl MasterKeyProvider for LocalMasterKeyProvider {
             return Err(EncryptionError::MasterKeyMismatch);
         }
 
+        if wrapped.nonce.len() != BASE64URL_NOPAD_12_BYTE_LEN {
+            return Err(EncryptionError::InvalidNonceLength);
+        }
         let nonce_bytes = BASE64URL_NOPAD
             .decode(wrapped.nonce.as_bytes())
             .map_err(|_| EncryptionError::InvalidEncoding)?;
@@ -432,12 +438,15 @@ impl MasterKeyProvider for LocalMasterKeyProvider {
             .map_err(|_| EncryptionError::InvalidNonceLength)?;
         let nonce = Nonce::assume_unique_for_key(nonce_bytes);
 
+        if wrapped.wrapped_key.len() != LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_B64_LEN {
+            return Err(EncryptionError::InvalidCiphertextLength);
+        }
         let mut wrapped_key = Zeroizing::new(
             BASE64URL_NOPAD
                 .decode(wrapped.wrapped_key.as_bytes())
                 .map_err(|_| EncryptionError::InvalidEncoding)?,
         );
-        if wrapped_key.len() < KEY_LEN + TAG_LEN {
+        if wrapped_key.len() != LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_LEN {
             return Err(EncryptionError::InvalidCiphertextLength);
         }
 
@@ -849,6 +858,35 @@ mod tests {
             keyring.decrypt(&envelope, context),
             Err(EncryptionError::OpenFailed)
         );
+    }
+
+    #[test]
+    fn local_master_key_provider_rejects_wrong_sized_wrapped_resource_key() {
+        let provider =
+            LocalMasterKeyProvider::new("tenant-a/mk-v1", SecretKey::from_bytes([91u8; 32]))
+                .unwrap();
+        let aad = b"resource-key-wrap-test";
+        let mut wrapped = provider
+            .wrap_resource_key(&SecretKey::from_bytes([92u8; 32]), aad)
+            .unwrap();
+        assert_eq!(
+            wrapped.wrapped_key.len(),
+            LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_B64_LEN
+        );
+
+        let mut oversized = wrapped.clone();
+        oversized.wrapped_key =
+            BASE64URL_NOPAD.encode(&[7u8; LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_LEN + 1]);
+        assert!(matches!(
+            provider.unwrap_resource_key(&oversized, aad),
+            Err(EncryptionError::InvalidCiphertextLength),
+        ));
+
+        wrapped.nonce.push('A');
+        assert!(matches!(
+            provider.unwrap_resource_key(&wrapped, aad),
+            Err(EncryptionError::InvalidNonceLength),
+        ));
     }
 
     #[test]
