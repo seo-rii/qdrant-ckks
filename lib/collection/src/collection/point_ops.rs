@@ -2621,9 +2621,10 @@ impl Collection {
         &self,
         mode: EncryptedPayloadReadMode,
     ) -> CollectionResult<Option<PayloadRedactionPlan>> {
-        if mode != EncryptedPayloadReadMode::Redacted {
+        if mode == EncryptedPayloadReadMode::Decrypted {
             return Ok(None);
         }
+        let redact_encrypted_values = mode == EncryptedPayloadReadMode::Redacted;
 
         let collection_config = self.collection_config.read().await;
         let Some(encryption) = collection_config.params.effective_encryption() else {
@@ -2638,14 +2639,16 @@ impl Collection {
                     EncryptionSelector::MetadataKeys { keys: paths },
                     Some(METADATA_VALUE_BINDING),
                 ) => {
-                    for path in paths {
-                        let json_path = path.parse::<JsonPath>().map_err(|err| {
-                            CollectionError::bad_input(format!(
-                                "encrypted payload field path '{path}' is invalid: {err:?}",
-                            ))
-                        })?;
-                        plan.encrypted_payload_paths
-                            .push((json_path, PayloadRedactionKind::AnyValue));
+                    if redact_encrypted_values {
+                        for path in paths {
+                            let json_path = path.parse::<JsonPath>().map_err(|err| {
+                                CollectionError::bad_input(format!(
+                                    "encrypted payload field path '{path}' is invalid: {err:?}",
+                                ))
+                            })?;
+                            plan.encrypted_payload_paths
+                                .push((json_path, PayloadRedactionKind::AnyValue));
+                        }
                     }
                 }
                 (
@@ -2662,10 +2665,11 @@ impl Collection {
                             .push((json_path, PayloadRedactionKind::AnyValue));
                     }
                 }
-                (EncryptionSelector::VectorNames { .. }, _) => {
+                (EncryptionSelector::VectorNames { .. }, _) if redact_encrypted_values => {
                     plan.redact_vector_sidecar = true;
                 }
                 (EncryptionSelector::MetadataKeys { .. }, _) => {}
+                (EncryptionSelector::VectorNames { .. }, _) => {}
             }
         }
 
@@ -2675,12 +2679,9 @@ impl Collection {
 
 pub(super) fn apply_encrypted_payload_read_mode_to_scored_points(
     points: &mut [ScoredPoint],
-    mode: EncryptedPayloadReadMode,
+    _mode: EncryptedPayloadReadMode,
     redaction_plan: Option<&PayloadRedactionPlan>,
 ) {
-    if mode != EncryptedPayloadReadMode::Redacted {
-        return;
-    }
     let Some(redaction_plan) = redaction_plan else {
         return;
     };
@@ -2694,12 +2695,9 @@ pub(super) fn apply_encrypted_payload_read_mode_to_scored_points(
 
 fn apply_encrypted_payload_read_mode_to_records(
     records: &mut [RecordInternal],
-    mode: EncryptedPayloadReadMode,
+    _mode: EncryptedPayloadReadMode,
     redaction_plan: Option<&PayloadRedactionPlan>,
 ) {
-    if mode != EncryptedPayloadReadMode::Redacted {
-        return;
-    }
     let Some(redaction_plan) = redaction_plan else {
         return;
     };
@@ -3322,6 +3320,57 @@ mod tests {
         assert_eq!(
             payload.0.get("document").unwrap().get("title").unwrap(),
             &serde_json::json!("public"),
+        );
+    }
+
+    #[test]
+    fn raw_payload_reads_redact_blind_index_tokens_by_default() {
+        let token = blind_index_token(31);
+        let mut points = [ScoredPoint {
+            id: 1.into(),
+            version: 0,
+            score: 0.0,
+            payload: Some(Payload(
+                serde_json::json!({
+                    "body__blind_eq": token,
+                    "document": { "body": "raw encrypted marker would stay raw" },
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            )),
+            vector: None,
+            shard_key: None,
+            order_value: None,
+        }];
+        let redaction_plan = PayloadRedactionPlan {
+            encrypted_payload_paths: vec![(
+                "body__blind_eq".parse().unwrap(),
+                PayloadRedactionKind::AnyValue,
+            )],
+            redact_vector_sidecar: false,
+        };
+
+        apply_encrypted_payload_read_mode_to_scored_points(
+            &mut points,
+            EncryptedPayloadReadMode::Raw,
+            Some(&redaction_plan),
+        );
+
+        let payload = points[0].payload.as_ref().unwrap();
+        assert_eq!(
+            payload.0.get("body__blind_eq").unwrap(),
+            &encrypted_payload_redaction_value(),
+        );
+        assert_eq!(
+            payload
+                .0
+                .get("document")
+                .unwrap()
+                .get("body")
+                .unwrap()
+                .as_str(),
+            Some("raw encrypted marker would stay raw"),
         );
     }
 }
