@@ -14,6 +14,10 @@ use crate::rest::FeedbackStrategy;
 
 const CKKS_ENCRYPTED_QUERY_SCHEME: &str = "openfhe-ckks";
 const CKKS_ENCRYPTED_QUERY_SECURITY_PROFILE: &str = "ckks-128-n16384-d4-scale50";
+const CKKS_ENCRYPTED_QUERY_CONTEXT_DIGEST_B64_LEN: usize = 43;
+const CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_BYTES: usize = 16 * 1024 * 1024;
+const CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_ENCODED_BYTES: usize =
+    (CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_BYTES + 2) / 3 * 4;
 
 impl Validate for NamedVectorStruct {
     fn validate(&self) -> Result<(), validator::ValidationErrors> {
@@ -102,6 +106,12 @@ impl Validate for CkksEncryptedQueryVector {
                 "context_digest",
                 ValidationError::new("empty_ckks_encrypted_query_context_digest"),
             );
+        } else if self.envelope.context_digest.len() != CKKS_ENCRYPTED_QUERY_CONTEXT_DIGEST_B64_LEN
+        {
+            errors.add(
+                "context_digest",
+                ValidationError::new("invalid_ckks_encrypted_query_context_digest_length"),
+            );
         } else {
             match BASE64URL_NOPAD.decode(self.envelope.context_digest.as_bytes()) {
                 Ok(decoded) if decoded.len() == 32 => {}
@@ -126,14 +136,24 @@ impl Validate for CkksEncryptedQueryVector {
                 "ciphertext",
                 ValidationError::new("empty_ckks_encrypted_query_ciphertext"),
             );
-        } else if BASE64URL_NOPAD
-            .decode(self.envelope.ciphertext.as_bytes())
-            .is_err()
+        } else if self.envelope.ciphertext.len() > CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_ENCODED_BYTES
         {
             errors.add(
                 "ciphertext",
-                ValidationError::new("invalid_ckks_encrypted_query_ciphertext_base64url"),
+                ValidationError::new("oversized_ckks_encrypted_query_ciphertext"),
             );
+        } else {
+            match BASE64URL_NOPAD.decode(self.envelope.ciphertext.as_bytes()) {
+                Ok(decoded) if decoded.len() <= CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_BYTES => {}
+                Ok(_) => errors.add(
+                    "ciphertext",
+                    ValidationError::new("oversized_ckks_encrypted_query_ciphertext"),
+                ),
+                Err(_) => errors.add(
+                    "ciphertext",
+                    ValidationError::new("invalid_ckks_encrypted_query_ciphertext_base64url"),
+                ),
+            }
         }
         if errors.is_empty() {
             Ok(())
@@ -446,6 +466,28 @@ mod tests {
         assert!(
             bad_query.validate().is_err(),
             "short REST CKKS encrypted query context digest should error on validation"
+        );
+
+        let bad_query = CkksEncryptedQueryVector {
+            envelope: CkksEncryptedQueryVectorEnvelope {
+                context_digest: "A".repeat(CKKS_ENCRYPTED_QUERY_CONTEXT_DIGEST_B64_LEN + 1),
+                ..valid_ckks_encrypted_query().envelope
+            },
+        };
+        assert!(
+            bad_query.validate().is_err(),
+            "oversized REST CKKS encrypted query context digest should error before decode"
+        );
+
+        let bad_query = CkksEncryptedQueryVector {
+            envelope: CkksEncryptedQueryVectorEnvelope {
+                ciphertext: "A".repeat(CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_ENCODED_BYTES + 1),
+                ..valid_ckks_encrypted_query().envelope
+            },
+        };
+        assert!(
+            bad_query.validate().is_err(),
+            "oversized REST CKKS encrypted query ciphertext should error before decode"
         );
 
         let bad_query = CkksEncryptedQueryVector {

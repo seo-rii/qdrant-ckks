@@ -155,6 +155,10 @@ const CKKS_SIDECAR_HNSW_GRAPH_CACHE_VERSION: u8 = 1;
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_FILES: usize = 32;
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
+const CKKS_CLIENT_QUERY_CONTEXT_DIGEST_B64_LEN: usize = 43;
+const CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_BYTES: usize = 16 * 1024 * 1024;
+const CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_ENCODED_BYTES: usize =
+    (CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_BYTES + 2) / 3 * 4;
 
 static CKKS_SIDECAR_HNSW_GRAPH_CACHE: LazyLock<Mutex<CkksSidecarHnswGraphCache>> =
     LazyLock::new(|| Mutex::new(CkksSidecarHnswGraphCache::default()));
@@ -1885,6 +1889,11 @@ fn ckks_client_encrypted_query_source_from_parts<'a>(
             "encrypted vector '{vector_name}' client CKKS query slots must be greater than 0",
         )));
     }
+    if context_digest_b64.len() != CKKS_CLIENT_QUERY_CONTEXT_DIGEST_B64_LEN {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query context digest must be {CKKS_CLIENT_QUERY_CONTEXT_DIGEST_B64_LEN} base64url characters",
+        )));
+    }
     let context_digest = BASE64URL_NOPAD
         .decode(context_digest_b64.as_bytes())
         .map_err(|err| {
@@ -1897,6 +1906,11 @@ fn ckks_client_encrypted_query_source_from_parts<'a>(
             "encrypted vector '{vector_name}' client CKKS query context digest must decode to 32 bytes",
         )));
     }
+    if ciphertext_b64.len() > CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_ENCODED_BYTES {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query ciphertext exceeds maximum size",
+        )));
+    }
     let ciphertext = BASE64URL_NOPAD
         .decode(ciphertext_b64.as_bytes())
         .map_err(|err| {
@@ -1907,6 +1921,11 @@ fn ckks_client_encrypted_query_source_from_parts<'a>(
     if ciphertext.is_empty() {
         return Err(StorageError::bad_input(format!(
             "encrypted vector '{vector_name}' client CKKS query ciphertext must not be empty",
+        )));
+    }
+    if ciphertext.len() > CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_BYTES {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query ciphertext exceeds maximum size",
         )));
     }
 
@@ -7677,6 +7696,40 @@ mod tests {
             payload.as_object().unwrap().clone(),
         ));
         point
+    }
+
+    #[test]
+    fn ckks_client_encrypted_query_source_rejects_oversized_fixed_fields() {
+        let context_digest = BASE64URL_NOPAD.encode(&[3_u8; 32]);
+        let valid_ciphertext = BASE64URL_NOPAD.encode(b"ciphertext");
+
+        let err = match ckks_client_encrypted_query_source_from_parts(
+            "embedding",
+            1,
+            CKKS_SCHEME,
+            CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+            &"A".repeat(CKKS_CLIENT_QUERY_CONTEXT_DIGEST_B64_LEN + 1),
+            2,
+            &valid_ciphertext,
+        ) {
+            Ok(_) => panic!("oversized context digest must be rejected"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("context digest"));
+
+        let err = match ckks_client_encrypted_query_source_from_parts(
+            "embedding",
+            1,
+            CKKS_SCHEME,
+            CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+            &context_digest,
+            2,
+            &"A".repeat(CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_ENCODED_BYTES + 1),
+        ) {
+            Ok(_) => panic!("oversized ciphertext must be rejected"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("maximum size"));
     }
 
     #[test]

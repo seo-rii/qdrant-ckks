@@ -12,6 +12,10 @@ const TIMESTAMP_MIN_SECONDS: i64 = -62_135_596_800; // 0001-01-01T00:00:00Z
 const TIMESTAMP_MAX_SECONDS: i64 = 253_402_300_799; // 9999-12-31T23:59:59Z
 const CKKS_ENCRYPTED_QUERY_SCHEME: &str = "openfhe-ckks";
 const CKKS_ENCRYPTED_QUERY_SECURITY_PROFILE: &str = "ckks-128-n16384-d4-scale50";
+const CKKS_ENCRYPTED_QUERY_CONTEXT_DIGEST_B64_LEN: usize = 43;
+const CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_BYTES: usize = 16 * 1024 * 1024;
+const CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_ENCODED_BYTES: usize =
+    (CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_BYTES + 2) / 3 * 4;
 
 pub trait ValidateExt {
     fn validate(&self) -> Result<(), ValidationErrors>;
@@ -422,6 +426,11 @@ impl Validate for grpc::CkksEncryptedQueryVector {
                 "context_digest",
                 ValidationError::new("empty_ckks_encrypted_query_context_digest"),
             );
+        } else if self.context_digest.len() != CKKS_ENCRYPTED_QUERY_CONTEXT_DIGEST_B64_LEN {
+            errors.add(
+                "context_digest",
+                ValidationError::new("invalid_ckks_encrypted_query_context_digest_length"),
+            );
         } else {
             match BASE64URL_NOPAD.decode(self.context_digest.as_bytes()) {
                 Ok(decoded) if decoded.len() == 32 => {}
@@ -446,11 +455,23 @@ impl Validate for grpc::CkksEncryptedQueryVector {
                 "ciphertext",
                 ValidationError::new("empty_ckks_encrypted_query_ciphertext"),
             );
-        } else if BASE64URL_NOPAD.decode(self.ciphertext.as_bytes()).is_err() {
+        } else if self.ciphertext.len() > CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_ENCODED_BYTES {
             errors.add(
                 "ciphertext",
-                ValidationError::new("invalid_ckks_encrypted_query_ciphertext_base64url"),
+                ValidationError::new("oversized_ckks_encrypted_query_ciphertext"),
             );
+        } else {
+            match BASE64URL_NOPAD.decode(self.ciphertext.as_bytes()) {
+                Ok(decoded) if decoded.len() <= CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_BYTES => {}
+                Ok(_) => errors.add(
+                    "ciphertext",
+                    ValidationError::new("oversized_ckks_encrypted_query_ciphertext"),
+                ),
+                Err(_) => errors.add(
+                    "ciphertext",
+                    ValidationError::new("invalid_ckks_encrypted_query_ciphertext_base64url"),
+                ),
+            }
         }
 
         if errors.is_empty() {
@@ -596,6 +617,10 @@ mod tests {
     use data_encoding::BASE64URL_NOPAD;
     use validator::Validate;
 
+    use super::{
+        CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_ENCODED_BYTES,
+        CKKS_ENCRYPTED_QUERY_CONTEXT_DIGEST_B64_LEN,
+    };
     use crate::grpc::qdrant::{
         CkksEncryptedQueryVector, CreateCollection, CreateFieldIndexCollection, GeoLineString,
         GeoPoint, GeoPolygon, PrefetchQuery, Query, QueryBatchPoints, QueryPointGroups,
@@ -790,6 +815,34 @@ mod tests {
         assert!(
             bad_request.validate().is_err(),
             "short CKKS encrypted query context digest should error on validation"
+        );
+
+        let bad_request = SearchPoints {
+            collection_name: "docs".to_string(),
+            limit: 1,
+            ckks_encrypted_query: Some(CkksEncryptedQueryVector {
+                context_digest: "A".repeat(CKKS_ENCRYPTED_QUERY_CONTEXT_DIGEST_B64_LEN + 1),
+                ..valid_ckks_encrypted_query()
+            }),
+            ..Default::default()
+        };
+        assert!(
+            bad_request.validate().is_err(),
+            "oversized CKKS encrypted query context digest should error before decode"
+        );
+
+        let bad_request = SearchPoints {
+            collection_name: "docs".to_string(),
+            limit: 1,
+            ckks_encrypted_query: Some(CkksEncryptedQueryVector {
+                ciphertext: "A".repeat(CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_ENCODED_BYTES + 1),
+                ..valid_ckks_encrypted_query()
+            }),
+            ..Default::default()
+        };
+        assert!(
+            bad_request.validate().is_err(),
+            "oversized CKKS encrypted query ciphertext should error before decode"
         );
 
         let bad_request = SearchPoints {
