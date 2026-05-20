@@ -31,7 +31,7 @@ use crate::common::crypto::{
 use crate::common::health;
 use crate::common::metrics::MetricsData;
 use crate::common::stacktrace::get_stack_trace;
-use crate::common::telemetry::TelemetryCollector;
+use crate::common::telemetry::{TelemetryCollector, TelemetryData};
 use crate::settings::{CryptoMaterialConfig, ServiceConfig, Settings};
 use crate::tracing;
 
@@ -72,13 +72,34 @@ fn telemetry(
             .await
             .prepare_data(&auth, detail, None, params.timeout())
             .await?;
-        let telemetry_data = if anonymize {
+        let can_view_crypto_runtime = auth
+            .unlogged_access()
+            .check_global_access(AccessRequirements::new())
+            .is_ok();
+        let mut telemetry_data = if anonymize {
             telemetry_data.anonymize()
         } else {
             telemetry_data
         };
+        filter_local_telemetry_crypto_runtime_fingerprint(
+            &mut telemetry_data,
+            can_view_crypto_runtime,
+        );
         Ok(telemetry_data)
     })
+}
+
+fn filter_local_telemetry_crypto_runtime_fingerprint(
+    telemetry_data: &mut TelemetryData,
+    can_view_crypto_runtime: bool,
+) {
+    if can_view_crypto_runtime {
+        return;
+    }
+
+    if let Some(app) = telemetry_data.app.as_mut() {
+        app.crypto_runtime_capability_fingerprint = None;
+    }
 }
 
 #[derive(Deserialize, Serialize, JsonSchema, Validate)]
@@ -740,6 +761,8 @@ mod tests {
     };
 
     use super::*;
+    use crate::common::telemetry_ops::app_telemetry::AppBuildTelemetry;
+    use crate::common::telemetry_ops::collections_telemetry::CollectionsTelemetry;
     use crate::settings::{CryptoInstanceConfig, CryptoSettings};
 
     fn resource_key_wrap_test_aad(
@@ -796,6 +819,62 @@ mod tests {
         material.nonce = Some(wrapped.nonce);
         material.wrapped_key_b64 = Some(wrapped.wrapped_key);
         material
+    }
+
+    fn telemetry_with_crypto_runtime_fingerprint() -> TelemetryData {
+        TelemetryData {
+            id: "node-1".to_string(),
+            app: Some(AppBuildTelemetry {
+                name: "qdrant".to_string(),
+                version: "test".to_string(),
+                features: None,
+                runtime_features: None,
+                hnsw_global_config: None,
+                system: None,
+                jwt_rbac: None,
+                hide_jwt_dashboard: None,
+                crypto_runtime_capability_fingerprint: Some("crypto-fingerprint".to_string()),
+                startup: chrono::Utc::now(),
+            }),
+            collections: CollectionsTelemetry::default(),
+            cluster: None,
+            requests: None,
+            memory: None,
+            hardware: None,
+        }
+    }
+
+    #[test]
+    fn local_telemetry_filters_crypto_fingerprint_without_global_access() {
+        let mut telemetry_data = telemetry_with_crypto_runtime_fingerprint();
+
+        filter_local_telemetry_crypto_runtime_fingerprint(&mut telemetry_data, false);
+
+        assert!(
+            telemetry_data
+                .app
+                .as_ref()
+                .unwrap()
+                .crypto_runtime_capability_fingerprint
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn local_telemetry_preserves_crypto_fingerprint_for_global_access() {
+        let mut telemetry_data = telemetry_with_crypto_runtime_fingerprint();
+
+        filter_local_telemetry_crypto_runtime_fingerprint(&mut telemetry_data, true);
+
+        assert_eq!(
+            telemetry_data
+                .app
+                .as_ref()
+                .unwrap()
+                .crypto_runtime_capability_fingerprint
+                .as_deref(),
+            Some("crypto-fingerprint")
+        );
     }
 
     #[test]
