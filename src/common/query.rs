@@ -202,6 +202,7 @@ const CKKS_GROUPED_SEARCH_MAX_CANDIDATES: usize = 4096;
 const CKKS_SCORING_SOURCE_BATCH_MAX: usize = 32;
 const CKKS_MATRIX_SAMPLE_MAX: usize = 512;
 const CKKS_MATRIX_SCORE_PAIR_MAX: usize = CKKS_MATRIX_SAMPLE_MAX * CKKS_MATRIX_SAMPLE_MAX;
+const CKKS_SIDECAR_HNSW_GRAPH_BUILD_PAIR_MAX: usize = CKKS_MATRIX_SCORE_PAIR_MAX;
 
 static CKKS_SIDECAR_HNSW_GRAPH_CACHE: LazyLock<Mutex<CkksSidecarHnswGraphCache>> =
     LazyLock::new(|| Mutex::new(CkksSidecarHnswGraphCache::default()));
@@ -2997,6 +2998,7 @@ fn ckks_sidecar_hnsw_search_points(
                 cache.insert(cache_key, graph.clone());
                 graph
             } else {
+                ensure_ckks_sidecar_hnsw_graph_build_budget(records.len())?;
                 let indexed_records = ckks_sidecar_indexed_records(records)?;
                 let index = CkksCiphertextVectorIndex::build(
                     indexed_records,
@@ -3458,6 +3460,23 @@ fn ckks_grouped_candidate_limit(
         .saturating_mul(CKKS_GROUPED_SEARCH_CANDIDATE_OVERSAMPLING)
         .min(CKKS_GROUPED_SEARCH_MAX_CANDIDATES)
         .max(requested_hits))
+}
+
+fn ensure_ckks_sidecar_hnsw_graph_build_budget(records_len: usize) -> Result<(), StorageError> {
+    let previous_records = records_len.saturating_sub(1);
+    let pairs = records_len
+        .checked_mul(previous_records)
+        .and_then(|pairs| pairs.checked_div(2))
+        .ok_or_else(|| {
+            StorageError::bad_input("encrypted vector HNSW sidecar graph build budget is too large")
+        })?;
+    if pairs > CKKS_SIDECAR_HNSW_GRAPH_BUILD_PAIR_MAX {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector HNSW sidecar graph cache miss would require {pairs} pairwise CKKS scoring candidates; maximum is {CKKS_SIDECAR_HNSW_GRAPH_BUILD_PAIR_MAX}",
+        )));
+    }
+
+    Ok(())
 }
 
 fn ensure_ckks_matrix_budget(
@@ -9126,6 +9145,37 @@ mod tests {
             query_values: source.as_slice(),
         };
         assert_eq!(ckks_sidecar_scoring_source_batches(&scoring), 1);
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_graph_build_budget_rejects_unbounded_cache_miss_work() {
+        ensure_ckks_sidecar_hnsw_graph_build_budget(0).unwrap();
+        ensure_ckks_sidecar_hnsw_graph_build_budget(1).unwrap();
+
+        let mut largest_allowed_records = 1usize;
+        loop {
+            let next = largest_allowed_records + 1;
+            let next_pairs = next.checked_mul(next - 1).unwrap() / 2;
+            if next_pairs > CKKS_SIDECAR_HNSW_GRAPH_BUILD_PAIR_MAX {
+                break;
+            }
+            largest_allowed_records = next;
+        }
+
+        ensure_ckks_sidecar_hnsw_graph_build_budget(largest_allowed_records).unwrap();
+        let err = ensure_ckks_sidecar_hnsw_graph_build_budget(largest_allowed_records + 1)
+            .expect_err("cache miss graph build above pair budget must fail");
+        assert!(
+            format!("{err}").contains("cache miss"),
+            "unexpected error: {err}",
+        );
+
+        let err = ensure_ckks_sidecar_hnsw_graph_build_budget(usize::MAX)
+            .expect_err("overflowing graph build pair count must fail");
+        assert!(
+            format!("{err}").contains("budget"),
+            "unexpected error: {err}",
+        );
     }
 
     #[test]
