@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use actix_web::http::StatusCode;
@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use storage::content_manager::errors::StorageError;
 use storage::dispatcher::Dispatcher;
 use storage::rbac::AccessRequirements;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use validator::{Validate, ValidationError};
 
 use super::CollectionPath;
@@ -36,6 +36,12 @@ use crate::settings::{CryptoMaterialConfig, ServiceConfig, Settings};
 use crate::tracing;
 
 const RUNTIME_RESOURCE_KEY_ADMIN_DEADLINE: Duration = Duration::from_secs(30);
+const RUNTIME_RESOURCE_KEY_ADMIN_MAX_CONCURRENT_WORKERS: usize = 2;
+static RUNTIME_RESOURCE_KEY_ADMIN_WORKERS: LazyLock<Arc<Semaphore>> = LazyLock::new(|| {
+    Arc::new(Semaphore::new(
+        RUNTIME_RESOURCE_KEY_ADMIN_MAX_CONCURRENT_WORKERS,
+    ))
+});
 
 #[derive(Deserialize, Serialize, JsonSchema, Validate)]
 pub struct TelemetryParam {
@@ -504,18 +510,6 @@ fn runtime_resource_key_generate_response_audit_metadata(
     metadata
 }
 
-async fn await_runtime_resource_key_worker<T>(
-    worker: tokio::task::JoinHandle<Result<T, StorageError>>,
-    operation: &'static str,
-) -> Result<T, StorageError> {
-    await_runtime_resource_key_worker_with_deadline(
-        worker,
-        operation,
-        RUNTIME_RESOURCE_KEY_ADMIN_DEADLINE,
-    )
-    .await
-}
-
 async fn await_runtime_resource_key_worker_with_deadline<T>(
     worker: tokio::task::JoinHandle<Result<T, StorageError>>,
     operation: &'static str,
@@ -534,6 +528,63 @@ async fn await_runtime_resource_key_worker_with_deadline<T>(
                 "crypto resource-key {operation} worker failed: {err}"
             ))
         })?
+}
+
+async fn acquire_runtime_resource_key_worker_permit_with_deadline(
+    semaphore: Arc<Semaphore>,
+    operation: &'static str,
+    deadline: Duration,
+) -> Result<OwnedSemaphorePermit, StorageError> {
+    tokio::time::timeout(deadline, semaphore.acquire_owned())
+        .await
+        .map_err(|_| {
+            StorageError::service_error(format!(
+                "crypto resource-key {operation} worker concurrency limit was unavailable for {}s",
+                deadline.as_secs()
+            ))
+        })?
+        .map_err(|_| {
+            StorageError::service_error(format!(
+                "crypto resource-key {operation} worker concurrency limiter was closed",
+            ))
+        })
+}
+
+async fn run_runtime_resource_key_worker_with_semaphore<T, F>(
+    semaphore: Arc<Semaphore>,
+    operation: &'static str,
+    deadline: Duration,
+    work: F,
+) -> Result<T, StorageError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, StorageError> + Send + 'static,
+{
+    let permit =
+        acquire_runtime_resource_key_worker_permit_with_deadline(semaphore, operation, deadline)
+            .await?;
+    let worker = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        work()
+    });
+    await_runtime_resource_key_worker_with_deadline(worker, operation, deadline).await
+}
+
+async fn run_runtime_resource_key_worker<T, F>(
+    operation: &'static str,
+    work: F,
+) -> Result<T, StorageError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, StorageError> + Send + 'static,
+{
+    run_runtime_resource_key_worker_with_semaphore(
+        RUNTIME_RESOURCE_KEY_ADMIN_WORKERS.clone(),
+        operation,
+        RUNTIME_RESOURCE_KEY_ADMIN_DEADLINE,
+        work,
+    )
+    .await
 }
 
 #[post("/crypto/resource-keys/generate")]
@@ -563,10 +614,10 @@ async fn generate_runtime_resource_key(
         }
 
         let settings = settings.get_ref().clone();
-        let worker = tokio::task::spawn_blocking(move || {
+        let result = run_runtime_resource_key_worker("generation", move || {
             build_runtime_resource_key_generate_response(&settings, operation)
-        });
-        let result = await_runtime_resource_key_worker(worker, "generation").await;
+        })
+        .await;
         let audit_metadata = result
             .as_ref()
             .map(runtime_resource_key_generate_response_audit_metadata)
@@ -713,10 +764,10 @@ async fn rewrap_runtime_resource_keys(
         }
 
         let settings = settings.get_ref().clone();
-        let worker = tokio::task::spawn_blocking(move || {
+        let result = run_runtime_resource_key_worker("rewrap", move || {
             build_runtime_resource_key_rewrap_response(&settings, operation)
-        });
-        let result = await_runtime_resource_key_worker(worker, "rewrap").await;
+        })
+        .await;
         let audit_metadata = result
             .as_ref()
             .map(runtime_resource_key_rewrap_response_audit_metadata)
@@ -1190,6 +1241,46 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("exceeded"));
+    }
+
+    #[tokio::test]
+    async fn runtime_resource_key_worker_concurrency_limit_times_out() {
+        let semaphore = Arc::new(Semaphore::new(1));
+        let _held = semaphore.clone().acquire_owned().await.unwrap();
+
+        let err = acquire_runtime_resource_key_worker_permit_with_deadline(
+            semaphore,
+            "test",
+            Duration::from_millis(1),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("concurrency limit"));
+    }
+
+    #[tokio::test]
+    async fn runtime_resource_key_worker_concurrency_limit_releases_after_completion() {
+        let semaphore = Arc::new(Semaphore::new(1));
+
+        let result = run_runtime_resource_key_worker_with_semaphore(
+            semaphore.clone(),
+            "test",
+            Duration::from_secs(1),
+            || Ok::<_, StorageError>(7usize),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, 7);
+
+        let permit = acquire_runtime_resource_key_worker_permit_with_deadline(
+            semaphore,
+            "test",
+            Duration::from_secs(1),
+        )
+        .await
+        .expect("worker permit should be released after blocking task completion");
+        drop(permit);
     }
 
     #[test]
