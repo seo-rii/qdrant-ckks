@@ -528,7 +528,17 @@ async fn generate_runtime_resource_key(
             return result;
         }
 
-        let result = build_runtime_resource_key_generate_response(settings.get_ref(), operation);
+        let settings = settings.get_ref().clone();
+        let result = tokio::task::spawn_blocking(move || {
+            build_runtime_resource_key_generate_response(&settings, operation)
+        })
+        .await
+        .map_err(|err| {
+            StorageError::service_error(format!(
+                "crypto resource-key generation worker failed: {err}"
+            ))
+        })
+        .and_then(|result| result);
         let audit_metadata = result
             .as_ref()
             .map(runtime_resource_key_generate_response_audit_metadata)
@@ -674,7 +684,15 @@ async fn rewrap_runtime_resource_keys(
             return result;
         }
 
-        let result = build_runtime_resource_key_rewrap_response(settings.get_ref(), operation);
+        let settings = settings.get_ref().clone();
+        let result = tokio::task::spawn_blocking(move || {
+            build_runtime_resource_key_rewrap_response(&settings, operation)
+        })
+        .await
+        .map_err(|err| {
+            StorageError::service_error(format!("crypto resource-key rewrap worker failed: {err}"))
+        })
+        .and_then(|result| result);
         let audit_metadata = result
             .as_ref()
             .map(runtime_resource_key_rewrap_response_audit_metadata)
