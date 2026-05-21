@@ -144,6 +144,7 @@ const RESOURCE_KEY_STATE_ACTIVE: &str = "active";
 const RESOURCE_KEY_STATE_RETIRED: &str = "retired";
 const RESOURCE_KEY_STATE_DISABLED: &str = "disabled";
 const RESOURCE_KEY_STATE_DESTROYED: &str = "destroyed";
+const MAX_RUNTIME_RESOURCE_KEY_REWRAP_MATERIALS: usize = 128;
 const CLUSTER_KEY_ATTESTATION_ENV: &str = "QDRANT_CRYPTO_CLUSTER_ATTESTATION_B64";
 const CLUSTER_KEY_ATTESTATION_B64_LEN: usize = 43;
 const MATERIAL_FINGERPRINT_ID_OPTION: &str = "material_fingerprint_id";
@@ -5137,33 +5138,45 @@ pub fn rewrap_runtime_resource_key_materials_by_master_key(
         });
     }
 
-    let mut rewrapped = HashMap::new();
-    for (material_name, material) in &runtime_settings.materials {
-        if material.kind == WRAPPED_SYMMETRIC_KEY_32_KIND
-            && material.wrapped_by.as_deref() == Some(old_wrapped_by)
-            && matches!(
-                wrapped_resource_key_state(material),
-                RESOURCE_KEY_STATE_ACTIVE | RESOURCE_KEY_STATE_RETIRED
-            )
-        {
-            rewrapped.insert(
-                material_name.clone(),
-                rewrap_runtime_resource_key_material(
-                    runtime_settings,
-                    material_name,
-                    new_wrapped_by,
-                )?,
-            );
-        }
-    }
+    let target_materials = runtime_settings
+        .materials
+        .iter()
+        .filter_map(|(material_name, material)| {
+            (material.kind == WRAPPED_SYMMETRIC_KEY_32_KIND
+                && material.wrapped_by.as_deref() == Some(old_wrapped_by)
+                && matches!(
+                    wrapped_resource_key_state(material),
+                    RESOURCE_KEY_STATE_ACTIVE | RESOURCE_KEY_STATE_RETIRED
+                ))
+            .then_some(material_name.clone())
+        })
+        .collect::<Vec<_>>();
 
-    if rewrapped.is_empty() {
+    if target_materials.is_empty() {
         return Err(PayloadWriteSetupError::InvalidWrappedMaterial {
             material: old_wrapped_by.to_string(),
             reason:
                 "no active or retired wrapped resource keys reference this wrapping key material"
                     .to_string(),
         });
+    }
+
+    if target_materials.len() > MAX_RUNTIME_RESOURCE_KEY_REWRAP_MATERIALS {
+        return Err(PayloadWriteSetupError::InvalidWrappedMaterial {
+            material: old_wrapped_by.to_string(),
+            reason: format!(
+                "resource-key rewrap can target at most {MAX_RUNTIME_RESOURCE_KEY_REWRAP_MATERIALS} active/retired materials per request, got {}",
+                target_materials.len(),
+            ),
+        });
+    }
+
+    let mut rewrapped = HashMap::new();
+    for material_name in target_materials {
+        rewrapped.insert(
+            material_name.clone(),
+            rewrap_runtime_resource_key_material(runtime_settings, &material_name, new_wrapped_by)?,
+        );
     }
 
     Ok(rewrapped)
@@ -13654,6 +13667,64 @@ mod tests {
             retired_payload.0.get("body").and_then(Value::as_str),
             Some("retired mk rotation batch"),
         );
+    }
+
+    #[test]
+    fn runtime_resource_key_batch_rewrap_rejects_too_many_targets_before_unwrap() {
+        let old_mk_material = "tenant-a/mk-v1";
+        let new_mk_material = "tenant-a/mk-v2";
+        let mut materials = HashMap::from([
+            (
+                old_mk_material.to_string(),
+                CryptoMaterialConfig {
+                    kind: WRAPPING_KEY_32_KIND.to_string(),
+                    source: Some("inline".to_string()),
+                    value_b64: Some(BASE64URL_NOPAD.encode(&[91u8; 32])),
+                    ..CryptoMaterialConfig::default()
+                },
+            ),
+            (
+                new_mk_material.to_string(),
+                CryptoMaterialConfig {
+                    kind: WRAPPING_KEY_32_KIND.to_string(),
+                    source: Some("inline".to_string()),
+                    value_b64: Some(BASE64URL_NOPAD.encode(&[93u8; 32])),
+                    ..CryptoMaterialConfig::default()
+                },
+            ),
+        ]);
+        for index in 0..=MAX_RUNTIME_RESOURCE_KEY_REWRAP_MATERIALS {
+            materials.insert(
+                format!("tenant-a/payload-rk-v{index}"),
+                CryptoMaterialConfig {
+                    kind: WRAPPED_SYMMETRIC_KEY_32_KIND.to_string(),
+                    wrapped_by: Some(old_mk_material.to_string()),
+                    state: Some(RESOURCE_KEY_STATE_ACTIVE.to_string()),
+                    ..CryptoMaterialConfig::default()
+                },
+            );
+        }
+        let runtime_settings = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::new(),
+            materials,
+            backends: HashMap::new(),
+        };
+
+        let err = rewrap_runtime_resource_key_materials_by_master_key(
+            &runtime_settings,
+            old_mk_material,
+            new_mk_material,
+        )
+        .expect_err("oversized batch must fail before decoding malformed wrapped keys");
+
+        assert!(matches!(
+            err,
+            PayloadWriteSetupError::InvalidWrappedMaterial { material, reason }
+                if material == old_mk_material
+                    && reason.contains("at most")
+                    && reason.contains(&(MAX_RUNTIME_RESOURCE_KEY_REWRAP_MATERIALS + 1).to_string())
+        ));
     }
 
     #[test]
