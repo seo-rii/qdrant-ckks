@@ -26,6 +26,8 @@ const DEFAULT_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 const MIN_OPENFHE_SECURITY_LEVEL_BITS: u16 = 128;
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
 const MAX_BRIDGE_PROGRAM_SHA256_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_BRIDGE_CIPHERTEXT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_BRIDGE_CIPHERTEXT_B64_LEN: usize = (MAX_BRIDGE_CIPHERTEXT_BYTES + 2) / 3 * 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BridgeSandbox {
@@ -1907,9 +1909,7 @@ fn decode_single_bridge_response(
     )?;
     validate_bridge_security_metadata(response.security_level_bits, response.noise_budget_bits)?;
 
-    BASE64URL_NOPAD
-        .decode(response.ciphertext.as_bytes())
-        .map_err(|_| CkksError::Backend("OpenFHE bridge returned invalid ciphertext".to_string()))
+    decode_bridge_ciphertext(&response.ciphertext, "OpenFHE bridge returned")
 }
 
 fn decode_score_bridge_response(
@@ -2011,12 +2011,28 @@ fn decode_batch_bridge_response(
     response
         .ciphertexts
         .iter()
-        .map(|ciphertext| {
-            BASE64URL_NOPAD.decode(ciphertext.as_bytes()).map_err(|_| {
-                CkksError::Backend("OpenFHE bridge returned invalid batch ciphertext".to_string())
-            })
-        })
+        .map(|ciphertext| decode_bridge_ciphertext(ciphertext, "OpenFHE bridge returned batch"))
         .collect()
+}
+
+fn decode_bridge_ciphertext(ciphertext_b64: &str, context: &str) -> Result<Vec<u8>, CkksError> {
+    if ciphertext_b64.len() > MAX_BRIDGE_CIPHERTEXT_B64_LEN {
+        return Err(CkksError::Backend(format!(
+            "{context} ciphertext exceeds maximum size"
+        )));
+    }
+    let ciphertext = BASE64URL_NOPAD
+        .decode(ciphertext_b64.as_bytes())
+        .map_err(|_| CkksError::Backend(format!("{context} invalid ciphertext")))?;
+    if ciphertext.is_empty() {
+        return Err(CkksError::Backend(format!("{context} empty ciphertext")));
+    }
+    if ciphertext.len() > MAX_BRIDGE_CIPHERTEXT_BYTES {
+        return Err(CkksError::Backend(format!(
+            "{context} ciphertext exceeds maximum size"
+        )));
+    }
+    Ok(ciphertext)
 }
 
 fn expected_security_profile(parameters: &CkksParameters) -> Result<&'static str, CkksError> {
@@ -2073,6 +2089,50 @@ fn validate_bridge_security_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bridge_response_decode_rejects_oversized_ciphertext_before_decode() {
+        let expected_profile = CkksParameters::default().security_profile().unwrap();
+        let oversized_ciphertext = "A".repeat(MAX_BRIDGE_CIPHERTEXT_B64_LEN + 1);
+
+        let single_response = serde_json::json!({
+            "version": 1,
+            "ciphertext": oversized_ciphertext,
+            "security_profile": expected_profile,
+            "security_level_bits": MIN_OPENFHE_SECURITY_LEVEL_BITS,
+        })
+        .to_string();
+        let err = decode_single_bridge_response(single_response.as_bytes(), expected_profile)
+            .expect_err("oversized single ciphertext must fail before decode");
+        assert!(format!("{err}").contains("ciphertext exceeds maximum size"));
+
+        let batch_response = serde_json::json!({
+            "version": 1,
+            "ciphertexts": ["A".repeat(MAX_BRIDGE_CIPHERTEXT_B64_LEN + 1)],
+            "security_profile": expected_profile,
+            "security_level_bits": MIN_OPENFHE_SECURITY_LEVEL_BITS,
+        })
+        .to_string();
+        let err = decode_batch_bridge_response(batch_response.as_bytes(), 1, expected_profile)
+            .expect_err("oversized batch ciphertext must fail before decode");
+        assert!(format!("{err}").contains("ciphertext exceeds maximum size"));
+    }
+
+    #[test]
+    fn bridge_response_decode_rejects_empty_ciphertext() {
+        let expected_profile = CkksParameters::default().security_profile().unwrap();
+        let response = serde_json::json!({
+            "version": 1,
+            "ciphertext": "",
+            "security_profile": expected_profile,
+            "security_level_bits": MIN_OPENFHE_SECURITY_LEVEL_BITS,
+        })
+        .to_string();
+
+        let err = decode_single_bridge_response(response.as_bytes(), expected_profile)
+            .expect_err("empty bridge ciphertext must fail closed");
+        assert!(format!("{err}").contains("empty ciphertext"));
+    }
 
     #[test]
     fn cached_context_requests_strip_public_material_for_all_openfhe_operations() {
