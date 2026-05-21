@@ -25,6 +25,7 @@ const CKKS_CIPHERTEXT_HNSW_GRAPH_MAX_DEGREE: usize = 512;
 const CKKS_CIPHERTEXT_SIDECAR_MAX_BYTES: usize = 16 * 1024 * 1024;
 const CKKS_CIPHERTEXT_SIDECAR_MAX_ENCODED_BYTES: usize =
     (CKKS_CIPHERTEXT_SIDECAR_MAX_BYTES + 2) / 3 * 4;
+const CKKS_CIPHERTEXT_SIDECAR_NONCE_B64_LEN: usize = 16;
 pub const CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD: &str = "$qdrant_sec_vectors";
 pub const CKKS_VECTOR_SIDECAR_MARKER: &str = "$qdrant_sec_ckks_vector";
 
@@ -671,6 +672,11 @@ pub fn ckks_ciphertext_from_payload<'a>(
         .get("nonce")
         .and_then(serde_json::Value::as_str)
         .expect("nonce was checked above");
+    if nonce.len() != CKKS_CIPHERTEXT_SIDECAR_NONCE_B64_LEN {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' has invalid nonce",
+        )));
+    }
     let nonce = BASE64URL_NOPAD.decode(nonce.as_bytes()).map_err(|_| {
         OperationError::service_error(format!(
             "stored CKKS vector sidecar entry '{vector_name}' has invalid nonce",
@@ -2615,6 +2621,26 @@ mod tests {
                     "rk_id": "tenant-a/vector-rk@v1",
                     "rk_epoch": 1,
                     "nonce": "not-base64url",
+                    "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA"
+                }
+            })),
+            "embedding",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("invalid nonce"));
+
+        let err = ckks_ciphertext_from_payload(
+            &payload_with_marker(serde_json::json!({
+                "version": 1,
+                "scheme": "openfhe-ckks",
+                "envelope": {
+                    "version": 1,
+                    "algorithm": "AES-256-GCM",
+                    "key_id": "tenant-a:vector",
+                    "material_fingerprint": "tenant-a/vector@v1",
+                    "rk_id": "tenant-a/vector-rk@v1",
+                    "rk_epoch": 1,
+                    "nonce": "A".repeat(CKKS_CIPHERTEXT_SIDECAR_NONCE_B64_LEN + 1),
                     "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA"
                 }
             })),
