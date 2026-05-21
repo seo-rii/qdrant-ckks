@@ -13,3 +13,8 @@ pub mod query_requests_grpc;
 pub mod query_requests_rest;
 pub mod service;
 pub mod update_requests;
+
+pub(crate) use batch_processing::{
+    reject_group_inference_inputs_for_encrypted_vectors,
+    reject_inference_inputs_for_encrypted_vectors,
+};

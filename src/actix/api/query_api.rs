@@ -1,13 +1,19 @@
+use std::collections::HashSet;
+
 use actix_web::{Responder, post, web};
 use actix_web_validator::{Json, Path, Query};
 use api::rest::models::InferenceUsage;
 use api::rest::{QueryGroupsRequest, QueryRequest, QueryRequestBatch, QueryResponse};
+use collection::config::EncryptionSelector;
 use collection::operations::shard_selector_internal::ShardSelectorInternal;
+use collection::operations::verification::new_unchecked_verification_pass;
 use itertools::Itertools;
 use storage::content_manager::collection_verification::{
     check_strict_mode, check_strict_mode_batch,
 };
+use storage::content_manager::errors::StorageError;
 use storage::dispatcher::Dispatcher;
+use storage::rbac::{AccessRequirements, Auth};
 use tokio::time::Instant;
 
 use super::CollectionPath;
@@ -20,11 +26,44 @@ use crate::common::inference::query_requests_rest::{
     CollectionQueryGroupsRequestWithUsage, CollectionQueryRequestWithUsage,
     convert_query_groups_request_from_rest, convert_query_request_from_rest,
 };
+use crate::common::inference::{
+    reject_group_inference_inputs_for_encrypted_vectors,
+    reject_inference_inputs_for_encrypted_vectors,
+};
 use crate::common::query::{do_query_batch_points, do_query_point_groups, do_query_points};
 use crate::settings::{ServiceConfig, Settings};
 
 #[cfg(test)]
 pub const THIS_FILE: &str = file!();
+
+async fn encrypted_vector_names_for_inference_guard(
+    dispatcher: &Dispatcher,
+    collection_name: &str,
+    auth: &Auth,
+) -> Result<HashSet<String>, StorageError> {
+    let pass = auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new(),
+        "encrypted_vector_inference_guard",
+    )?;
+    let verification_pass = new_unchecked_verification_pass();
+    let collection = dispatcher
+        .toc(auth, &verification_pass)
+        .get_collection(&pass)
+        .await?;
+    let config = collection.config_snapshot().await;
+    let Some(encryption) = config.params.effective_encryption() else {
+        return Ok(HashSet::new());
+    };
+
+    let mut names = HashSet::new();
+    for rule in &encryption.rules {
+        if let EncryptionSelector::VectorNames { names: rule_names } = &rule.selector {
+            names.extend(rule_names.iter().cloned());
+        }
+    }
+    Ok(names)
+}
 
 #[post("/collections/{collection_name}/points/query")]
 #[allow(clippy::too_many_arguments)]
@@ -61,6 +100,14 @@ async fn query_points(
     let inference_params = InferenceParams::new(api_keys, params.timeout());
 
     let result = async {
+        let encrypted_vector_names = encrypted_vector_names_for_inference_guard(
+            &dispatcher,
+            &collection.collection_name,
+            &auth,
+        )
+        .await?;
+        reject_inference_inputs_for_encrypted_vectors(&query_request, &encrypted_vector_names)?;
+
         let CollectionQueryRequestWithUsage { request, usage } =
             convert_query_request_from_rest(query_request, &inference_params).await?;
 
@@ -131,6 +178,12 @@ async fn query_points_batch(
     let inference_params = InferenceParams::new(api_keys, params.timeout());
 
     let result = async {
+        let encrypted_vector_names = encrypted_vector_names_for_inference_guard(
+            &dispatcher,
+            &collection.collection_name,
+            &auth,
+        )
+        .await?;
         let mut batch = Vec::with_capacity(searches.len());
 
         for request_item in searches {
@@ -138,6 +191,8 @@ async fn query_points_batch(
                 internal,
                 shard_key,
             } = request_item;
+
+            reject_inference_inputs_for_encrypted_vectors(&internal, &encrypted_vector_names)?;
 
             let CollectionQueryRequestWithUsage { request, usage } =
                 convert_query_request_from_rest(internal, &inference_params).await?;
@@ -227,6 +282,17 @@ async fn query_points_groups(
             None => ShardSelectorInternal::All,
             Some(shard_keys) => shard_keys.into(),
         };
+        let encrypted_vector_names = encrypted_vector_names_for_inference_guard(
+            &dispatcher,
+            &collection.collection_name,
+            &auth,
+        )
+        .await?;
+        reject_group_inference_inputs_for_encrypted_vectors(
+            &search_group_request,
+            &encrypted_vector_names,
+        )?;
+
         let CollectionQueryGroupsRequestWithUsage { request, usage } =
             convert_query_groups_request_from_rest(search_group_request, inference_params).await?;
 
