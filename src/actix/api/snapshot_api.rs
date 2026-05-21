@@ -52,7 +52,8 @@ use crate::common::collections::*;
 use crate::common::crypto::validate_recovered_collection_crypto_config;
 use crate::common::http_client::HttpClient;
 use crate::common::snapshots::{
-    try_take_partial_snapshot_recovery_lock, validate_snapshot_url_api_key_policy,
+    try_take_partial_snapshot_recovery_lock, validate_snapshot_peer_base_url_policy,
+    validate_snapshot_url_api_key_policy,
 };
 use crate::settings::Settings;
 
@@ -893,12 +894,14 @@ async fn recover_partial_snapshot_from(
                 api_key.as_deref(),
                 "partial snapshot recover_from",
             )?;
+            validate_snapshot_peer_base_url_policy(&peer_url, "partial snapshot recover_from")?;
             let http_client = http_client.client(api_key.as_deref())?;
 
             let encoded_collection_name = urlencoding::encode(&collection_name);
-            let create_snapshot_url = format!(
-                "{peer_url}/collections/{encoded_collection_name}/shards/{shard_id}/snapshot/partial/create"
-            );
+            let mut create_snapshot_url = peer_url;
+            create_snapshot_url.set_path(&format!(
+                "/collections/{encoded_collection_name}/shards/{shard_id}/snapshot/partial/create"
+            ));
 
             // Empty snapshot manifest allows us to use partial snapshots even if local shard doesn't exist
             let snapshot_manifest = match collection.get_partial_snapshot_manifest(shard_id).await {

@@ -51,6 +51,38 @@ pub fn validate_snapshot_url_api_key_policy(
     Ok(())
 }
 
+pub fn validate_snapshot_peer_base_url_policy(
+    url: &Url,
+    operation: &str,
+) -> Result<(), StorageError> {
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(StorageError::bad_input(format!(
+            "{operation} peer URL {} must use http or https",
+            redacted_snapshot_url_for_message(url),
+        )));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(StorageError::bad_input(format!(
+            "{operation} does not allow credentials embedded in peer URL {}; use configured peer credentials instead",
+            redacted_snapshot_url_for_message(url),
+        )));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(StorageError::bad_input(format!(
+            "{operation} peer URL {} must not contain query parameters or fragments",
+            redacted_snapshot_url_for_message(url),
+        )));
+    }
+    if !matches!(url.path(), "" | "/") {
+        return Err(StorageError::bad_input(format!(
+            "{operation} peer URL {} must be an origin-only URL without a path",
+            redacted_snapshot_url_for_message(url),
+        )));
+    }
+
+    Ok(())
+}
+
 fn redacted_snapshot_url_for_message(url: &Url) -> String {
     let mut redacted = url.clone();
     let _ = redacted.set_username("");
@@ -630,6 +662,50 @@ mod tests {
         assert!(message.contains("https://example.test/snapshots/docs.snapshot?[redacted]"));
         assert!(!message.contains("secret"));
         assert!(!message.contains("api-key"));
+    }
+
+    #[test]
+    fn snapshot_peer_base_url_policy_requires_origin_only_http_urls() {
+        validate_snapshot_peer_base_url_policy(
+            &Url::parse("https://peer.example.test").unwrap(),
+            "partial snapshot recover_from",
+        )
+        .expect("origin-only HTTPS peer URL should be allowed");
+        validate_snapshot_peer_base_url_policy(
+            &Url::parse("http://peer.example.test:6333/").unwrap(),
+            "partial snapshot recover_from",
+        )
+        .expect("origin-only HTTP peer URL should be allowed");
+
+        for (url, expected) in [
+            ("file:///tmp/snapshot", "must use http or https"),
+            (
+                "https://peer.example.test/collections/docs",
+                "without a path",
+            ),
+            (
+                "https://peer.example.test?token=secret#fragment",
+                "must not contain query parameters or fragments",
+            ),
+            (
+                "https://user:password@peer.example.test",
+                "does not allow credentials embedded",
+            ),
+        ] {
+            let err = validate_snapshot_peer_base_url_policy(
+                &Url::parse(url).unwrap(),
+                "partial snapshot recover_from",
+            )
+            .expect_err("non-origin or credential-bearing peer URL must fail closed");
+            let message = err.to_string();
+            assert!(
+                message.contains(expected),
+                "expected {message:?} to contain {expected:?}",
+            );
+            assert!(!message.contains("password"));
+            assert!(!message.contains("secret"));
+            assert!(!message.contains("#fragment"));
+        }
     }
 
     #[test]
