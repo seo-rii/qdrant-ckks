@@ -346,6 +346,27 @@ mod tests {
         CollectionEncryptionConfig, CryptoMigrationState, EncryptionRuleRef, EncryptionSelector,
     };
 
+    fn params_with_payload_path(path: &str) -> CollectionParams {
+        CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:payload".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec![path.to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        }
+    }
+
     fn params_with_metadata_blind_index_key(key: &str) -> CollectionParams {
         CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
@@ -500,6 +521,35 @@ mod tests {
                 if description.contains("encrypted metadata value field")
                     && description.contains("tenant_id.keyword")
         ));
+    }
+
+    #[test]
+    fn create_shard_key_payload_index_schema_rejects_encrypted_path_replay() {
+        let collection_params = params_with_payload_path("document.body");
+        let mut schema = HashMap::new();
+
+        for field_name in ["document", "document.body", "document.body.keyword"] {
+            schema.clear();
+            schema.insert(
+                field_name.parse().unwrap(),
+                PayloadFieldSchema::FieldType(PayloadSchemaType::Keyword),
+            );
+
+            let err = validate_payload_index_schema_for_encryption(
+                schema.iter(),
+                &collection_params,
+                "create shard key",
+            )
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                CollectionError::BadInput { description }
+                    if description.contains("create shard key payload index schema")
+                        && description.contains("encrypted payload field")
+                        && description.contains("document.body")
+            ));
+        }
     }
 
     #[test]

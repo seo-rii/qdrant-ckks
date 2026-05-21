@@ -4,6 +4,7 @@ use common::counter::hardware_accumulator::HwMeasurementAcc;
 use segment::types::ShardKey;
 
 use crate::collection::Collection;
+use crate::collection::payload_index_schema::validate_payload_index_schema_for_encryption;
 use crate::config::ShardingMethod;
 use crate::operations::types::{CollectionError, CollectionResult};
 use crate::operations::{
@@ -104,6 +105,11 @@ impl Collection {
 
         let max_shard_id = state.max_shard_id();
         let payload_schema = self.payload_index_schema.read().schema.clone();
+        validate_payload_index_schema_for_encryption(
+            payload_schema.iter(),
+            &state.config.params,
+            "create shard key",
+        )?;
 
         for (idx, shard_replicas_placement) in placement.iter().enumerate() {
             let shard_id = max_shard_id + idx as ShardId + 1;
