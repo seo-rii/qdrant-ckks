@@ -6,7 +6,7 @@ use std::path::Path;
 use common::fs::{atomic_save_json, read_json};
 use segment::common::operation_error::{OperationError, OperationResult};
 use segment::types::{
-    HnswConfig, PayloadStorageType, QuantizationConfig, SegmentConfig, VectorNameBuf,
+    HnswConfig, Indexes, PayloadStorageType, QuantizationConfig, SegmentConfig, VectorNameBuf,
 };
 use serde::{Deserialize, Serialize};
 use shard::operations::optimization::OptimizerThresholds;
@@ -60,7 +60,9 @@ impl Default for EdgeConfig {
 
 impl EdgeConfig {
     /// Build from existing segment config. Fills all parameters that can be inferred.
-    pub fn from_segment_config(segment: &SegmentConfig) -> Self {
+    pub fn from_segment_config(segment: &SegmentConfig) -> OperationResult<Self> {
+        reject_ckks_ciphertext_index(segment)?;
+
         let SegmentConfig {
             vector_data,
             sparse_vector_data,
@@ -106,14 +108,14 @@ impl EdgeConfig {
             })
             .unwrap_or_default();
 
-        Self {
+        Ok(Self {
             on_disk_payload,
             vectors,
             sparse_vectors,
             hnsw_config,
             quantization_config: None,
             optimizers: EdgeOptimizersConfig::default(),
-        }
+        })
     }
 
     /// Check compatibility with a segment config (e.g. loaded segment).
@@ -121,6 +123,7 @@ impl EdgeConfig {
         &self,
         other: &SegmentConfig,
     ) -> Result<(), String> {
+        reject_ckks_ciphertext_index(other).map_err(|err| err.to_string())?;
         self.plain_segment_config().check_compatible(other)
     }
 
@@ -261,5 +264,77 @@ impl EdgeConfig {
 
     pub fn optimizers_mut(&mut self) -> &mut EdgeOptimizersConfig {
         &mut self.optimizers
+    }
+}
+
+fn reject_ckks_ciphertext_index(segment: &SegmentConfig) -> OperationResult<()> {
+    if let Some(vector_name) =
+        segment
+            .vector_data
+            .iter()
+            .find_map(|(vector_name, vector_config)| match vector_config.index {
+                Indexes::CkksCiphertextHnsw { .. } => Some(vector_name),
+                Indexes::Plain {} | Indexes::Hnsw(_) => None,
+            })
+    {
+        return Err(OperationError::service_error(format!(
+            "edge shards do not support qdrant-sec CKKS ciphertext indexes; vector {vector_name} must be opened through the encrypted collection runtime"
+        )));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use segment::types::{
+        Distance, HnswConfig, Indexes, PayloadStorageType, SegmentConfig, VectorDataConfig,
+        VectorStorageType,
+    };
+
+    use super::EdgeConfig;
+
+    fn ckks_indexed_segment_config() -> SegmentConfig {
+        SegmentConfig {
+            vector_data: HashMap::from([(
+                "secure-vector".into(),
+                VectorDataConfig {
+                    size: 4,
+                    distance: Distance::Cosine,
+                    storage_type: VectorStorageType::Memory,
+                    index: Indexes::CkksCiphertextHnsw {
+                        hnsw_config: HnswConfig::default(),
+                        vector_name: "secure-vector".into(),
+                    },
+                    quantization_config: None,
+                    multivector_config: None,
+                    datatype: None,
+                },
+            )]),
+            sparse_vector_data: HashMap::new(),
+            payload_storage_type: PayloadStorageType::Mmap,
+        }
+    }
+
+    #[test]
+    fn edge_config_refuses_to_infer_ckks_ciphertext_index() {
+        let err = EdgeConfig::from_segment_config(&ckks_indexed_segment_config())
+            .expect_err("edge must not infer encrypted CKKS index config as plaintext HNSW");
+
+        assert!(
+            err.to_string()
+                .contains("edge shards do not support qdrant-sec CKKS ciphertext indexes")
+        );
+    }
+
+    #[test]
+    fn edge_config_compatibility_refuses_ckks_ciphertext_index() {
+        let err = EdgeConfig::default()
+            .check_compatible_with_segment_config(&ckks_indexed_segment_config())
+            .expect_err("edge must not accept encrypted CKKS index segments");
+
+        assert!(err.contains("edge shards do not support qdrant-sec CKKS ciphertext indexes"));
     }
 }

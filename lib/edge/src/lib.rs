@@ -315,7 +315,7 @@ fn load_segments(
                 ))
             )?;
         } else {
-            *config = Some(EdgeConfig::from_segment_config(segment_cfg));
+            *config = Some(EdgeConfig::from_segment_config(segment_cfg)?);
         }
 
         segment.check_consistency_and_repair().map_err(|err| {
