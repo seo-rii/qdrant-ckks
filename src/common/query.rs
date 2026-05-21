@@ -1159,7 +1159,7 @@ async fn ckks_vector_search_points_with_scoring(
                 distance,
                 score_order,
                 score_threshold,
-                residual_records.len(),
+                hnsw_ef,
                 hnsw_top,
             )?;
 
