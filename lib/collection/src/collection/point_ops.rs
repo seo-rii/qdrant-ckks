@@ -4002,6 +4002,55 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_payload_redaction_keeps_marker_shaped_values_outside_configured_paths() {
+        let server_marker_like = serde_json::json!({
+            qdrant_sec::ENCRYPTED_PAYLOAD_MARKER: {
+                "kind": "payload_text",
+                "ciphertext": "ordinary user payload marker-shaped object",
+            }
+        });
+        let client_marker_like = serde_json::json!({
+            qdrant_sec::CLIENT_ENCRYPTED_PAYLOAD_MARKER: {
+                "kind": "payload_text",
+                "ciphertext": "ordinary client marker-shaped object",
+            }
+        });
+        let mut payload = Payload(
+            serde_json::json!({
+                "document": {
+                    "body": "configured encrypted value",
+                },
+                "notes": server_marker_like.clone(),
+                "nested": {
+                    "client": client_marker_like.clone(),
+                },
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        let redaction_plan = PayloadRedactionPlan {
+            encrypted_payload_paths: vec![(
+                "document.body".parse().unwrap(),
+                PayloadRedactionKind::AnyValue,
+            )],
+            redact_vector_sidecar: false,
+        };
+
+        redact_encrypted_payload_values(&mut payload, &redaction_plan);
+
+        assert_eq!(
+            payload.0.get("document").unwrap().get("body").unwrap(),
+            &encrypted_payload_redaction_value(),
+        );
+        assert_eq!(payload.0.get("notes").unwrap(), &server_marker_like);
+        assert_eq!(
+            payload.0.get("nested").unwrap().get("client").unwrap(),
+            &client_marker_like,
+        );
+    }
+
+    #[test]
     fn raw_payload_reads_redact_blind_index_tokens_by_default() {
         let token = blind_index_token(31);
         let mut points = [ScoredPoint {
