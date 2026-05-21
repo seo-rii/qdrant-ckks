@@ -296,6 +296,105 @@ pub(crate) fn invalidate_ckks_sidecar_hnsw_graph_cache(
     Ok(())
 }
 
+pub(crate) fn invalidate_ckks_sidecar_hnsw_graph_cache_for_collection_path(
+    collection_path: &Path,
+    collection_identity: &str,
+    vector_names: &[String],
+) -> Result<(), StorageError> {
+    invalidate_ckks_sidecar_hnsw_graph_cache(collection_identity, vector_names)?;
+    if vector_names.is_empty() {
+        return Ok(());
+    }
+
+    let directory = collection_path.join(CKKS_SIDECAR_HNSW_GRAPH_CACHE_DIR);
+    if !ckks_sidecar_hnsw_existing_cache_directory_is_safe(&directory)? {
+        return Ok(());
+    }
+
+    let entries = fs::read_dir(&directory).map_err(|err| {
+        StorageError::service_error(format!(
+            "failed to read CKKS sidecar HNSW graph cache directory {directory:?}: {err}",
+        ))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|err| {
+            StorageError::service_error(format!(
+                "failed to read CKKS sidecar HNSW graph cache directory entry {directory:?}: {err}",
+            ))
+        })?;
+        let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+
+        let metadata = fs::symlink_metadata(&path).map_err(|err| {
+            StorageError::service_error(format!(
+                "failed to inspect CKKS sidecar HNSW graph cache {path:?}: {err}",
+            ))
+        })?;
+        if metadata.file_type().is_symlink() {
+            fs::remove_file(&path).map_err(|err| {
+                StorageError::service_error(format!(
+                    "failed to prune CKKS sidecar HNSW graph cache symlink {path:?}: {err}",
+                ))
+            })?;
+            ckks_sidecar_hnsw_sync_parent(&path).map_err(|err| {
+                StorageError::service_error(format!(
+                    "failed to sync CKKS sidecar HNSW graph cache directory after pruning symlink {path:?}: {err}",
+                ))
+            })?;
+            continue;
+        }
+        if !metadata.is_file() || metadata.len() > CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES {
+            continue;
+        }
+        #[cfg(unix)]
+        if ckks_sidecar_hnsw_validate_cache_file_unix_metadata(&path, &metadata, "file").is_err() {
+            continue;
+        }
+
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            options.custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
+        }
+        let Ok(file) = options.open(&path) else {
+            continue;
+        };
+        let mut content = String::with_capacity(metadata.len() as usize);
+        let mut limited_file = file.take(CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES + 1);
+        if limited_file.read_to_string(&mut content).is_err()
+            || content.len() as u64 > CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES
+        {
+            continue;
+        }
+        let Ok(disk) = serde_json::from_str::<CkksSidecarHnswGraphDisk>(&content) else {
+            continue;
+        };
+        if disk.collection_identity == collection_identity
+            && vector_names
+                .iter()
+                .any(|vector_name| vector_name == &disk.vector_name)
+        {
+            fs::remove_file(&path).map_err(|err| {
+                StorageError::service_error(format!(
+                    "failed to invalidate CKKS sidecar HNSW graph cache {path:?}: {err}",
+                ))
+            })?;
+            ckks_sidecar_hnsw_sync_parent(&path).map_err(|err| {
+                StorageError::service_error(format!(
+                    "failed to sync CKKS sidecar HNSW graph cache directory after invalidating {path:?}: {err}",
+                ))
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn do_core_search_points(
     toc: &TableOfContent,
@@ -8526,6 +8625,52 @@ mod tests {
         assert!(cache.get(&target_key).is_none());
         assert!(cache.get(&same_collection_other_vector_key).is_some());
         assert!(cache.get(&other_collection_key).is_some());
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_graph_cache_invalidates_matching_persisted_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let target_key = ckks_sidecar_test_graph_cache_key("target");
+        let same_collection_other_vector_key = CkksSidecarHnswGraphCacheKey {
+            vector_name: "other".to_string(),
+            records_fingerprint: "other-vector".to_string(),
+            ..target_key.clone()
+        };
+        let other_collection_key = CkksSidecarHnswGraphCacheKey {
+            collection_identity: "other-collection".to_string(),
+            records_fingerprint: "other-collection".to_string(),
+            ..target_key.clone()
+        };
+
+        let target_path = write_ckks_sidecar_test_graph_disk(
+            dir.path(),
+            &target_key,
+            &ckks_sidecar_test_graph_disk(&target_key, vec![vec![1], vec![0]]),
+        );
+        let same_collection_other_vector_path = write_ckks_sidecar_test_graph_disk(
+            dir.path(),
+            &same_collection_other_vector_key,
+            &ckks_sidecar_test_graph_disk(
+                &same_collection_other_vector_key,
+                vec![vec![1], vec![0]],
+            ),
+        );
+        let other_collection_path = write_ckks_sidecar_test_graph_disk(
+            dir.path(),
+            &other_collection_key,
+            &ckks_sidecar_test_graph_disk(&other_collection_key, vec![vec![1], vec![0]]),
+        );
+
+        invalidate_ckks_sidecar_hnsw_graph_cache_for_collection_path(
+            dir.path(),
+            "collection-uuid",
+            &["vector".to_string()],
+        )
+        .unwrap();
+
+        assert!(!target_path.exists());
+        assert!(same_collection_other_vector_path.exists());
+        assert!(other_collection_path.exists());
     }
 
     fn ckks_sidecar_test_graph_cache_key(

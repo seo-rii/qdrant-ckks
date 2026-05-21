@@ -51,7 +51,7 @@ use crate::common::crypto::{
 use crate::common::inference::params::InferenceParams;
 use crate::common::inference::service::InferenceType;
 use crate::common::inference::update_requests::*;
-use crate::common::query::invalidate_ckks_sidecar_hnsw_graph_cache;
+use crate::common::query::invalidate_ckks_sidecar_hnsw_graph_cache_for_collection_path;
 use crate::common::strict_mode::*;
 use crate::settings::Settings;
 
@@ -1980,7 +1980,11 @@ async fn maybe_encrypt_update_vectors(
     )?;
     mutated_vector_names.sort_unstable();
     mutated_vector_names.dedup();
-    invalidate_ckks_sidecar_hnsw_graph_cache(&collection_crypto_id, &mutated_vector_names)?;
+    invalidate_ckks_sidecar_hnsw_graph_cache_for_collection_path(
+        collection.path(),
+        &collection_crypto_id,
+        &mutated_vector_names,
+    )?;
 
     let provenance = CollectionUpdateProvenance::runtime_encrypted_vectors(verified_sidecar_keys);
     Ok((sidecar_updates, provenance))
@@ -2341,7 +2345,8 @@ async fn split_encrypted_vector_delete_names(
             ))
         })?
     };
-    invalidate_ckks_sidecar_hnsw_graph_cache(
+    invalidate_ckks_sidecar_hnsw_graph_cache_for_collection_path(
+        collection.path(),
         &collection_crypto_id,
         &encrypted_sidecar_vector_names,
     )?;
