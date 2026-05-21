@@ -1,4 +1,5 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::io::{self, Write};
 use std::sync::Arc;
 
 use segment::data_types::facets::FacetParams;
@@ -308,11 +309,24 @@ fn redact_sensitive_log_fields(value: &mut Value) {
 }
 
 fn redacted_request_hash(request_name: &str, log_value: &Value) -> u64 {
+    struct HashWriter<'a>(&'a mut DefaultHasher);
+
+    impl Write for HashWriter<'_> {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.write(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
     let mut hasher = DefaultHasher::new();
     request_name.hash(&mut hasher);
-    serde_json::to_string(log_value)
-        .unwrap_or_default()
-        .hash(&mut hasher);
+    if serde_json::to_writer(HashWriter(&mut hasher), log_value).is_err() {
+        "serde-json-hash-failed".hash(&mut hasher);
+    }
     hasher.finish()
 }
 
