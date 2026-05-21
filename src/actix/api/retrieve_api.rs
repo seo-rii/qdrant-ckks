@@ -10,7 +10,6 @@ use futures::TryFutureExt;
 use itertools::Itertools;
 use segment::types::{
     EncryptedPayloadReadMode, PayloadEncryptedReadPolicy, PointIdType, WithPayloadInterface,
-    WithVector,
 };
 use serde::Deserialize;
 use shard::retrieve::record_internal::RecordInternal;
@@ -405,6 +404,8 @@ async fn export_payload_points(
 
 #[cfg(test)]
 mod tests {
+    use segment::types::WithVector;
+
     use super::*;
 
     #[test]
