@@ -11,6 +11,8 @@ use serde::Serialize;
 
 use crate::operations::loggable::Loggable;
 
+const MAX_SLOW_REQUEST_LOG_BODY_BYTES: usize = 64 * 1024;
+
 #[derive(Serialize, Clone, JsonSchema)]
 pub struct LogEntry {
     collection_name: String,
@@ -165,7 +167,35 @@ impl SlowRequestsLog {
             }
         }
 
-        let (request_body, request_hash) = request.to_log_value_and_hash();
+        let (mut request_body, request_hash) = request.to_log_value_and_hash();
+        match serde_json::to_vec(&request_body) {
+            Ok(serialized) if serialized.len() > MAX_SLOW_REQUEST_LOG_BODY_BYTES => {
+                let original_type = match &request_body {
+                    serde_json::Value::Null => "null",
+                    serde_json::Value::Bool(_) => "bool",
+                    serde_json::Value::Number(_) => "number",
+                    serde_json::Value::String(_) => "string",
+                    serde_json::Value::Array(_) => "array",
+                    serde_json::Value::Object(_) => "object",
+                };
+                request_body = serde_json::json!({
+                    "truncated": true,
+                    "reason": "slow_request_log_body_budget_exceeded",
+                    "original_type": original_type,
+                    "redacted_projection_bytes": serialized.len(),
+                    "budget_bytes": MAX_SLOW_REQUEST_LOG_BODY_BYTES,
+                });
+            }
+            Ok(_) => {}
+            Err(err) => {
+                request_body = serde_json::json!({
+                    "truncated": true,
+                    "reason": "slow_request_log_body_serialization_failed",
+                    "error": err.to_string(),
+                    "budget_bytes": MAX_SLOW_REQUEST_LOG_BODY_BYTES,
+                });
+            }
+        }
         let content_hash = Self::content_hash(request_hash, collection_name);
 
         self.inc_counter(content_hash);
@@ -227,6 +257,23 @@ mod tests {
 
         fn request_hash(&self) -> u64 {
             42
+        }
+    }
+
+    struct LargeLoggable;
+    impl Loggable for LargeLoggable {
+        fn to_log_value(&self) -> Value {
+            json!({
+                "shape": "x".repeat(MAX_SLOW_REQUEST_LOG_BODY_BYTES + 1),
+            })
+        }
+
+        fn request_name(&self) -> &'static str {
+            "large"
+        }
+
+        fn request_hash(&self) -> u64 {
+            99
         }
     }
 
@@ -307,6 +354,32 @@ mod tests {
             fast.log_value_calls.get(),
             0,
             "skipped fast requests must not build redacted JSON projections",
+        );
+    }
+
+    #[test]
+    fn oversized_redacted_request_body_is_truncated_before_storage() {
+        let mut log = SlowRequestsLog::new(1);
+        let request = LargeLoggable;
+
+        log.log_request("col", Duration::from_secs(1), Utc::now(), &request, None);
+
+        let entries = log.get_log_entries(1, None);
+        assert_eq!(entries.len(), 1);
+        let request_body = &entries[0].request_body;
+        assert_eq!(request_body["truncated"], true);
+        assert_eq!(
+            request_body["reason"],
+            "slow_request_log_body_budget_exceeded"
+        );
+        assert_eq!(request_body["original_type"], "object");
+        assert!(
+            request_body["redacted_projection_bytes"].as_u64().unwrap()
+                > MAX_SLOW_REQUEST_LOG_BODY_BYTES as u64
+        );
+        assert!(
+            serde_json::to_vec(request_body).unwrap().len() < MAX_SLOW_REQUEST_LOG_BODY_BYTES,
+            "stored log body should stay below the configured byte budget",
         );
     }
 }
