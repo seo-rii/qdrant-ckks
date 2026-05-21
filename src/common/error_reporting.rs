@@ -65,6 +65,7 @@ pub(crate) fn redact_crypto_material_for_report(value: &str) -> String {
         "ciphertext",
         "encryptedquery",
         "authorization",
+        "accesskeyid",
         "awssessiontoken",
         "awssecuritytoken",
         "contextdigest",
@@ -79,9 +80,13 @@ pub(crate) fn redact_crypto_material_for_report(value: &str) -> String {
         "signaturesig",
         "sigb64",
         "privatekey",
+        "secretaccesskey",
         "secretkey",
+        "securitytoken",
         "sessiontoken",
         "vaulttoken",
+        "xamzcredential",
+        "xamzsignature",
         "xamzsecuritytoken",
         "xapikey",
     ]
@@ -145,11 +150,29 @@ mod tests {
             "cryptoContextB64=crypto-context-sentinel",
             "publicKeyB64=public-key-sentinel",
             "signature.sig=sig-sentinel",
+            "AWS_ACCESS_KEY_ID=access-key-sentinel",
+            "AWS_SECRET_ACCESS_KEY=secret-key-sentinel",
+            "X-Amz-Credential=credential-sentinel",
+            "X-Amz-Signature=signature-sentinel",
+            "Security-Token: security-token-sentinel",
         ] {
             let payload = ErrorReporter::build_report_payload(secret, "node-4", Some(secret));
 
             assert!(payload.contains("crypto material omitted"), "{payload}");
             assert!(!payload.contains("sentinel"), "{payload}");
         }
+    }
+
+    #[test]
+    fn test_build_report_payload_preserves_non_secret_context() {
+        let payload = ErrorReporter::build_report_payload(
+            "ordinary panic in optimizer worker",
+            "node-5",
+            Some("frame: src/common/query.rs:123"),
+        );
+
+        assert!(payload.contains("ordinary panic in optimizer worker"));
+        assert!(payload.contains("src/common/query.rs:123"));
+        assert!(!payload.contains("crypto material omitted"));
     }
 }
