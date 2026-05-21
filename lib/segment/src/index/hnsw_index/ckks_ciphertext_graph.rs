@@ -32,6 +32,7 @@ pub const CKKS_VECTOR_SIDECAR_MARKER: &str = "$qdrant_sec_ckks_vector";
 pub struct CkksCiphertextHnswGraph {
     links: Arc<Vec<Vec<usize>>>,
     max_degree: usize,
+    kind: CkksCiphertextHnswGraphKind,
 }
 
 #[derive(Clone, Debug)]
@@ -60,6 +61,13 @@ pub struct CkksCiphertextIndexedRecord {
     pub sidecar_identity: Vec<u8>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CkksCiphertextHnswGraphKind {
+    Similarity,
+    OptimizerCandidate,
+}
+
 #[derive(Clone, Debug)]
 pub struct CkksCiphertextVectorIndex {
     index: CkksCiphertextHnswIndex<CkksCiphertextIndexedRecord>,
@@ -83,6 +91,7 @@ pub enum CkksCiphertextScoreError<E> {
 #[serde(deny_unknown_fields)]
 struct CkksCiphertextHnswGraphFile {
     version: u8,
+    graph_kind: CkksCiphertextHnswGraphKind,
     record_count: usize,
     records_digest: String,
     #[serde(default)]
@@ -92,6 +101,13 @@ struct CkksCiphertextHnswGraphFile {
 
 impl CkksCiphertextHnswGraph {
     pub fn from_validated_links(links: Vec<Vec<usize>>) -> Option<Self> {
+        Self::from_validated_links_with_kind(links, CkksCiphertextHnswGraphKind::Similarity)
+    }
+
+    fn from_validated_links_with_kind(
+        links: Vec<Vec<usize>>,
+        kind: CkksCiphertextHnswGraphKind,
+    ) -> Option<Self> {
         let max_degree = links.iter().map(Vec::len).max().unwrap_or(0);
         if max_degree <= CKKS_CIPHERTEXT_HNSW_GRAPH_MAX_DEGREE
             && links_have_valid_neighbors(&links)
@@ -101,6 +117,7 @@ impl CkksCiphertextHnswGraph {
             Some(Self {
                 links: Arc::new(links),
                 max_degree,
+                kind,
             })
         } else {
             None
@@ -113,6 +130,14 @@ impl CkksCiphertextHnswGraph {
 
     pub fn max_degree(&self) -> usize {
         self.max_degree
+    }
+
+    pub fn kind(&self) -> CkksCiphertextHnswGraphKind {
+        self.kind
+    }
+
+    pub fn is_optimizer_candidate_graph(&self) -> bool {
+        self.kind == CkksCiphertextHnswGraphKind::OptimizerCandidate
     }
 
     pub fn links_are_reciprocal(links: &[Vec<usize>]) -> bool {
@@ -147,6 +172,7 @@ impl CkksCiphertextHnswGraph {
             return Ok(Self {
                 links: Arc::new(links),
                 max_degree: 0,
+                kind: CkksCiphertextHnswGraphKind::Similarity,
             });
         }
 
@@ -178,6 +204,7 @@ impl CkksCiphertextHnswGraph {
         Ok(Self {
             links: Arc::new(links),
             max_degree,
+            kind: CkksCiphertextHnswGraphKind::Similarity,
         })
     }
 
@@ -187,6 +214,7 @@ impl CkksCiphertextHnswGraph {
             return Self {
                 links: Arc::new(links),
                 max_degree: 0,
+                kind: CkksCiphertextHnswGraphKind::OptimizerCandidate,
             };
         }
 
@@ -209,6 +237,7 @@ impl CkksCiphertextHnswGraph {
         Self {
             links: Arc::new(links),
             max_degree,
+            kind: CkksCiphertextHnswGraphKind::OptimizerCandidate,
         }
     }
 
@@ -412,7 +441,10 @@ impl CkksCiphertextVectorIndex {
         {
             return Ok(None);
         }
-        let Some(graph) = CkksCiphertextHnswGraph::from_validated_links(graph_file.links) else {
+        let Some(graph) = CkksCiphertextHnswGraph::from_validated_links_with_kind(
+            graph_file.links,
+            graph_file.graph_kind,
+        ) else {
             return Ok(None);
         };
         let Some(mut index) = Self::from_graph(records, graph) else {
@@ -434,6 +466,7 @@ impl CkksCiphertextVectorIndex {
         }
         let graph_file = CkksCiphertextHnswGraphFile {
             version: CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_VERSION,
+            graph_kind: self.index.graph().kind(),
             record_count: self.index.records().len(),
             records_digest: ckks_ciphertext_records_digest(self.index.records()),
             max_degree: Some(self.index.graph().max_degree()),
@@ -1286,6 +1319,7 @@ mod tests {
         )
         .unwrap();
 
+        assert_eq!(graph.kind(), CkksCiphertextHnswGraphKind::Similarity);
         assert!(CkksCiphertextHnswGraph::links_are_reciprocal(graph.links()));
         assert!(CkksCiphertextHnswGraph::links_are_connected(graph.links()));
         assert!(graph.links()[1].contains(&0));
@@ -1297,6 +1331,10 @@ mod tests {
     fn builds_optimizer_candidate_graph_without_scoring_runtime() {
         let graph = CkksCiphertextHnswGraph::build_optimizer_candidate_graph(5, 2);
 
+        assert_eq!(
+            graph.kind(),
+            CkksCiphertextHnswGraphKind::OptimizerCandidate
+        );
         assert!(CkksCiphertextHnswGraph::links_are_reciprocal(graph.links()));
         assert!(CkksCiphertextHnswGraph::links_are_connected(graph.links()));
         assert!(graph.links()[0].contains(&1));
@@ -2137,6 +2175,7 @@ mod tests {
         let graph_file = CkksCiphertextVectorIndex::graph_file_path(directory.path());
         let graph = CkksCiphertextHnswGraphFile {
             version: CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_VERSION + 1,
+            graph_kind: CkksCiphertextHnswGraphKind::Similarity,
             record_count: 2,
             records_digest: ckks_ciphertext_records_digest(&[
                 CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
@@ -2168,6 +2207,7 @@ mod tests {
         let graph_file = CkksCiphertextVectorIndex::graph_file_path(directory.path());
         let graph = serde_json::json!({
             "version": CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_VERSION,
+            "graph_kind": "similarity",
             "record_count": 2,
             "records_digest": ckks_ciphertext_records_digest(&[
                 CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
@@ -2274,6 +2314,7 @@ mod tests {
         let graph_file = CkksCiphertextVectorIndex::graph_file_path(directory.path());
         let invalid_graph = CkksCiphertextHnswGraphFile {
             version: CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_VERSION,
+            graph_kind: CkksCiphertextHnswGraphKind::Similarity,
             record_count: 3,
             records_digest: ckks_ciphertext_records_digest(&[
                 CkksCiphertextIndexedRecord::new(0, b"ciphertext-a".to_vec()),
@@ -2312,6 +2353,7 @@ mod tests {
         ];
         let invalid_graph = CkksCiphertextHnswGraphFile {
             version: CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_VERSION,
+            graph_kind: CkksCiphertextHnswGraphKind::Similarity,
             record_count: records.len(),
             records_digest: ckks_ciphertext_records_digest(&records),
             max_degree: Some(1),

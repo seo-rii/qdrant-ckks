@@ -2753,6 +2753,52 @@ fn ckks_sidecar_hnsw_search_segment_snapshots(
         if snapshot.records.is_empty() {
             continue;
         }
+        if snapshot.graph.is_optimizer_candidate_graph() {
+            let encrypted_items = snapshot
+                .records
+                .iter()
+                .map(|record| (record.point_id.clone(), record.encrypted.clone()))
+                .collect::<Vec<_>>();
+            let scores = ckks_sidecar_score_hnsw_query_batch(
+                collection_name,
+                vector_name,
+                plan,
+                query,
+                &encrypted_items,
+            )?;
+            if scores.len() != snapshot.records.len() {
+                return Err(StorageError::service_error(format!(
+                    "CKKS ciphertext candidate graph scorer returned {} score(s) for {} indexed record(s)",
+                    scores.len(),
+                    snapshot.records.len(),
+                )));
+            }
+            for (record, score) in snapshot.records.iter().zip(scores) {
+                if !ckks_score_passes_threshold(score_order, score, score_threshold) {
+                    continue;
+                }
+                let scored_point = ScoredPoint {
+                    id: record.id,
+                    version: 0,
+                    score,
+                    payload: None,
+                    vector: None,
+                    shard_key: record.shard_key.clone(),
+                    order_value: None,
+                };
+                match scored_by_id.entry(scored_point.id) {
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        if ckks_scored_point_is_better(score_order, &scored_point, entry.get()) {
+                            entry.insert(scored_point);
+                        }
+                    }
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(scored_point);
+                    }
+                }
+            }
+            continue;
+        }
         let ef = hnsw_ef.max(top).max(1).min(snapshot.records.len());
         let indexed_records = snapshot
             .records
