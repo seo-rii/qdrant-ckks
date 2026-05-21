@@ -26,7 +26,7 @@ use storage::content_manager::collection_meta_ops::{
 use storage::content_manager::errors::StorageError;
 use storage::dispatcher::Dispatcher;
 use storage::rbac::AccessRequirements;
-use validator::Validate;
+use validator::{Validate, ValidationError};
 
 use super::CollectionPath;
 use crate::actix::api::StrictCollectionPath;
@@ -221,17 +221,37 @@ async fn apply_crypto_migration_plan(
     ActixAuth(auth): ActixAuth,
 ) -> impl Responder {
     let timing = Instant::now();
-    let response = dispatcher
-        .submit_collection_meta_op(
-            CollectionMetaOperations::ApplyCryptoMigration(ApplyCryptoMigrationPlan {
-                collection_name: collection.collection_name.clone(),
-                plan: operation.into_inner(),
-            }),
-            auth,
-            query.timeout(),
-        )
-        .await;
+    let plan = operation.into_inner();
+    let response = if let Err(err) = validate_standalone_crypto_migration_plan(&plan) {
+        Err(StorageError::bad_input(format!(
+            "crypto migration plan is invalid: {err}"
+        )))
+    } else {
+        dispatcher
+            .submit_collection_meta_op(
+                CollectionMetaOperations::ApplyCryptoMigration(ApplyCryptoMigrationPlan {
+                    collection_name: collection.collection_name.clone(),
+                    plan,
+                }),
+                auth,
+                query.timeout(),
+            )
+            .await
+    };
     process_response(response, timing, None)
+}
+
+fn validate_standalone_crypto_migration_plan(
+    plan: &CryptoMigrationPlan,
+) -> Result<(), ValidationError> {
+    plan.validate_admin_plan()?;
+    if plan.requires_verified_completion() {
+        return Err(ValidationError::new(
+            "crypto_migration_completion_requires_run_payloads",
+        ));
+    }
+
+    Ok(())
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Validate)]
@@ -1345,6 +1365,40 @@ mod tests {
             err.code.as_ref(),
             "crypto_migration_completion_cannot_be_dry_run"
         );
+    }
+
+    #[test]
+    fn standalone_crypto_migration_plan_rejects_completion_transitions() {
+        let completion_plan = payload_crypto_migration_completion_plan(
+            CryptoMigrationState::Rotating,
+            4,
+            RunPayloadCryptoMigration {
+                active_rk_id: "rk/docs/4".to_string(),
+                retired_rk_id: Some("rk/docs/3".to_string()),
+                dry_run: false,
+            },
+            vec![verified_checkpoint()],
+        )
+        .unwrap();
+        completion_plan.validate_admin_plan().unwrap();
+
+        let err = validate_standalone_crypto_migration_plan(&completion_plan)
+            .expect_err("standalone endpoint must not close migration state");
+        assert_eq!(
+            err.code.as_ref(),
+            "crypto_migration_completion_requires_run_payloads"
+        );
+
+        let start_plan = CryptoMigrationPlan {
+            from: CryptoMigrationState::Active,
+            to: CryptoMigrationState::Rotating,
+            target_epoch: 4,
+            active_rk_id: Some("rk/docs/4".to_string()),
+            retired_rk_id: Some("rk/docs/3".to_string()),
+            checkpoints: Vec::new(),
+            dry_run: false,
+        };
+        validate_standalone_crypto_migration_plan(&start_plan).unwrap();
     }
 
     #[test]
