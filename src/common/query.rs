@@ -2343,6 +2343,19 @@ fn ckks_sidecar_hnsw_validate_cache_file_unix_metadata(
     Ok(())
 }
 
+fn ensure_ckks_sidecar_hnsw_graph_cache_content_size(
+    path: &Path,
+    len: u64,
+) -> Result<(), StorageError> {
+    if len > CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES {
+        return Err(StorageError::service_error(format!(
+            "CKKS sidecar HNSW graph cache {path:?} exceeds maximum size",
+        )));
+    }
+
+    Ok(())
+}
+
 fn ckks_sidecar_hnsw_load_persisted_graph(
     collection_path: &Path,
     key: &CkksSidecarHnswGraphCacheKey,
@@ -2372,11 +2385,7 @@ fn ckks_sidecar_hnsw_load_persisted_graph(
             "CKKS sidecar HNSW graph cache {path:?} must be a regular file",
         )));
     }
-    if metadata.len() > CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES {
-        return Err(StorageError::service_error(format!(
-            "CKKS sidecar HNSW graph cache {path:?} exceeds maximum size",
-        )));
-    }
+    ensure_ckks_sidecar_hnsw_graph_cache_content_size(&path, metadata.len())?;
     #[cfg(unix)]
     ckks_sidecar_hnsw_validate_cache_file_unix_metadata(&path, &metadata, "file")?;
 
@@ -2403,11 +2412,7 @@ fn ckks_sidecar_hnsw_load_persisted_graph(
             "opened CKKS sidecar HNSW graph cache {path:?} must be a regular file",
         )));
     }
-    if opened_metadata.len() > CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES {
-        return Err(StorageError::service_error(format!(
-            "CKKS sidecar HNSW graph cache {path:?} exceeds maximum size",
-        )));
-    }
+    ensure_ckks_sidecar_hnsw_graph_cache_content_size(&path, opened_metadata.len())?;
     #[cfg(unix)]
     ckks_sidecar_hnsw_validate_cache_file_unix_metadata(&path, &opened_metadata, "opened file")?;
 
@@ -2418,11 +2423,7 @@ fn ckks_sidecar_hnsw_load_persisted_graph(
             "failed to read CKKS sidecar HNSW graph cache {path:?}: {err}",
         ))
     })?;
-    if content.len() as u64 > CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES {
-        return Err(StorageError::service_error(format!(
-            "CKKS sidecar HNSW graph cache {path:?} exceeds maximum size",
-        )));
-    }
+    ensure_ckks_sidecar_hnsw_graph_cache_content_size(&path, content.len() as u64)?;
     let disk: CkksSidecarHnswGraphDisk = serde_json::from_str(&content).map_err(|err| {
         StorageError::service_error(format!(
             "failed to parse CKKS sidecar HNSW graph cache {path:?}: {err}",
@@ -2498,6 +2499,7 @@ fn ckks_sidecar_hnsw_persist_graph(
             "failed to serialize CKKS sidecar HNSW graph cache {path:?}: {err}",
         ))
     })?;
+    ensure_ckks_sidecar_hnsw_graph_cache_content_size(&path, content.len() as u64)?;
 
     match fs::symlink_metadata(&temp_path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
@@ -8671,6 +8673,23 @@ mod tests {
         assert!(!target_path.exists());
         assert!(same_collection_other_vector_path.exists());
         assert!(other_collection_path.exists());
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_graph_cache_rejects_oversized_serialized_content() {
+        let path = Path::new("ckks-sidecar-cache.json");
+        ensure_ckks_sidecar_hnsw_graph_cache_content_size(
+            path,
+            CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES,
+        )
+        .unwrap();
+        let err = ensure_ckks_sidecar_hnsw_graph_cache_content_size(
+            path,
+            CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES + 1,
+        )
+        .expect_err("oversized persisted graph cache content must fail before write");
+
+        assert!(format!("{err}").contains("exceeds maximum size"));
     }
 
     fn ckks_sidecar_test_graph_cache_key(
