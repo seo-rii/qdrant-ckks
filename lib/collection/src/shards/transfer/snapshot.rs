@@ -210,20 +210,11 @@ pub(super) async fn transfer_snapshot(
         // Create shard snapshot
         progress.lock().set_stage(TransferStage::CreatingSnapshot);
         log::trace!("Creating snapshot of shard {shard_id} for shard snapshot transfer");
-        let snapshot_description = shard_holder_read
+        let (snapshot_description, snapshot_temp_path) = shard_holder_read
             .create_shard_snapshot(snapshots_path, collection_id, shard_id, temp_dir)
             .await?
             .await?;
 
-        // TODO: If future is cancelled until `get_shard_snapshot_path` resolves, shard snapshot may not be cleaned up...
-        let snapshot_temp_path = shard_holder_read
-            .get_shard_snapshot_path(snapshots_path, shard_id, &snapshot_description.name)
-            .await
-            .map_err(|err| {
-                CollectionError::service_error(format!(
-                    "Failed to determine snapshot path, cannot continue with shard snapshot recovery: {err}",
-                ))
-            })?;
         let snapshot_temp_path = TempPath::try_from_path(snapshot_temp_path)?;
         let snapshot_checksum_temp_path =
             TempPath::try_from_path(get_checksum_path(&snapshot_temp_path))?;

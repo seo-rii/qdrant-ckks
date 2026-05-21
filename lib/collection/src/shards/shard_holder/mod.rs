@@ -1127,7 +1127,9 @@ impl ShardHolder {
         collection_name: &str,
         shard_id: ShardId,
         temp_dir: &Path,
-    ) -> CollectionResult<impl Future<Output = CollectionResult<SnapshotDescription>> + use<>> {
+    ) -> CollectionResult<
+        impl Future<Output = CollectionResult<(SnapshotDescription, PathBuf)>> + use<>,
+    > {
         // - `snapshot_temp_dir` and `temp_file` are handled by `tempfile`
         //   and would be deleted, if future is canceled
 
@@ -1192,7 +1194,7 @@ impl ShardHolder {
             if snapshot_description.is_ok() {
                 let _ = temp_file.keep();
             }
-            snapshot_description
+            snapshot_description.map(|description| (description, snapshot_path))
         };
 
         Ok(future)

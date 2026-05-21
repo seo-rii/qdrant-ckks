@@ -297,7 +297,8 @@ impl Collection {
         // We don't hold shards_holder lock here on purpose,
         // because snapshot creation may take a long time,
         // and we don't want to block other operations on the collection.
-        snapshot_creator.await
+        let (snapshot_description, _) = snapshot_creator.await?;
+        Ok(snapshot_description)
     }
 
     pub async fn stream_shard_snapshot(
