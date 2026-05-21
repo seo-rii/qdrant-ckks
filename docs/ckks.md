@@ -539,6 +539,10 @@ resolved in the configured, validated URL.
 Vault-backed material keeps the MK/RK out of config files, but the Vault token
 source, Vault policy, and Vault availability become part of the key-management
 TCB and must be identical across nodes that can write encrypted collections.
+Vault KV v2, AWS KMS, and Vault Transit materials may set `timeout_ms` between
+`1` and `30000`; when omitted, Qdrant uses a 5000 ms HTTP timeout and never
+follows redirects. This keeps resource-key lifecycle endpoints bounded even
+when an external key provider is slow.
 When a wrapping material uses `source: aws_kms`, it must be
 `kind: wrapping_key_32`, `path` must be the AWS KMS key id, alias, or ARN, and
 `env` must be an environment-variable prefix. Qdrant reads

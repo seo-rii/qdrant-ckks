@@ -162,6 +162,8 @@ const CKKS_PUBLIC_KEY_B64_OPTION: &str = "public_key_b64";
 const ALLOW_PLAINTEXT_QUERIES_OPTION: &str = "allow_plaintext_queries";
 const VAULT_KV2_RESPONSE_MAX_BYTES: u64 = 64 * 1024;
 const VAULT_TRANSIT_RESPONSE_MAX_BYTES: u64 = 64 * 1024;
+const EXTERNAL_MATERIAL_DEFAULT_TIMEOUT_MS: u64 = 5_000;
+const EXTERNAL_MATERIAL_MAX_TIMEOUT_MS: u64 = 30_000;
 const PAYLOAD_AES_GCM_ALLOWED_OPTIONS: &[&str] = &[
     "key_id",
     MATERIAL_FINGERPRINT_ID_OPTION,
@@ -2573,6 +2575,8 @@ fn validate_material(
     material: &CryptoMaterialConfig,
     allow_inline_key_material: bool,
 ) -> Result<(), CryptoSetupError> {
+    validate_material_timeout_policy(material_name, material)?;
+
     if material.kind == WRAPPED_SYMMETRIC_KEY_32_KIND {
         return validate_wrapped_resource_key_material(material_name, material);
     }
@@ -3047,6 +3051,85 @@ fn validate_external_expected_host_value(
         });
     }
     Ok(())
+}
+
+fn validate_external_material_timeout_value(
+    material_name: &str,
+    path: &str,
+    provider: &str,
+    timeout_ms: Option<u64>,
+) -> Result<(), CryptoSetupError> {
+    let Some(timeout_ms) = timeout_ms else {
+        return Ok(());
+    };
+    if timeout_ms == 0 || timeout_ms > EXTERNAL_MATERIAL_MAX_TIMEOUT_MS {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: path.to_string(),
+            reason: format!(
+                "{provider} timeout_ms must be between 1 and {EXTERNAL_MATERIAL_MAX_TIMEOUT_MS}"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn external_material_timeout(
+    material_name: &str,
+    path: &str,
+    provider: &str,
+    timeout_ms: Option<u64>,
+) -> Result<Duration, PayloadWriteSetupError> {
+    let timeout_ms = timeout_ms.unwrap_or(EXTERNAL_MATERIAL_DEFAULT_TIMEOUT_MS);
+    if timeout_ms == 0 || timeout_ms > EXTERNAL_MATERIAL_MAX_TIMEOUT_MS {
+        return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: path.to_string(),
+            reason: format!(
+                "{provider} timeout_ms must be between 1 and {EXTERNAL_MATERIAL_MAX_TIMEOUT_MS}"
+            ),
+        });
+    }
+    Ok(Duration::from_millis(timeout_ms))
+}
+
+fn validate_material_timeout_policy(
+    material_name: &str,
+    material: &CryptoMaterialConfig,
+) -> Result<(), CryptoSetupError> {
+    let Some(timeout_ms) = material.timeout_ms else {
+        return Ok(());
+    };
+    match material.source.as_deref() {
+        Some(AWS_KMS_SOURCE) => validate_external_material_timeout_value(
+            material_name,
+            material.path.as_deref().unwrap_or(AWS_KMS_SOURCE),
+            "AWS KMS",
+            Some(timeout_ms),
+        ),
+        Some(VAULT_TRANSIT_SOURCE) => validate_external_material_timeout_value(
+            material_name,
+            material.path.as_deref().unwrap_or(VAULT_TRANSIT_SOURCE),
+            "Vault Transit",
+            Some(timeout_ms),
+        ),
+        Some("vault_kv2") => validate_external_material_timeout_value(
+            material_name,
+            material.path.as_deref().unwrap_or("vault_kv2"),
+            "Vault KV v2",
+            Some(timeout_ms),
+        ),
+        Some(source) => Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: source.to_string(),
+            reason:
+                "timeout_ms is only supported for aws_kms, vault_transit, and vault_kv2 sources"
+                    .to_string(),
+        }),
+        None => Err(CryptoSetupError::MissingMaterialSource {
+            material: material_name.to_string(),
+        }),
+    }
 }
 
 fn validate_external_material_host_policy(
@@ -5384,6 +5467,7 @@ struct AwsKmsMasterKeyProvider {
     key_id: String,
     env_prefix: String,
     expected_host: Option<String>,
+    timeout: Duration,
 }
 
 struct AwsKmsCredentials {
@@ -5400,6 +5484,7 @@ impl AwsKmsMasterKeyProvider {
         key_id: &str,
         env_prefix: &str,
         expected_host: Option<&str>,
+        timeout_ms: Option<u64>,
     ) -> Result<Self, PayloadWriteSetupError> {
         validate_material_aws_kms_source(mk_id, key_id, env_prefix, expected_host).map_err(
             |err| match err {
@@ -5418,17 +5503,19 @@ impl AwsKmsMasterKeyProvider {
                 },
             },
         )?;
+        let timeout = external_material_timeout(mk_id, key_id, "AWS KMS", timeout_ms)?;
         Ok(Self {
             mk_id: mk_id.to_string(),
             key_id: key_id.to_string(),
             env_prefix: env_prefix.to_string(),
             expected_host: expected_host.map(str::to_string),
+            timeout,
         })
     }
 
     fn client(&self) -> Result<reqwest::blocking::Client, qdrant_sec::EncryptionError> {
         reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(5))
+            .timeout(self.timeout)
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|_| qdrant_sec::EncryptionError::SealFailed)
@@ -5819,6 +5906,7 @@ struct VaultTransitMasterKeyProvider {
     encrypt_url: String,
     decrypt_url: String,
     token_env: String,
+    timeout: Duration,
 }
 
 impl VaultTransitMasterKeyProvider {
@@ -5827,6 +5915,7 @@ impl VaultTransitMasterKeyProvider {
         key_url: &str,
         token_env: &str,
         expected_host: Option<&str>,
+        timeout_ms: Option<u64>,
     ) -> Result<Self, PayloadWriteSetupError> {
         validate_material_vault_transit_source(mk_id, key_url, token_env, expected_host).map_err(
             |err| match err {
@@ -5845,17 +5934,19 @@ impl VaultTransitMasterKeyProvider {
                 },
             },
         )?;
+        let timeout = external_material_timeout(mk_id, key_url, "Vault Transit", timeout_ms)?;
         Ok(Self {
             mk_id: mk_id.to_string(),
             encrypt_url: vault_transit_action_url(key_url, "encrypt")?,
             decrypt_url: vault_transit_action_url(key_url, "decrypt")?,
             token_env: token_env.to_string(),
+            timeout,
         })
     }
 
     fn client(&self) -> Result<reqwest::blocking::Client, qdrant_sec::EncryptionError> {
         reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(5))
+            .timeout(self.timeout)
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|_| qdrant_sec::EncryptionError::SealFailed)
@@ -6071,6 +6162,7 @@ fn runtime_master_key_provider(
                 key_id,
                 env_prefix,
                 material.expected_host.as_deref(),
+                material.timeout_ms,
             )?,
         ));
     }
@@ -6094,6 +6186,7 @@ fn runtime_master_key_provider(
                 key_url,
                 token_env,
                 material.expected_host.as_deref(),
+                material.timeout_ms,
             )?,
         ));
     }
@@ -6205,6 +6298,7 @@ fn decode_direct_material_key(
                 token_env,
                 vault_field,
                 material.expected_host.as_deref(),
+                material.timeout_ms,
             )?
         }
         Some("fd") => {
@@ -6323,6 +6417,7 @@ fn read_material_vault_kv2_to_string(
     token_env: &str,
     vault_field: &str,
     expected_host: Option<&str>,
+    timeout_ms: Option<u64>,
 ) -> Result<Zeroizing<String>, PayloadWriteSetupError> {
     validate_material_vault_kv2_source(
         material_name,
@@ -6346,6 +6441,7 @@ fn read_material_vault_kv2_to_string(
             path: format!("{url}: {err}"),
         },
     })?;
+    let timeout = external_material_timeout(material_name, url, "Vault KV v2", timeout_ms)?;
     let token = Zeroizing::new(std::env::var(token_env).map_err(|_| {
         PayloadWriteSetupError::MissingMaterialEnv {
             material: material_name.to_string(),
@@ -6369,7 +6465,7 @@ fn read_material_vault_kv2_to_string(
         })?;
     token_header.set_sensitive(true);
     let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(5))
+        .timeout(timeout)
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|_| PayloadWriteSetupError::UnreadableMaterialFile {
@@ -8040,6 +8136,7 @@ mod tests {
                             value_b64: Some(BASE64URL_NOPAD.encode(&[1_u8; 32])),
                             vault_field: None,
                             expected_host: None,
+                            timeout_ms: None,
                             wrapped_by: None,
                             wrap_algorithm: None,
                             nonce: None,
@@ -8060,6 +8157,7 @@ mod tests {
                             value_b64: None,
                             vault_field: None,
                             expected_host: None,
+                            timeout_ms: None,
                             wrapped_by: Some("tenant-a/mk".to_string()),
                             wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
                             nonce: Some(BASE64URL_NOPAD.encode(&[2_u8; 12])),
@@ -8140,6 +8238,7 @@ mod tests {
                 value_b64: None,
                 vault_field: None,
                 expected_host: None,
+                timeout_ms: None,
                 wrapped_by: Some("tenant-a/mk".to_string()),
                 wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
                 nonce: Some(BASE64URL_NOPAD.encode(&[4_u8; 12])),
@@ -10087,6 +10186,85 @@ mod tests {
                 if reason.contains("does not match")
         ));
         assert!(validate_aws_kms_endpoint_url("http://127.0.0.1:4566/", None).is_ok());
+    }
+
+    #[test]
+    fn validate_material_external_timeout_policy() {
+        let mut aws_wrapping_material = CryptoMaterialConfig {
+            kind: WRAPPING_KEY_32_KIND.to_string(),
+            source: Some(AWS_KMS_SOURCE.to_string()),
+            env: Some("QDRANT_TEST_AWS_KMS_WRAP".to_string()),
+            path: Some("alias/qdrant-sec-docs".to_string()),
+            timeout_ms: Some(250),
+            ..CryptoMaterialConfig::default()
+        };
+        assert_eq!(
+            validate_material("tenant-a/mk-aws", &aws_wrapping_material, false),
+            Ok(())
+        );
+
+        aws_wrapping_material.timeout_ms = Some(0);
+        assert!(matches!(
+            validate_material("tenant-a/mk-aws", &aws_wrapping_material, false),
+            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("timeout_ms")
+        ));
+
+        aws_wrapping_material.timeout_ms = Some(EXTERNAL_MATERIAL_MAX_TIMEOUT_MS + 1);
+        assert!(matches!(
+            validate_material("tenant-a/mk-aws", &aws_wrapping_material, false),
+            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("timeout_ms")
+        ));
+
+        let inline_with_timeout = CryptoMaterialConfig {
+            kind: SYMMETRIC_KEY_32_KIND.to_string(),
+            source: Some("inline".to_string()),
+            value_b64: Some(BASE64URL_NOPAD.encode(&[91u8; 32])),
+            timeout_ms: Some(250),
+            ..CryptoMaterialConfig::default()
+        };
+        assert!(matches!(
+            validate_material("tenant-a/payload-rk", &inline_with_timeout, true),
+            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("only supported")
+        ));
+    }
+
+    #[test]
+    fn external_master_key_providers_use_configured_timeout() {
+        let aws = AwsKmsMasterKeyProvider::new(
+            "tenant-a/mk-aws",
+            "alias/qdrant-sec-docs",
+            "QDRANT_TEST_AWS_KMS_WRAP",
+            None,
+            Some(250),
+        )
+        .unwrap();
+        assert_eq!(aws.timeout, Duration::from_millis(250));
+
+        let vault = VaultTransitMasterKeyProvider::new(
+            "tenant-a/mk-vault",
+            "http://127.0.0.1:8200/v1/transit/keys/docs",
+            "QDRANT_TEST_VAULT_TRANSIT_TOKEN",
+            None,
+            Some(750),
+        )
+        .unwrap();
+        assert_eq!(vault.timeout, Duration::from_millis(750));
+
+        let defaulted = VaultTransitMasterKeyProvider::new(
+            "tenant-a/mk-vault",
+            "http://127.0.0.1:8200/v1/transit/keys/docs",
+            "QDRANT_TEST_VAULT_TRANSIT_TOKEN",
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            defaulted.timeout,
+            Duration::from_millis(EXTERNAL_MATERIAL_DEFAULT_TIMEOUT_MS)
+        );
     }
 
     fn assert_zeroizing_request_buffer(_: &Zeroizing<Vec<u8>>) {}
