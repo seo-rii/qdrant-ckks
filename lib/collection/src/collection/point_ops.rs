@@ -35,7 +35,7 @@ use shard::scroll::ScrollRequestInternal;
 use super::Collection;
 use crate::config::{
     CryptoMigrationCheckpoint, CryptoMigrationCheckpointStatus, CryptoMigrationState,
-    EncryptionSelector,
+    EncryptionSelector, encrypted_vector_return_request,
 };
 use crate::operations::consistency_params::ReadConsistency;
 use crate::operations::loggable::Loggable;
@@ -2741,29 +2741,11 @@ impl Collection {
             return Ok(());
         };
 
-        for rule in &encryption.rules {
-            let EncryptionSelector::VectorNames { names } = &rule.selector else {
-                continue;
-            };
-            match with_vector {
-                WithVector::Bool(true) => {
-                    if let Some(encrypted_name) = names.first() {
-                        return Err(CollectionError::bad_input(format!(
-                            "cannot return encrypted vector '{encrypted_name}'; CKKS vector ciphertext read path returns payload sidecar only",
-                        )));
-                    }
-                }
-                WithVector::Selector(vector_names) => {
-                    for requested_name in vector_names {
-                        if names.iter().any(|name| name == requested_name) {
-                            return Err(CollectionError::bad_input(format!(
-                                "cannot return encrypted vector '{requested_name}'; CKKS vector ciphertext read path returns payload sidecar only",
-                            )));
-                        }
-                    }
-                }
-                WithVector::Bool(false) => {}
-            }
+        if let Some(request) = encrypted_vector_return_request(&encryption, with_vector) {
+            let encrypted_name = request.vector_name();
+            return Err(CollectionError::bad_input(format!(
+                "cannot return encrypted vector '{encrypted_name}'; CKKS vector ciphertext read path returns payload sidecar only",
+            )));
         }
 
         Ok(())

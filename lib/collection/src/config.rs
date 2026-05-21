@@ -14,7 +14,7 @@ use segment::index::sparse_index::sparse_index_config::{SparseIndexConfig, Spars
 use segment::types::{
     Distance, HnswConfig, Indexes, Payload, PayloadStorageType, QuantizationConfig, SegmentConfig,
     SparseVectorDataConfig, StrictModeConfig, VectorDataConfig, VectorName, VectorNameBuf,
-    VectorStorageDatatype, VectorStorageType,
+    VectorStorageDatatype, VectorStorageType, WithVector,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -312,6 +312,52 @@ mod ckks_tests {
         };
 
         params.validate().unwrap();
+    }
+
+    #[test]
+    fn encrypted_vector_return_guard_rejects_any_or_selected_encrypted_vectors() {
+        let encryption = CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a:docs".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 3,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![EncryptionRuleRef {
+                id: "embedding_conf".to_string(),
+                selector: EncryptionSelector::VectorNames {
+                    names: vec!["embedding".to_string()],
+                },
+                instance: "docs_vector_v1".to_string(),
+                binding: Some("vector-envelope/v1".to_string()),
+            }],
+        };
+
+        assert_eq!(
+            encrypted_vector_return_request(&encryption, &WithVector::Bool(true)),
+            Some(EncryptedVectorReturnRequest::Any {
+                encrypted_name: "embedding"
+            })
+        );
+        assert_eq!(
+            encrypted_vector_return_request(
+                &encryption,
+                &WithVector::Selector(vec!["plain".to_string(), "embedding".to_string()])
+            ),
+            Some(EncryptedVectorReturnRequest::Named {
+                vector_name: "embedding"
+            })
+        );
+        assert_eq!(
+            encrypted_vector_return_request(
+                &encryption,
+                &WithVector::Selector(vec!["plain".to_string()])
+            ),
+            None
+        );
+        assert_eq!(
+            encrypted_vector_return_request(&encryption, &WithVector::Bool(false)),
+            None
+        );
     }
 
     #[test]
@@ -2016,6 +2062,51 @@ impl EncryptionSelector {
             Self::VectorNames { names } => Some(names),
             _ => None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncryptedVectorReturnRequest<'a> {
+    Any { encrypted_name: &'a str },
+    Named { vector_name: &'a str },
+}
+
+impl<'a> EncryptedVectorReturnRequest<'a> {
+    pub fn vector_name(self) -> &'a str {
+        match self {
+            Self::Any { encrypted_name } => encrypted_name,
+            Self::Named { vector_name } => vector_name,
+        }
+    }
+}
+
+pub fn encrypted_vector_return_request<'a>(
+    encryption: &'a CollectionEncryptionConfig,
+    with_vector: &'a WithVector,
+) -> Option<EncryptedVectorReturnRequest<'a>> {
+    match with_vector {
+        WithVector::Bool(false) => None,
+        WithVector::Bool(true) => encryption.rules.iter().find_map(|rule| {
+            let EncryptionSelector::VectorNames { names } = &rule.selector else {
+                return None;
+            };
+            names
+                .first()
+                .map(String::as_str)
+                .map(|encrypted_name| EncryptedVectorReturnRequest::Any { encrypted_name })
+        }),
+        WithVector::Selector(vector_names) => vector_names.iter().find_map(|requested_name| {
+            encryption.rules.iter().find_map(|rule| {
+                let EncryptionSelector::VectorNames { names } = &rule.selector else {
+                    return None;
+                };
+                names.iter().any(|name| name == requested_name).then_some(
+                    EncryptedVectorReturnRequest::Named {
+                        vector_name: requested_name,
+                    },
+                )
+            })
+        }),
     }
 }
 

@@ -11,7 +11,9 @@ use collection::collection::ckks_search::{
 };
 use collection::collection::distance_matrix::*;
 use collection::common::batching::batch_requests;
-use collection::config::EncryptionSelector;
+use collection::config::{
+    EncryptedVectorReturnRequest, EncryptionSelector, encrypted_vector_return_request,
+};
 use collection::grouping::group_by::GroupRequest;
 use collection::lookup::lookup_ids;
 use collection::lookup::types::PseudoId;
@@ -5660,35 +5662,15 @@ async fn ensure_with_vector_does_not_request_encrypted_vectors(
         return Ok(());
     };
 
-    let encrypted_names = encryption
-        .rules
-        .iter()
-        .filter_map(|rule| match &rule.selector {
-            EncryptionSelector::VectorNames { names } => Some(names),
-            _ => None,
-        })
-        .flat_map(|names| names.iter().map(String::as_str))
-        .collect::<std::collections::HashSet<_>>();
-    if encrypted_names.is_empty() {
-        return Ok(());
-    }
-
-    match with_vector {
-        WithVector::Bool(false) => Ok(()),
-        WithVector::Bool(true) => Err(StorageError::bad_input(format!(
+    match encrypted_vector_return_request(&encryption, with_vector) {
+        None => Ok(()),
+        Some(EncryptedVectorReturnRequest::Any { .. }) => Err(StorageError::bad_input(format!(
             "cannot {operation} encrypted vectors for collection '{collection_name}'; CKKS vector ciphertext read path returns payload sidecar only",
         ))),
-        WithVector::Selector(vector_names) => {
-            if let Some(vector_name) = vector_names
-                .iter()
-                .map(String::as_str)
-                .find(|vector_name| encrypted_names.contains(vector_name))
-            {
-                return Err(StorageError::bad_input(format!(
-                    "cannot {operation} encrypted vector '{vector_name}'; CKKS vector ciphertext read path returns payload sidecar only",
-                )));
-            }
-            Ok(())
+        Some(EncryptedVectorReturnRequest::Named { vector_name }) => {
+            Err(StorageError::bad_input(format!(
+                "cannot {operation} encrypted vector '{vector_name}'; CKKS vector ciphertext read path returns payload sidecar only",
+            )))
         }
     }
 }
