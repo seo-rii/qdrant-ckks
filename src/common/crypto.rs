@@ -1441,10 +1441,11 @@ pub fn validate_recovered_collection_crypto_runtime(
     params: &CollectionParams,
 ) -> Result<(), StorageError> {
     if let Some(encryption) = &params.encryption {
-        if encryption.migration_state == CryptoMigrationState::Disabled {
+        if encryption.migration_state != CryptoMigrationState::Active {
             return Err(StorageError::bad_input(format!(
-                "recovered collection {collection_name} has disabled encryption metadata; \
-                 restore requires either no encryption config or a verified decrypt-migration completion proof",
+                "recovered collection {collection_name} has in-flight or disabled crypto migration state {:?}; \
+                 restore requires migration_state=active, no encryption config, or a verified migration recovery manifest",
+                encryption.migration_state,
             )));
         }
         encryption.validate().map_err(|err| {
@@ -14381,7 +14382,7 @@ mod tests {
             .expect_err("recovered disabled crypto metadata must fail closed without proof");
         assert!(
             matches!(err, StorageError::BadInput { ref description }
-                if description.contains("disabled encryption metadata")),
+                if description.contains("in-flight or disabled crypto migration state")),
             "unexpected error: {err:?}",
         );
         let err = validate_recovered_collection_crypto_config(
@@ -14395,9 +14396,62 @@ mod tests {
         .expect_err("recovered disabled crypto config must fail closed without proof");
         assert!(
             matches!(err, StorageError::BadInput { ref description }
-                if description.contains("disabled encryption metadata")),
+                if description.contains("in-flight or disabled crypto migration state")),
             "unexpected error: {err:?}",
         );
+    }
+
+    #[test]
+    fn validate_recovered_collection_crypto_config_rejects_in_flight_migration_states() {
+        let settings = Settings::new(None).unwrap();
+        for migration_state in [
+            CryptoMigrationState::Encrypting,
+            CryptoMigrationState::Rotating,
+            CryptoMigrationState::Decrypting,
+        ] {
+            let params = CollectionParams {
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 3,
+                    migration_state,
+                    rules: vec![EncryptionRuleRef {
+                        id: "body_conf".to_string(),
+                        selector: EncryptionSelector::PayloadPaths {
+                            paths: vec!["body".to_string()],
+                        },
+                        instance: "missing_runtime_instance".to_string(),
+                        binding: Some("payload-field/v1".to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            };
+
+            let err = validate_recovered_collection_crypto_runtime(&settings, "docs", &params)
+                .expect_err("recovered in-flight migration state must fail closed");
+            assert!(
+                matches!(err, StorageError::BadInput { ref description }
+                    if description.contains("in-flight or disabled crypto migration state")
+                        && description.contains("migration_state=active")),
+                "unexpected error for {migration_state:?}: {err:?}",
+            );
+            let err = validate_recovered_collection_crypto_config(
+                &settings,
+                "docs",
+                &recovered_config(
+                    params,
+                    Some("12345678-90ab-cdef-1234-567890abcdef".parse().unwrap()),
+                ),
+            )
+            .expect_err("recovered in-flight migration config must fail closed");
+            assert!(
+                matches!(err, StorageError::BadInput { ref description }
+                    if description.contains("in-flight or disabled crypto migration state")
+                        && description.contains("verified migration recovery manifest")),
+                "unexpected config error for {migration_state:?}: {err:?}",
+            );
+        }
     }
 
     #[test]
@@ -14696,24 +14750,27 @@ mod tests {
             },
             ..Settings::new(None).unwrap()
         };
-        let params = CollectionParams {
-            encryption: Some(CollectionEncryptionConfig {
-                version: 1,
-                key_id: Some("tenant-a:docs".to_string()),
-                crypto_schema_version: 1,
-                encryption_epoch: 0,
-                migration_state: CryptoMigrationState::Active,
-                rules: vec![EncryptionRuleRef {
-                    id: "embedding_conf".to_string(),
-                    selector: EncryptionSelector::VectorNames {
-                        names: vec!["embedding".to_string()],
-                    },
-                    instance: "docs_vector_v1".to_string(),
-                    binding: Some("vector-envelope/v1".to_string()),
-                }],
-            }),
-            ..CollectionParams::empty()
-        };
+        let params = with_embedding_vector(
+            CollectionParams {
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 0,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "embedding_conf".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec!["embedding".to_string()],
+                        },
+                        instance: "docs_vector_v1".to_string(),
+                        binding: Some("vector-envelope/v1".to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            },
+            Distance::Dot,
+        );
 
         let err = validate_recovered_collection_crypto_config(
             &settings,
