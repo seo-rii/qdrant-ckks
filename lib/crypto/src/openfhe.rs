@@ -315,6 +315,11 @@ impl CommandOpenFheBackend {
         self.next_worker = Arc::new(AtomicUsize::new(0));
         self
     }
+
+    #[doc(hidden)]
+    pub fn shares_worker_pool_for_tests(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.workers, &other.workers)
+    }
 }
 
 fn validate_checked_bridge_program(path: &Path) -> Result<(), CkksError> {

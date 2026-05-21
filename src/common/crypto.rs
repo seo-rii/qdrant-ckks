@@ -3,6 +3,7 @@ use std::fs;
 use std::io::Read;
 use std::num::NonZeroUsize;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use chrono::Utc;
@@ -188,6 +189,7 @@ const OPENFHE_BACKEND_KIND_PROCESS: &str = "process";
 const OPENFHE_BACKEND_KIND_PROCESS_POOL: &str = "process_pool";
 const OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK: &str = "process_landlock";
 const OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK: &str = "process_pool_landlock";
+const OPENFHE_BACKEND_CACHE_MAX_ENTRIES: usize = 64;
 const OPENFHE_BACKEND_SIGNATURE_DOMAIN: &[u8] = b"qdrant-sec/openfhe-bridge-binary-signature/v1\0";
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
 const BASE64URL_NOPAD_64_BYTE_LEN: usize = 86;
@@ -1284,14 +1286,6 @@ fn openfhe_backend_from_config(
             "crypto backend {backend_name} requires sha256_b64 program pin",
         )));
     };
-    let mut command_backend =
-        CommandOpenFheBackend::new_checked_with_sha256_b64(program, expected_sha256_b64).map_err(
-            |err| {
-                StorageError::bad_input(format!(
-                    "crypto backend {backend_name} program path is invalid: {err}",
-                ))
-            },
-        )?;
     validate_backend_signature_config(
         backend_name,
         expected_sha256_b64,
@@ -1299,13 +1293,6 @@ fn openfhe_backend_from_config(
         backend.signature_b64.as_deref(),
     )
     .map_err(|err| StorageError::bad_input(format!("crypto backend {backend_name}: {err}")))?;
-    if let Some(timeout_ms) = backend.timeout_ms {
-        command_backend = command_backend.with_timeout(Duration::from_millis(timeout_ms));
-    }
-    command_backend = command_backend.with_sensitive_env_names(crypto_secret_env_names(settings));
-    if openfhe_backend_kind_uses_landlock(&backend.kind) {
-        command_backend = command_backend.with_linux_landlock_write_deny_sandbox();
-    }
     let pool_size = match backend.kind.as_str() {
         OPENFHE_BACKEND_KIND_PROCESS_POOL | OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK => {
             backend.size.unwrap_or(1)
@@ -1322,7 +1309,84 @@ fn openfhe_backend_from_config(
             "crypto backend {backend_name} size must be at least 1",
         )));
     };
-    Ok(command_backend.with_pool_size(pool_size))
+    let sensitive_env_names = crypto_secret_env_names(settings);
+    let cache_key = OpenFheBackendCacheKey {
+        backend_name: backend_name.to_string(),
+        kind: backend.kind.clone(),
+        program: program.to_string(),
+        sha256_b64: expected_sha256_b64.to_string(),
+        signature_public_key_b64: backend.signature_public_key_b64.clone(),
+        signature_b64: backend.signature_b64.clone(),
+        size: pool_size.get(),
+        timeout_ms: backend.timeout_ms,
+        sensitive_env_names: sensitive_env_names.clone(),
+    };
+    if let Some(cached) = cached_openfhe_backend(&cache_key) {
+        return Ok(cached);
+    }
+
+    let mut command_backend =
+        CommandOpenFheBackend::new_checked_with_sha256_b64(program, expected_sha256_b64).map_err(
+            |err| {
+                StorageError::bad_input(format!(
+                    "crypto backend {backend_name} program path is invalid: {err}",
+                ))
+            },
+        )?;
+    if let Some(timeout_ms) = backend.timeout_ms {
+        command_backend = command_backend.with_timeout(Duration::from_millis(timeout_ms));
+    }
+    command_backend = command_backend.with_sensitive_env_names(sensitive_env_names);
+    if openfhe_backend_kind_uses_landlock(&backend.kind) {
+        command_backend = command_backend.with_linux_landlock_write_deny_sandbox();
+    }
+    command_backend = command_backend.with_pool_size(pool_size);
+    Ok(cache_openfhe_backend(cache_key, command_backend))
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct OpenFheBackendCacheKey {
+    backend_name: String,
+    kind: String,
+    program: String,
+    sha256_b64: String,
+    signature_public_key_b64: Option<String>,
+    signature_b64: Option<String>,
+    size: usize,
+    timeout_ms: Option<u64>,
+    sensitive_env_names: Vec<String>,
+}
+
+static OPENFHE_BACKEND_CACHE: OnceLock<
+    Mutex<HashMap<OpenFheBackendCacheKey, CommandOpenFheBackend>>,
+> = OnceLock::new();
+
+fn cached_openfhe_backend(cache_key: &OpenFheBackendCacheKey) -> Option<CommandOpenFheBackend> {
+    OPENFHE_BACKEND_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(cache_key).cloned())
+}
+
+fn cache_openfhe_backend(
+    cache_key: OpenFheBackendCacheKey,
+    backend: CommandOpenFheBackend,
+) -> CommandOpenFheBackend {
+    let Ok(mut cache) = OPENFHE_BACKEND_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+    else {
+        return backend;
+    };
+    if let Some(cached) = cache.get(&cache_key) {
+        return cached.clone();
+    }
+    if cache.len() >= OPENFHE_BACKEND_CACHE_MAX_ENTRIES {
+        cache.clear();
+    }
+    cache.insert(cache_key, backend.clone());
+    backend
 }
 
 fn openfhe_backend_kind_uses_landlock(kind: &str) -> bool {
@@ -1333,11 +1397,14 @@ fn openfhe_backend_kind_uses_landlock(kind: &str) -> bool {
 }
 
 fn crypto_secret_env_names(settings: &CryptoSettings) -> Vec<String> {
-    settings
+    let mut env_names = settings
         .materials
         .values()
         .filter_map(|material| material.env.clone())
-        .collect()
+        .collect::<Vec<_>>();
+    env_names.sort();
+    env_names.dedup();
+    env_names
 }
 
 pub fn validate_create_collection_crypto_runtime(
@@ -10693,6 +10760,33 @@ mod tests {
         BASE64URL_NOPAD.encode(&Sha256::digest(std::fs::read(program).unwrap()))
     }
 
+    fn test_bridge_program() -> (tempfile::TempDir, String, String) {
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-bridge-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let bridge_path = dir.path().join("openfhe-bridge");
+        let bridge_bytes = b"#!/bin/sh\nexit 0\n";
+        std::fs::write(&bridge_path, bridge_bytes).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut dir_permissions = std::fs::metadata(dir.path()).unwrap().permissions();
+            dir_permissions.set_mode(0o700);
+            std::fs::set_permissions(dir.path(), dir_permissions).unwrap();
+
+            let mut permissions = std::fs::metadata(&bridge_path).unwrap().permissions();
+            permissions.set_mode(0o700);
+            std::fs::set_permissions(&bridge_path, permissions).unwrap();
+        }
+        (
+            dir,
+            bridge_path.to_string_lossy().to_string(),
+            BASE64URL_NOPAD.encode(&Sha256::digest(bridge_bytes)),
+        )
+    }
+
     fn backend_signature_for_sha256(sha256_b64: &str) -> (String, String) {
         let rng = SystemRandom::new();
         let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
@@ -10820,11 +10914,7 @@ mod tests {
 
     #[test]
     fn validate_backend_verifies_bridge_signature_policy() {
-        let program = std::env::current_exe()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        let sha256_b64 = current_exe_sha256_b64();
+        let (_dir, program, sha256_b64) = test_bridge_program();
         let (signature_public_key_b64, signature_b64) = backend_signature_for_sha256(&sha256_b64);
 
         validate_backend(
@@ -10921,11 +11011,7 @@ mod tests {
 
     #[test]
     fn validate_backend_accepts_landlock_process_kinds() {
-        let program = std::env::current_exe()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        let sha256_b64 = current_exe_sha256_b64();
+        let (_dir, program, sha256_b64) = test_bridge_program();
 
         let process_result = validate_backend(
             "openfhe_local",
@@ -10994,7 +11080,7 @@ mod tests {
 
     #[test]
     fn openfhe_backend_factory_tracks_crypto_material_env_names() {
-        let program = std::env::current_exe().unwrap();
+        let (_dir, program, sha256_b64) = test_bridge_program();
         let settings = CryptoSettings {
             materials: HashMap::from([
                 (
@@ -11024,8 +11110,8 @@ mod tests {
             "openfhe_local",
             &CryptoBackendConfig {
                 kind: "process".to_string(),
-                program: Some(program.to_string_lossy().to_string()),
-                sha256_b64: Some(current_exe_sha256_b64()),
+                program: Some(program),
+                sha256_b64: Some(sha256_b64),
                 signature_public_key_b64: None,
                 signature_b64: None,
                 size: None,
@@ -11039,14 +11125,48 @@ mod tests {
     }
 
     #[test]
+    fn openfhe_backend_factory_reuses_cached_pool_for_matching_backend_policy() {
+        let (_dir, program, sha256_b64) = test_bridge_program();
+        let backend_config = CryptoBackendConfig {
+            kind: "process_pool".to_string(),
+            program: Some(program),
+            sha256_b64: Some(sha256_b64),
+            signature_public_key_b64: None,
+            signature_b64: None,
+            size: Some(2),
+            timeout_ms: Some(5_000),
+        };
+        let settings = CryptoSettings::default();
+
+        let first = openfhe_backend_from_config("openfhe_local", &backend_config, &settings)
+            .expect("matching backend policy must build");
+        let second = openfhe_backend_from_config("openfhe_local", &backend_config, &settings)
+            .expect("matching backend policy must reuse cached backend");
+        assert!(
+            first.shares_worker_pool_for_tests(&second),
+            "matching backend policy should reuse the long-lived worker pool",
+        );
+
+        let mut drifted_backend_config = backend_config;
+        drifted_backend_config.timeout_ms = Some(5_001);
+        let drifted =
+            openfhe_backend_from_config("openfhe_local", &drifted_backend_config, &settings)
+                .expect("drifted backend policy must still build");
+        assert!(
+            !first.shares_worker_pool_for_tests(&drifted),
+            "backend policy drift must not reuse the previous worker pool",
+        );
+    }
+
+    #[test]
     fn openfhe_backend_factory_enables_landlock_sandbox_kind() {
-        let program = std::env::current_exe().unwrap();
+        let (_dir, program, sha256_b64) = test_bridge_program();
         let backend_result = openfhe_backend_from_config(
             "openfhe_local",
             &CryptoBackendConfig {
                 kind: OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK.to_string(),
-                program: Some(program.to_string_lossy().to_string()),
-                sha256_b64: Some(current_exe_sha256_b64()),
+                program: Some(program),
+                sha256_b64: Some(sha256_b64),
                 signature_public_key_b64: None,
                 signature_b64: None,
                 size: None,
@@ -11106,10 +11226,7 @@ mod tests {
 
     #[test]
     fn validate_backend_rejects_zero_timeout() {
-        let program = std::env::current_exe()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
+        let (_dir, program, sha256_b64) = test_bridge_program();
 
         assert_eq!(
             validate_backend(
@@ -11117,7 +11234,7 @@ mod tests {
                 &CryptoBackendConfig {
                     kind: "process".to_string(),
                     program: Some(program),
-                    sha256_b64: Some(current_exe_sha256_b64()),
+                    sha256_b64: Some(sha256_b64),
                     signature_public_key_b64: None,
                     signature_b64: None,
                     size: None,
