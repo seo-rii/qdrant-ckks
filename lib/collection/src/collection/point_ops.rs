@@ -17,7 +17,9 @@ use qdrant_sec::{
     ckks_vector_sidecar_envelope_key, client_payload_envelope_key, client_payload_nonce_replay_key,
     is_client_encrypted_payload_value, is_encrypted_payload_value, server_payload_envelope_key,
     validate_client_payload_value_after_runtime_verification,
+    validate_client_payload_value_for_peer_replay,
     validate_server_payload_value_after_runtime_encryption,
+    validate_server_payload_value_for_peer_replay,
 };
 use segment::data_types::order_by::{Direction, OrderBy};
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
@@ -665,6 +667,627 @@ impl Collection {
     /// # Cancel safety
     ///
     /// This method is cancel safe.
+    async fn ensure_peer_update_crypto_invariants(
+        &self,
+        operation: &CollectionUpdateOperations,
+    ) -> CollectionResult<()> {
+        let (encryption, collection_crypto_id) = {
+            let collection_config = self.collection_config.read().await;
+            (
+                collection_config.params.effective_encryption(),
+                collection_config.stable_crypto_id(self.name())?,
+            )
+        };
+        let Some(encryption) = encryption else {
+            return Ok(());
+        };
+
+        match operation {
+            CollectionUpdateOperations::PointOperation(
+                PointOperations::UpsertPointsConditional(operation),
+            ) => {
+                self.ensure_filter_does_not_touch_encrypted_payload(Some(&operation.condition))
+                    .await?
+            }
+            CollectionUpdateOperations::PointOperation(PointOperations::DeletePointsByFilter(
+                filter,
+            )) => {
+                self.ensure_filter_does_not_touch_encrypted_payload(Some(filter))
+                    .await?
+            }
+            CollectionUpdateOperations::PayloadOperation(
+                PayloadOps::SetPayload(operation) | PayloadOps::OverwritePayload(operation),
+            ) => {
+                self.ensure_filter_does_not_touch_encrypted_payload(operation.filter.as_ref())
+                    .await?;
+            }
+            CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(operation)) => {
+                self.ensure_filter_does_not_touch_encrypted_payload(operation.filter.as_ref())
+                    .await?;
+            }
+            CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayloadByFilter(
+                filter,
+            )) => {
+                self.ensure_filter_does_not_touch_encrypted_payload(Some(filter))
+                    .await?
+            }
+            CollectionUpdateOperations::VectorOperation(VectorOperations::UpdateVectors(
+                operation,
+            )) => {
+                self.ensure_filter_does_not_touch_encrypted_payload(
+                    operation.update_filter.as_ref(),
+                )
+                .await?;
+            }
+            CollectionUpdateOperations::VectorOperation(
+                VectorOperations::DeleteVectorsByFilter(filter, _),
+            ) => {
+                self.ensure_filter_does_not_touch_encrypted_payload(Some(filter))
+                    .await?
+            }
+            _ => {}
+        }
+
+        let encrypted_vector_names = encryption
+            .rules
+            .iter()
+            .flat_map(|rule| match &rule.selector {
+                EncryptionSelector::VectorNames { names } => names.clone(),
+                EncryptionSelector::PayloadPaths { .. }
+                | EncryptionSelector::MetadataKeys { .. } => Vec::new(),
+            })
+            .collect::<HashSet<_>>();
+        let encrypted_vector_key_id = encryption.key_id.as_deref();
+        let mut seen_client_nonces = HashSet::new();
+
+        let validate_vector_sidecar_payload = |payload: &Payload,
+                                               point_id: Option<&str>|
+         -> CollectionResult<bool> {
+            let Some(value) = payload.0.get(ENCRYPTED_VECTOR_SIDECAR_FIELD) else {
+                return Ok(false);
+            };
+            let Some(point_id) = point_id else {
+                return Err(CollectionError::bad_input(format!(
+                    "encrypted vector sidecar '{ENCRYPTED_VECTOR_SIDECAR_FIELD}' replay requires point-specific binding",
+                )));
+            };
+            let Some(sidecar) = value.as_object() else {
+                return Err(CollectionError::bad_input(format!(
+                    "encrypted vector sidecar '{ENCRYPTED_VECTOR_SIDECAR_FIELD}' must be an object",
+                )));
+            };
+            for (vector_name, encrypted) in sidecar {
+                if !encrypted_vector_names.contains(vector_name) {
+                    return Err(CollectionError::bad_input(format!(
+                        "peer encrypted vector sidecar entry '{vector_name}' is not configured as an encrypted vector",
+                    )));
+                }
+                let Some(marker) = encrypted
+                    .as_object()
+                    .and_then(|object| object.get(ENCRYPTED_CKKS_VECTOR_MARKER))
+                else {
+                    return Err(CollectionError::bad_input(format!(
+                        "peer encrypted vector sidecar entry '{vector_name}' is malformed",
+                    )));
+                };
+                let encrypted_vector: EncryptedCkksVector = serde_json::from_value(
+                        marker.clone(),
+                    )
+                    .map_err(|err| {
+                        CollectionError::bad_input(format!(
+                            "peer encrypted vector sidecar entry '{vector_name}' is malformed: {err}",
+                        ))
+                    })?;
+                if let Some(key_id) = encrypted_vector_key_id
+                    && encrypted_vector.envelope.key_id != key_id
+                {
+                    return Err(CollectionError::bad_input(format!(
+                        "peer encrypted vector sidecar entry '{vector_name}' key id does not match this collection",
+                    )));
+                }
+                let Some(sidecar_key) = ckks_vector_sidecar_envelope_key(
+                        encrypted,
+                        &collection_crypto_id,
+                        point_id,
+                        vector_name,
+                    )
+                    .map_err(|err| {
+                        CollectionError::bad_input(format!(
+                            "peer encrypted vector sidecar entry '{vector_name}' is invalid for this collection: {err}",
+                        ))
+                    })?
+                    else {
+                        return Err(CollectionError::bad_input(format!(
+                            "peer encrypted vector sidecar entry '{vector_name}' is missing marker",
+                        )));
+                    };
+                if !sidecar_key.matches_binding(&collection_crypto_id, point_id, vector_name) {
+                    return Err(CollectionError::bad_input(format!(
+                        "peer encrypted vector sidecar entry '{vector_name}' does not match collection, point, and vector binding",
+                    )));
+                }
+            }
+            Ok(true)
+        };
+
+        let mut validate_payload_path = |payload: &Payload,
+                                         key: Option<&JsonPath>,
+                                         point_id: Option<&str>,
+                                         encrypted_path: &JsonPath,
+                                         encrypted_path_str: &str,
+                                         expected_envelope_kind: &str,
+                                         allow_client_envelope: bool|
+         -> CollectionResult<bool> {
+            if let Some(key) = key {
+                return Ok(key.compatible(encrypted_path));
+            }
+
+            for value in encrypted_path.value_get(&payload.0) {
+                let Some(point_id) = point_id else {
+                    return Err(CollectionError::bad_input(format!(
+                        "peer encrypted payload marker for field '{encrypted_path_str}' requires point-specific binding",
+                    )));
+                };
+                if is_encrypted_payload_value(value) {
+                    validate_server_payload_value_for_peer_replay(
+                            value,
+                            &collection_crypto_id,
+                            point_id,
+                            ServerPayloadValidationContext {
+                                field_path: encrypted_path_str,
+                                expected_kind: Some(expected_envelope_kind),
+                                key_id: encryption.key_id.as_deref(),
+                                crypto_schema_version: encryption.crypto_schema_version,
+                                encryption_epoch: encryption.encryption_epoch,
+                            },
+                        )
+                        .map_err(|err| {
+                            CollectionError::bad_input(format!(
+                                "peer encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: {err}",
+                            ))
+                        })?;
+                    continue;
+                }
+                if allow_client_envelope && is_client_encrypted_payload_value(value) {
+                    validate_client_payload_value_for_peer_replay(
+                            value,
+                            ClientPayloadValidationContext {
+                                collection_id: &collection_crypto_id,
+                                point_id,
+                                field_path: encrypted_path_str,
+                                expected_key_id: encryption.key_id.as_deref(),
+                                expected_rk_id: encryption.key_id.as_deref(),
+                                min_rk_epoch: Some(encryption.encryption_epoch),
+                                max_rk_epoch: Some(encryption.encryption_epoch),
+                                key_id_required: true,
+                                signature_required: true,
+                                signature_verification: None,
+                            },
+                        )
+                        .map_err(|err| {
+                            CollectionError::bad_input(format!(
+                                "peer client encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: {err}",
+                            ))
+                        })?;
+                    let Some(nonce_replay_key) =
+                            client_payload_nonce_replay_key(value, encrypted_path_str).map_err(
+                                |err| {
+                                    CollectionError::bad_input(format!(
+                                        "peer client encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: {err}",
+                                    ))
+                                },
+                            )?
+                        else {
+                            return Err(CollectionError::bad_input(format!(
+                                "peer client encrypted payload marker for field '{encrypted_path_str}' is missing nonce replay metadata",
+                            )));
+                        };
+                    if !seen_client_nonces.insert(nonce_replay_key) {
+                        return Err(CollectionError::bad_input(format!(
+                            "peer client encrypted payload marker for field '{encrypted_path_str}' reuses a nonce in this operation",
+                        )));
+                    }
+                    continue;
+                }
+                return Ok(true);
+            }
+
+            Ok(false)
+        };
+
+        let reject_payload_delete_for_encrypted_path =
+            |keys: &[JsonPath], protected_path: &JsonPath, protected_path_str: &str| {
+                for key in keys {
+                    if key.compatible(protected_path) {
+                        return Err(CollectionError::bad_input(format!(
+                            "peer update cannot delete encrypted payload field '{protected_path_str}' via delete_payload key '{key}'",
+                        )));
+                    }
+                }
+                Ok(())
+            };
+        let vector_write_touches_encrypted_name =
+            |vector: &VectorStructPersisted, encrypted_name: &str| match vector {
+                VectorStructPersisted::Single(_) | VectorStructPersisted::MultiDense(_) => {
+                    encrypted_name == DEFAULT_VECTOR_NAME
+                }
+                VectorStructPersisted::Named(vectors) => vectors.contains_key(encrypted_name),
+            };
+
+        if !encrypted_vector_names.is_empty() {
+            match operation {
+                CollectionUpdateOperations::PointOperation(point_operation) => {
+                    match point_operation {
+                        PointOperations::UpsertPoints(insert_operation)
+                        | PointOperations::UpsertPointsConditional(
+                            shard::operations::point_ops::ConditionalInsertOperationInternal {
+                                points_op: insert_operation,
+                                condition: _,
+                                update_mode: _,
+                            },
+                        ) => match insert_operation {
+                            PointInsertOperationsInternal::PointsBatch(batch) => {
+                                if let Some(payloads) = batch.payloads.as_ref() {
+                                    for (id, payload) in batch.ids.iter().zip(payloads).filter_map(
+                                        |(id, payload)| {
+                                            payload
+                                                .as_ref()
+                                                .map(|payload| (id.to_string(), payload))
+                                        },
+                                    ) {
+                                        validate_vector_sidecar_payload(
+                                            payload,
+                                            Some(id.as_str()),
+                                        )?;
+                                    }
+                                }
+                            }
+                            PointInsertOperationsInternal::PointsList(points) => {
+                                for (id, payload) in points.iter().filter_map(|point| {
+                                    point
+                                        .payload
+                                        .as_ref()
+                                        .map(|payload| (point.id.to_string(), payload))
+                                }) {
+                                    validate_vector_sidecar_payload(payload, Some(id.as_str()))?;
+                                }
+                            }
+                        },
+                        PointOperations::SyncPoints(sync_operation) => {
+                            for (id, payload) in sync_operation.points.iter().filter_map(|point| {
+                                point
+                                    .payload
+                                    .as_ref()
+                                    .map(|payload| (point.id.to_string(), payload))
+                            }) {
+                                validate_vector_sidecar_payload(payload, Some(id.as_str()))?;
+                            }
+                        }
+                        PointOperations::DeletePoints { .. }
+                        | PointOperations::DeletePointsByFilter(_) => {}
+                    }
+                }
+                CollectionUpdateOperations::PayloadOperation(
+                    PayloadOps::SetPayload(operation) | PayloadOps::OverwritePayload(operation),
+                ) => {
+                    let point_id = operation
+                        .points
+                        .as_ref()
+                        .and_then(|points| (points.len() == 1).then(|| points[0].to_string()));
+                    validate_vector_sidecar_payload(&operation.payload, point_id.as_deref())?;
+                }
+                CollectionUpdateOperations::PayloadOperation(
+                    PayloadOps::ClearPayload { .. } | PayloadOps::ClearPayloadByFilter(_),
+                ) => {
+                    return Err(CollectionError::bad_input(format!(
+                        "peer update cannot clear encrypted vector sidecar '{ENCRYPTED_VECTOR_SIDECAR_FIELD}'",
+                    )));
+                }
+                CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(
+                    operation,
+                )) => {
+                    if operation
+                        .keys
+                        .iter()
+                        .any(|key| key.first_key == ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                    {
+                        return Err(CollectionError::bad_input(format!(
+                            "peer update cannot delete encrypted vector sidecar '{ENCRYPTED_VECTOR_SIDECAR_FIELD}'",
+                        )));
+                    }
+                }
+                CollectionUpdateOperations::VectorOperation(_)
+                | CollectionUpdateOperations::FieldIndexOperation(_) => {}
+                #[cfg(feature = "staging")]
+                CollectionUpdateOperations::StagingOperation(_) => {}
+            }
+        }
+
+        for rule in &encryption.rules {
+            match &rule.selector {
+                EncryptionSelector::PayloadPaths { paths } => {
+                    let allow_client_envelope =
+                        rule.binding.as_deref() == Some(CLIENT_PAYLOAD_ENVELOPE_BINDING);
+                    for encrypted_path in paths {
+                        let encrypted_json_path =
+                            encrypted_path.parse::<JsonPath>().map_err(|err| {
+                                CollectionError::bad_input(format!(
+                                    "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                                ))
+                            })?;
+                        let touches_encrypted_payload = match operation {
+                            CollectionUpdateOperations::PointOperation(point_operation) => {
+                                match point_operation {
+                                    PointOperations::UpsertPoints(insert_operation)
+                                    | PointOperations::UpsertPointsConditional(
+                                        shard::operations::point_ops::ConditionalInsertOperationInternal {
+                                            points_op: insert_operation,
+                                            condition: _,
+                                            update_mode: _,
+                                        },
+                                    ) => match insert_operation {
+                                        PointInsertOperationsInternal::PointsBatch(batch) => {
+                                            let mut touches = false;
+                                            if let Some(payloads) = batch.payloads.as_ref() {
+                                                for (id, payload) in batch
+                                                    .ids
+                                                    .iter()
+                                                    .zip(payloads)
+                                                    .filter_map(|(id, payload)| {
+                                                        payload
+                                                            .as_ref()
+                                                            .map(|payload| (id.to_string(), payload))
+                                                    })
+                                                {
+                                                    validate_vector_sidecar_payload(
+                                                        payload,
+                                                        Some(id.as_str()),
+                                                    )?;
+                                                    if validate_payload_path(
+                                                        payload,
+                                                        None,
+                                                        Some(id.as_str()),
+                                                        &encrypted_json_path,
+                                                        encrypted_path,
+                                                        PAYLOAD_TEXT_ENVELOPE_KIND,
+                                                        allow_client_envelope,
+                                                    )? {
+                                                        touches = true;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            touches
+                                        }
+                                        PointInsertOperationsInternal::PointsList(points) => {
+                                            let mut touches = false;
+                                            for (id, payload) in points.iter().filter_map(|point| {
+                                                point
+                                                    .payload
+                                                    .as_ref()
+                                                    .map(|payload| (point.id.to_string(), payload))
+                                            }) {
+                                                validate_vector_sidecar_payload(
+                                                    payload,
+                                                    Some(id.as_str()),
+                                                )?;
+                                                if validate_payload_path(
+                                                    payload,
+                                                    None,
+                                                    Some(id.as_str()),
+                                                    &encrypted_json_path,
+                                                    encrypted_path,
+                                                    PAYLOAD_TEXT_ENVELOPE_KIND,
+                                                    allow_client_envelope,
+                                                )? {
+                                                    touches = true;
+                                                    break;
+                                                }
+                                            }
+                                            touches
+                                        }
+                                    },
+                                    PointOperations::SyncPoints(sync_operation) => {
+                                        let mut touches = false;
+                                        for (id, payload) in sync_operation
+                                            .points
+                                            .iter()
+                                            .filter_map(|point| {
+                                                point
+                                                    .payload
+                                                    .as_ref()
+                                                    .map(|payload| (point.id.to_string(), payload))
+                                            })
+                                        {
+                                            validate_vector_sidecar_payload(
+                                                payload,
+                                                Some(id.as_str()),
+                                            )?;
+                                            if validate_payload_path(
+                                                payload,
+                                                None,
+                                                Some(id.as_str()),
+                                                &encrypted_json_path,
+                                                encrypted_path,
+                                                PAYLOAD_TEXT_ENVELOPE_KIND,
+                                                allow_client_envelope,
+                                            )? {
+                                                touches = true;
+                                                break;
+                                            }
+                                        }
+                                        touches
+                                    }
+                                    PointOperations::DeletePoints { .. }
+                                    | PointOperations::DeletePointsByFilter(_) => false,
+                                }
+                            }
+                            CollectionUpdateOperations::PayloadOperation(
+                                PayloadOps::SetPayload(operation)
+                                | PayloadOps::OverwritePayload(operation),
+                            ) => {
+                                validate_vector_sidecar_payload(
+                                    &operation.payload,
+                                    operation
+                                        .points
+                                        .as_ref()
+                                        .and_then(|points| {
+                                            (points.len() == 1).then(|| points[0].to_string())
+                                        })
+                                        .as_deref(),
+                                )?;
+                                let point_id = operation.points.as_ref().and_then(|points| {
+                                    (points.len() == 1).then(|| points[0].to_string())
+                                });
+                                validate_payload_path(
+                                    &operation.payload,
+                                    operation.key.as_ref(),
+                                    point_id.as_deref(),
+                                    &encrypted_json_path,
+                                    encrypted_path,
+                                    PAYLOAD_TEXT_ENVELOPE_KIND,
+                                    allow_client_envelope,
+                                )?
+                            }
+                            CollectionUpdateOperations::PayloadOperation(
+                                PayloadOps::DeletePayload(operation),
+                            ) => {
+                                reject_payload_delete_for_encrypted_path(
+                                    &operation.keys,
+                                    &encrypted_json_path,
+                                    encrypted_path,
+                                )?;
+                                false
+                            }
+                            CollectionUpdateOperations::PayloadOperation(
+                                PayloadOps::ClearPayload { .. }
+                                | PayloadOps::ClearPayloadByFilter(_),
+                            ) => true,
+                            CollectionUpdateOperations::VectorOperation(_)
+                            | CollectionUpdateOperations::FieldIndexOperation(_) => false,
+                            #[cfg(feature = "staging")]
+                            CollectionUpdateOperations::StagingOperation(_) => false,
+                        };
+                        if touches_encrypted_payload {
+                            return Err(CollectionError::bad_input(format!(
+                                "peer update cannot write plaintext payload for encrypted field '{encrypted_path}'",
+                            )));
+                        }
+                    }
+                }
+                EncryptionSelector::VectorNames { names } => {
+                    for encrypted_name in names {
+                        let touches_encrypted_vector = match operation {
+                            CollectionUpdateOperations::PointOperation(point_operation) => {
+                                match point_operation {
+                                    PointOperations::UpsertPoints(insert_operation)
+                                    | PointOperations::UpsertPointsConditional(
+                                        shard::operations::point_ops::ConditionalInsertOperationInternal {
+                                            points_op: insert_operation,
+                                            condition: _,
+                                            update_mode: _,
+                                        },
+                                    ) => match insert_operation {
+                                        PointInsertOperationsInternal::PointsBatch(batch) => {
+                                            match &batch.vectors {
+                                                BatchVectorStructPersisted::Single(_)
+                                                | BatchVectorStructPersisted::MultiDense(_) => {
+                                                    encrypted_name == DEFAULT_VECTOR_NAME
+                                                }
+                                                BatchVectorStructPersisted::Named(vectors) => {
+                                                    vectors.contains_key(encrypted_name)
+                                                }
+                                            }
+                                        }
+                                        PointInsertOperationsInternal::PointsList(points) => {
+                                            points.iter().any(|point| {
+                                                vector_write_touches_encrypted_name(
+                                                    &point.vector,
+                                                    encrypted_name,
+                                                )
+                                            })
+                                        }
+                                    },
+                                    PointOperations::SyncPoints(sync_operation) => {
+                                        sync_operation.points.iter().any(|point| {
+                                            vector_write_touches_encrypted_name(
+                                                &point.vector,
+                                                encrypted_name,
+                                            )
+                                        })
+                                    }
+                                    PointOperations::DeletePoints { .. }
+                                    | PointOperations::DeletePointsByFilter(_) => false,
+                                }
+                            }
+                            CollectionUpdateOperations::VectorOperation(
+                                VectorOperations::UpdateVectors(operation),
+                            ) => operation.points.iter().any(|point| {
+                                vector_write_touches_encrypted_name(
+                                    &point.vector,
+                                    encrypted_name,
+                                )
+                            }),
+                            CollectionUpdateOperations::VectorOperation(
+                                VectorOperations::DeleteVectors(_, vector_names)
+                                | VectorOperations::DeleteVectorsByFilter(_, vector_names),
+                            ) => vector_names.iter().any(|name| name == encrypted_name),
+                            CollectionUpdateOperations::PayloadOperation(_)
+                            | CollectionUpdateOperations::FieldIndexOperation(_) => false,
+                            #[cfg(feature = "staging")]
+                            CollectionUpdateOperations::StagingOperation(_) => false,
+                        };
+                        if touches_encrypted_vector {
+                            return Err(CollectionError::bad_input(format!(
+                                "peer update cannot write plaintext vector '{encrypted_name}' for encrypted vector rule",
+                            )));
+                        }
+                    }
+                }
+                EncryptionSelector::MetadataKeys { keys } => {
+                    for metadata_key in keys {
+                        let metadata_path = metadata_key.parse::<JsonPath>().map_err(|err| {
+                            CollectionError::bad_input(format!(
+                                "encrypted metadata field path '{metadata_key}' is invalid: {err:?}",
+                            ))
+                        })?;
+                        match operation {
+                            CollectionUpdateOperations::PayloadOperation(
+                                PayloadOps::DeletePayload(operation),
+                            ) => {
+                                reject_payload_delete_for_encrypted_path(
+                                    &operation.keys,
+                                    &metadata_path,
+                                    metadata_key,
+                                )?;
+                            }
+                            CollectionUpdateOperations::PayloadOperation(
+                                PayloadOps::ClearPayload { .. }
+                                | PayloadOps::ClearPayloadByFilter(_),
+                            ) => {
+                                return Err(CollectionError::bad_input(format!(
+                                    "peer update cannot clear encrypted metadata field '{metadata_key}'",
+                                )));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        if !seen_client_nonces.is_empty() {
+            self.record_client_payload_nonce_replay_keys(
+                seen_client_nonces
+                    .iter()
+                    .map(|key| client_nonce_replay_cache_key(&collection_crypto_id, key)),
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
     pub async fn update_from_peer(
         &self,
         operation: OperationWithClockTag,
@@ -675,6 +1298,8 @@ impl Collection {
         hw_measurement_acc: HwMeasurementAcc,
     ) -> CollectionResult<UpdateResult> {
         self.ensure_crypto_migration_allows_regular_operation("peer writes")
+            .await?;
+        self.ensure_peer_update_crypto_invariants(&operation.operation)
             .await?;
 
         let shard_holder = self.shards_holder.clone().read_owned().await;

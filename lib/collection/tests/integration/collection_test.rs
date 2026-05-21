@@ -15,7 +15,6 @@ use collection::config::{
 use collection::discovery::{discover, discover_batch};
 use collection::grouping::GroupBy;
 use collection::grouping::group_by::{GroupRequest, SourceRequest};
-use collection::operations::CollectionUpdateOperations;
 use collection::operations::config_diff::CollectionParamsDiff;
 use collection::operations::payload_ops::{DeletePayloadOp, PayloadOps, SetPayloadOp};
 use collection::operations::point_ops::{
@@ -40,6 +39,7 @@ use collection::operations::vector_ops::{
     PointVectorsPersisted, UpdateVectorsOp, VectorOperations,
 };
 use collection::operations::vector_params_builder::VectorParamsBuilder;
+use collection::operations::{CollectionUpdateOperations, OperationWithClockTag};
 use collection::recommendations::{recommend_batch_by, recommend_by};
 use collection::shards::channel_service::ChannelService;
 use collection::shards::replica_set::replica_set_state::{ReplicaSetState, ReplicaState};
@@ -4258,6 +4258,140 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
         )
         .await
         .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn peer_update_rechecks_encrypted_payload_invariants() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, payload_encryption_config()).await;
+    let collection_crypto_id = collection.config_snapshot().await.uuid.unwrap().to_string();
+
+    let plaintext_peer_upsert =
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                id: 10.into(),
+                vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                payload: Some(
+                    serde_json::from_str(r#"{"document":{"body":"peer plaintext"}}"#).unwrap(),
+                ),
+            }]),
+        ));
+    let err = collection
+        .update_from_peer(
+            OperationWithClockTag::from(plaintext_peer_upsert),
+            0,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("peer update")
+                && description.contains("plaintext payload")
+                && description.contains("document.body")
+    ));
+
+    // SAFETY: this fixture uses a known test cipher to produce a
+    // runtime-encrypted marker as it would appear on a forwarded peer update.
+    let valid_key_encryptor = unsafe {
+        PayloadTextEncryptor::new_with_derived_cipher_unchecked(
+            &collection_crypto_id,
+            AeadCipher::new_with_material_fingerprint(
+                "tenant-a:docs",
+                SecretKey::from_bytes([8u8; 32]),
+                "tenant-a/docs@v1",
+            )
+            .unwrap(),
+        )
+    }
+    .unwrap();
+    let mut encrypted_payload: Payload =
+        serde_json::from_str(r#"{"document":{"body":"peer encrypted"}}"#).unwrap();
+    valid_key_encryptor
+        .encrypt_selected_fields(
+            "11",
+            &mut encrypted_payload.0,
+            &PayloadEncryptionPolicy::new(["document.body"]).unwrap(),
+        )
+        .unwrap();
+    let encrypted_peer_upsert =
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                id: 11.into(),
+                vector: VectorStructPersisted::from(vec![0.0, 1.0, 0.0, 0.0]),
+                payload: Some(encrypted_payload),
+            }]),
+        ));
+    collection
+        .update_from_peer(
+            OperationWithClockTag::from(encrypted_peer_upsert),
+            0,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+
+    let mut malformed_payload: Payload =
+        serde_json::from_str(r#"{"document":{"body":"peer malformed"}}"#).unwrap();
+    valid_key_encryptor
+        .encrypt_selected_fields(
+            "12",
+            &mut malformed_payload.0,
+            &PayloadEncryptionPolicy::new(["document.body"]).unwrap(),
+        )
+        .unwrap();
+    malformed_payload
+        .0
+        .get_mut("document")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut("body")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut(ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut("envelope")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("nonce".to_string(), serde_json::json!("AQID"));
+    let malformed_peer_upsert =
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                id: 12.into(),
+                vector: VectorStructPersisted::from(vec![0.0, 0.0, 1.0, 0.0]),
+                payload: Some(malformed_payload),
+            }]),
+        ));
+    let err = collection
+        .update_from_peer(
+            OperationWithClockTag::from(malformed_peer_upsert),
+            0,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("peer encrypted payload marker")
+                && description.contains("nonce must decode to 96 bits")
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread")]
