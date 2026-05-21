@@ -21,7 +21,9 @@ use collection::operations::consistency_params::ReadConsistency;
 use collection::operations::shard_selector_internal::ShardSelectorInternal;
 use collection::operations::types::*;
 use collection::operations::universal_query::collection_query::*;
-use collection::operations::universal_query::shard_query::FusionInternal;
+use collection::operations::universal_query::shard_query::{
+    FusionInternal, SampleInternal, ScoringQuery, ShardQueryRequest,
+};
 use collection::recommendations::avg_vector_for_recommendation;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use common::math::scaled_fast_sigmoid;
@@ -7870,50 +7872,41 @@ async fn ckks_vector_search_points_matrix(
         ))
     })?;
     let score_order = distance.distance_order();
-    let mut next_offset = None;
     let mut sampled = Vec::with_capacity(request.sample_size);
-    const BATCH_SIZE: usize = 512;
 
-    while sampled.len() < request.sample_size {
-        let scroll_result = collection
-            .scroll_by(
-                ScrollRequestInternal {
-                    offset: next_offset,
-                    limit: Some(BATCH_SIZE),
-                    filter: request.filter.clone(),
-                    with_payload: Some(WithPayloadInterface::Bool(true)),
-                    with_vector: WithVector::Bool(false),
-                    order_by: None,
-                },
-                read_consistency,
-                shard_selection,
-                timeout,
-                hw_measurement_acc.clone(),
-            )
-            .await?;
+    let sampled_points = collection
+        .query(
+            ShardQueryRequest {
+                prefetches: Vec::new(),
+                query: Some(ScoringQuery::Sample(SampleInternal::Random)),
+                filter: request.filter.clone(),
+                score_threshold: None,
+                limit: request.sample_size,
+                offset: 0,
+                params: None,
+                with_vector: WithVector::Bool(false),
+                with_payload: WithPayloadInterface::Bool(true),
+            },
+            read_consistency,
+            shard_selection.clone(),
+            timeout,
+            hw_measurement_acc.clone(),
+        )
+        .await?;
 
-        for record in scroll_result.points {
-            let Some(payload) = record.payload.as_ref() else {
-                continue;
-            };
-            let Some(encrypted) = encrypted_vector_from_payload(payload, vector_name)? else {
-                continue;
-            };
-            sampled.push(CkksSidecarSearchRecord {
-                id: record.id,
-                shard_key: record.shard_key,
-                point_id: record.id.to_string(),
-                encrypted,
-            });
-            if sampled.len() >= request.sample_size {
-                break;
-            }
-        }
-
-        let Some(offset) = scroll_result.next_page_offset else {
-            break;
+    for record in sampled_points {
+        let Some(payload) = record.payload.as_ref() else {
+            continue;
         };
-        next_offset = Some(offset);
+        let Some(encrypted) = encrypted_vector_from_payload(payload, vector_name)? else {
+            continue;
+        };
+        sampled.push(CkksSidecarSearchRecord {
+            id: record.id,
+            shard_key: record.shard_key,
+            point_id: record.id.to_string(),
+            encrypted,
+        });
     }
 
     if sampled.len() < 2 {

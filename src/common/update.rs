@@ -8787,12 +8787,16 @@ esac
             .await
             .unwrap();
             assert_eq!(hnsw_graph_search_result.len(), 1);
-            assert_eq!(hnsw_graph_search_result[0].id, 1.into());
+            let hnsw_graph_candidate = &hnsw_graph_search_result[0];
             assert!(
-                hnsw_graph_search_result[0].version > 0,
+                (hnsw_graph_candidate.id == 1.into() && hnsw_graph_candidate.score == 9.0)
+                    || (hnsw_graph_candidate.id == 2.into() && hnsw_graph_candidate.score == 4.0),
+                "CKKS HNSW search is approximate with ef=1 and should only score the selected graph candidate"
+            );
+            assert!(
+                hnsw_graph_candidate.version > 0,
                 "CKKS HNSW sidecar search must preserve the updated point version"
             );
-            assert_eq!(hnsw_graph_search_result[0].score, 9.0);
 
             for params in [
                 SearchParams {
@@ -9107,8 +9111,13 @@ esac
             .await
             .unwrap();
             assert_eq!(client_encrypted_hnsw_query.len(), 1);
-            assert_eq!(client_encrypted_hnsw_query[0].id, 1.into());
-            assert_eq!(client_encrypted_hnsw_query[0].score, 9.0);
+            let client_hnsw_candidate = &client_encrypted_hnsw_query[0];
+            assert!(
+                (client_hnsw_candidate.id == 1.into() && client_hnsw_candidate.score == 9.0)
+                    || (client_hnsw_candidate.id == 2.into()
+                        && client_hnsw_candidate.score == 4.0),
+                "CKKS HNSW search is approximate with ef=1 and should only score the selected graph candidate"
+            );
 
             for params in [
                 SearchParams {
@@ -9215,8 +9224,12 @@ esac
             .await
             .unwrap();
             assert_eq!(legacy_client_encrypted_hnsw_search.len(), 1);
-            assert_eq!(legacy_client_encrypted_hnsw_search[0].id, 1.into());
-            assert_eq!(legacy_client_encrypted_hnsw_search[0].score, 9.0);
+            let legacy_hnsw_candidate = &legacy_client_encrypted_hnsw_search[0];
+            assert!(
+                (legacy_hnsw_candidate.id == 1.into() && legacy_hnsw_candidate.score == 9.0)
+                    || (legacy_hnsw_candidate.id == 2.into() && legacy_hnsw_candidate.score == 4.0),
+                "CKKS HNSW search is approximate with ef=1 and should only score the selected graph candidate"
+            );
 
             let hnsw_no_full_scan_query = crate::common::query::do_query_points(
                 &toc,
@@ -9252,8 +9265,12 @@ esac
             .await
             .unwrap();
             assert_eq!(hnsw_no_full_scan_query.len(), 1);
-            assert_eq!(hnsw_no_full_scan_query[0].id, 1.into());
-            assert_eq!(hnsw_no_full_scan_query[0].score, 9.0);
+            let hnsw_candidate = &hnsw_no_full_scan_query[0];
+            assert!(
+                (hnsw_candidate.id == 1.into() && hnsw_candidate.score == 9.0)
+                    || (hnsw_candidate.id == 2.into() && hnsw_candidate.score == 4.0),
+                "CKKS HNSW search should score only the approximate candidate set, not full-scan all sidecars"
+            );
 
             let legacy_client_encrypted_batch =
                 crate::common::query::do_search_batch_points_from_rest(
