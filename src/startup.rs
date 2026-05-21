@@ -32,8 +32,8 @@ pub fn setup_panic_hook(reporting_enabled: bool, reporting_id: String) {
             "Payload not captured as it is not a string."
         };
 
-        let redacted_backtrace = redact_crypto_material_for_report(&backtrace);
-        let redacted_message = redact_crypto_material_for_report(message);
+        let (redacted_message, redacted_backtrace) =
+            redact_panic_message_and_backtrace(message, &backtrace);
 
         log::error!("Panic backtrace: \n{redacted_backtrace}");
         log::error!("Panic occurred{loc}: {redacted_message}");
@@ -42,6 +42,13 @@ pub fn setup_panic_hook(reporting_enabled: bool, reporting_id: String) {
             ErrorReporter::report(&redacted_message, &reporting_id, Some(&loc));
         }
     }));
+}
+
+fn redact_panic_message_and_backtrace(message: &str, backtrace: &str) -> (String, String) {
+    (
+        redact_crypto_material_for_report(message),
+        redact_crypto_material_for_report(backtrace),
+    )
 }
 
 /// Creates a file that indicates that the server has been started.
@@ -60,5 +67,23 @@ pub fn remove_started_file_indicator() {
         && let Err(err) = fs::remove_file(path)
     {
         log::warn!("Failed to remove init file indicator: {err}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redact_panic_message_and_backtrace;
+
+    #[test]
+    fn panic_message_and_backtrace_redact_crypto_material() {
+        let (message, backtrace) = redact_panic_message_and_backtrace(
+            r#"panic while handling {"$qdrant_client_aead":{"ciphertext":"payload-sentinel"}}"#,
+            "frame with X-Amz-Security-Token: aws-token-sentinel",
+        );
+
+        assert!(message.contains("crypto material omitted"));
+        assert!(backtrace.contains("crypto material omitted"));
+        assert!(!message.contains("payload-sentinel"));
+        assert!(!backtrace.contains("aws-token-sentinel"));
     }
 }

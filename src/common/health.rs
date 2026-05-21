@@ -120,7 +120,7 @@ impl Task {
     pub async fn exec(self) {
         while let Err(err) = self.exec_catch_unwind().await {
             let message = common::panic::downcast_str(&err).unwrap_or("");
-            let message = redact_crypto_material_for_report(message);
+            let message = redact_health_checker_panic_message(message);
             let separator = if !message.is_empty() { ": " } else { "" };
 
             log::error!("HealthChecker task panicked, retrying{separator}{message}",);
@@ -387,6 +387,10 @@ impl Task {
     }
 }
 
+fn redact_health_checker_panic_message(message: &str) -> String {
+    redact_crypto_material_for_report(message)
+}
+
 fn get_consensus_commit<'a>(
     transport_channel_pool: &'a TransportChannelPool,
     uri: &'a tonic::transport::Uri,
@@ -451,6 +455,17 @@ impl Shard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn health_checker_panic_message_redacts_crypto_material() {
+        let message = redact_health_checker_panic_message(
+            "health panic with session_token=session-token-sentinel and signatureB64=sig-sentinel",
+        );
+
+        assert!(message.contains("crypto material omitted"));
+        assert!(!message.contains("session-token-sentinel"));
+        assert!(!message.contains("sig-sentinel"));
+    }
 
     #[test]
     fn crypto_runtime_health_mismatch_requires_all_peer_fingerprints_to_match() {
