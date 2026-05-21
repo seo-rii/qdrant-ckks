@@ -35,6 +35,8 @@ use crate::common::telemetry::{TelemetryCollector, TelemetryData};
 use crate::settings::{CryptoMaterialConfig, ServiceConfig, Settings};
 use crate::tracing;
 
+const RUNTIME_RESOURCE_KEY_ADMIN_DEADLINE: Duration = Duration::from_secs(30);
+
 #[derive(Deserialize, Serialize, JsonSchema, Validate)]
 pub struct TelemetryParam {
     pub anonymize: Option<bool>,
@@ -502,6 +504,38 @@ fn runtime_resource_key_generate_response_audit_metadata(
     metadata
 }
 
+async fn await_runtime_resource_key_worker<T>(
+    worker: tokio::task::JoinHandle<Result<T, StorageError>>,
+    operation: &'static str,
+) -> Result<T, StorageError> {
+    await_runtime_resource_key_worker_with_deadline(
+        worker,
+        operation,
+        RUNTIME_RESOURCE_KEY_ADMIN_DEADLINE,
+    )
+    .await
+}
+
+async fn await_runtime_resource_key_worker_with_deadline<T>(
+    worker: tokio::task::JoinHandle<Result<T, StorageError>>,
+    operation: &'static str,
+    deadline: Duration,
+) -> Result<T, StorageError> {
+    tokio::time::timeout(deadline, worker)
+        .await
+        .map_err(|_| {
+            StorageError::service_error(format!(
+                "crypto resource-key {operation} worker exceeded {}s deadline",
+                deadline.as_secs()
+            ))
+        })?
+        .map_err(|err| {
+            StorageError::service_error(format!(
+                "crypto resource-key {operation} worker failed: {err}"
+            ))
+        })?
+}
+
 #[post("/crypto/resource-keys/generate")]
 async fn generate_runtime_resource_key(
     settings: web::Data<Settings>,
@@ -529,16 +563,10 @@ async fn generate_runtime_resource_key(
         }
 
         let settings = settings.get_ref().clone();
-        let result = tokio::task::spawn_blocking(move || {
+        let worker = tokio::task::spawn_blocking(move || {
             build_runtime_resource_key_generate_response(&settings, operation)
-        })
-        .await
-        .map_err(|err| {
-            StorageError::service_error(format!(
-                "crypto resource-key generation worker failed: {err}"
-            ))
-        })
-        .and_then(|result| result);
+        });
+        let result = await_runtime_resource_key_worker(worker, "generation").await;
         let audit_metadata = result
             .as_ref()
             .map(runtime_resource_key_generate_response_audit_metadata)
@@ -685,14 +713,10 @@ async fn rewrap_runtime_resource_keys(
         }
 
         let settings = settings.get_ref().clone();
-        let result = tokio::task::spawn_blocking(move || {
+        let worker = tokio::task::spawn_blocking(move || {
             build_runtime_resource_key_rewrap_response(&settings, operation)
-        })
-        .await
-        .map_err(|err| {
-            StorageError::service_error(format!("crypto resource-key rewrap worker failed: {err}"))
-        })
-        .and_then(|result| result);
+        });
+        let result = await_runtime_resource_key_worker(worker, "rewrap").await;
         let audit_metadata = result
             .as_ref()
             .map(runtime_resource_key_rewrap_response_audit_metadata)
@@ -1136,6 +1160,36 @@ mod tests {
             memory: None,
             hardware: None,
         }
+    }
+
+    #[tokio::test]
+    async fn runtime_resource_key_worker_deadline_returns_worker_result() {
+        let worker = tokio::task::spawn_blocking(|| Ok::<_, StorageError>(7usize));
+
+        let result =
+            await_runtime_resource_key_worker_with_deadline(worker, "test", Duration::from_secs(1))
+                .await
+                .unwrap();
+
+        assert_eq!(result, 7);
+    }
+
+    #[tokio::test]
+    async fn runtime_resource_key_worker_deadline_times_out() {
+        let worker = tokio::task::spawn_blocking(|| {
+            std::thread::sleep(Duration::from_millis(50));
+            Ok::<_, StorageError>(())
+        });
+
+        let err = await_runtime_resource_key_worker_with_deadline(
+            worker,
+            "test",
+            Duration::from_millis(1),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("exceeded"));
     }
 
     #[test]
