@@ -2913,50 +2913,9 @@ fn ckks_sidecar_hnsw_search_segment_snapshots(
             continue;
         }
         if snapshot.graph.is_optimizer_candidate_graph() {
-            let encrypted_items = snapshot
-                .records
-                .iter()
-                .map(|record| (record.point_id.clone(), record.encrypted.clone()))
-                .collect::<Vec<_>>();
-            let scores = ckks_sidecar_score_hnsw_query_batch(
-                collection_name,
-                vector_name,
-                plan,
-                query,
-                &encrypted_items,
-            )?;
-            if scores.len() != snapshot.records.len() {
-                return Err(StorageError::service_error(format!(
-                    "CKKS ciphertext candidate graph scorer returned {} score(s) for {} indexed record(s)",
-                    scores.len(),
-                    snapshot.records.len(),
-                )));
-            }
-            for (record, score) in snapshot.records.iter().zip(scores) {
-                if !ckks_score_passes_threshold(score_order, score, score_threshold) {
-                    continue;
-                }
-                let scored_point = ScoredPoint {
-                    id: record.id,
-                    version: 0,
-                    score,
-                    payload: None,
-                    vector: None,
-                    shard_key: record.shard_key.clone(),
-                    order_value: None,
-                };
-                match scored_by_id.entry(scored_point.id) {
-                    std::collections::hash_map::Entry::Occupied(mut entry) => {
-                        if ckks_scored_point_is_better(score_order, &scored_point, entry.get()) {
-                            entry.insert(scored_point);
-                        }
-                    }
-                    std::collections::hash_map::Entry::Vacant(entry) => {
-                        entry.insert(scored_point);
-                    }
-                }
-            }
-            continue;
+            return Err(StorageError::service_error(
+                "optimizer-candidate CKKS ciphertext graphs must be searched through the residual query-side HNSW path",
+            ));
         }
         let ef = hnsw_ef.max(top).max(1).min(snapshot.records.len());
         let indexed_records = snapshot
@@ -8042,7 +8001,10 @@ async fn ckks_vector_search_points_matrix(
 
 #[cfg(test)]
 mod tests {
-    use collection::collection::ckks_search::CkksCiphertextSegmentSearchRecord;
+    use collection::collection::ckks_search::{
+        CkksCiphertextSegmentIndexSnapshot, CkksCiphertextSegmentSearchRecord,
+    };
+    use common::types::PointOffsetType;
     use segment::types::Distance;
     use serde_json::json;
 
@@ -8254,6 +8216,52 @@ mod tests {
                 },
             },
         }
+    }
+
+    fn ckks_sidecar_test_segment_record(
+        point_id: u64,
+        ciphertext: &str,
+    ) -> CkksCiphertextSegmentSearchRecord {
+        let record = ckks_sidecar_test_record(point_id, ciphertext);
+        CkksCiphertextSegmentSearchRecord {
+            id: record.id,
+            shard_key: record.shard_key,
+            point_id: record.point_id,
+            indexed_record: CkksCiphertextIndexedRecord {
+                point_offset: point_id as PointOffsetType,
+                ciphertext: ciphertext.as_bytes().to_vec(),
+                sidecar_identity: format!("sidecar-{point_id}").into_bytes(),
+            },
+            encrypted: record.encrypted,
+        }
+    }
+
+    #[test]
+    fn ckks_sidecar_segment_search_rejects_optimizer_candidate_graph_snapshots() {
+        let err = ckks_sidecar_hnsw_search_segment_snapshots(
+            "test",
+            "embedding",
+            &crate::common::crypto::VectorWritePlan::empty_for_test(),
+            &[CkksCiphertextSegmentIndexSnapshot {
+                records: vec![
+                    ckks_sidecar_test_segment_record(0, "ciphertext-a"),
+                    ckks_sidecar_test_segment_record(1, "ciphertext-b"),
+                ],
+                graph: CkksCiphertextHnswGraph::build_optimizer_candidate_graph(2, 16),
+            }],
+            CkksSidecarHnswQuery::Dense(&[1.0, 0.0]),
+            Distance::Dot.distance_order(),
+            None,
+            1,
+            1,
+        )
+        .expect_err("optimizer-candidate segment graphs must not be searched as indexed HNSW");
+
+        assert!(
+            err.to_string()
+                .contains("optimizer-candidate CKKS ciphertext graphs"),
+            "unexpected error: {err}",
+        );
     }
 
     #[test]

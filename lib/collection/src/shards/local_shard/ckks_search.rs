@@ -98,6 +98,13 @@ impl LocalShard {
                 continue;
             };
 
+            if index.graph().is_optimizer_candidate_graph() {
+                snapshot
+                    .residual_records
+                    .extend(sidecar_by_offset.into_values());
+                continue;
+            }
+
             let mut records = Vec::new();
             let mut indexed_offsets = HashSet::<PointOffsetType>::new();
             let mut stale_artifact = false;

@@ -7625,6 +7625,155 @@ async fn encrypted_vector_segment_snapshot_recovers_unindexed_sidecars_after_rel
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn encrypted_vector_segment_snapshot_treats_optimizer_candidate_graph_as_residual() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection_path = collection_dir.path().to_path_buf();
+    let snapshot_path = collection_path.join("snapshots");
+    let mut optimizer_config = TEST_OPTIMIZERS_CONFIG.clone();
+    optimizer_config.default_segment_number = 1;
+    optimizer_config.indexing_threshold = Some(1);
+    optimizer_config.flush_interval_sec = 0;
+    optimizer_config.max_optimization_threads = Some(1);
+    let collection_config = CollectionConfigInternal {
+        params: CollectionParams {
+            vectors: VectorParamsBuilder::new(4, Distance::Dot).build().into(),
+            shard_number: NonZeroU32::new(1).unwrap(),
+            encryption: Some(vector_encryption_config()),
+            ..CollectionParams::empty()
+        },
+        optimizer_config,
+        wal_config: WalConfig {
+            wal_capacity_mb: 1,
+            wal_segments_ahead: 0,
+            wal_retain_closed: 1,
+        },
+        hnsw_config: Default::default(),
+        quantization_config: Default::default(),
+        strict_mode_config: Default::default(),
+        uuid: Some(uuid::Uuid::from_u128(0x22222222222222222222222222222222)),
+        metadata: None,
+    };
+    let collection = new_local_collection(
+        "test".to_string(),
+        &collection_path,
+        &snapshot_path,
+        &collection_config,
+    )
+    .await
+    .unwrap();
+    let collection_crypto_id = collection.config_snapshot().await.uuid.unwrap().to_string();
+    let encryptor = CkksVectorEncryptor::new_from_resource_key_with_metadata(
+        "tenant-a:docs",
+        DEFAULT_VECTOR_NAME,
+        CkksParameters::default(),
+        &SecretKey::from_bytes([31u8; 32]),
+        "tenant-a/vector@v1",
+        "tenant-a/vector-rk@v1",
+        1,
+        CollectionTestCkksBackend,
+    )
+    .unwrap()
+    .with_collection_identity(collection_crypto_id)
+    .unwrap();
+    let public_material =
+        CkksPublicMaterial::new(b"openfhe context".to_vec(), b"openfhe public key".to_vec())
+            .unwrap();
+    let mut verified_sidecar_keys = Vec::new();
+    let points = (0..64_u64)
+        .map(|point_id| {
+            let (envelope, verified_sidecar_key) = encryptor
+                .encrypt_sidecar_payload_value(
+                    "docs",
+                    &point_id.to_string(),
+                    &public_material,
+                    &[point_id as f64, 1.0],
+                )
+                .unwrap();
+            verified_sidecar_keys.push(verified_sidecar_key);
+            let mut sidecar = Map::new();
+            sidecar.insert(DEFAULT_VECTOR_NAME.to_string(), envelope);
+            let mut payload = Map::new();
+            payload.insert(
+                ENCRYPTED_VECTOR_SIDECAR_FIELD.to_string(),
+                serde_json::Value::Object(sidecar),
+            );
+            PointStructPersisted {
+                id: point_id.into(),
+                vector: VectorStructPersisted::Named(HashMap::new()),
+                payload: Some(Payload(payload)),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    collection
+        .update_from_client(
+            CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+                PointInsertOperationsInternal::from(points),
+            )),
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            None,
+            HwMeasurementAcc::new(),
+            CollectionUpdateProvenance::runtime_encrypted_vectors(verified_sidecar_keys),
+        )
+        .await
+        .unwrap();
+
+    let mut complete_snapshot = None;
+    for _ in 0..100 {
+        collection.trigger_optimizers().await;
+        let mut graph_artifact_exists = false;
+        let mut pending = vec![collection_path.clone()];
+        while let Some(path) = pending.pop() {
+            let Ok(metadata) = fs::metadata(&path) else {
+                continue;
+            };
+            if metadata.is_dir() {
+                for entry in fs::read_dir(&path).unwrap() {
+                    pending.push(entry.unwrap().path());
+                }
+                continue;
+            }
+            if path
+                .file_name()
+                .is_some_and(|name| name == std::ffi::OsStr::new("ckks_ciphertext_hnsw_graph.json"))
+            {
+                graph_artifact_exists = true;
+                break;
+            }
+        }
+        if graph_artifact_exists {
+            let snapshot = collection
+                .ckks_ciphertext_segment_search_snapshot(
+                    DEFAULT_VECTOR_NAME,
+                    &ShardSelectorInternal::All,
+                )
+                .await
+                .unwrap();
+            if snapshot.complete {
+                complete_snapshot = Some(snapshot);
+                break;
+            }
+        }
+        if complete_snapshot.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let snapshot = complete_snapshot.expect(
+        "optimizer must produce a CKKS ciphertext candidate graph artifact and complete snapshot",
+    );
+
+    assert!(snapshot.complete);
+    assert!(
+        snapshot.indexed_segments.is_empty(),
+        "optimizer-candidate graph artifacts must not be exposed as similarity HNSW indexes",
+    );
+    assert_eq!(snapshot.residual_records.len(), 64);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn encrypted_vector_rejects_plaintext_vector_reads() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection =

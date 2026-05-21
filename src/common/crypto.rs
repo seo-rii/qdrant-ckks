@@ -800,6 +800,11 @@ pub(crate) struct VectorWritePlan {
 }
 
 impl VectorWritePlan {
+    #[cfg(test)]
+    pub(crate) fn empty_for_test() -> Self {
+        Self { rules: Vec::new() }
+    }
+
     pub(crate) fn contains_vector_name(&self, vector_name: &str) -> bool {
         self.rules
             .iter()
