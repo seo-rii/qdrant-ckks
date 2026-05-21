@@ -1028,6 +1028,28 @@ async fn ckks_vector_search_points_with_scoring(
             "encrypted vector '{vector_name}' CKKS query uses {source_batches} scoring source batches; maximum is {CKKS_SCORING_SOURCE_BATCH_MAX}",
         )));
     }
+    if let CkksSidecarScoring::NearestResolved {
+        query:
+            CkksSidecarQuerySource::ClientEncrypted {
+                context_digest,
+                slots,
+                ciphertext,
+            },
+    } = &scoring
+    {
+        plan.validate_client_encrypted_query(
+            collection_name,
+            vector_name,
+            context_digest,
+            *slots,
+            ciphertext,
+        )?
+        .ok_or_else(|| {
+            StorageError::service_error(format!(
+                "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
+            ))
+        })?;
+    }
     let with_vector = with_vector.unwrap_or_default();
     if with_vector.is_enabled() {
         return Err(StorageError::bad_input(format!(

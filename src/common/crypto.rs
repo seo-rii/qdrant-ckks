@@ -910,6 +910,13 @@ impl VectorWritePlan {
         slots: usize,
         encrypted_query: &[u8],
     ) -> Result<Option<Vec<f32>>, StorageError> {
+        self.validate_client_encrypted_query(
+            collection_name,
+            vector_name,
+            context_digest,
+            slots,
+            encrypted_query,
+        )?;
         let Some(rule) = self
             .rules
             .iter()
@@ -917,12 +924,6 @@ impl VectorWritePlan {
         else {
             return Ok(None);
         };
-        let expected_digest = rule.encryptor.context_digest_for(&rule.public_material);
-        if context_digest != expected_digest {
-            return Err(StorageError::bad_input(format!(
-                "encrypted query context digest does not match active CKKS public material for vector '{vector_name}' in collection {collection_name}",
-            )));
-        }
         let encrypted_items = encrypted_items
             .iter()
             .map(|(point_id, encrypted)| (point_id.as_str(), encrypted))
@@ -956,6 +957,38 @@ impl VectorWritePlan {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Some(scores))
+    }
+
+    pub(crate) fn validate_client_encrypted_query(
+        &self,
+        collection_name: &str,
+        vector_name: &str,
+        context_digest: &str,
+        slots: usize,
+        encrypted_query: &[u8],
+    ) -> Result<Option<()>, StorageError> {
+        let Some(rule) = self
+            .rules
+            .iter()
+            .find(|rule| rule.vector_name == vector_name)
+        else {
+            return Ok(None);
+        };
+        let expected_digest = rule.encryptor.context_digest_for(&rule.public_material);
+        if context_digest != expected_digest {
+            return Err(StorageError::bad_input(format!(
+                "encrypted query context digest does not match active CKKS public material for vector '{vector_name}' in collection {collection_name}",
+            )));
+        }
+        rule.encryptor
+            .validate_pre_encrypted_query_input(encrypted_query, slots)
+            .map_err(|err| {
+                StorageError::bad_input(format!(
+                    "encrypted vector '{vector_name}' client CKKS query is incompatible with active CKKS parameters in collection {collection_name}: {err}",
+                ))
+            })?;
+
+        Ok(Some(()))
     }
 
     pub(crate) fn score_stored_query_batch(

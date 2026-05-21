@@ -3215,6 +3215,66 @@ esac
 
     #[cfg(unix)]
     #[test]
+    fn vector_write_plan_preflights_client_encrypted_query_metadata() {
+        let bridge = fake_openfhe_bridge();
+        let settings = vector_runtime_settings(&bridge.path().join("openfhe-bridge"));
+        let params = encrypted_vector_params();
+        let plan = vector_write_plan_for_collection_with_crypto_id(
+            &settings,
+            "docs",
+            "docs-crypto-id",
+            &params,
+        )
+        .unwrap()
+        .unwrap();
+        let query = fake_ckks_client_query(b"fake-ckks-query:2", 2);
+
+        plan.validate_client_encrypted_query(
+            "docs",
+            "embedding",
+            &query.context_digest,
+            query.slots,
+            b"fake-ckks-query:2",
+        )
+        .unwrap()
+        .unwrap();
+
+        let err = plan
+            .validate_client_encrypted_query(
+                "docs",
+                "embedding",
+                &BASE64URL_NOPAD.encode(&[9u8; 32]),
+                query.slots,
+                b"fake-ckks-query:2",
+            )
+            .expect_err("wrong client encrypted query context must fail before scoring");
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("context digest does not match")
+        ));
+
+        let too_many_slots =
+            qdrant_sec::CkksParameters::openfhe_default_128_bit().batch_size as usize + 1;
+        let err = plan
+            .validate_client_encrypted_query(
+                "docs",
+                "embedding",
+                &query.context_digest,
+                too_many_slots,
+                b"fake-ckks-query:2",
+            )
+            .expect_err("oversized client encrypted query slot count must fail before scoring");
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("incompatible with active CKKS parameters")
+                    && description.contains("batch size")
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn vector_write_plan_rejects_sparse_encrypted_vector() {
         let bridge = fake_openfhe_bridge();
         let settings = vector_runtime_settings(&bridge.path().join("openfhe-bridge"));

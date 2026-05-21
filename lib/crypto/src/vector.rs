@@ -1109,6 +1109,27 @@ where
         public_material.digest_for(&self.parameters)
     }
 
+    pub fn validate_pre_encrypted_query_input(
+        &self,
+        encrypted_query: &[u8],
+        slots: usize,
+    ) -> Result<(), CkksError> {
+        if encrypted_query.is_empty() {
+            return Err(CkksError::EmptyCiphertext);
+        }
+        if slots == 0 {
+            return Err(CkksError::EmptyVector);
+        }
+        if slots > self.parameters.batch_size as usize {
+            return Err(CkksError::VectorTooWide {
+                len: slots,
+                batch_size: self.parameters.batch_size as usize,
+            });
+        }
+
+        Ok(())
+    }
+
     pub fn score_encrypted_query_batch(
         &self,
         collection: &str,
@@ -1180,18 +1201,7 @@ where
         encrypted_items: &[(&str, &EncryptedCkksVector)],
         distance: &str,
     ) -> Result<Vec<f64>, CkksError> {
-        if encrypted_query.is_empty() {
-            return Err(CkksError::EmptyCiphertext);
-        }
-        if slots == 0 {
-            return Err(CkksError::EmptyVector);
-        }
-        if slots > self.parameters.batch_size as usize {
-            return Err(CkksError::VectorTooWide {
-                len: slots,
-                batch_size: self.parameters.batch_size as usize,
-            });
-        }
+        self.validate_pre_encrypted_query_input(encrypted_query, slots)?;
         if encrypted_items.is_empty() {
             return Ok(Vec::new());
         }
