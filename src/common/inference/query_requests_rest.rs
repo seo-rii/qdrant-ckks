@@ -171,7 +171,7 @@ fn convert_vector_input_with_inferred(
             let vector = inferred.get_vector(&data).ok_or_else(|| {
                 StorageError::inference_error("Missing inferred vector for document")
             })?;
-            Ok(VectorInputInternal::Vector(VectorInternal::from(
+            Ok(VectorInputInternal::InferredVector(VectorInternal::from(
                 vector.clone(),
             )))
         }
@@ -180,7 +180,7 @@ fn convert_vector_input_with_inferred(
             let vector = inferred.get_vector(&data).ok_or_else(|| {
                 StorageError::inference_error("Missing inferred vector for image")
             })?;
-            Ok(VectorInputInternal::Vector(VectorInternal::from(
+            Ok(VectorInputInternal::InferredVector(VectorInternal::from(
                 vector.clone(),
             )))
         }
@@ -205,7 +205,7 @@ fn convert_vector_input_with_inferred(
             let vector = inferred.get_vector(&data).ok_or_else(|| {
                 StorageError::inference_error("Missing inferred vector for object")
             })?;
-            Ok(VectorInputInternal::Vector(VectorInternal::from(
+            Ok(VectorInputInternal::InferredVector(VectorInternal::from(
                 vector.clone(),
             )))
         }
@@ -494,10 +494,10 @@ mod tests {
 
         let result = convert_vector_input_with_inferred(vector, &inferred).unwrap();
         match result {
-            VectorInputInternal::Vector(VectorInternal::Dense(values)) => {
+            VectorInputInternal::InferredVector(VectorInternal::Dense(values)) => {
                 assert_eq!(values, vec![1.0, 2.0, 3.0]);
             }
-            _ => panic!("Expected dense vector from inference"),
+            _ => panic!("Expected inference-derived dense vector"),
         }
     }
 
@@ -529,7 +529,7 @@ mod tests {
         match (result.positive, result.negative) {
             (
                 VectorInputInternal::Vector(VectorInternal::Dense(pos)),
-                VectorInputInternal::Vector(VectorInternal::Dense(neg)),
+                VectorInputInternal::InferredVector(VectorInternal::Dense(neg)),
             ) => {
                 assert_eq!(pos, vec![1.0, 2.0, 3.0]);
                 assert_eq!(neg, vec![1.0, 2.0, 3.0]);
@@ -550,10 +550,10 @@ mod tests {
         let result = convert_query_with_inferred(query, &inferred).unwrap();
         match result {
             Query::Vector(VectorQuery::Nearest(vector)) => match vector {
-                VectorInputInternal::Vector(VectorInternal::Dense(values)) => {
+                VectorInputInternal::InferredVector(VectorInternal::Dense(values)) => {
                     assert_eq!(values, vec![1.0, 2.0, 3.0]);
                 }
-                _ => panic!("Expected dense vector"),
+                _ => panic!("Expected inference-derived dense vector"),
             },
             _ => panic!("Expected nearest query"),
         }

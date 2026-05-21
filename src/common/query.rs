@@ -5899,6 +5899,9 @@ async fn ckks_vector_input_as_query_source<'a>(
         VectorInputInternal::Vector(_) => Err(StorageError::bad_input(format!(
             "encrypted vector '{vector_name}' context query only supports raw dense or point-id {role} examples",
         ))),
+        VectorInputInternal::InferredVector(_) => Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' does not allow inference-derived {role} query vectors; use a client-encrypted CKKS query envelope or stored point-id query",
+        ))),
         VectorInputInternal::CkksEncryptedQuery(input) => {
             ckks_client_encrypted_query_source(vector_name, input)
         }
@@ -7658,6 +7661,11 @@ fn ckks_query_as_core_query(
                 "encrypted vector '{vector_name}' only supports dense query vectors",
             )))
         }
+        Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::InferredVector(_)))) => {
+            Err(StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' does not allow inference-derived query vectors; use a client-encrypted CKKS query envelope or stored point-id query",
+            )))
+        }
         _ => Err(StorageError::bad_input(format!(
             "encrypted vector '{vector_name}' only supports nearest-neighbor dense query, raw-dense recommend, raw-dense discover, or raw-dense context",
         ))),
@@ -7696,6 +7704,9 @@ fn vector_inputs_as_dense_vectors(
             }
             VectorInputInternal::Vector(_) => Err(StorageError::bad_input(format!(
                 "encrypted vector '{vector_name}' query only supports raw dense {role} examples",
+            ))),
+            VectorInputInternal::InferredVector(_) => Err(StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' query does not allow inference-derived {role} examples",
             ))),
             VectorInputInternal::Id(_) => Err(StorageError::bad_input(format!(
                 "encrypted vector '{vector_name}' query cannot resolve point-id {role} examples because plaintext vectors are not stored",
@@ -8136,6 +8147,40 @@ mod tests {
         };
 
         assert!(err.to_string().contains("ciphertext_sha256"));
+    }
+
+    #[test]
+    fn ckks_query_rejects_inference_derived_vector_inputs() {
+        let err = ckks_query_as_core_query(
+            &Some(Query::Vector(VectorQuery::Nearest(
+                VectorInputInternal::InferredVector(VectorInternal::Dense(vec![0.1, 0.2])),
+            ))),
+            "embedding",
+        )
+        .expect_err("CKKS encrypted vector queries must reject inference-derived plaintext");
+
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("inference-derived query vectors")
+        ));
+
+        let err = ckks_recommend_query_as_core_recommend(
+            &segment::vector_storage::query::RecoQuery::new(
+                vec![VectorInputInternal::InferredVector(VectorInternal::Dense(
+                    vec![0.1, 0.2],
+                ))],
+                Vec::new(),
+            ),
+            "embedding",
+        )
+        .expect_err("CKKS recommend must reject inference-derived plaintext");
+
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("inference-derived positive examples")
+        ));
     }
 
     #[test]

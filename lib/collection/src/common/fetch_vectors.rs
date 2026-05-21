@@ -167,6 +167,7 @@ impl ReferencedVectors {
     ) -> Option<VectorInternal> {
         match vector_input {
             VectorInputInternal::Vector(vector) => Some(vector),
+            VectorInputInternal::InferredVector(vector) => Some(vector),
             VectorInputInternal::CkksEncryptedQuery(_) => None,
             VectorInputInternal::Id(vid) => {
                 let rec = self.get(collection_name, vid)?;

@@ -147,6 +147,7 @@ impl Query {
 pub enum VectorInputInternal {
     Id(PointIdType),
     Vector(VectorInternal),
+    InferredVector(VectorInternal),
     CkksEncryptedQuery(CkksEncryptedQueryInput),
 }
 
@@ -165,7 +166,9 @@ impl VectorInputInternal {
     pub fn as_id(&self) -> Option<&PointIdType> {
         match self {
             VectorInputInternal::Id(id) => Some(id),
-            VectorInputInternal::Vector(_) | VectorInputInternal::CkksEncryptedQuery(_) => None,
+            VectorInputInternal::Vector(_)
+            | VectorInputInternal::InferredVector(_)
+            | VectorInputInternal::CkksEncryptedQuery(_) => None,
         }
     }
 }
