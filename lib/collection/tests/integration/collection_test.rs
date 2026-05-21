@@ -4395,6 +4395,79 @@ async fn peer_update_rechecks_encrypted_payload_invariants() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn peer_update_rejects_client_envelope_replay_without_verifier_manifest() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection =
+        encrypted_collection_fixture(collection_dir.path(), 1, client_payload_encryption_config())
+            .await;
+    let collection_crypto_id = collection.config_snapshot().await.uuid.unwrap().to_string();
+    let rng = SystemRandom::new();
+    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+    let mut payload = Payload(
+        serde_json::json!({
+            "document": {
+                "body": {
+                    CLIENT_ENCRYPTED_PAYLOAD_MARKER: {
+                        "version": 1,
+                        "kind": "payload_text",
+                        "algorithm": "AES-256-GCM",
+                        "key_id": "tenant-a/client-rk-2026-04",
+                        "rk_id": "tenant-a/client-rk-2026-04",
+                        "rk_epoch": 3,
+                        "kdf_domain": "qdrant-sec/client-payload-text/v1",
+                        "aad": {
+                            "collection_id": collection_crypto_id,
+                            "point_id": "21",
+                            "field_path": "document.body",
+                            "schema_version": 1
+                        },
+                        "nonce": "AAAAAAAAAAAAAAAA",
+                        "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA",
+                        "signature": {
+                            "alg": "ed25519",
+                            "key_id": "tenant-a/client-signing-v1",
+                            "sig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                        }
+                    }
+                }
+            }
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
+    sign_client_payload(&mut payload, &key_pair);
+    let peer_upsert = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+        PointInsertOperationsInternal::from(vec![PointStructPersisted {
+            id: 21.into(),
+            vector: VectorStructPersisted::from(vec![0.0, 0.0, 1.0, 0.0]),
+            payload: Some(payload),
+        }]),
+    ));
+
+    let err = collection
+        .update_from_peer(
+            OperationWithClockTag::from(peer_upsert),
+            0,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("peer client encrypted payload marker")
+                && description.contains("runtime verifier manifest")
+                && description.contains("cluster-wide nonce ledger")
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn client_encrypted_payload_marker_must_match_collection_guard() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection =

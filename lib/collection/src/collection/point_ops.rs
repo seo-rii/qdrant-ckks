@@ -17,7 +17,6 @@ use qdrant_sec::{
     ckks_vector_sidecar_envelope_key, client_payload_envelope_key, client_payload_nonce_replay_key,
     is_client_encrypted_payload_value, is_encrypted_payload_value, server_payload_envelope_key,
     validate_client_payload_value_after_runtime_verification,
-    validate_client_payload_value_for_peer_replay,
     validate_server_payload_value_after_runtime_encryption,
     validate_server_payload_value_for_peer_replay,
 };
@@ -738,7 +737,6 @@ impl Collection {
             })
             .collect::<HashSet<_>>();
         let encrypted_vector_key_id = encryption.key_id.as_deref();
-        let mut seen_client_nonces = HashSet::new();
 
         let validate_vector_sidecar_payload = |payload: &Payload,
                                                point_id: Option<&str>|
@@ -810,13 +808,13 @@ impl Collection {
             Ok(true)
         };
 
-        let mut validate_payload_path = |payload: &Payload,
-                                         key: Option<&JsonPath>,
-                                         point_id: Option<&str>,
-                                         encrypted_path: &JsonPath,
-                                         encrypted_path_str: &str,
-                                         expected_envelope_kind: &str,
-                                         allow_client_envelope: bool|
+        let validate_payload_path = |payload: &Payload,
+                                     key: Option<&JsonPath>,
+                                     point_id: Option<&str>,
+                                     encrypted_path: &JsonPath,
+                                     encrypted_path_str: &str,
+                                     expected_envelope_kind: &str,
+                                     allow_client_envelope: bool|
          -> CollectionResult<bool> {
             if let Some(key) = key {
                 return Ok(key.compatible(encrypted_path));
@@ -849,45 +847,9 @@ impl Collection {
                     continue;
                 }
                 if allow_client_envelope && is_client_encrypted_payload_value(value) {
-                    validate_client_payload_value_for_peer_replay(
-                            value,
-                            ClientPayloadValidationContext {
-                                collection_id: &collection_crypto_id,
-                                point_id,
-                                field_path: encrypted_path_str,
-                                expected_key_id: encryption.key_id.as_deref(),
-                                expected_rk_id: encryption.key_id.as_deref(),
-                                min_rk_epoch: Some(encryption.encryption_epoch),
-                                max_rk_epoch: Some(encryption.encryption_epoch),
-                                key_id_required: true,
-                                signature_required: true,
-                                signature_verification: None,
-                            },
-                        )
-                        .map_err(|err| {
-                            CollectionError::bad_input(format!(
-                                "peer client encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: {err}",
-                            ))
-                        })?;
-                    let Some(nonce_replay_key) =
-                            client_payload_nonce_replay_key(value, encrypted_path_str).map_err(
-                                |err| {
-                                    CollectionError::bad_input(format!(
-                                        "peer client encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: {err}",
-                                    ))
-                                },
-                            )?
-                        else {
-                            return Err(CollectionError::bad_input(format!(
-                                "peer client encrypted payload marker for field '{encrypted_path_str}' is missing nonce replay metadata",
-                            )));
-                        };
-                    if !seen_client_nonces.insert(nonce_replay_key) {
-                        return Err(CollectionError::bad_input(format!(
-                            "peer client encrypted payload marker for field '{encrypted_path_str}' reuses a nonce in this operation",
-                        )));
-                    }
-                    continue;
+                    return Err(CollectionError::bad_input(format!(
+                        "peer client encrypted payload marker for field '{encrypted_path_str}' requires a runtime verifier manifest and cluster-wide nonce ledger before peer replay is supported",
+                    )));
                 }
                 return Ok(true);
             }
@@ -1274,15 +1236,6 @@ impl Collection {
                     }
                 }
             }
-        }
-
-        if !seen_client_nonces.is_empty() {
-            self.record_client_payload_nonce_replay_keys(
-                seen_client_nonces
-                    .iter()
-                    .map(|key| client_nonce_replay_cache_key(&collection_crypto_id, key)),
-            )
-            .await?;
         }
 
         Ok(())
