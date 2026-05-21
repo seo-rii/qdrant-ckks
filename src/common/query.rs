@@ -12,7 +12,8 @@ use collection::collection::ckks_search::{
 use collection::collection::distance_matrix::*;
 use collection::common::batching::batch_requests;
 use collection::config::{
-    EncryptedVectorReturnRequest, EncryptionSelector, encrypted_vector_return_request,
+    CollectionEncryptionConfig, EncryptedVectorReturnRequest, EncryptionSelector,
+    encrypted_vector_return_request,
 };
 use collection::grouping::group_by::GroupRequest;
 use collection::lookup::lookup_ids;
@@ -3416,7 +3417,10 @@ async fn try_ckks_vector_search_groups(
             "cannot return encrypted vector '{vector_name}'; CKKS vector ciphertext read path returns payload sidecar only",
         )));
     }
-    ensure_group_path_does_not_touch_encrypted_vector_sidecar(&request.group_request.group_by)?;
+    ensure_group_path_does_not_touch_encrypted_crypto_selectors(
+        config.params.encryption.as_ref(),
+        &request.group_request.group_by,
+    )?;
 
     let group_by = request.group_request.group_by.clone();
     if let api::rest::NamedVectorStruct::CkksEncryptedQuery(query) = &request.vector {
@@ -3503,7 +3507,8 @@ async fn try_ckks_vector_search_groups(
     .map(Some)
 }
 
-fn ensure_group_path_does_not_touch_encrypted_vector_sidecar(
+fn ensure_group_path_does_not_touch_encrypted_crypto_selectors(
+    encryption: Option<&CollectionEncryptionConfig>,
     group_by: &JsonPath,
 ) -> Result<(), StorageError> {
     let sidecar_path = JsonPath {
@@ -3514,6 +3519,45 @@ fn ensure_group_path_does_not_touch_encrypted_vector_sidecar(
         return Err(StorageError::bad_input(format!(
             "cannot group by encrypted vector sidecar field '{group_by}'; use a plaintext group field",
         )));
+    }
+
+    let Some(encryption) = encryption else {
+        return Ok(());
+    };
+
+    for rule in &encryption.rules {
+        match &rule.selector {
+            EncryptionSelector::PayloadPaths { paths } => {
+                for encrypted_path in paths {
+                    let encrypted_json_path =
+                        encrypted_path
+                            .parse::<JsonPath>()
+                            .map_err(|err| StorageError::bad_input(format!(
+                                "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                            )))?;
+                    if group_by.compatible(&encrypted_json_path) {
+                        return Err(StorageError::bad_input(format!(
+                            "cannot group by encrypted payload field '{group_by}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                        )));
+                    }
+                }
+            }
+            EncryptionSelector::MetadataKeys { keys } => {
+                for metadata_key in keys {
+                    let metadata_path = metadata_key.parse::<JsonPath>().map_err(|err| {
+                        StorageError::bad_input(format!(
+                            "encrypted metadata field path '{metadata_key}' is invalid: {err:?}",
+                        ))
+                    })?;
+                    if group_by.compatible(&metadata_path) {
+                        return Err(StorageError::bad_input(format!(
+                            "cannot group by encrypted metadata field '{group_by}' because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
+                        )));
+                    }
+                }
+            }
+            EncryptionSelector::VectorNames { .. } => {}
+        }
     }
 
     Ok(())
@@ -4587,7 +4631,10 @@ async fn try_ckks_vector_recommend_groups(
             "cannot return encrypted vector '{vector_name}'; CKKS vector ciphertext read path returns payload sidecar only",
         )));
     }
-    ensure_group_path_does_not_touch_encrypted_vector_sidecar(&request.group_request.group_by)?;
+    ensure_group_path_does_not_touch_encrypted_crypto_selectors(
+        config.params.encryption.as_ref(),
+        &request.group_request.group_by,
+    )?;
 
     if let Some(point_id) = recommend_request_single_positive_point_id(&recommend_request) {
         let query_encrypted = ckks_vector_sidecar_for_point_id(
@@ -6938,7 +6985,10 @@ async fn try_ckks_vector_query_groups(
                     "cannot return encrypted vectors from CKKS prefetch fusion groups; CKKS vector ciphertext read path returns payload sidecar only",
                 ));
             }
-            ensure_group_path_does_not_touch_encrypted_vector_sidecar(&request.group_by)?;
+            ensure_group_path_does_not_touch_encrypted_crypto_selectors(
+                config.params.encryption.as_ref(),
+                &request.group_by,
+            )?;
 
             let intermediates = ckks_resolve_query_prefetches(
                 toc,
@@ -7046,7 +7096,10 @@ async fn try_ckks_vector_query_groups(
                 limit: request.limit,
                 with_lookup: request.with_lookup.clone(),
             };
-            ensure_group_path_does_not_touch_encrypted_vector_sidecar(&request.group_by)?;
+            ensure_group_path_does_not_touch_encrypted_crypto_selectors(
+                config.params.encryption.as_ref(),
+                &request.group_by,
+            )?;
             return toc
                 .group(
                     collection_name,
@@ -7068,7 +7121,10 @@ async fn try_ckks_vector_query_groups(
             request.using,
         )));
     }
-    ensure_group_path_does_not_touch_encrypted_vector_sidecar(&request.group_by)?;
+    ensure_group_path_does_not_touch_encrypted_crypto_selectors(
+        config.params.encryption.as_ref(),
+        &request.group_by,
+    )?;
 
     if let Some(Query::Vector(VectorQuery::RecommendAverageVector(recommend))) = &request.query
         && let Some(point_id) = reco_query_single_positive_point_id(recommend)
@@ -7997,6 +8053,7 @@ mod tests {
     use collection::collection::ckks_search::{
         CkksCiphertextSegmentIndexSnapshot, CkksCiphertextSegmentSearchRecord,
     };
+    use collection::config::{CryptoMigrationState, EncryptionRuleRef};
     use common::types::PointOffsetType;
     use segment::types::Distance;
     use serde_json::json;
@@ -9440,7 +9497,7 @@ mod tests {
     #[test]
     fn ckks_sidecar_grouping_allows_plain_group_path() {
         let group_by = "group".parse::<JsonPath>().unwrap();
-        ensure_group_path_does_not_touch_encrypted_vector_sidecar(&group_by).unwrap();
+        ensure_group_path_does_not_touch_encrypted_crypto_selectors(None, &group_by).unwrap();
     }
 
     #[test]
@@ -9450,12 +9507,62 @@ mod tests {
             "\"$qdrant_sec_vectors\".embedding",
         ] {
             let group_by = group_by.parse::<JsonPath>().unwrap();
-            let err = ensure_group_path_does_not_touch_encrypted_vector_sidecar(&group_by)
+            let err = ensure_group_path_does_not_touch_encrypted_crypto_selectors(None, &group_by)
                 .expect_err("grouping by encrypted vector sidecar path must fail");
 
             assert!(
                 format!("{err}").contains("cannot group by encrypted vector sidecar field"),
                 "unexpected error: {err}",
+            );
+        }
+    }
+
+    #[test]
+    fn ckks_sidecar_grouping_rejects_encrypted_payload_and_metadata_paths() {
+        let encryption = CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a:docs".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 3,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![
+                EncryptionRuleRef {
+                    id: "body".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["document.body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: None,
+                },
+                EncryptionRuleRef {
+                    id: "metadata".to_string(),
+                    selector: EncryptionSelector::MetadataKeys {
+                        keys: vec!["meta.owner".to_string()],
+                    },
+                    instance: "docs_metadata_v1".to_string(),
+                    binding: Some("metadata-value/v1".to_string()),
+                },
+            ],
+        };
+
+        for (group_by, expected) in [
+            ("document", "cannot group by encrypted payload field"),
+            (
+                "document.body.keyword",
+                "cannot group by encrypted payload field",
+            ),
+            ("meta.owner", "cannot group by encrypted metadata field"),
+            ("meta.owner.raw", "cannot group by encrypted metadata field"),
+        ] {
+            let group_by = group_by.parse::<JsonPath>().unwrap();
+            let err = ensure_group_path_does_not_touch_encrypted_crypto_selectors(
+                Some(&encryption),
+                &group_by,
+            )
+            .expect_err("CKKS grouping by encrypted payload or metadata paths must fail");
+            assert!(
+                format!("{err}").contains(expected),
+                "unexpected error for {group_by}: {err}",
             );
         }
     }
