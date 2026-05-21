@@ -1030,8 +1030,11 @@ client-encrypted CKKS query envelopes and root direct point-id nearest `query`
 or `query/groups` requests when runtime `crypto` settings are available on the
 serving node. Raw dense REST/gRPC query vectors are rejected by default for
 `vector/openfhe-ckks@v1`; setting `allow_plaintext_queries: true` explicitly
-opts into a server-side query plaintext TCB. In that opt-in mode, Qdrant scrolls
-the encrypted sidecar payloads,
+opts into a server-side query plaintext TCB for client-supplied numeric dense
+vectors. Query vectors produced by Qdrant inference (`document`, `image`, or
+`object` inputs) remain rejected for encrypted vector names because they would
+send client plaintext to the inference service before CKKS scoring. In the raw
+dense opt-in mode, Qdrant scrolls the encrypted sidecar payloads,
 validates each CKKS envelope against the active OpenFHE public material/context
 digest, sends `encrypt_query` to the bridge, and then sends
 `score_encrypted_query_batch` requests over the encrypted query ciphertext plus
