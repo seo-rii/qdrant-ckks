@@ -18,3 +18,7 @@ pub(crate) use batch_processing::{
     reject_group_inference_inputs_for_encrypted_vectors,
     reject_inference_inputs_for_encrypted_vectors,
 };
+pub(crate) use batch_processing_grpc::{
+    reject_query_point_groups_inference_for_encrypted_vectors,
+    reject_query_points_inference_for_encrypted_vectors,
+};

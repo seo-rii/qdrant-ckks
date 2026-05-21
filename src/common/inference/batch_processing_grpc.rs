@@ -3,10 +3,11 @@ use std::collections::HashSet;
 use api::grpc::RelevanceFeedbackInput;
 use api::grpc::qdrant::vector_input::Variant;
 use api::grpc::qdrant::{
-    ContextInput, ContextInputPair, DiscoverInput, PrefetchQuery, Query, RecommendInput,
-    VectorInput, query,
+    ContextInput, ContextInputPair, DiscoverInput, PrefetchQuery, Query, QueryPointGroups,
+    QueryPoints, RecommendInput, VectorInput, query,
 };
 use api::rest::schema as rest;
+use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
 use tonic::Status;
 
 use super::service::{InferenceData, InferenceInput, InferenceRequest};
@@ -227,6 +228,163 @@ pub(crate) fn collect_prefetch(
     Ok(())
 }
 
+pub(crate) fn reject_query_points_inference_for_encrypted_vectors(
+    query_points: &QueryPoints,
+    encrypted_vector_names: &HashSet<String>,
+) -> Result<(), Status> {
+    if encrypted_vector_names.is_empty() {
+        return Ok(());
+    }
+
+    let using = query_points.using.as_deref().unwrap_or(DEFAULT_VECTOR_NAME);
+    reject_query_inference_for_encrypted_vector(
+        query_points.query.as_ref(),
+        using,
+        encrypted_vector_names,
+    )?;
+    reject_prefetches_inference_for_encrypted_vectors(
+        &query_points.prefetch,
+        encrypted_vector_names,
+    )
+}
+
+pub(crate) fn reject_query_point_groups_inference_for_encrypted_vectors(
+    query_points: &QueryPointGroups,
+    encrypted_vector_names: &HashSet<String>,
+) -> Result<(), Status> {
+    if encrypted_vector_names.is_empty() {
+        return Ok(());
+    }
+
+    let using = query_points.using.as_deref().unwrap_or(DEFAULT_VECTOR_NAME);
+    reject_query_inference_for_encrypted_vector(
+        query_points.query.as_ref(),
+        using,
+        encrypted_vector_names,
+    )?;
+    reject_prefetches_inference_for_encrypted_vectors(
+        &query_points.prefetch,
+        encrypted_vector_names,
+    )
+}
+
+fn reject_prefetches_inference_for_encrypted_vectors(
+    prefetches: &[PrefetchQuery],
+    encrypted_vector_names: &HashSet<String>,
+) -> Result<(), Status> {
+    for prefetch in prefetches {
+        let using = prefetch.using.as_deref().unwrap_or(DEFAULT_VECTOR_NAME);
+        reject_query_inference_for_encrypted_vector(
+            prefetch.query.as_ref(),
+            using,
+            encrypted_vector_names,
+        )?;
+        reject_prefetches_inference_for_encrypted_vectors(
+            &prefetch.prefetch,
+            encrypted_vector_names,
+        )?;
+    }
+    Ok(())
+}
+
+fn reject_query_inference_for_encrypted_vector(
+    query: Option<&Query>,
+    using: &str,
+    encrypted_vector_names: &HashSet<String>,
+) -> Result<(), Status> {
+    let Some(query) = query else {
+        return Ok(());
+    };
+    if !encrypted_vector_names.contains(using) {
+        return Ok(());
+    }
+    let Some(variant) = &query.variant else {
+        return Ok(());
+    };
+
+    match variant {
+        query::Variant::Nearest(vector) => reject_vector_input_inference(using, vector),
+        query::Variant::Recommend(recommend) => {
+            for vector in &recommend.positive {
+                reject_vector_input_inference(using, vector)?;
+            }
+            for vector in &recommend.negative {
+                reject_vector_input_inference(using, vector)?;
+            }
+            Ok(())
+        }
+        query::Variant::Discover(discover) => {
+            if let Some(target) = &discover.target {
+                reject_vector_input_inference(using, target)?;
+            }
+            if let Some(context) = &discover.context {
+                for pair in &context.pairs {
+                    reject_context_pair_inference(using, pair)?;
+                }
+            }
+            Ok(())
+        }
+        query::Variant::Context(context) => {
+            for pair in &context.pairs {
+                reject_context_pair_inference(using, pair)?;
+            }
+            Ok(())
+        }
+        query::Variant::NearestWithMmr(nearest_with_mmr) => {
+            if let Some(nearest) = &nearest_with_mmr.nearest {
+                reject_vector_input_inference(using, nearest)?;
+            }
+            Ok(())
+        }
+        query::Variant::RelevanceFeedback(feedback) => {
+            if let Some(target) = &feedback.target {
+                reject_vector_input_inference(using, target)?;
+            }
+            for item in &feedback.feedback {
+                if let Some(example) = &item.example {
+                    reject_vector_input_inference(using, example)?;
+                }
+            }
+            Ok(())
+        }
+        query::Variant::OrderBy(_)
+        | query::Variant::Fusion(_)
+        | query::Variant::Rrf(_)
+        | query::Variant::Sample(_)
+        | query::Variant::Formula(_) => Ok(()),
+    }
+}
+
+fn reject_context_pair_inference(using: &str, pair: &ContextInputPair) -> Result<(), Status> {
+    if let Some(positive) = &pair.positive {
+        reject_vector_input_inference(using, positive)?;
+    }
+    if let Some(negative) = &pair.negative {
+        reject_vector_input_inference(using, negative)?;
+    }
+    Ok(())
+}
+
+fn reject_vector_input_inference(using: &str, vector: &VectorInput) -> Result<(), Status> {
+    let kind = match vector.variant.as_ref() {
+        Some(Variant::Document(_)) => "document",
+        Some(Variant::Image(_)) => "image",
+        Some(Variant::Object(_)) => "object",
+        Some(
+            Variant::Id(_)
+            | Variant::Dense(_)
+            | Variant::Sparse(_)
+            | Variant::MultiDense(_)
+            | Variant::CkksEncryptedQuery(_),
+        )
+        | None => return Ok(()),
+    };
+
+    Err(Status::invalid_argument(format!(
+        "encrypted vector '{using}' does not allow {kind} inference query inputs; use a client-encrypted CKKS query envelope, a stored point-id query, or an explicit raw dense vector only when plaintext query opt-in is enabled",
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use api::rest::schema::{Document, Image, InferenceObject};
@@ -312,5 +470,57 @@ mod tests {
         batch.add(InferenceData::Document(doc2));
 
         assert_eq!(batch.objects.len(), 2);
+    }
+
+    #[test]
+    fn test_reject_query_points_inference_for_encrypted_vectors() {
+        let mut encrypted = HashSet::new();
+        encrypted.insert("embedding".to_string());
+        let request = QueryPoints {
+            using: Some("embedding".to_string()),
+            query: Some(Query {
+                variant: Some(query::Variant::Nearest(VectorInput {
+                    variant: Some(Variant::Document(create_test_document("secret").into())),
+                })),
+            }),
+            ..Default::default()
+        };
+
+        let err = reject_query_points_inference_for_encrypted_vectors(&request, &encrypted)
+            .expect_err("encrypted vector query must reject inference before execution");
+
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message()
+                .contains("does not allow document inference query inputs")
+        );
+    }
+
+    #[test]
+    fn test_reject_nested_prefetch_inference_for_encrypted_vectors() {
+        let mut encrypted = HashSet::new();
+        encrypted.insert("embedding".to_string());
+        let request = QueryPoints {
+            using: Some("other".to_string()),
+            prefetch: vec![PrefetchQuery {
+                using: Some("embedding".to_string()),
+                query: Some(Query {
+                    variant: Some(query::Variant::Nearest(VectorInput {
+                        variant: Some(Variant::Image(create_test_image("secret.jpg").into())),
+                    })),
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let err = reject_query_points_inference_for_encrypted_vectors(&request, &encrypted)
+            .expect_err("encrypted vector prefetch must reject inference before execution");
+
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message()
+                .contains("does not allow image inference query inputs")
+        );
     }
 }

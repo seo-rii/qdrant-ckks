@@ -1,16 +1,25 @@
 use std::sync::Arc;
 
-use collection::operations::verification::StrictModeVerification;
+use collection::operations::verification::{
+    StrictModeVerification, new_unchecked_verification_pass,
+};
 use storage::content_manager::collection_verification::{
     check_strict_mode, check_strict_mode_batch, check_strict_mode_toc, check_strict_mode_toc_batch,
 };
 use storage::content_manager::errors::StorageError;
 use storage::content_manager::toc::TableOfContent;
 use storage::dispatcher::Dispatcher;
-use storage::rbac::Auth;
+use storage::rbac::{AccessRequirements, Auth};
 
 /// Trait for different ways of providing something with `toc` that may do additional checks eg. for Strict mode.
 pub trait CheckedTocProvider {
+    async fn toc_for_preflight(
+        &self,
+        collection_name: &str,
+        auth: &Auth,
+        operation: &str,
+    ) -> Result<&Arc<TableOfContent>, StorageError>;
+
     async fn check_strict_mode(
         &self,
         request: &impl StrictModeVerification,
@@ -44,6 +53,16 @@ impl<'a> UncheckedTocProvider<'a> {
 }
 
 impl CheckedTocProvider for UncheckedTocProvider<'_> {
+    async fn toc_for_preflight(
+        &self,
+        collection_name: &str,
+        auth: &Auth,
+        operation: &str,
+    ) -> Result<&Arc<TableOfContent>, StorageError> {
+        auth.check_collection_access(collection_name, AccessRequirements::new(), operation)?;
+        Ok(self.toc)
+    }
+
     async fn check_strict_mode(
         &self,
         _request: &impl StrictModeVerification,
@@ -84,6 +103,17 @@ impl<'a> StrictModeCheckedTocProvider<'a> {
 }
 
 impl CheckedTocProvider for StrictModeCheckedTocProvider<'_> {
+    async fn toc_for_preflight(
+        &self,
+        collection_name: &str,
+        auth: &Auth,
+        operation: &str,
+    ) -> Result<&Arc<TableOfContent>, StorageError> {
+        auth.check_collection_access(collection_name, AccessRequirements::new(), operation)?;
+        let pass = new_unchecked_verification_pass();
+        Ok(self.dispatcher.toc(auth, &pass))
+    }
+
     async fn check_strict_mode(
         &self,
         request: &impl StrictModeVerification,
@@ -135,6 +165,16 @@ impl<'a> StrictModeCheckedInternalTocProvider<'a> {
 }
 
 impl CheckedTocProvider for StrictModeCheckedInternalTocProvider<'_> {
+    async fn toc_for_preflight(
+        &self,
+        collection_name: &str,
+        auth: &Auth,
+        operation: &str,
+    ) -> Result<&Arc<TableOfContent>, StorageError> {
+        auth.check_collection_access(collection_name, AccessRequirements::new(), operation)?;
+        Ok(self.toc)
+    }
+
     async fn check_strict_mode(
         &self,
         request: &impl StrictModeVerification,

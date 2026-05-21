@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use api::conversions::json::json_path_from_proto;
@@ -15,6 +16,7 @@ use api::rest;
 use collection::collection::distance_matrix::{
     CollectionSearchMatrixRequest, CollectionSearchMatrixResponse,
 };
+use collection::config::EncryptionSelector;
 use collection::operations::consistency_params::ReadConsistency;
 use collection::operations::conversions::try_discover_request_from_grpc;
 use collection::operations::shard_selector_internal::ShardSelectorInternal;
@@ -29,16 +31,48 @@ use shard::scroll::ScrollRequestInternal;
 use shard::search::CoreSearchRequestBatch;
 use storage::content_manager::toc::TableOfContent;
 use storage::content_manager::toc::request_hw_counter::RequestHwCounter;
-use storage::rbac::Auth;
+use storage::rbac::{AccessRequirements, Auth};
 use tonic::{Response, Status};
 
 use crate::common::inference::params::InferenceParams;
 use crate::common::inference::query_requests_grpc::{
     convert_query_point_groups_from_grpc, convert_query_points_from_grpc,
 };
+use crate::common::inference::{
+    reject_query_point_groups_inference_for_encrypted_vectors,
+    reject_query_points_inference_for_encrypted_vectors,
+};
 use crate::common::query::*;
 use crate::common::strict_mode::*;
 use crate::settings::Settings;
+
+async fn encrypted_vector_names_for_inference_guard(
+    toc_provider: &impl CheckedTocProvider,
+    collection_name: &str,
+    auth: &Auth,
+) -> Result<HashSet<String>, Status> {
+    let toc = toc_provider
+        .toc_for_preflight(collection_name, auth, "encrypted_vector_inference_guard")
+        .await?;
+    let pass = auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new(),
+        "encrypted_vector_inference_guard",
+    )?;
+    let collection = toc.get_collection(&pass).await?;
+    let config = collection.config_snapshot().await;
+    let Some(encryption) = config.params.effective_encryption() else {
+        return Ok(HashSet::new());
+    };
+
+    let mut names = HashSet::new();
+    for rule in &encryption.rules {
+        if let EncryptionSelector::VectorNames { names: rule_names } = &rule.selector {
+            names.extend(rule_names.iter().cloned());
+        }
+    }
+    Ok(names)
+}
 
 pub(crate) fn convert_shard_selector_for_read(
     shard_id_selector: Option<ShardId>,
@@ -778,6 +812,9 @@ pub async fn query(
         .transpose()?;
     let collection_name = query_points.collection_name.clone();
     let timeout = query_points.timeout;
+    let encrypted_vector_names =
+        encrypted_vector_names_for_inference_guard(&toc_provider, &collection_name, &auth).await?;
+    reject_query_points_inference_for_encrypted_vectors(&query_points, &encrypted_vector_names)?;
     let (request, inference_usage) =
         convert_query_points_from_grpc(query_points, inference_params).await?;
 
@@ -833,10 +870,16 @@ pub async fn query_batch(
     let read_consistency = ReadConsistency::try_from_optional(read_consistency)?;
     let mut requests = Vec::with_capacity(points.len());
     let mut total_inference_usage = InferenceUsage::default();
+    let encrypted_vector_names =
+        encrypted_vector_names_for_inference_guard(&toc_provider, collection_name, &auth).await?;
 
     for query_points in points {
         let shard_key_selector = query_points.shard_key_selector.clone();
         let shard_selector = convert_shard_selector_for_read(None, shard_key_selector)?;
+        reject_query_points_inference_for_encrypted_vectors(
+            &query_points,
+            &encrypted_vector_names,
+        )?;
         let (request, usage) =
             convert_query_points_from_grpc(query_points, inference_params.clone()).await?;
         total_inference_usage.merge(usage);
@@ -902,6 +945,12 @@ pub async fn query_groups(
         .transpose()?;
     let timeout = query_points.timeout;
     let collection_name = query_points.collection_name.clone();
+    let encrypted_vector_names =
+        encrypted_vector_names_for_inference_guard(&toc_provider, &collection_name, &auth).await?;
+    reject_query_point_groups_inference_for_encrypted_vectors(
+        &query_points,
+        &encrypted_vector_names,
+    )?;
     let (request, inference_usage) =
         convert_query_point_groups_from_grpc(query_points, inference_params).await?;
 
