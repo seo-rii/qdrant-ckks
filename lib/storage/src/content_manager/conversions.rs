@@ -447,4 +447,24 @@ mod tests {
                 .contains("invalid create collection encryption_json")
         );
     }
+
+    #[test]
+    fn grpc_create_collection_rejects_invalid_encryption_selector_json() {
+        let mut encryption = encryption_config();
+        encryption.rules[0].selector = EncryptionSelector::PayloadPaths {
+            paths: vec!["document".to_string(), "document.body".to_string()],
+        };
+
+        let err = CollectionMetaOperations::try_from(grpc_create_collection(Some(
+            serde_json::to_string(&encryption).unwrap(),
+        )))
+        .unwrap_err();
+
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message().contains("invalid create collection config")
+                && err.message().contains("overlapping_encryption_selector"),
+            "unexpected error: {err:?}",
+        );
+    }
 }

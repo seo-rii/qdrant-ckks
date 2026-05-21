@@ -728,6 +728,16 @@ mod tests {
             bad_request.validate().is_err(),
             "bad collection request should error on validation"
         );
+
+        let bad_request = CreateCollection {
+            collection_name: "test_collection".into(),
+            encryption_json: Some("x".repeat(1024 * 1024 + 1)),
+            ..Default::default()
+        };
+        assert!(
+            bad_request.validate().is_err(),
+            "oversized create collection encryption_json should error on validation"
+        );
     }
 
     #[test]
