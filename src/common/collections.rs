@@ -1018,6 +1018,13 @@ fn validate_encrypted_cluster_data_movement_parity(
                 op.replicate_shard.to_peer_id,
             ],
         ),
+        ClusterOperations::CreateShardingKey(op) => (
+            "create_sharding_key",
+            op.create_sharding_key
+                .placement
+                .clone()
+                .unwrap_or_else(|| all_peer_ids.to_vec()),
+        ),
         ClusterOperations::ReplicatePoints(_) => ("replicate_points", all_peer_ids.to_vec()),
         ClusterOperations::RestartTransfer(op) => (
             "restart_transfer",
@@ -1087,6 +1094,7 @@ fn validate_encrypted_cluster_data_movement_parity(
 mod tests {
     use std::collections::HashSet;
 
+    use collection::operations::cluster_ops::{CreateShardingKey, CreateShardingKeyOperation};
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_sec::{CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, VECTOR_OPENFHE_CKKS_PROVIDER};
 
@@ -1400,6 +1408,89 @@ mod tests {
             &metadata,
         )
         .expect("matching all-peer crypto runtime parity should allow point replication");
+    }
+
+    #[test]
+    fn encrypted_cluster_create_sharding_key_requires_target_peer_crypto_runtime_parity() {
+        let operation = ClusterOperations::CreateShardingKey(CreateShardingKeyOperation {
+            create_sharding_key: CreateShardingKey {
+                shard_key: "tenant-a".into(),
+                shards_number: None,
+                replication_factor: None,
+                placement: Some(vec![1, 2, 3]),
+                initial_state: None,
+            },
+        });
+
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            1,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "local-fingerprint".to_string(),
+            )),
+        );
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "local-fingerprint".to_string(),
+            )),
+        );
+        metadata.insert(
+            3,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "different-fingerprint".to_string(),
+            )),
+        );
+
+        let err = validate_encrypted_cluster_data_movement_parity(
+            "docs",
+            true,
+            &operation,
+            1,
+            &[1, 2, 3],
+            &metadata,
+        )
+        .expect_err("encrypted create-sharding-key must fail closed on placement peer mismatch");
+        assert!(matches!(err, StorageError::BadRequest { .. }));
+        assert!(err.to_string().contains("create_sharding_key"));
+        assert!(err.to_string().contains("crypto runtime parity"));
+
+        metadata.insert(
+            3,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "local-fingerprint".to_string(),
+            )),
+        );
+        validate_encrypted_cluster_data_movement_parity(
+            "docs",
+            true,
+            &operation,
+            1,
+            &[1, 2, 3],
+            &metadata,
+        )
+        .expect("matching placement peer parity should allow encrypted create-sharding-key");
+
+        let operation = ClusterOperations::CreateShardingKey(CreateShardingKeyOperation {
+            create_sharding_key: CreateShardingKey {
+                shard_key: "tenant-b".into(),
+                shards_number: None,
+                replication_factor: None,
+                placement: None,
+                initial_state: None,
+            },
+        });
+        metadata.remove(&3);
+        let err = validate_encrypted_cluster_data_movement_parity(
+            "docs",
+            true,
+            &operation,
+            1,
+            &[1, 2, 3],
+            &metadata,
+        )
+        .expect_err("default placement must require all candidate peer crypto metadata");
+        assert!(err.to_string().contains("peer 3 has not published"));
     }
 
     #[test]

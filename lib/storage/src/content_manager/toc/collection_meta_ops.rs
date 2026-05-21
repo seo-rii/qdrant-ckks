@@ -725,8 +725,20 @@ impl TableOfContent {
             ReplicaState::Active
         };
 
-        self.get_collection_unchecked(&operation.collection_name)
-            .await?
+        let collection = self
+            .get_collection_unchecked(&operation.collection_name)
+            .await?;
+        let collection_config = collection.config_snapshot().await;
+        if collection_params_require_crypto_runtime_transfer_parity(&collection_config.params) {
+            validate_encrypted_create_shard_key_crypto_runtime_parity(
+                &operation.collection_name,
+                self.this_peer_id,
+                &operation.placement,
+                &self.channel_service.id_to_metadata.read(),
+            )?;
+        }
+
+        collection
             .create_shard_key(operation.shard_key, operation.placement, init_state)
             .await?;
 
@@ -813,6 +825,21 @@ fn validate_encrypted_resharding_crypto_runtime_parity(
     )
 }
 
+fn validate_encrypted_create_shard_key_crypto_runtime_parity(
+    collection_id: &str,
+    local_peer_id: PeerId,
+    placement: &[Vec<PeerId>],
+    peer_metadata_by_id: &HashMap<PeerId, PeerMetadata>,
+) -> Result<(), StorageError> {
+    validate_encrypted_operation_crypto_runtime_parity(
+        "create shard key",
+        collection_id,
+        local_peer_id,
+        placement.iter().flatten().copied(),
+        peer_metadata_by_id,
+    )
+}
+
 fn validate_encrypted_operation_crypto_runtime_parity(
     operation: &str,
     collection_id: &str,
@@ -869,6 +896,7 @@ mod tests {
 
     use super::{
         collection_params_require_crypto_runtime_transfer_parity,
+        validate_encrypted_create_shard_key_crypto_runtime_parity,
         validate_encrypted_resharding_crypto_runtime_parity,
         validate_encrypted_transfer_crypto_runtime_parity,
     };
@@ -1068,6 +1096,56 @@ mod tests {
         let err =
             validate_encrypted_resharding_crypto_runtime_parity("docs", 1, [1, 2, 3], &metadata)
                 .expect_err("blank peer crypto metadata must fail closed");
+        assert!(
+            err.to_string()
+                .contains("requires peer 2 crypto runtime capability metadata")
+        );
+    }
+
+    #[test]
+    fn encrypted_create_shard_key_requires_placement_peer_crypto_runtime_parity() {
+        let mut metadata = HashMap::<PeerId, PeerMetadata>::new();
+        metadata.insert(
+            1,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-a".to_string(),
+            )),
+        );
+        metadata.insert(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-a".to_string(),
+            )),
+        );
+        metadata.insert(
+            3,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-b".to_string(),
+            )),
+        );
+        let placement = vec![vec![1, 2], vec![2, 3]];
+
+        let err = validate_encrypted_create_shard_key_crypto_runtime_parity(
+            "docs", 1, &placement, &metadata,
+        )
+        .expect_err("mismatched create-shard-key placement must fail closed");
+        assert!(err.to_string().contains("create shard key"));
+        assert!(err.to_string().contains("crypto runtime parity mismatch"));
+
+        metadata.insert(
+            3,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "fingerprint-a".to_string(),
+            )),
+        );
+        validate_encrypted_create_shard_key_crypto_runtime_parity("docs", 1, &placement, &metadata)
+            .expect("matching create-shard-key placement should be allowed");
+
+        metadata.remove(&2);
+        let err = validate_encrypted_create_shard_key_crypto_runtime_parity(
+            "docs", 1, &placement, &metadata,
+        )
+        .expect_err("missing create-shard-key placement metadata must fail closed");
         assert!(
             err.to_string()
                 .contains("requires peer 2 crypto runtime capability metadata")
