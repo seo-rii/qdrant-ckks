@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ::common::tempfile_ext::MaybeTempPath;
@@ -113,7 +114,7 @@ pub async fn do_save_uploaded_snapshot(
     toc: &TableOfContent,
     collection_name: &str,
     snapshot: TempFile,
-) -> Result<Url, StorageError> {
+) -> Result<(Url, PathBuf), StorageError> {
     let filename = snapshot
         .file_name
         // Sanitize the file name:
@@ -145,7 +146,7 @@ pub async fn do_save_uploaded_snapshot(
         ))
     })?;
 
-    Ok(snapshot_location)
+    Ok((snapshot_location, absolute_path))
 }
 
 // Actix specific code
@@ -240,40 +241,58 @@ async fn upload_snapshot(
             }
         }
 
-        let snapshot_location = do_save_uploaded_snapshot(
+        let (snapshot_location, uploaded_snapshot_path) = do_save_uploaded_snapshot(
             dispatcher.toc(&auth, &pass),
             &collection.collection_name,
             snapshot,
         )
         .await?;
 
-        // Snapshot is a local file, we do not need an API key for that
-        let http_client = http_client.client(None)?;
+        let recovery_result = async {
+            // Snapshot is a local file, we do not need an API key for that
+            let http_client = http_client.client(None)?;
 
-        let snapshot_recover = SnapshotRecover {
-            location: snapshot_location,
-            priority: params.priority,
-            checksum: None,
-            api_key: None,
-        };
+            let snapshot_recover = SnapshotRecover {
+                location: snapshot_location,
+                priority: params.priority,
+                checksum: None,
+                api_key: None,
+            };
 
-        do_recover_from_snapshot(
-            dispatcher.get_ref(),
-            &collection.collection_name,
-            snapshot_recover,
-            auth,
-            http_client,
-            Some(Arc::new(
-                move |collection_name: &str, snapshot_config: &CollectionConfigInternal| {
-                    validate_recovered_collection_crypto_config(
-                        &settings,
-                        collection_name,
-                        snapshot_config,
-                    )
-                },
-            )),
-        )
-        .await
+            do_recover_from_snapshot(
+                dispatcher.get_ref(),
+                &collection.collection_name,
+                snapshot_recover,
+                auth,
+                http_client,
+                Some(Arc::new(
+                    move |collection_name: &str, snapshot_config: &CollectionConfigInternal| {
+                        validate_recovered_collection_crypto_config(
+                            &settings,
+                            collection_name,
+                            snapshot_config,
+                        )
+                    },
+                )),
+            )
+            .await
+        }
+        .await;
+
+        if recovery_result.is_err() {
+            match tokio_fs::remove_file(&uploaded_snapshot_path).await {
+                Ok(()) => {}
+                Err(err) if err.kind() == ErrorKind::NotFound => {}
+                Err(err) => {
+                    log::warn!(
+                        "Failed to remove uploaded snapshot artifact after failed recovery for collection {}: {err}",
+                        collection.collection_name,
+                    );
+                }
+            }
+        }
+
+        recovery_result
     };
 
     helpers::time_or_accept(future, wait.unwrap_or(true)).await
