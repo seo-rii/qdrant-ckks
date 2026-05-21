@@ -24,6 +24,9 @@ const BASE64URL_NOPAD_64_BYTE_LEN: usize = 86;
 const CLIENT_PAYLOAD_CIPHERTEXT_MAX_BYTES: usize = 1024 * 1024;
 const CLIENT_PAYLOAD_CIPHERTEXT_MAX_B64_LEN: usize =
     base64url_nopad_encoded_len(CLIENT_PAYLOAD_CIPHERTEXT_MAX_BYTES);
+const SERVER_PAYLOAD_CIPHERTEXT_MAX_BYTES: usize = 1024 * 1024;
+const SERVER_PAYLOAD_CIPHERTEXT_MAX_B64_LEN: usize =
+    base64url_nopad_encoded_len(SERVER_PAYLOAD_CIPHERTEXT_MAX_BYTES);
 const CRYPTO_SCHEMA_VERSION: u16 = 1;
 const DEFAULT_ENCRYPTION_EPOCH: u64 = 0;
 
@@ -88,6 +91,8 @@ pub enum PayloadEncryptionError {
     InvalidClientSignature,
     #[error("payload field client envelope ciphertext exceeds maximum size: {0}")]
     ClientCiphertextTooLarge(String),
+    #[error("payload field server envelope ciphertext exceeds maximum size: {0}")]
+    ServerCiphertextTooLarge(String),
     #[error("payload field encrypted envelope does not match runtime verification proof")]
     RuntimeEnvelopeProofMismatch,
     #[error("payload field contains unsupported qdrant crypto schema version: {0}")]
@@ -1230,9 +1235,19 @@ pub fn server_payload_envelope_key(
         return Ok(None);
     };
     validate_encrypted_envelope_metadata(&envelope.envelope)?;
+    if envelope.envelope.ciphertext.len() > SERVER_PAYLOAD_CIPHERTEXT_MAX_B64_LEN {
+        return Err(PayloadEncryptionError::ServerCiphertextTooLarge(
+            field_path.to_string(),
+        ));
+    }
     let ciphertext = BASE64URL_NOPAD
         .decode(envelope.envelope.ciphertext.as_bytes())
         .map_err(|_| PayloadEncryptionError::MalformedEnvelope(field_path.to_string()))?;
+    if ciphertext.len() > SERVER_PAYLOAD_CIPHERTEXT_MAX_BYTES {
+        return Err(PayloadEncryptionError::ServerCiphertextTooLarge(
+            field_path.to_string(),
+        ));
+    }
     let ciphertext_digest = Sha256::digest(&ciphertext);
     let ciphertext_sha256_b64 = BASE64URL_NOPAD.encode(ciphertext_digest.as_ref());
 
@@ -1869,6 +1884,47 @@ mod tests {
         assert!(matches!(
             client_payload_envelope_key(&ciphertext_value, "document.body"),
             Err(PayloadEncryptionError::ClientCiphertextTooLarge(field)) if field == "document.body",
+        ));
+    }
+
+    #[test]
+    fn server_payload_envelope_key_rejects_oversized_ciphertext_before_decode() {
+        let value = serde_json::json!({
+            ENCRYPTED_PAYLOAD_MARKER: {
+                "kind": PAYLOAD_TEXT_ENVELOPE_KIND,
+                "schema_version": 1,
+                "encryption_epoch": 0,
+                "envelope": {
+                    "version": 1,
+                    "algorithm": "AES-256-GCM",
+                    "key_id": "tenant-a:docs",
+                    "material_fingerprint": "tenant-a/docs@v1",
+                    "rk_id": "tenant-a/docs-rk-v1",
+                    "rk_epoch": 0,
+                    "nonce": BASE64URL_NOPAD.encode(&[1_u8; 12]),
+                    "ciphertext": "A".repeat(SERVER_PAYLOAD_CIPHERTEXT_MAX_B64_LEN + 1),
+                },
+            },
+        });
+
+        assert!(matches!(
+            server_payload_envelope_key(&value, "collection-crypto-id", "1", "document.body"),
+            Err(PayloadEncryptionError::ServerCiphertextTooLarge(field)) if field == "document.body",
+        ));
+        assert!(matches!(
+            validate_server_payload_value_for_peer_replay(
+                &value,
+                "collection-crypto-id",
+                "1",
+                ServerPayloadValidationContext {
+                    field_path: "document.body",
+                    expected_kind: Some(PAYLOAD_TEXT_ENVELOPE_KIND),
+                    key_id: Some("tenant-a:docs"),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 0,
+                },
+            ),
+            Err(PayloadEncryptionError::ServerCiphertextTooLarge(field)) if field == "document.body",
         ));
     }
 }
