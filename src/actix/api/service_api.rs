@@ -25,7 +25,7 @@ use super::CollectionPath;
 use crate::actix::auth::ActixAuth;
 use crate::actix::helpers::{self, process_response_error};
 use crate::common::crypto::{
-    generate_wrapped_runtime_resource_key_material,
+    generate_wrapped_runtime_resource_key_material, plan_runtime_resource_key_rewrap_by_master_key,
     rewrap_runtime_resource_key_materials_by_master_key,
 };
 use crate::common::health;
@@ -331,6 +331,8 @@ pub struct RuntimeResourceKeyRewrapRequest {
     pub old_wrapped_by: String,
     #[validate(custom(function = "validate_runtime_resource_key_rewrap_identifier"))]
     pub new_wrapped_by: String,
+    #[serde(default)]
+    pub dry_run: bool,
 }
 
 #[derive(Deserialize, Serialize, JsonSchema, Validate)]
@@ -638,7 +640,10 @@ async fn generate_runtime_resource_key(
 pub struct RuntimeResourceKeyRewrapResponse {
     pub old_wrapped_by: String,
     pub new_wrapped_by: String,
+    pub dry_run: bool,
     pub settings_mutated: bool,
+    pub material_count: usize,
+    pub estimated_external_calls: usize,
     pub materials: BTreeMap<String, RuntimeResourceKeyRewrapMaterialPatch>,
 }
 
@@ -651,6 +656,26 @@ fn build_runtime_resource_key_rewrap_response(
             "crypto resource-key rewrap request is invalid: {err}"
         ))
     })?;
+    let plan = plan_runtime_resource_key_rewrap_by_master_key(
+        &settings.crypto,
+        &request.old_wrapped_by,
+        &request.new_wrapped_by,
+    )
+    .map_err(|err| {
+        StorageError::bad_request(format!("crypto resource-key rewrap failed: {err}"))
+    })?;
+    if request.dry_run {
+        return Ok(RuntimeResourceKeyRewrapResponse {
+            old_wrapped_by: request.old_wrapped_by,
+            new_wrapped_by: request.new_wrapped_by,
+            dry_run: true,
+            settings_mutated: false,
+            material_count: plan.target_materials.len(),
+            estimated_external_calls: plan.estimated_external_calls,
+            materials: BTreeMap::new(),
+        });
+    }
+
     let materials = rewrap_runtime_resource_key_materials_by_master_key(
         &settings.crypto,
         &request.old_wrapped_by,
@@ -669,7 +694,10 @@ fn build_runtime_resource_key_rewrap_response(
     Ok(RuntimeResourceKeyRewrapResponse {
         old_wrapped_by: request.old_wrapped_by,
         new_wrapped_by: request.new_wrapped_by,
+        dry_run: false,
         settings_mutated: false,
+        material_count: materials.len(),
+        estimated_external_calls: plan.estimated_external_calls,
         materials,
     })
 }
@@ -681,6 +709,7 @@ fn runtime_resource_key_rewrap_request_audit_metadata(
         ("operation".to_string(), "rewrap".to_string()),
         ("old_wrapped_by".to_string(), request.old_wrapped_by.clone()),
         ("new_wrapped_by".to_string(), request.new_wrapped_by.clone()),
+        ("dry_run".to_string(), request.dry_run.to_string()),
     ])
 }
 
@@ -699,8 +728,13 @@ fn runtime_resource_key_rewrap_response_audit_metadata(
         ),
         (
             "material_count".to_string(),
-            response.materials.len().to_string(),
+            response.material_count.to_string(),
         ),
+        (
+            "estimated_external_calls".to_string(),
+            response.estimated_external_calls.to_string(),
+        ),
+        ("dry_run".to_string(), response.dry_run.to_string()),
         (
             "settings_mutated".to_string(),
             response.settings_mutated.to_string(),
@@ -1603,11 +1637,15 @@ mod tests {
             RuntimeResourceKeyRewrapRequest {
                 old_wrapped_by: "tenant-a/mk-v1".to_string(),
                 new_wrapped_by: "tenant-a/mk-v2".to_string(),
+                dry_run: false,
             },
         )
         .unwrap();
 
         assert!(!response.settings_mutated);
+        assert!(!response.dry_run);
+        assert_eq!(response.material_count, 2);
+        assert_eq!(response.estimated_external_calls, 4);
         assert_eq!(response.materials.len(), 2);
         assert_eq!(
             settings
@@ -1646,6 +1684,79 @@ mod tests {
     }
 
     #[test]
+    fn runtime_rewrap_dry_run_reports_targets_without_unwrapping_materials() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::new(),
+                backends: HashMap::new(),
+                materials: HashMap::from([
+                    (
+                        "tenant-a/mk-v1".to_string(),
+                        CryptoMaterialConfig {
+                            kind: "wrapping_key_32".to_string(),
+                            source: Some("inline".to_string()),
+                            value_b64: Some(BASE64URL_NOPAD.encode(&[91u8; 32])),
+                            ..CryptoMaterialConfig::default()
+                        },
+                    ),
+                    (
+                        "tenant-a/mk-v2".to_string(),
+                        CryptoMaterialConfig {
+                            kind: "wrapping_key_32".to_string(),
+                            source: Some("inline".to_string()),
+                            value_b64: Some(BASE64URL_NOPAD.encode(&[92u8; 32])),
+                            ..CryptoMaterialConfig::default()
+                        },
+                    ),
+                    (
+                        "tenant-a/payload-rk-v3".to_string(),
+                        CryptoMaterialConfig {
+                            kind: "wrapped_symmetric_key_32".to_string(),
+                            wrapped_by: Some("tenant-a/mk-v1".to_string()),
+                            rk_epoch: Some(3),
+                            state: Some("active".to_string()),
+                            scope: Some("collection:docs".to_string()),
+                            ..CryptoMaterialConfig::default()
+                        },
+                    ),
+                ]),
+            },
+            ..Settings::new(None).unwrap()
+        };
+
+        let response = build_runtime_resource_key_rewrap_response(
+            &settings,
+            RuntimeResourceKeyRewrapRequest {
+                old_wrapped_by: "tenant-a/mk-v1".to_string(),
+                new_wrapped_by: "tenant-a/mk-v2".to_string(),
+                dry_run: true,
+            },
+        )
+        .unwrap();
+
+        assert!(response.dry_run);
+        assert!(!response.settings_mutated);
+        assert_eq!(response.material_count, 1);
+        assert_eq!(response.estimated_external_calls, 2);
+        assert!(
+            response.materials.is_empty(),
+            "dry-run must not return secret-bearing material patches",
+        );
+
+        let err = build_runtime_resource_key_rewrap_response(
+            &settings,
+            RuntimeResourceKeyRewrapRequest {
+                old_wrapped_by: "tenant-a/mk-v1".to_string(),
+                new_wrapped_by: "tenant-a/mk-v2".to_string(),
+                dry_run: false,
+            },
+        )
+        .expect_err("non-dry-run must still unwrap and reject malformed wrapped material");
+        assert!(err.to_string().contains("missing nonce"));
+    }
+
+    #[test]
     fn runtime_rewrap_response_rejects_malformed_material_identifiers() {
         let settings = Settings::new(None).unwrap();
 
@@ -1653,14 +1764,17 @@ mod tests {
             RuntimeResourceKeyRewrapRequest {
                 old_wrapped_by: "tenant a/mk-v1".to_string(),
                 new_wrapped_by: "tenant-a/mk-v2".to_string(),
+                dry_run: false,
             },
             RuntimeResourceKeyRewrapRequest {
                 old_wrapped_by: "tenant-a/mk-v1".to_string(),
                 new_wrapped_by: "tenant-a/mk?2".to_string(),
+                dry_run: false,
             },
             RuntimeResourceKeyRewrapRequest {
                 old_wrapped_by: String::new(),
                 new_wrapped_by: "tenant-a/mk-v2".to_string(),
+                dry_run: false,
             },
         ] {
             let err = build_runtime_resource_key_rewrap_response(&settings, request)

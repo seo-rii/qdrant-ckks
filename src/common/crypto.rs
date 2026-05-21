@@ -5297,15 +5297,21 @@ pub fn generate_wrapped_runtime_resource_key_material(
     Ok(material)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuntimeResourceKeyRewrapPlan {
+    pub target_materials: Vec<String>,
+    pub estimated_external_calls: usize,
+}
+
 #[allow(
     dead_code,
     reason = "reserved for the admin MK rotation operation that rewraps all active/retired resource keys for one wrapping key"
 )]
-pub fn rewrap_runtime_resource_key_materials_by_master_key(
+pub fn plan_runtime_resource_key_rewrap_by_master_key(
     runtime_settings: &CryptoSettings,
     old_wrapped_by: &str,
     new_wrapped_by: &str,
-) -> Result<HashMap<String, CryptoMaterialConfig>, PayloadWriteSetupError> {
+) -> Result<RuntimeResourceKeyRewrapPlan, PayloadWriteSetupError> {
     if old_wrapped_by == new_wrapped_by {
         return Err(PayloadWriteSetupError::InvalidWrappedMaterial {
             material: old_wrapped_by.to_string(),
@@ -5346,8 +5352,46 @@ pub fn rewrap_runtime_resource_key_materials_by_master_key(
         });
     }
 
+    for wrapping_ref in [old_wrapped_by, new_wrapped_by] {
+        let wrapping_material = runtime_settings
+            .materials
+            .get(wrapping_ref)
+            .ok_or_else(|| PayloadWriteSetupError::UnknownWrappingMaterial {
+                material: wrapping_ref.to_string(),
+                wrapped_by: wrapping_ref.to_string(),
+            })?;
+        if wrapping_material.kind != WRAPPING_KEY_32_KIND {
+            return Err(PayloadWriteSetupError::UnsupportedWrappingMaterialKind {
+                material: wrapping_ref.to_string(),
+                wrapped_by: wrapping_ref.to_string(),
+                kind: wrapping_material.kind.clone(),
+            });
+        }
+    }
+
+    let estimated_external_calls = target_materials.len() * 2;
+    Ok(RuntimeResourceKeyRewrapPlan {
+        target_materials,
+        estimated_external_calls,
+    })
+}
+
+#[allow(
+    dead_code,
+    reason = "reserved for the admin MK rotation operation that rewraps all active/retired resource keys for one wrapping key"
+)]
+pub fn rewrap_runtime_resource_key_materials_by_master_key(
+    runtime_settings: &CryptoSettings,
+    old_wrapped_by: &str,
+    new_wrapped_by: &str,
+) -> Result<HashMap<String, CryptoMaterialConfig>, PayloadWriteSetupError> {
+    let plan = plan_runtime_resource_key_rewrap_by_master_key(
+        runtime_settings,
+        old_wrapped_by,
+        new_wrapped_by,
+    )?;
     let mut rewrapped = HashMap::new();
-    for material_name in target_materials {
+    for material_name in plan.target_materials {
         rewrapped.insert(
             material_name.clone(),
             rewrap_runtime_resource_key_material(runtime_settings, &material_name, new_wrapped_by)?,

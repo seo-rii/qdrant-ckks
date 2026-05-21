@@ -632,7 +632,8 @@ Operators can expose the MK rotation primitive through the manage-only
 ```json
 {
   "old_wrapped_by": "tenant-a/mk-v1",
-  "new_wrapped_by": "tenant-a/mk-v2"
+  "new_wrapped_by": "tenant-a/mk-v2",
+  "dry_run": false
 }
 ```
 
@@ -643,6 +644,9 @@ backend. This keeps MK rotation scoped to O(number of wrapped RKs) and avoids
 rewriting payload/vector data envelopes. The `old_wrapped_by` and
 `new_wrapped_by` values are validated as crypto material identifiers before any
 runtime lookup, and they must reference different `wrapping_key_32` materials.
+Set `dry_run: true` to return only the target material count and estimated
+external provider call count; dry-run never unwraps or rewraps RK material and
+never returns secret-bearing patch fields.
 The old and new MK material must both be available in the current runtime during
 the rewrap, and operators should roll out the resulting material patch
 atomically across nodes so runtime parity fingerprints stay aligned.
