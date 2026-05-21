@@ -1,3 +1,4 @@
+use std::future::{Ready, ready};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -5,7 +6,7 @@ use std::sync::Arc;
 use ::common::tempfile_ext::MaybeTempPath;
 use actix_multipart::form::MultipartForm;
 use actix_multipart::form::tempfile::TempFile;
-use actix_web::{Responder, Result, delete, get, post, put, web};
+use actix_web::{FromRequest, Responder, Result, delete, get, post, put, web};
 use actix_web_validator as valid;
 use collection::common::file_utils::move_file;
 use collection::common::sha_256;
@@ -34,7 +35,7 @@ use storage::content_manager::snapshots::{
 };
 use storage::content_manager::toc::TableOfContent;
 use storage::dispatcher::Dispatcher;
-use storage::rbac::AccessRequirements;
+use storage::rbac::{AccessRequirements, CollectionMultipass};
 use tokio::io::AsyncWriteExt as _;
 use uuid::Uuid;
 use validator::Validate;
@@ -43,7 +44,7 @@ use super::{
     CollectionPath, CollectionShardPath, CollectionShardSnapshotPath, CollectionSnapshotPath,
     StrictCollectionPath,
 };
-use crate::actix::auth::ActixAuth;
+use crate::actix::auth::{ActixAuth, take_auth_from_request};
 use crate::actix::helpers::{self, HttpError};
 use crate::common;
 use crate::common::auth::Auth;
@@ -89,6 +90,30 @@ pub struct SnapshotExportParam {
 #[derive(MultipartForm)]
 pub struct SnapshottingForm {
     snapshot: TempFile,
+}
+
+struct SnapshotManageAuth {
+    auth: Auth,
+    multipass: CollectionMultipass,
+}
+
+impl FromRequest for SnapshotManageAuth {
+    type Error = HttpError;
+    type Future = Ready<std::result::Result<Self, Self::Error>>;
+
+    fn from_request(
+        req: &actix_web::HttpRequest,
+        _payload: &mut actix_web::dev::Payload,
+    ) -> Self::Future {
+        let auth = take_auth_from_request(req);
+        match auth.check_global_access(
+            AccessRequirements::new().manage(),
+            "snapshot_upload_preflight",
+        ) {
+            Ok(multipass) => ready(Ok(Self { auth, multipass })),
+            Err(err) => ready(Err(HttpError::from(err))),
+        }
+    }
 }
 
 // Actix specific code
@@ -219,9 +244,9 @@ async fn upload_snapshot(
     http_client: web::Data<HttpClient>,
     settings: web::Data<Settings>,
     collection: valid::Path<StrictCollectionPath>,
+    SnapshotManageAuth { auth, .. }: SnapshotManageAuth,
     MultipartForm(form): MultipartForm<SnapshottingForm>,
     params: valid::Query<SnapshotUploadingParam>,
-    ActixAuth(auth): ActixAuth,
 ) -> impl Responder {
     let wait = params.wait;
 
@@ -231,8 +256,6 @@ async fn upload_snapshot(
     let future = async move {
         let settings = settings.get_ref().clone();
         let snapshot = form.snapshot;
-
-        auth.check_global_access(AccessRequirements::new().manage(), "upload_snapshot")?;
 
         if let Some(checksum) = &params.checksum {
             let snapshot_checksum = sha_256::hash_file(snapshot.file.path()).await?;
@@ -556,8 +579,8 @@ async fn upload_shard_snapshot(
     settings: web::Data<Settings>,
     path: valid::Path<CollectionShardPath>,
     query: web::Query<SnapshotUploadingParam>,
+    SnapshotManageAuth { auth, multipass }: SnapshotManageAuth,
     MultipartForm(form): MultipartForm<SnapshottingForm>,
-    ActixAuth(auth): ActixAuth,
 ) -> impl Responder {
     // nothing to verify.
     let pass = new_unchecked_verification_pass();
@@ -577,10 +600,7 @@ async fn upload_shard_snapshot(
     //   - but the task is *spawned* on the runtime and won't be cancelled, if request is cancelled
 
     let future = cancel::future::spawn_cancel_on_drop(async move |cancel| {
-        // TODO: Run this check before the multipart blob is uploaded
-        let collection_pass = auth
-            .check_global_access(AccessRequirements::new().manage(), "upload_shard_snapshot")?
-            .issue_pass(&collection);
+        let collection_pass = multipass.issue_pass(&collection);
 
         let cancel_safe = async {
             if let Some(checksum) = checksum {
@@ -726,8 +746,8 @@ async fn recover_partial_snapshot(
     settings: web::Data<Settings>,
     path: valid::Path<CollectionShardPath>,
     query: web::Query<SnapshotUploadingParam>,
+    SnapshotManageAuth { auth, multipass }: SnapshotManageAuth,
     MultipartForm(form): MultipartForm<SnapshottingForm>,
-    ActixAuth(auth): ActixAuth,
 ) -> impl Responder {
     let CollectionShardPath {
         collection_name: collection,
@@ -762,13 +782,7 @@ async fn recover_partial_snapshot(
     let future = cancel::future::spawn_cancel_on_drop(async move |cancel| {
         let _recovery_lock = recovery_lock;
 
-        // TODO: Run this check before the multipart blob is uploaded
-        let collection_pass = auth
-            .check_global_access(
-                AccessRequirements::new().manage(),
-                "recover_partial_snapshot",
-            )?
-            .issue_pass(&collection);
+        let collection_pass = multipass.issue_pass(&collection);
 
         let cancel_safe = async {
             if let Some(checksum) = checksum {
@@ -1020,6 +1034,10 @@ async fn get_partial_snapshot_manifest(
 
 #[cfg(test)]
 mod tests {
+    use actix_web::{HttpMessage as _, test as actix_test};
+    use futures::FutureExt as _;
+    use storage::rbac::{Access, AuthType};
+
     use super::*;
 
     #[test]
@@ -1041,6 +1059,47 @@ mod tests {
             serde_urlencoded::from_str::<SnapshotExportParam>("encrypted_payload=redacted")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn snapshot_manage_auth_extracts_manage_access_before_payload() {
+        let req = actix_test::TestRequest::default().to_http_request();
+        req.extensions_mut().insert(Auth::new(
+            Access::full("snapshot upload test"),
+            None,
+            None,
+            AuthType::None,
+            None,
+        ));
+        let mut payload = actix_web::dev::Payload::None;
+
+        let result = SnapshotManageAuth::from_request(&req, &mut payload)
+            .now_or_never()
+            .expect("snapshot manage auth extractor is ready");
+
+        let SnapshotManageAuth { auth, multipass } = result.unwrap();
+        auth.check_global_access(AccessRequirements::new().manage(), "test")
+            .unwrap();
+        let _collection_pass = multipass.issue_pass("test_collection");
+    }
+
+    #[test]
+    fn snapshot_manage_auth_rejects_read_only_access_before_payload() {
+        let req = actix_test::TestRequest::default().to_http_request();
+        req.extensions_mut().insert(Auth::new(
+            Access::full_ro("snapshot upload test"),
+            None,
+            None,
+            AuthType::None,
+            None,
+        ));
+        let mut payload = actix_web::dev::Payload::None;
+
+        let result = SnapshotManageAuth::from_request(&req, &mut payload)
+            .now_or_never()
+            .expect("snapshot manage auth extractor is ready");
+
+        assert!(result.is_err());
     }
 }
 

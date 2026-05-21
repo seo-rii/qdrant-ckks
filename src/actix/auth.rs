@@ -176,29 +176,30 @@ impl FromRequest for ActixAuth {
         req: &actix_web::HttpRequest,
         _payload: &mut actix_web::dev::Payload,
     ) -> Self::Future {
-        let auth = req.extensions_mut().remove::<Auth>().unwrap_or_else(|| {
-            let remote = if audit_trust_forwarded_headers() {
-                forwarded::forwarded_for_http(req)
-            } else {
-                None
-            }
-            .or_else(|| req.peer_addr().map(|a| a.ip().to_string()));
-            let tracing_id = extract_tracing_id(|h| {
-                req.headers()
-                    .get(h)
-                    .and_then(|val| val.to_str().ok())
-                    .map(str::to_string)
-            });
-            Auth::new(
-                Access::full(
-                    "All requests have full by default access when API key is not configured",
-                ),
-                None,
-                remote,
-                AuthType::None,
-                tracing_id,
-            )
-        });
-        ready(Ok(ActixAuth(auth)))
+        ready(Ok(ActixAuth(take_auth_from_request(req))))
     }
+}
+
+pub(crate) fn take_auth_from_request(req: &actix_web::HttpRequest) -> Auth {
+    req.extensions_mut().remove::<Auth>().unwrap_or_else(|| {
+        let remote = if audit_trust_forwarded_headers() {
+            forwarded::forwarded_for_http(req)
+        } else {
+            None
+        }
+        .or_else(|| req.peer_addr().map(|a| a.ip().to_string()));
+        let tracing_id = extract_tracing_id(|h| {
+            req.headers()
+                .get(h)
+                .and_then(|val| val.to_str().ok())
+                .map(str::to_string)
+        });
+        Auth::new(
+            Access::full("All requests have full by default access when API key is not configured"),
+            None,
+            remote,
+            AuthType::None,
+            tracing_id,
+        )
+    })
 }
