@@ -176,10 +176,7 @@ impl CkksCiphertextHnswGraph {
             });
         }
 
-        let max_degree = m
-            .saturating_mul(2)
-            .max(1)
-            .min(CKKS_CIPHERTEXT_HNSW_GRAPH_MAX_DEGREE);
+        let max_degree = pre_backbone_max_degree(m);
         for idx in 1..points_len {
             let scores = score_previous_points(idx).map_err(CkksCiphertextScoreError::Scoring)?;
             if scores.len() != idx {
@@ -221,10 +218,7 @@ impl CkksCiphertextHnswGraph {
         // Segment optimization does not own an OpenFHE scoring runtime. Build a
         // deterministic connected candidate graph here; query-time CKKS search
         // still scores visited ciphertext candidates through the runtime bridge.
-        let max_degree = m
-            .saturating_mul(2)
-            .max(1)
-            .min(CKKS_CIPHERTEXT_HNSW_GRAPH_MAX_DEGREE);
+        let max_degree = pre_backbone_max_degree(m);
         for idx in 1..points_len {
             let first_candidate = idx.saturating_sub(m.max(1));
             for candidate in first_candidate..idx {
@@ -962,6 +956,12 @@ fn add_connectivity_backbone(links: &mut [Vec<usize>]) {
     }
 }
 
+fn pre_backbone_max_degree(m: usize) -> usize {
+    m.saturating_mul(2)
+        .max(1)
+        .min(CKKS_CIPHERTEXT_HNSW_GRAPH_MAX_DEGREE.saturating_sub(2))
+}
+
 fn write_graph_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let temporary_path = path.with_extension("json.tmp");
     write_private_graph_file(&temporary_path, bytes)?;
@@ -1339,6 +1339,43 @@ mod tests {
         assert!(CkksCiphertextHnswGraph::links_are_connected(graph.links()));
         assert!(graph.links()[0].contains(&1));
         assert!(graph.links()[4].contains(&3));
+    }
+
+    #[test]
+    fn built_graphs_respect_max_degree_after_connectivity_backbone() {
+        let graph = CkksCiphertextHnswGraph::build(
+            CKKS_CIPHERTEXT_HNSW_GRAPH_MAX_DEGREE + 4,
+            usize::MAX,
+            Order::SmallBetter,
+            |idx| -> Result<Vec<f32>, std::convert::Infallible> {
+                Ok((0..idx).map(|candidate| (idx - candidate) as f32).collect())
+            },
+        )
+        .unwrap();
+
+        assert!(
+            graph.max_degree() <= CKKS_CIPHERTEXT_HNSW_GRAPH_MAX_DEGREE,
+            "similarity graph degree {} exceeded max {}",
+            graph.max_degree(),
+            CKKS_CIPHERTEXT_HNSW_GRAPH_MAX_DEGREE
+        );
+        assert!(CkksCiphertextHnswGraph::from_validated_links(graph.links().to_vec()).is_some());
+
+        let candidate_graph = CkksCiphertextHnswGraph::build_optimizer_candidate_graph(
+            CKKS_CIPHERTEXT_HNSW_GRAPH_MAX_DEGREE + 4,
+            usize::MAX,
+        );
+
+        assert!(
+            candidate_graph.max_degree() <= CKKS_CIPHERTEXT_HNSW_GRAPH_MAX_DEGREE,
+            "candidate graph degree {} exceeded max {}",
+            candidate_graph.max_degree(),
+            CKKS_CIPHERTEXT_HNSW_GRAPH_MAX_DEGREE
+        );
+        assert!(
+            CkksCiphertextHnswGraph::from_validated_links(candidate_graph.links().to_vec())
+                .is_some()
+        );
     }
 
     #[test]
