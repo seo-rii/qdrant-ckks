@@ -221,6 +221,7 @@ impl ConsensusOpWal {
                         "Appending operation, term: {}, index: {}, entry: {op:?}",
                         new_entry.term,
                         new_entry.index,
+                        op = op.redacted_log(),
                     );
                 } else {
                     log::debug!("Appending entry: {new_entry:?}");

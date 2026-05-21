@@ -19,6 +19,8 @@ pub mod staging;
 pub mod toc;
 
 pub mod consensus_ops {
+    use std::fmt;
+
     use collection::operations::types::PeerMetadata;
     use collection::shards::replica_set::replica_set_state::ReplicaState;
     use collection::shards::replica_set::replica_set_state::ReplicaState::Initializing;
@@ -68,6 +70,10 @@ pub mod consensus_ops {
     }
 
     impl ConsensusOperations {
+        pub fn redacted_log(&self) -> RedactedConsensusOperation<'_> {
+            RedactedConsensusOperation(self)
+        }
+
         pub fn abort_transfer(
             collection_id: CollectionId,
             transfer: ShardTransfer,
@@ -182,6 +188,63 @@ pub mod consensus_ops {
         }
     }
 
+    pub struct RedactedConsensusOperation<'a>(&'a ConsensusOperations);
+
+    impl fmt::Debug for RedactedConsensusOperation<'_> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self.0 {
+                ConsensusOperations::CollectionMeta(operation) => f
+                    .debug_tuple("CollectionMeta")
+                    .field(&operation.redacted_log())
+                    .finish(),
+                ConsensusOperations::AddPeer { peer_id, uri } => f
+                    .debug_struct("AddPeer")
+                    .field("peer_id", peer_id)
+                    .field("uri_present", &(!uri.is_empty()))
+                    .finish(),
+                ConsensusOperations::RemovePeer(peer_id) => {
+                    f.debug_tuple("RemovePeer").field(peer_id).finish()
+                }
+                ConsensusOperations::UpdatePeerMetadata { peer_id, metadata } => f
+                    .debug_struct("UpdatePeerMetadata")
+                    .field("peer_id", peer_id)
+                    .field(
+                        "crypto_fingerprint_present",
+                        &peer_metadata_has_crypto_fingerprint(metadata),
+                    )
+                    .finish(),
+                ConsensusOperations::UpdateClusterMetadata { key, value } => f
+                    .debug_struct("UpdateClusterMetadata")
+                    .field("key", key)
+                    .field("value_type", &json_value_type(value))
+                    .finish(),
+                ConsensusOperations::RequestSnapshot => f.write_str("RequestSnapshot"),
+                ConsensusOperations::ReportSnapshot { peer_id, status } => f
+                    .debug_struct("ReportSnapshot")
+                    .field("peer_id", peer_id)
+                    .field("status", status)
+                    .finish(),
+            }
+        }
+    }
+
+    fn peer_metadata_has_crypto_fingerprint(metadata: &PeerMetadata) -> bool {
+        metadata
+            .crypto_runtime_capability_fingerprint()
+            .is_some_and(|fingerprint| !fingerprint.is_empty())
+    }
+
+    fn json_value_type(value: &serde_json::Value) -> &'static str {
+        match value {
+            serde_json::Value::Null => "null",
+            serde_json::Value::Bool(_) => "bool",
+            serde_json::Value::Number(_) => "number",
+            serde_json::Value::String(_) => "string",
+            serde_json::Value::Array(_) => "array",
+            serde_json::Value::Object(_) => "object",
+        }
+    }
+
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Deserialize, Serialize)]
     pub enum SnapshotStatus {
         Finish,
@@ -228,6 +291,8 @@ pub trait CollectionContainer {
 mod test {
     use serde_json::json;
 
+    use super::consensus_ops::ConsensusOperations;
+
     // Consensus messages are serialized to CBOR when sent over network and written into WAL.
     //
     // We are using `serde_json::Value` in `ConsensusOperations::UpdateClusterMetadata`,
@@ -239,6 +304,35 @@ mod test {
     #[test]
     fn serde_json_null_combatible_with_cbor() {
         serde_json_value_compatible_with_cbor(json!(null));
+    }
+
+    #[test]
+    fn consensus_operation_log_projection_redacts_cluster_metadata_value() {
+        let operation = ConsensusOperations::UpdateClusterMetadata {
+            key: "crypto-policy".to_string(),
+            value: json!({
+                "secret": "qdrant-sec-consensus-secret-sentinel",
+                "rk_id": "rk/secret-sentinel",
+            }),
+        };
+
+        let log_line = format!("{:?}", operation.redacted_log());
+
+        assert!(!log_line.contains("qdrant-sec-consensus-secret-sentinel"));
+        assert!(!log_line.contains("rk/secret-sentinel"));
+        assert!(log_line.contains("value_type: \"object\""), "{log_line}");
+    }
+
+    #[test]
+    fn raw_consensus_operation_debug_still_contains_cluster_metadata_value() {
+        let operation = ConsensusOperations::UpdateClusterMetadata {
+            key: "crypto-policy".to_string(),
+            value: json!({ "secret": "qdrant-sec-raw-consensus-sentinel" }),
+        };
+
+        let raw_debug = format!("{operation:?}");
+
+        assert!(raw_debug.contains("qdrant-sec-raw-consensus-sentinel"));
     }
 
     #[test]

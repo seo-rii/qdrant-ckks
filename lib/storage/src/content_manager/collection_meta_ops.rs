@@ -536,6 +536,117 @@ pub enum CollectionMetaOperations {
     TestSlowDown(TestSlowDown),
 }
 
+impl CollectionMetaOperations {
+    pub(crate) fn redacted_log(&self) -> RedactedCollectionMetaOperation<'_> {
+        RedactedCollectionMetaOperation(self)
+    }
+}
+
+pub(crate) struct RedactedCollectionMetaOperation<'a>(&'a CollectionMetaOperations);
+
+impl fmt::Debug for RedactedCollectionMetaOperation<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            CollectionMetaOperations::CreateCollection(operation) => f
+                .debug_struct("CreateCollection")
+                .field("collection_name", &operation.collection_name)
+                .field(
+                    "has_encryption",
+                    &operation.create_collection.encryption.is_some(),
+                )
+                .field("has_uuid", &operation.create_collection.uuid.is_some())
+                .field(
+                    "metadata_present",
+                    &operation.create_collection.metadata.is_some(),
+                )
+                .field("distribution_present", &operation.is_distribution_set())
+                .finish(),
+            CollectionMetaOperations::UpdateCollection(operation) => f
+                .debug_struct("UpdateCollection")
+                .field("collection_name", &operation.collection_name)
+                .field("has_params", &operation.update_collection.params.is_some())
+                .field(
+                    "metadata_present",
+                    &operation.update_collection.metadata.is_some(),
+                )
+                .finish(),
+            CollectionMetaOperations::ApplyCryptoMigration(operation) => f
+                .debug_struct("ApplyCryptoMigration")
+                .field("collection_name", &operation.collection_name)
+                .field("from", &operation.plan.from)
+                .field("to", &operation.plan.to)
+                .field("target_epoch", &operation.plan.target_epoch)
+                .field(
+                    "active_rk_id_present",
+                    &operation.plan.active_rk_id.is_some(),
+                )
+                .field(
+                    "retired_rk_id_present",
+                    &operation.plan.retired_rk_id.is_some(),
+                )
+                .field("dry_run", &operation.plan.dry_run)
+                .field("checkpoint_count", &operation.plan.checkpoints.len())
+                .finish(),
+            CollectionMetaOperations::DeleteCollection(operation) => f
+                .debug_tuple("DeleteCollection")
+                .field(&operation.0)
+                .finish(),
+            CollectionMetaOperations::ChangeAliases(operation) => f
+                .debug_struct("ChangeAliases")
+                .field("action_count", &operation.actions.len())
+                .finish(),
+            CollectionMetaOperations::Resharding(collection_id, operation) => f
+                .debug_struct("Resharding")
+                .field("collection_id", collection_id)
+                .field("operation", operation)
+                .finish(),
+            CollectionMetaOperations::TransferShard(collection_id, operation) => f
+                .debug_struct("TransferShard")
+                .field("collection_id", collection_id)
+                .field("operation", &operation.redacted_log())
+                .finish(),
+            CollectionMetaOperations::SetShardReplicaState(operation) => f
+                .debug_struct("SetShardReplicaState")
+                .field("collection_name", &operation.collection_name)
+                .field("shard_id", &operation.shard_id)
+                .field("peer_id", &operation.peer_id)
+                .field("state", &operation.state)
+                .field("from_state", &operation.from_state)
+                .finish(),
+            CollectionMetaOperations::CreateShardKey(operation) => f
+                .debug_struct("CreateShardKey")
+                .field("collection_name", &operation.collection_name)
+                .field("placement", &operation.placement)
+                .field("initial_state", &operation.initial_state)
+                .field("shard_key_present", &true)
+                .finish(),
+            CollectionMetaOperations::DropShardKey(operation) => f
+                .debug_struct("DropShardKey")
+                .field("collection_name", &operation.collection_name)
+                .field("shard_key_present", &true)
+                .finish(),
+            CollectionMetaOperations::CreatePayloadIndex(operation) => f
+                .debug_struct("CreatePayloadIndex")
+                .field("collection_name", &operation.collection_name)
+                .field("field_name_present", &true)
+                .field("field_schema", &operation.field_schema)
+                .finish(),
+            CollectionMetaOperations::DropPayloadIndex(operation) => f
+                .debug_struct("DropPayloadIndex")
+                .field("collection_name", &operation.collection_name)
+                .field("field_name_present", &true)
+                .finish(),
+            CollectionMetaOperations::Nop { token } => {
+                f.debug_struct("Nop").field("token", token).finish()
+            }
+            #[cfg(feature = "staging")]
+            CollectionMetaOperations::TestSlowDown(operation) => {
+                f.debug_tuple("TestSlowDown").field(operation).finish()
+            }
+        }
+    }
+}
+
 /// Use config of the existing collection to generate a create collection operation
 /// for the new collection
 impl From<CollectionConfigInternal> for CreateCollection {
@@ -587,11 +698,11 @@ impl From<CollectionConfigInternal> for CreateCollection {
 #[cfg(test)]
 mod tests {
     use collection::config::{
-        CollectionEncryptionConfig, CryptoMigrationPlan, CryptoMigrationState, EncryptionRuleRef,
-        EncryptionSelector,
+        CollectionEncryptionConfig, CryptoMigrationCheckpoint, CryptoMigrationCheckpointStatus,
+        CryptoMigrationPlan, CryptoMigrationState, EncryptionRuleRef, EncryptionSelector,
     };
     use collection::shards::transfer::ShardTransferMethod;
-    use segment::types::{Condition, FieldCondition};
+    use segment::types::{Condition, FieldCondition, PayloadFieldSchema, PayloadSchemaType};
     use serde_json::json;
 
     use super::*;
@@ -749,5 +860,52 @@ mod tests {
 
         assert!(!log_line.contains("qdrant-sec-transfer-abort-sentinel"));
         assert!(log_line.contains("reason_present: true"), "{log_line}");
+    }
+
+    #[test]
+    fn collection_meta_log_projection_redacts_crypto_migration_key_ids() {
+        let operation = CollectionMetaOperations::ApplyCryptoMigration(ApplyCryptoMigrationPlan {
+            collection_name: "docs".to_string(),
+            plan: CryptoMigrationPlan {
+                from: CryptoMigrationState::Encrypting,
+                to: CryptoMigrationState::Active,
+                target_epoch: 7,
+                active_rk_id: Some("rk/secret-active-sentinel".to_string()),
+                retired_rk_id: Some("rk/secret-retired-sentinel".to_string()),
+                dry_run: false,
+                checkpoints: vec![CryptoMigrationCheckpoint {
+                    shard_id: 1,
+                    total_points: 10,
+                    processed_points: 10,
+                    rewritten_points: 10,
+                    changed_points: 10,
+                    status: CryptoMigrationCheckpointStatus::Verified,
+                }],
+            },
+        });
+
+        let log_line = format!("{:?}", operation.redacted_log());
+
+        assert!(!log_line.contains("secret-active-sentinel"), "{log_line}");
+        assert!(!log_line.contains("secret-retired-sentinel"), "{log_line}");
+        assert!(
+            log_line.contains("active_rk_id_present: true"),
+            "{log_line}"
+        );
+        assert!(log_line.contains("checkpoint_count: 1"), "{log_line}");
+    }
+
+    #[test]
+    fn collection_meta_log_projection_redacts_payload_index_path() {
+        let operation = CollectionMetaOperations::CreatePayloadIndex(CreatePayloadIndex {
+            collection_name: "docs".to_string(),
+            field_name: "document.body.secret-sentinel".parse().unwrap(),
+            field_schema: PayloadFieldSchema::FieldType(PayloadSchemaType::Keyword),
+        });
+
+        let log_line = format!("{:?}", operation.redacted_log());
+
+        assert!(!log_line.contains("document.body.secret-sentinel"));
+        assert!(log_line.contains("field_name_present: true"), "{log_line}");
     }
 }

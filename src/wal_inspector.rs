@@ -29,12 +29,12 @@ fn main() {
     let wal_type = positional[1].as_str();
     match wal_type {
         "collection" => print_collection_wal(wal_path, raw),
-        "consensus" => print_consensus_wal(wal_path),
+        "consensus" => print_consensus_wal(wal_path, raw),
         _ => eprintln!("Unknown wal type: {wal_type}"),
     }
 }
 
-fn print_consensus_wal(wal_path: &Path) {
+fn print_consensus_wal(wal_path: &Path, raw: bool) {
     // must live within a folder named `collections_meta_wal`
     let wal = ConsensusOpWal::new(wal_path);
     println!("==========================");
@@ -57,7 +57,8 @@ fn print_consensus_wal(wal_path: &Path) {
         println!("==========================");
         let command = ConsensusOperations::try_from(&entry);
         let data = match command {
-            Ok(command) => format!("{command:?}"),
+            Ok(command) if raw => format!("{command:?}"),
+            Ok(command) => format!("{:?}", command.redacted_log()),
             Err(_) => format!("{:?}", entry.data),
         };
         println!(
