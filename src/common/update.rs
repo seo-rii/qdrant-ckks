@@ -51,6 +51,7 @@ use crate::common::crypto::{
 use crate::common::inference::params::InferenceParams;
 use crate::common::inference::service::InferenceType;
 use crate::common::inference::update_requests::*;
+use crate::common::query::invalidate_ckks_sidecar_hnsw_graph_cache;
 use crate::common::strict_mode::*;
 use crate::settings::Settings;
 
@@ -1938,6 +1939,7 @@ async fn maybe_encrypt_update_vectors(
 
     let mut sidecar_updates = Vec::new();
     let mut verified_sidecar_keys = Vec::new();
+    let mut mutated_vector_names = Vec::new();
     for point in points.iter_mut() {
         let mut payload = None;
         let point_verified_sidecar_keys = encrypt_vectors_for_point(
@@ -1949,6 +1951,13 @@ async fn maybe_encrypt_update_vectors(
         )?;
         if !point_verified_sidecar_keys.is_empty() {
             verified_sidecar_keys.extend(point_verified_sidecar_keys);
+            if let Some(sidecar) = payload
+                .as_ref()
+                .and_then(|payload| payload.0.get(ENCRYPTED_VECTOR_SIDECAR_FIELD))
+                .and_then(Value::as_object)
+            {
+                mutated_vector_names.extend(sidecar.keys().cloned());
+            }
             sidecar_updates.push(SetPayload {
                 points: Some(vec![point.id]),
                 payload: payload.unwrap_or_default(),
@@ -1969,6 +1978,9 @@ async fn maybe_encrypt_update_vectors(
         collection_name,
         sidecar_updates.len(),
     )?;
+    mutated_vector_names.sort_unstable();
+    mutated_vector_names.dedup();
+    invalidate_ckks_sidecar_hnsw_graph_cache(&collection_crypto_id, &mutated_vector_names)?;
 
     let provenance = CollectionUpdateProvenance::runtime_encrypted_vectors(verified_sidecar_keys);
     Ok((sidecar_updates, provenance))
@@ -2318,7 +2330,7 @@ async fn split_encrypted_vector_delete_names(
     } else {
         CollectionUpdateProvenance::runtime_encrypted_vector_deletes_for_target(
             &collection_crypto_id,
-            encrypted_sidecar_vector_names,
+            encrypted_sidecar_vector_names.clone(),
             delete_target
                 .expect("encrypted sidecar vector names require delete target")
                 .clone(),
@@ -2329,6 +2341,10 @@ async fn split_encrypted_vector_delete_names(
             ))
         })?
     };
+    invalidate_ckks_sidecar_hnsw_graph_cache(
+        &collection_crypto_id,
+        &encrypted_sidecar_vector_names,
+    )?;
 
     Ok((
         plaintext_vector_names,

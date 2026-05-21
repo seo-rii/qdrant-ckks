@@ -259,6 +259,39 @@ impl CkksSidecarHnswGraphCache {
         self.order.push_back(key.clone());
         self.entries.insert(key, graph);
     }
+
+    fn invalidate_collection_vectors(
+        &mut self,
+        collection_identity: &str,
+        vector_names: &[String],
+    ) {
+        if vector_names.is_empty() {
+            return;
+        }
+        self.entries.retain(|key, _| {
+            key.collection_identity != collection_identity
+                || !vector_names
+                    .iter()
+                    .any(|vector_name| vector_name.as_str() == key.vector_name)
+        });
+        self.order.retain(|key| {
+            key.collection_identity != collection_identity
+                || !vector_names
+                    .iter()
+                    .any(|vector_name| vector_name.as_str() == key.vector_name)
+        });
+    }
+}
+
+pub(crate) fn invalidate_ckks_sidecar_hnsw_graph_cache(
+    collection_identity: &str,
+    vector_names: &[String],
+) -> Result<(), StorageError> {
+    let mut cache = CKKS_SIDECAR_HNSW_GRAPH_CACHE.lock().map_err(|_| {
+        StorageError::service_error("CKKS sidecar HNSW graph cache mutex was poisoned")
+    })?;
+    cache.invalidate_collection_vectors(collection_identity, vector_names);
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -8481,6 +8514,36 @@ mod tests {
         }
 
         assert!(cache.get(&original_key).is_none());
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_graph_cache_invalidates_collection_vector_entries() {
+        let mut cache = CkksSidecarHnswGraphCache::default();
+        let target_key = ckks_sidecar_test_graph_cache_key("target");
+        let same_collection_other_vector_key = CkksSidecarHnswGraphCacheKey {
+            vector_name: "other".to_string(),
+            records_fingerprint: "other-vector".to_string(),
+            ..target_key.clone()
+        };
+        let other_collection_key = CkksSidecarHnswGraphCacheKey {
+            collection_identity: "other-collection".to_string(),
+            records_fingerprint: "other-collection".to_string(),
+            ..target_key.clone()
+        };
+
+        for key in [
+            target_key.clone(),
+            same_collection_other_vector_key.clone(),
+            other_collection_key.clone(),
+        ] {
+            cache.insert(key, Arc::new(ckks_sidecar_test_graph(Vec::new())));
+        }
+
+        cache.invalidate_collection_vectors("collection-uuid", &["vector".to_string()]);
+
+        assert!(cache.get(&target_key).is_none());
+        assert!(cache.get(&same_collection_other_vector_key).is_some());
+        assert!(cache.get(&other_collection_key).is_some());
     }
 
     fn ckks_sidecar_test_graph_cache_key(
