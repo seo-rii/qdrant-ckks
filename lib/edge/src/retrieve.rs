@@ -7,7 +7,7 @@ use segment::types::{ExtendedPointId, WithPayload, WithPayloadInterface, WithVec
 use shard::retrieve::record_internal::RecordInternal;
 use shard::retrieve::retrieve_blocking::retrieve_blocking;
 
-use crate::{DEFAULT_EDGE_TIMEOUT, EdgeShard};
+use crate::{DEFAULT_EDGE_TIMEOUT, EdgeShard, reject_edge_encrypted_payload_read_mode};
 
 impl EdgeShard {
     pub fn retrieve(
@@ -16,8 +16,9 @@ impl EdgeShard {
         with_payload: Option<WithPayloadInterface>,
         with_vector: Option<WithVector>,
     ) -> OperationResult<Vec<RecordInternal>> {
-        let with_payload =
-            WithPayload::from(with_payload.unwrap_or(WithPayloadInterface::Bool(true)));
+        let with_payload = with_payload.unwrap_or(WithPayloadInterface::Bool(true));
+        reject_edge_encrypted_payload_read_mode(&with_payload)?;
+        let with_payload = WithPayload::from(with_payload);
         let with_vector = with_vector.unwrap_or(WithVector::Bool(false));
 
         let mut points = retrieve_blocking(

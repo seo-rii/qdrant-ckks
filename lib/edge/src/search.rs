@@ -10,7 +10,7 @@ use shard::query::query_context::{fill_query_context, init_query_context};
 use shard::search::CoreSearchRequest;
 use shard::search_result_aggregator::BatchResultAggregator;
 
-use crate::{DEFAULT_EDGE_TIMEOUT, EdgeShard};
+use crate::{DEFAULT_EDGE_TIMEOUT, EdgeShard, reject_edge_encrypted_payload_read_mode};
 
 impl EdgeShard {
     /// This method is DEPRECATED and should be replaced with query.
@@ -61,7 +61,9 @@ impl EdgeShard {
 
         let vector_name = query.get_vector_name().to_string();
         let query_vector = QueryVector::from(query);
-        let with_payload = WithPayload::from(with_payload.unwrap_or_default());
+        let with_payload = with_payload.unwrap_or_default();
+        reject_edge_encrypted_payload_read_mode(&with_payload)?;
+        let with_payload = WithPayload::from(with_payload);
         let with_vector = with_vector.unwrap_or_default();
 
         let mut points_by_segment = Vec::with_capacity(segments.len());

@@ -16,7 +16,7 @@ use shard::retrieve::retrieve_blocking::retrieve_blocking;
 use shard::scroll::ScrollRequestInternal;
 
 use super::EdgeShard;
-use crate::DEFAULT_EDGE_TIMEOUT;
+use crate::{DEFAULT_EDGE_TIMEOUT, reject_edge_encrypted_payload_read_mode};
 
 impl EdgeShard {
     pub fn scroll(
@@ -34,6 +34,7 @@ impl EdgeShard {
 
         let limit = limit.unwrap_or(ScrollRequestInternal::default_limit());
         let with_payload = with_payload.unwrap_or(ScrollRequestInternal::default_with_payload());
+        reject_edge_encrypted_payload_read_mode(&with_payload)?;
 
         match order_by.map(OrderBy::from) {
             None => {
@@ -85,6 +86,7 @@ impl EdgeShard {
             scroll_order,
             with_payload,
         } = request;
+        reject_edge_encrypted_payload_read_mode(with_payload)?;
 
         let records = match scroll_order {
             ScrollOrder::ById => self.scroll_by_id(

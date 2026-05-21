@@ -29,6 +29,7 @@ use parking_lot::Mutex;
 pub use reexports::*;
 use segment::entry::ReadSegmentEntry as _;
 use segment::segment_constructor::{load_segment, normalize_segment_dir};
+use segment::types::EncryptedPayloadReadMode;
 use shard::files::{PAYLOAD_INDEX_CONFIG_FILE, SEGMENTS_PATH};
 use shard::operations::CollectionUpdateOperations;
 use shard::segment_holder::SegmentHolder;
@@ -363,3 +364,60 @@ fn ensure_appendable_segment(
 
 // Default timeout of 1h used as a placeholder in Edge
 pub(crate) const DEFAULT_EDGE_TIMEOUT: Duration = Duration::from_secs(3600);
+
+pub(crate) fn reject_edge_encrypted_payload_read_mode(
+    with_payload: &segment::types::WithPayloadInterface,
+) -> OperationResult<()> {
+    match with_payload.encrypted_payload_read_mode() {
+        EncryptedPayloadReadMode::Raw => Ok(()),
+        EncryptedPayloadReadMode::Redacted | EncryptedPayloadReadMode::Decrypted => {
+            Err(OperationError::validation_error(
+                "edge shards do not support qdrant-sec encrypted payload read modes",
+            ))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use segment::types::{
+        EncryptedPayloadReadMode, PayloadEncryptedReadPolicy, WithPayloadInterface,
+    };
+
+    use super::reject_edge_encrypted_payload_read_mode;
+
+    #[test]
+    fn edge_allows_only_raw_encrypted_payload_read_mode() {
+        reject_edge_encrypted_payload_read_mode(&WithPayloadInterface::Bool(true)).unwrap();
+        reject_edge_encrypted_payload_read_mode(&WithPayloadInterface::Encrypted(
+            PayloadEncryptedReadPolicy {
+                encrypted_payload: EncryptedPayloadReadMode::Raw,
+            },
+        ))
+        .unwrap();
+
+        let redacted = reject_edge_encrypted_payload_read_mode(&WithPayloadInterface::Encrypted(
+            PayloadEncryptedReadPolicy {
+                encrypted_payload: EncryptedPayloadReadMode::Redacted,
+            },
+        ))
+        .expect_err("edge must fail closed on encrypted payload redaction mode");
+        assert!(
+            redacted
+                .to_string()
+                .contains("edge shards do not support qdrant-sec encrypted payload read modes")
+        );
+
+        let decrypted = reject_edge_encrypted_payload_read_mode(&WithPayloadInterface::Encrypted(
+            PayloadEncryptedReadPolicy {
+                encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+            },
+        ))
+        .expect_err("edge must fail closed on encrypted payload decrypt mode");
+        assert!(
+            decrypted
+                .to_string()
+                .contains("edge shards do not support qdrant-sec encrypted payload read modes")
+        );
+    }
+}

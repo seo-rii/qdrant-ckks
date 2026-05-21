@@ -23,7 +23,7 @@ use shard::search::CoreSearchRequest;
 use shard::search_result_aggregator::BatchResultAggregator;
 
 use super::EdgeShard;
-use crate::DEFAULT_EDGE_TIMEOUT;
+use crate::{DEFAULT_EDGE_TIMEOUT, reject_edge_encrypted_payload_read_mode};
 
 impl EdgeShard {
     pub fn query(&self, request: ShardQueryRequest) -> OperationResult<Vec<ScoredPoint>> {
@@ -408,6 +408,7 @@ impl EdgeShard {
         with_vector: WithVector,
         hw_measurement_acc: HwMeasurementAcc,
     ) -> OperationResult<ShardQueryResponse> {
+        reject_edge_encrypted_payload_read_mode(&with_payload)?;
         if !with_payload.is_required() && !with_vector.is_enabled() {
             return Ok(query_response);
         }
