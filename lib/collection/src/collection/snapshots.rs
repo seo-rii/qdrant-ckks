@@ -17,7 +17,10 @@ use super::Collection;
 use crate::collection::CollectionVersion;
 use crate::common::snapshot_stream::SnapshotStream;
 use crate::common::snapshots_manager::SnapshotStorageManager;
-use crate::config::{COLLECTION_CONFIG_FILE, CollectionConfigInternal, ShardingMethod};
+use crate::config::{
+    COLLECTION_CONFIG_FILE, CollectionConfigInternal, CollectionParams, CryptoMigrationState,
+    ShardingMethod,
+};
 use crate::operations::snapshot_ops::SnapshotDescription;
 use crate::operations::types::{CollectionError, CollectionResult, NodeType};
 use crate::shards::local_shard::LocalShard;
@@ -57,6 +60,14 @@ impl Collection {
         global_temp_dir: &Path,
         this_peer_id: PeerId,
     ) -> CollectionResult<SnapshotDescription> {
+        {
+            let collection_config = self.collection_config.read().await;
+            ensure_snapshot_crypto_migration_state_allows_snapshot(
+                self.name(),
+                &collection_config.params,
+            )?;
+        }
+
         let snapshot_name = format!(
             "{}-{this_peer_id}-{}.snapshot",
             self.name(),
@@ -399,5 +410,75 @@ impl Collection {
             .ok_or_else(|| shard_not_found_error(shard_id))?
             .get_partial_snapshot_manifest()
             .await
+    }
+}
+
+fn ensure_snapshot_crypto_migration_state_allows_snapshot(
+    collection_name: &str,
+    params: &CollectionParams,
+) -> CollectionResult<()> {
+    let Some(encryption) = params.effective_encryption() else {
+        return Ok(());
+    };
+    if encryption.migration_state != CryptoMigrationState::Active {
+        return Err(CollectionError::bad_request(format!(
+            "encrypted collection {collection_name} snapshot creation requires \
+             migration_state=active; current state is {:?}. Finish or roll back the crypto \
+             migration before creating a snapshot because in-flight migration snapshots are not \
+             recovery-supported.",
+            encryption.migration_state,
+        )));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{CollectionEncryptionConfig, CollectionParams};
+
+    fn params_with_migration_state(migration_state: CryptoMigrationState) -> CollectionParams {
+        CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state,
+                rules: Vec::new(),
+            }),
+            ..CollectionParams::empty()
+        }
+    }
+
+    #[test]
+    fn snapshot_crypto_migration_state_guard_rejects_in_flight_states() {
+        ensure_snapshot_crypto_migration_state_allows_snapshot(
+            "docs",
+            &params_with_migration_state(CryptoMigrationState::Active),
+        )
+        .unwrap();
+        ensure_snapshot_crypto_migration_state_allows_snapshot(
+            "docs",
+            &params_with_migration_state(CryptoMigrationState::Disabled),
+        )
+        .unwrap();
+
+        for migration_state in [
+            CryptoMigrationState::Encrypting,
+            CryptoMigrationState::Rotating,
+            CryptoMigrationState::Decrypting,
+        ] {
+            let err = ensure_snapshot_crypto_migration_state_allows_snapshot(
+                "docs",
+                &params_with_migration_state(migration_state),
+            )
+            .expect_err("in-flight crypto migration snapshots must fail closed");
+            assert!(
+                err.to_string().contains("migration_state=active"),
+                "unexpected error for {migration_state:?}: {err}",
+            );
+        }
     }
 }
