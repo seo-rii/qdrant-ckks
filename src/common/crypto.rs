@@ -5656,25 +5656,27 @@ fn aws_kms_authorization_header(
         None => host.to_string(),
     };
     let payload_hash = hex_lower(&Sha256::digest(payload));
-    let mut canonical_headers =
-        format!("content-type:application/x-amz-json-1.1\nhost:{host}\nx-amz-date:{amz_date}\n");
+    let mut canonical_headers = Zeroizing::new(format!(
+        "content-type:application/x-amz-json-1.1\nhost:{host}\nx-amz-date:{amz_date}\n"
+    ));
     let mut signed_headers = "content-type;host;x-amz-date".to_string();
     if let Some(session_token) = &credentials.session_token {
-        canonical_headers.push_str(&format!(
-            "x-amz-security-token:{}\n",
-            session_token.as_str()
-        ));
+        canonical_headers.push_str("x-amz-security-token:");
+        canonical_headers.push_str(session_token.as_str());
+        canonical_headers.push('\n');
         signed_headers.push_str(";x-amz-security-token");
     }
     canonical_headers.push_str(&format!("x-amz-target:{target}\n"));
     signed_headers.push_str(";x-amz-target");
-    let canonical_request =
-        format!("POST\n/\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}");
+    let canonical_headers = canonical_headers.as_str();
+    let canonical_request = Zeroizing::new(format!(
+        "POST\n/\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
+    ));
     let credential_scope = format!("{date}/{}/kms/aws4_request", credentials.region);
-    let string_to_sign = format!(
+    let string_to_sign = Zeroizing::new(format!(
         "AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n{}",
         hex_lower(&Sha256::digest(canonical_request.as_bytes()))
-    );
+    ));
     let mut aws_secret_access_key = Zeroizing::new(Vec::with_capacity(
         b"AWS4".len() + credentials.secret_access_key.len(),
     ));
