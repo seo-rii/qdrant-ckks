@@ -17,12 +17,26 @@ const TAG_LEN: usize = 16;
 const MAX_KEY_ID_LEN: usize = 128;
 const HKDF_SALT: &[u8] = b"qdrant-sec-aead-master-key-v1";
 const BASE64URL_NOPAD_12_BYTE_LEN: usize = 16;
+const ENCRYPTED_ENVELOPE_CIPHERTEXT_MAX_BYTES: usize = 16 * 1024 * 1024;
+const ENCRYPTED_ENVELOPE_CIPHERTEXT_MAX_B64_LEN: usize =
+    base64url_nopad_encoded_len(ENCRYPTED_ENVELOPE_CIPHERTEXT_MAX_BYTES);
 pub const LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_LEN: usize = KEY_LEN + TAG_LEN;
 pub const LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_B64_LEN: usize = 64;
 
 pub const PAYLOAD_TEXT_KEY_DOMAIN: &[u8] = b"qdrant-sec/payload-text/v1";
 pub const METADATA_VALUE_KEY_DOMAIN: &[u8] = b"qdrant-sec/metadata-value/v1";
 pub const CKKS_VECTOR_KEY_DOMAIN: &[u8] = b"qdrant-sec/vector-envelope/v1";
+
+const fn base64url_nopad_encoded_len(decoded_len: usize) -> usize {
+    let full_groups = decoded_len / 3;
+    let remainder = decoded_len % 3;
+    let base_len = full_groups * 4;
+    match remainder {
+        0 => base_len,
+        1 => base_len + 2,
+        _ => base_len + 3,
+    }
+}
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum EncryptionError {
@@ -296,6 +310,9 @@ pub(crate) fn validate_encrypted_envelope_metadata(
         (false, None) => {}
     }
 
+    if envelope.nonce.len() != BASE64URL_NOPAD_12_BYTE_LEN {
+        return Err(EncryptionError::InvalidNonceLength);
+    }
     let nonce = BASE64URL_NOPAD
         .decode(envelope.nonce.as_bytes())
         .map_err(|_| EncryptionError::InvalidEncoding)?;
@@ -303,10 +320,16 @@ pub(crate) fn validate_encrypted_envelope_metadata(
         return Err(EncryptionError::InvalidNonceLength);
     }
 
+    if envelope.ciphertext.len() > ENCRYPTED_ENVELOPE_CIPHERTEXT_MAX_B64_LEN {
+        return Err(EncryptionError::InvalidCiphertextLength);
+    }
     let ciphertext = BASE64URL_NOPAD
         .decode(envelope.ciphertext.as_bytes())
         .map_err(|_| EncryptionError::InvalidEncoding)?;
     if ciphertext.len() < TAG_LEN {
+        return Err(EncryptionError::InvalidCiphertextLength);
+    }
+    if ciphertext.len() > ENCRYPTED_ENVELOPE_CIPHERTEXT_MAX_BYTES {
         return Err(EncryptionError::InvalidCiphertextLength);
     }
 
@@ -904,6 +927,44 @@ mod tests {
             provider.unwrap_resource_key(&wrapped, aad),
             Err(EncryptionError::InvalidNonceLength),
         ));
+    }
+
+    #[test]
+    fn envelope_metadata_rejects_oversized_ciphertext_before_decode() {
+        let envelope = EncryptedEnvelope {
+            version: VERSION,
+            algorithm: ALGORITHM.to_string(),
+            key_id: "tenant-a:active".to_string(),
+            material_fingerprint: "tenant-a/active@v1".to_string(),
+            rk_id: "tenant-a/active-rk".to_string(),
+            rk_epoch: Some(1),
+            nonce: BASE64URL_NOPAD.encode(&[0u8; NONCE_LEN]),
+            ciphertext: "A".repeat(ENCRYPTED_ENVELOPE_CIPHERTEXT_MAX_B64_LEN + 1),
+        };
+
+        assert_eq!(
+            validate_encrypted_envelope_metadata(&envelope),
+            Err(EncryptionError::InvalidCiphertextLength)
+        );
+    }
+
+    #[test]
+    fn envelope_metadata_rejects_oversized_nonce_before_decode() {
+        let envelope = EncryptedEnvelope {
+            version: VERSION,
+            algorithm: ALGORITHM.to_string(),
+            key_id: "tenant-a:active".to_string(),
+            material_fingerprint: "tenant-a/active@v1".to_string(),
+            rk_id: "tenant-a/active-rk".to_string(),
+            rk_epoch: Some(1),
+            nonce: "A".repeat(BASE64URL_NOPAD_12_BYTE_LEN + 1),
+            ciphertext: BASE64URL_NOPAD.encode(&[1u8; TAG_LEN]),
+        };
+
+        assert_eq!(
+            validate_encrypted_envelope_metadata(&envelope),
+            Err(EncryptionError::InvalidNonceLength)
+        );
     }
 
     #[test]
