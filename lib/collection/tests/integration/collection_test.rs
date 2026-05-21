@@ -217,6 +217,19 @@ fn client_payload_encryption_config() -> CollectionEncryptionConfig {
     }
 }
 
+fn client_payload_encryption_with_blind_index_config() -> CollectionEncryptionConfig {
+    let mut config = client_payload_encryption_config();
+    config.rules.push(EncryptionRuleRef {
+        id: "document_body_blind_eq".to_string(),
+        selector: EncryptionSelector::MetadataKeys {
+            keys: vec!["document_body__blind_eq".to_string()],
+        },
+        instance: "docs_body_blind_v1".to_string(),
+        binding: Some(METADATA_EXACT_MATCH_TOKEN_BINDING.to_string()),
+    });
+    config
+}
+
 fn vector_encryption_config() -> CollectionEncryptionConfig {
     CollectionEncryptionConfig {
         version: 1,
@@ -1129,7 +1142,7 @@ async fn encrypted_payload_field_rejects_recovered_payload_index_schema() {
 
     assert!(matches!(
         err,
-        CollectionError::BadInput { description }
+        CollectionError::BadInput { ref description }
             if description.contains("payload index schema")
                 && description.contains("document.body")
                 && description.contains("blind index")
@@ -1213,7 +1226,7 @@ async fn crypto_migration_plan_updates_collection_config_through_admin_path() {
         .unwrap_err();
     assert!(matches!(
         regular_write_err,
-        CollectionError::BadInput { description }
+        CollectionError::BadInput { ref description }
             if description.contains("encryption migration")
                 && description.contains("regular writes")
     ));
@@ -2957,9 +2970,14 @@ async fn encrypted_payload_blind_index_token_filter_is_searchable() {
             .payload
             .as_ref()
             .and_then(|payload| payload.0.get("document_body__blind_eq"))
-            .and_then(|value| value.as_str()),
-        Some(token.as_str()),
+            .cloned(),
+        Some(serde_json::json!({
+            "$qdrant_sec_redacted": true,
+            "reason": "encrypted_payload",
+        })),
     );
+    let serialized = serde_json::to_string(&records.points[0].payload).unwrap();
+    assert!(!serialized.contains(&token));
 
     let redacted_records = collection
         .scroll_by(
@@ -3340,12 +3358,15 @@ async fn metadata_blind_index_writes_require_hmac_token_shape() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(
-        err,
-        CollectionError::BadInput { description }
-            if description.contains("metadata blind-index field 'document_body__blind_eq'")
-                && description.contains("base64url")
-    ));
+    assert!(
+        matches!(
+            err,
+            CollectionError::BadInput { ref description }
+                if description.contains("metadata blind-index field 'document_body__blind_eq'")
+                    && description.contains("token must decode to 32 bytes")
+        ),
+        "unexpected error: {err:?}"
+    );
 
     let err = collection
         .update_from_client_simple(
@@ -3369,6 +3390,45 @@ async fn metadata_blind_index_writes_require_hmac_token_shape() {
         err,
         CollectionError::BadInput { description }
             if description.contains("must be written as a full payload object")
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn client_encrypted_payload_rejects_unbound_blind_index_token_writes() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection = encrypted_collection_fixture(
+        collection_dir.path(),
+        1,
+        client_payload_encryption_with_blind_index_config(),
+    )
+    .await;
+
+    let err = collection
+        .update_from_client_simple(
+            CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+                PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                    id: 1.into(),
+                    vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                    payload: Some(
+                        serde_json::from_value(serde_json::json!({
+                            "document_body__blind_eq": BASE64URL_NOPAD.encode(&[7_u8; 32]),
+                        }))
+                        .unwrap(),
+                    ),
+                }]),
+            )),
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("metadata blind-index field 'document_body__blind_eq'")
+                && description.contains("client envelope signature binds the token manifest")
     ));
 }
 

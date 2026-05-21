@@ -1681,6 +1681,10 @@ impl Collection {
         }
         if let Some(encryption) = encryption {
             let mut seen_client_nonces = std::collections::HashSet::new();
+            let client_payload_envelope_rules_present = encryption.rules.iter().any(|rule| {
+                matches!(rule.selector, EncryptionSelector::PayloadPaths { .. })
+                    && rule.binding.as_deref() == Some(CLIENT_PAYLOAD_ENVELOPE_BINDING)
+            });
             let payload_write_touches_metadata_blind_index =
                 |payload: &Payload,
                  key: Option<&JsonPath>,
@@ -1700,6 +1704,11 @@ impl Collection {
                     for value in metadata_path.value_get(&payload.0) {
                         validate_metadata_blind_index_json_value(value, metadata_key)?;
                         touches = true;
+                    }
+                    if touches && client_payload_envelope_rules_present {
+                        return Err(CollectionError::bad_input(format!(
+                            "metadata blind-index field '{metadata_key}' cannot be written for client-side encrypted payload collections until the client envelope signature binds the token manifest",
+                        )));
                     }
                     Ok(touches)
                 };
