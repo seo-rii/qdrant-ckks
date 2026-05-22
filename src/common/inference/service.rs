@@ -337,58 +337,54 @@ impl InferenceService {
         retry_after: Option<Duration>,
     ) -> Result<InferenceResponse, StorageError> {
         match status {
-            reqwest::StatusCode::OK => {
-                serde_json::from_str(response_body)
-                    .map_err(|e| {
-                        StorageError::service_error(format!(
-                            "Failed to parse successful inference response: {e}. Response body: {response_body}",
-                        ))
-                    })
-            }
+            reqwest::StatusCode::OK => serde_json::from_str(response_body).map_err(|e| {
+                StorageError::service_error(format!(
+                    "Failed to parse successful inference response: {e}. Response body redacted",
+                ))
+            }),
             reqwest::StatusCode::BAD_REQUEST => {
-                // Try to extract error description from the response body, if it is a valid JSON
+                // Provider errors can echo request text, image payloads, or auth context.
+                // Treat response bodies as untrusted sensitive data and keep them out of user/log errors.
                 let parsed_body: Result<InferenceError, _> = serde_json::from_str(response_body);
                 match parsed_body {
-                    Ok(InferenceError { error }) => {
-                        Err(StorageError::bad_request(format!(
-                            "Inference request validation failed: {error}",
-                        )))
-                    }
-                    Err(_) => {
-                        Err(StorageError::bad_request(format!(
-                            "Invalid inference request: {response_body}",
-                        )))
-                    }
+                    Ok(InferenceError { error: _ }) => Err(StorageError::bad_request(format!(
+                        "Inference request validation failed ({status}); provider response body redacted",
+                    ))),
+                    Err(_) => Err(StorageError::bad_request(format!(
+                        "Invalid inference request ({status}); provider response body redacted",
+                    ))),
                 }
             }
             status @ (reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN) => {
                 Err(StorageError::service_error(format!(
-                    "Authentication failed for inference service ({status}): {response_body}",
+                    "Authentication failed for inference service ({status}); provider response body redacted",
                 )))
             }
             status @ reqwest::StatusCode::TOO_MANY_REQUESTS => {
                 Err(StorageError::rate_limit_exceeded(
-                    format!("Too many requests for inference service ({status}): {response_body}"),
+                    format!(
+                        "Too many requests for inference service ({status}); provider response body redacted",
+                    ),
                     retry_after,
                 ))
             }
             status @ (reqwest::StatusCode::INTERNAL_SERVER_ERROR
             | reqwest::StatusCode::SERVICE_UNAVAILABLE
             | reqwest::StatusCode::GATEWAY_TIMEOUT) => Err(StorageError::service_error(format!(
-                "Inference service error ({status}): {response_body}",
+                "Inference service error ({status}); provider response body redacted",
             ))),
             _ => {
                 if status.is_server_error() {
                     Err(StorageError::service_error(format!(
-                        "Inference service error ({status}): {response_body}",
+                        "Inference service error ({status}); provider response body redacted",
                     )))
                 } else if status.is_client_error() {
                     Err(StorageError::bad_request(format!(
-                        "Inference can't process request ({status}): {response_body}",
+                        "Inference can't process request ({status}); provider response body redacted",
                     )))
                 } else {
                     Err(StorageError::service_error(format!(
-                        "Unexpected inference error ({status}): {response_body}",
+                        "Unexpected inference error ({status}); provider response body redacted",
                     )))
                 }
             }
@@ -499,6 +495,41 @@ mod test {
         assert!(!rendered.contains("inference-data-plaintext-sentinel"));
         assert!(rendered.contains("document"), "{rendered}");
         assert!(rendered.contains("[redacted]"), "{rendered}");
+    }
+
+    #[test]
+    fn remote_inference_error_redacts_provider_response_body() {
+        for (status, body) in [
+            (
+                reqwest::StatusCode::OK,
+                "successful-response-plaintext-sentinel",
+            ),
+            (
+                reqwest::StatusCode::BAD_REQUEST,
+                r#"{"error":"bad-request-plaintext-sentinel"}"#,
+            ),
+            (
+                reqwest::StatusCode::FORBIDDEN,
+                "forbidden-token-plaintext-sentinel",
+            ),
+            (
+                reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+                "server-error-plaintext-sentinel",
+            ),
+        ] {
+            let err = InferenceService::handle_inference_response(status, body, None)
+                .expect_err("test response must fail");
+            let rendered = err.to_string();
+
+            assert!(
+                !rendered.contains("plaintext-sentinel"),
+                "status {status} leaked provider body: {rendered}",
+            );
+            assert!(
+                rendered.contains("redacted"),
+                "status {status} did not explain redaction: {rendered}",
+            );
+        }
     }
 
     #[tokio::test]
