@@ -34,7 +34,7 @@ use crate::actix::auth::ActixAuth;
 use crate::actix::helpers::{self, process_response};
 use crate::common::collections::*;
 use crate::common::crypto::{
-    validate_collection_crypto_runtime, validate_create_collection_crypto_runtime,
+    validate_collection_crypto_runtime_with_crypto_id, validate_create_collection_crypto_runtime,
 };
 use crate::common::update::{
     do_decrypt_payloads_for_crypto_migration, do_reencrypt_stale_payloads_for_crypto_migration,
@@ -167,17 +167,19 @@ async fn create_collection(
     let timing = Instant::now();
     let collection_name = collection.collection_name.clone();
     let operation = operation.into_inner();
-    if let Err(err) =
-        validate_create_collection_crypto_runtime(settings.get_ref(), &collection_name, &operation)
-    {
-        return process_response::<bool>(Err(err), timing, None);
-    }
-
-    let create_collection_op = CreateCollectionOperation::new(collection_name, operation);
+    let create_collection_op = CreateCollectionOperation::new(collection_name.clone(), operation);
 
     let Ok(create_collection_op) = create_collection_op else {
         return process_response(create_collection_op, timing, None);
     };
+
+    if let Err(err) = validate_create_collection_crypto_runtime(
+        settings.get_ref(),
+        &collection_name,
+        &create_collection_op.create_collection,
+    ) {
+        return process_response::<bool>(Err(err), timing, None);
+    }
 
     let response = dispatcher
         .submit_collection_meta_op(
@@ -441,9 +443,13 @@ fn build_collection_crypto_manifest_response(
             "collection {collection_name} does not have encryption configured",
         ))
     })?;
-    validate_collection_crypto_runtime(settings, collection_name, &config.params)?;
-
     let stable_crypto_id = config.stable_crypto_id(collection_name)?;
+    validate_collection_crypto_runtime_with_crypto_id(
+        settings,
+        collection_name,
+        &stable_crypto_id,
+        &config.params,
+    )?;
     let mut rules = Vec::new();
     let mut resource_keys = BTreeMap::new();
 

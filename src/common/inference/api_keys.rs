@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::fmt;
 use std::str::FromStr;
 
 use actix_web::{FromRequest, HttpMessage};
@@ -9,12 +10,24 @@ pub const EMBEDDING_API_KEY_HEADER_SUFFIX: &str = "-api-key";
 
 /// Combined inference authentication containing both the inference token (from JWT)
 /// and external API keys (from headers like `openai-api-key`).
-#[derive(Debug, Default, PartialEq, Eq, Clone)]
+#[derive(Default, PartialEq, Eq, Clone)]
 pub struct InferenceApiKeys {
     /// Token extracted from JWT claims (sub field), used for inference tracking
     pub token: Option<String>,
     /// External provider API keys extracted from headers ending with `-api-key`
     pub keys: HashMap<String, String>,
+}
+
+impl fmt::Debug for InferenceApiKeys {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut key_names = self.keys.keys().collect::<Vec<_>>();
+        key_names.sort();
+        f.debug_struct("InferenceApiKeys")
+            .field("token", &self.token.as_ref().map(|_| "[redacted]"))
+            .field("keys", &key_names)
+            .field("key_values", &"[redacted]")
+            .finish()
+    }
 }
 
 impl InferenceApiKeys {
@@ -75,8 +88,16 @@ impl InferenceApiKeys {
 
 /// Legacy type alias for backward compatibility during transition.
 /// This will be removed once all usages are updated.
-#[derive(Debug, Clone, Eq, PartialEq, Default)]
+#[derive(Clone, Eq, PartialEq, Default)]
 pub struct InferenceToken(pub Option<String>);
+
+impl fmt::Debug for InferenceToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("InferenceToken")
+            .field(&self.0.as_ref().map(|_| "[redacted]"))
+            .finish()
+    }
+}
 
 impl InferenceToken {
     pub fn new(key: impl Into<String>) -> Self {
@@ -127,4 +148,35 @@ pub fn convert_to_reqwest_headers(
     }
 
     headers
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_redacts_inference_token_and_external_api_keys() {
+        let mut api_keys = InferenceApiKeys::new(Some("jwt-subject-sentinel".to_string()));
+        api_keys.keys.insert(
+            "openai-api-key".to_string(),
+            "external-provider-key-sentinel".to_string(),
+        );
+
+        let rendered = format!("{api_keys:?}");
+
+        assert!(!rendered.contains("jwt-subject-sentinel"));
+        assert!(!rendered.contains("external-provider-key-sentinel"));
+        assert!(rendered.contains("openai-api-key"));
+        assert!(rendered.contains("[redacted]"));
+    }
+
+    #[test]
+    fn debug_redacts_legacy_inference_token() {
+        let token = InferenceToken::new("legacy-token-sentinel");
+
+        let rendered = format!("{token:?}");
+
+        assert!(!rendered.contains("legacy-token-sentinel"));
+        assert!(rendered.contains("[redacted]"));
+    }
 }

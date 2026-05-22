@@ -1497,12 +1497,31 @@ pub fn validate_create_collection_crypto_runtime(
             "collection {collection_name} crypto config is invalid: encrypted vector collection quantization is unsupported",
         )));
     }
-    validate_collection_crypto_runtime_inner(settings, collection_name, &params)
+    let collection_crypto_id = if params.encryption.is_some() {
+        create_collection
+            .uuid
+            .map(|uuid| uuid.to_string())
+            .ok_or_else(|| {
+                StorageError::bad_input(format!(
+                    "collection {collection_name} crypto runtime validation requires a stable UUID; \
+                     encrypted resource-key scopes cannot fall back to collection name",
+                ))
+            })?
+    } else {
+        collection_name.to_string()
+    };
+    validate_collection_crypto_runtime_inner_with_crypto_id(
+        settings,
+        collection_name,
+        &collection_crypto_id,
+        &params,
+    )
 }
 
-pub fn validate_collection_crypto_runtime(
+pub fn validate_collection_crypto_runtime_with_crypto_id(
     settings: &Settings,
     collection_name: &str,
+    collection_crypto_id: &str,
     params: &CollectionParams,
 ) -> Result<(), StorageError> {
     params.validate().map_err(|err| {
@@ -1510,12 +1529,32 @@ pub fn validate_collection_crypto_runtime(
             "collection {collection_name} crypto config is invalid: {err}"
         ))
     })?;
-    validate_collection_crypto_runtime_inner(settings, collection_name, params)
+    validate_collection_crypto_runtime_inner_with_crypto_id(
+        settings,
+        collection_name,
+        collection_crypto_id,
+        params,
+    )
 }
 
+#[cfg(test)]
 fn validate_collection_crypto_runtime_inner(
     settings: &Settings,
     collection_name: &str,
+    params: &CollectionParams,
+) -> Result<(), StorageError> {
+    validate_collection_crypto_runtime_inner_with_crypto_id(
+        settings,
+        collection_name,
+        collection_name,
+        params,
+    )
+}
+
+fn validate_collection_crypto_runtime_inner_with_crypto_id(
+    settings: &Settings,
+    collection_name: &str,
+    collection_crypto_id: &str,
     params: &CollectionParams,
 ) -> Result<(), StorageError> {
     if let Some(encryption) = &params.encryption {
@@ -1558,6 +1597,7 @@ fn validate_collection_crypto_runtime_inner(
         return validate_generic_collection_crypto_runtime(
             &effective_settings(settings),
             collection_name,
+            collection_crypto_id,
             params,
             encryption,
         );
@@ -1566,6 +1606,7 @@ fn validate_collection_crypto_runtime_inner(
     Ok(())
 }
 
+#[cfg(test)]
 pub fn validate_recovered_collection_crypto_runtime(
     settings: &Settings,
     collection_name: &str,
@@ -1585,7 +1626,7 @@ pub fn validate_recovered_collection_crypto_runtime(
             ))
         })?;
     }
-    validate_collection_crypto_runtime(settings, collection_name, params)
+    validate_collection_crypto_runtime_inner(settings, collection_name, params)
 }
 
 pub fn validate_recovered_collection_crypto_config(
@@ -1593,14 +1634,37 @@ pub fn validate_recovered_collection_crypto_config(
     collection_name: &str,
     config: &CollectionConfigInternal,
 ) -> Result<(), StorageError> {
-    if config.params.encryption.is_some() && config.uuid.is_none() {
-        return Err(StorageError::bad_input(format!(
-            "recovered encrypted collection {collection_name} is missing a stable UUID; \
-             encrypted payload/vector AAD requires an explicit stable collection identity",
-        )));
+    if let Some(encryption) = &config.params.encryption {
+        if config.uuid.is_none() {
+            return Err(StorageError::bad_input(format!(
+                "recovered encrypted collection {collection_name} is missing a stable UUID; \
+                 encrypted payload/vector AAD requires an explicit stable collection identity",
+            )));
+        }
+        if encryption.migration_state != CryptoMigrationState::Active {
+            return Err(StorageError::bad_input(format!(
+                "recovered collection {collection_name} has in-flight or disabled crypto migration state {:?}; \
+                 restore requires migration_state=active, no encryption config, or a verified migration recovery manifest",
+                encryption.migration_state,
+            )));
+        }
+        encryption.validate().map_err(|err| {
+            StorageError::bad_input(format!(
+                "recovered collection {collection_name} encryption config is invalid: {err}",
+            ))
+        })?;
     }
 
-    validate_recovered_collection_crypto_runtime(settings, collection_name, &config.params)
+    let collection_crypto_id = config
+        .uuid
+        .map(|uuid| uuid.to_string())
+        .unwrap_or_else(|| collection_name.to_string());
+    validate_collection_crypto_runtime_with_crypto_id(
+        settings,
+        collection_name,
+        &collection_crypto_id,
+        &config.params,
+    )
 }
 
 pub fn effective_settings(settings: &Settings) -> CryptoSettings {
@@ -3971,7 +4035,7 @@ fn hash_backend_program_reader(
 }
 
 fn validate_resource_key_scope_for_rule(
-    collection_name: &str,
+    _collection_name: &str,
     collection_crypto_id: &str,
     rule_id: &str,
     selector: &EncryptionSelector,
@@ -3981,10 +4045,7 @@ fn validate_resource_key_scope_for_rule(
     let Some(scope) = material.scope.as_deref() else {
         return Ok(());
     };
-    let Some(mut suffix) = scope
-        .strip_prefix(&format!("collection:{collection_crypto_id}"))
-        .or_else(|| scope.strip_prefix(&format!("collection:{collection_name}")))
-    else {
+    let Some(mut suffix) = scope.strip_prefix(&format!("collection:{collection_crypto_id}")) else {
         return Err(format!(
             "material {material_ref} scope {scope:?} must start with collection:{collection_crypto_id}"
         ));
@@ -4531,6 +4592,7 @@ fn is_server_aead_key_id(value: &str) -> bool {
 fn validate_generic_collection_crypto_runtime(
     runtime_settings: &CryptoSettings,
     collection_name: &str,
+    collection_crypto_id: &str,
     params: &CollectionParams,
     encryption: &CollectionEncryptionConfig,
 ) -> Result<(), StorageError> {
@@ -4556,7 +4618,7 @@ fn validate_generic_collection_crypto_runtime(
         generic_payload_write_plan(
             runtime_settings,
             collection_name,
-            collection_name,
+            collection_crypto_id,
             &payload_only_encryption,
         )
         .map_err(|err| {
@@ -4840,7 +4902,7 @@ fn validate_generic_collection_crypto_runtime(
         };
         validate_resource_key_scope_for_rule(
             collection_name,
-            collection_name,
+            collection_crypto_id,
             &rule.id,
             &rule.selector,
             material_ref,
@@ -6855,6 +6917,10 @@ mod tests {
     }
 
     fn create_collection_with_params(params: CollectionParams) -> CreateCollection {
+        let uuid = params
+            .encryption
+            .is_some()
+            .then_some(Uuid::from_u128(0x1234567890abcdef1234567890abcdef));
         CreateCollection {
             vectors: params.vectors,
             sparse_vectors: params.sparse_vectors,
@@ -6869,7 +6935,7 @@ mod tests {
             sharding_method: None,
             encryption: params.encryption,
             strict_mode_config: None,
-            uuid: None,
+            uuid,
             metadata: None,
         }
     }
@@ -11736,6 +11802,93 @@ mod tests {
     }
 
     #[test]
+    fn payload_write_plan_rejects_collection_name_scoped_resource_key_for_stable_crypto_id() {
+        let mut settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_payload_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_AES_GCM_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            "tenant-a/payload-v1".to_string(),
+                        )]),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a:docs",
+                            "material_fingerprint_id": "tenant-a/payload@v5",
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([(
+                    "tenant-a/payload-v1".to_string(),
+                    CryptoMaterialConfig {
+                        kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        env: None,
+                        path: None,
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[7u8; 32])),
+                        rk_epoch: Some(5),
+                        scope: Some("collection:docs/payload:body".to_string()),
+                        ..CryptoMaterialConfig::default()
+                    },
+                )]),
+                backends: HashMap::new(),
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 5,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some(PAYLOAD_FIELD_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = match payload_write_plan_for_collection_with_crypto_id(
+            &settings,
+            "docs",
+            "crypto-docs-uuid",
+            &params,
+        ) {
+            Ok(_) => panic!("collection-name scoped RK must not satisfy stable crypto id scope"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, PayloadWriteSetupError::InvalidWrappedMaterial { ref reason, .. }
+                if reason.contains("collection:crypto-docs-uuid")),
+            "unexpected error: {err:?}",
+        );
+
+        settings
+            .crypto
+            .materials
+            .get_mut("tenant-a/payload-v1")
+            .unwrap()
+            .scope = Some("collection:crypto-docs-uuid/payload:body".to_string());
+        payload_write_plan_for_collection_with_crypto_id(
+            &settings,
+            "docs",
+            "crypto-docs-uuid",
+            &params,
+        )
+        .unwrap()
+        .unwrap();
+    }
+
+    #[test]
     fn payload_write_plan_reencrypts_stale_envelopes_only_in_migration_mode() {
         let settings = Settings {
             crypto: CryptoSettings {
@@ -14661,7 +14814,8 @@ mod tests {
             ..CollectionParams::empty()
         };
 
-        validate_collection_crypto_runtime(&settings, "docs", &params).unwrap();
+        validate_collection_crypto_runtime_with_crypto_id(&settings, "docs", "docs", &params)
+            .unwrap();
 
         let mut settings_with_material = settings.clone();
         settings_with_material
@@ -14671,8 +14825,13 @@ mod tests {
             .unwrap()
             .materials
             .insert("sym_key".to_string(), "tenant-a/blind-v1".to_string());
-        let err = validate_collection_crypto_runtime(&settings_with_material, "docs", &params)
-            .expect_err("metadata blind-index provider must stay server blind");
+        let err = validate_collection_crypto_runtime_with_crypto_id(
+            &settings_with_material,
+            "docs",
+            "docs",
+            &params,
+        )
+        .expect_err("metadata blind-index provider must stay server blind");
         assert!(
             matches!(err, StorageError::BadInput { ref description }
                 if description.contains("metadata blind-index instance docs_metadata_v1 must not configure server materials")),
@@ -14733,7 +14892,8 @@ mod tests {
             ..CollectionParams::empty()
         };
 
-        validate_collection_crypto_runtime(&settings, "docs", &params).unwrap();
+        validate_collection_crypto_runtime_with_crypto_id(&settings, "docs", "docs", &params)
+            .unwrap();
         let plan = payload_write_plan_for_collection_for_test(&settings, "docs", &params)
             .unwrap()
             .unwrap();
