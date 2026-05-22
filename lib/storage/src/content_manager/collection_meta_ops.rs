@@ -598,7 +598,46 @@ impl fmt::Debug for RedactedCollectionMetaOperation<'_> {
             CollectionMetaOperations::Resharding(collection_id, operation) => f
                 .debug_struct("Resharding")
                 .field("collection_id", collection_id)
-                .field("operation", operation)
+                .field(
+                    "operation",
+                    &match operation {
+                        ReshardingOperation::Start(_) => "start",
+                        ReshardingOperation::CommitRead(_) => "commit_read",
+                        ReshardingOperation::CommitWrite(_) => "commit_write",
+                        ReshardingOperation::Finish(_) => "finish",
+                        ReshardingOperation::Abort(_) => "abort",
+                    },
+                )
+                .field(
+                    "peer_id",
+                    &match operation {
+                        ReshardingOperation::Start(key)
+                        | ReshardingOperation::CommitRead(key)
+                        | ReshardingOperation::CommitWrite(key)
+                        | ReshardingOperation::Finish(key)
+                        | ReshardingOperation::Abort(key) => key.peer_id,
+                    },
+                )
+                .field(
+                    "shard_id",
+                    &match operation {
+                        ReshardingOperation::Start(key)
+                        | ReshardingOperation::CommitRead(key)
+                        | ReshardingOperation::CommitWrite(key)
+                        | ReshardingOperation::Finish(key)
+                        | ReshardingOperation::Abort(key) => key.shard_id,
+                    },
+                )
+                .field(
+                    "shard_key_present",
+                    &match operation {
+                        ReshardingOperation::Start(key)
+                        | ReshardingOperation::CommitRead(key)
+                        | ReshardingOperation::CommitWrite(key)
+                        | ReshardingOperation::Finish(key)
+                        | ReshardingOperation::Abort(key) => key.shard_key.is_some(),
+                    },
+                )
                 .finish(),
             CollectionMetaOperations::TransferShard(collection_id, operation) => f
                 .debug_struct("TransferShard")
@@ -907,5 +946,25 @@ mod tests {
 
         assert!(!log_line.contains("document.body.secret-sentinel"));
         assert!(log_line.contains("field_name_present: true"), "{log_line}");
+    }
+
+    #[test]
+    fn collection_meta_log_projection_redacts_resharding_shard_key() {
+        let operation = CollectionMetaOperations::Resharding(
+            "docs".to_string(),
+            ReshardingOperation::Start(ReshardKey {
+                uuid: Uuid::from_u128(7),
+                direction: Default::default(),
+                peer_id: 3,
+                shard_id: 4,
+                shard_key: Some("tenant-secret-shard-sentinel".into()),
+            }),
+        );
+
+        let log_line = format!("{:?}", operation.redacted_log());
+
+        assert!(!log_line.contains("tenant-secret-shard-sentinel"));
+        assert!(log_line.contains("shard_key_present: true"), "{log_line}");
+        assert!(log_line.contains("operation: \"start\""), "{log_line}");
     }
 }

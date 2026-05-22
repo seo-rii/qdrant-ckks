@@ -93,7 +93,14 @@ impl TableOfContent {
                 self.update_aliases(operation).await
             }
             CollectionMetaOperations::Resharding(collection, operation) => {
-                log::debug!("Resharding {operation:?} of {collection}");
+                let operation_kind = match &operation {
+                    ReshardingOperation::Start(_) => "start",
+                    ReshardingOperation::CommitRead(_) => "commit_read",
+                    ReshardingOperation::CommitWrite(_) => "commit_write",
+                    ReshardingOperation::Finish(_) => "finish",
+                    ReshardingOperation::Abort(_) => "abort",
+                };
+                log::debug!("Resharding {operation_kind} of {collection}");
 
                 self.handle_resharding(collection, operation)
                     .await
@@ -110,26 +117,48 @@ impl TableOfContent {
                     .map(|()| true)
             }
             CollectionMetaOperations::SetShardReplicaState(operation) => {
-                log::debug!("Set shard replica state {operation:?}");
+                log::debug!(
+                    "Set shard replica state for collection {}, shard {}, peer {}, state {:?}, from_state {:?}",
+                    operation.collection_name,
+                    operation.shard_id,
+                    operation.peer_id,
+                    operation.state,
+                    operation.from_state,
+                );
                 self.set_shard_replica_state(operation).await.map(|()| true)
             }
             CollectionMetaOperations::Nop { .. } => Ok(true),
             CollectionMetaOperations::CreateShardKey(create_shard_key) => {
-                log::debug!("Create shard key {create_shard_key:?}");
+                log::debug!(
+                    "Create shard key for collection {}, placement {:?}, initial_state {:?}, shard_key_present true",
+                    create_shard_key.collection_name,
+                    create_shard_key.placement,
+                    create_shard_key.initial_state,
+                );
                 self.create_shard_key(create_shard_key).await.map(|()| true)
             }
             CollectionMetaOperations::DropShardKey(drop_shard_key) => {
-                log::debug!("Drop shard key {drop_shard_key:?}");
+                log::debug!(
+                    "Drop shard key for collection {}, shard_key_present true",
+                    drop_shard_key.collection_name,
+                );
                 self.drop_shard_key(drop_shard_key).await.map(|()| true)
             }
             CollectionMetaOperations::CreatePayloadIndex(create_payload_index) => {
-                log::debug!("Create payload index {create_payload_index:?}");
+                log::debug!(
+                    "Create payload index for collection {}, field_name_present true, field_schema {:?}",
+                    create_payload_index.collection_name,
+                    create_payload_index.field_schema,
+                );
                 self.create_payload_index(create_payload_index)
                     .await
                     .map(|()| true)
             }
             CollectionMetaOperations::DropPayloadIndex(drop_payload_index) => {
-                log::debug!("Drop payload index {drop_payload_index:?}");
+                log::debug!(
+                    "Drop payload index for collection {}, field_name_present true",
+                    drop_payload_index.collection_name,
+                );
                 self.drop_payload_index(drop_payload_index)
                     .await
                     .map(|()| true)
