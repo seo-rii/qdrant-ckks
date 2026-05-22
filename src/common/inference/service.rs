@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::fmt::{self, Display};
 use std::hash::Hash;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -34,12 +34,22 @@ impl Display for InferenceType {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct InferenceRequest {
     pub(crate) inputs: Vec<InferenceInput>,
     pub(crate) inference: Option<InferenceType>,
     #[serde(default)]
     pub(crate) token: Option<String>,
+}
+
+impl fmt::Debug for InferenceRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InferenceRequest")
+            .field("input_count", &self.inputs.len())
+            .field("inference", &self.inference)
+            .field("token", &self.token.as_ref().map(|_| "[redacted]"))
+            .finish()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -49,7 +59,7 @@ pub struct InferenceResponse {
     pub usage: Option<InferenceUsage>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub enum InferenceData {
     Document(Document),
     Image(Image),
@@ -59,6 +69,15 @@ pub enum InferenceData {
 #[derive(Debug, Deserialize)]
 struct InferenceError {
     pub error: String,
+}
+
+impl fmt::Debug for InferenceData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InferenceData")
+            .field("type", &self.type_name())
+            .field("data", &"[redacted]")
+            .finish()
+    }
 }
 
 impl InferenceData {
@@ -410,7 +429,7 @@ fn merge_position_items<I>(
 mod test {
     use std::collections::HashMap;
 
-    use api::rest::Bm25Config;
+    use api::rest::{Bm25Config, Document};
     use mockito::Matcher;
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
@@ -444,6 +463,42 @@ mod test {
 
         // We were missing an item and therefore expect `None`.
         assert_eq!(merged, None);
+    }
+
+    #[test]
+    fn debug_redacts_inference_request_inputs_and_token() {
+        let request = InferenceRequest {
+            inputs: vec![InferenceInput {
+                data: Value::String("remote-inference-plaintext-sentinel".to_string()),
+                data_type: InferenceDataType::Text,
+                model: "model-v1".to_string(),
+                options: None,
+            }],
+            inference: Some(InferenceType::Search),
+            token: Some("remote-inference-token-sentinel".to_string()),
+        };
+
+        let rendered = format!("{request:?}");
+
+        assert!(!rendered.contains("remote-inference-plaintext-sentinel"));
+        assert!(!rendered.contains("remote-inference-token-sentinel"));
+        assert!(rendered.contains("input_count: 1"), "{rendered}");
+        assert!(rendered.contains("[redacted]"), "{rendered}");
+    }
+
+    #[test]
+    fn debug_redacts_inference_data_payload() {
+        let data = InferenceData::Document(Document {
+            text: "inference-data-plaintext-sentinel".to_string(),
+            model: "model-v1".to_string(),
+            options: None,
+        });
+
+        let rendered = format!("{data:?}");
+
+        assert!(!rendered.contains("inference-data-plaintext-sentinel"));
+        assert!(rendered.contains("document"), "{rendered}");
+        assert!(rendered.contains("[redacted]"), "{rendered}");
     }
 
     #[tokio::test]

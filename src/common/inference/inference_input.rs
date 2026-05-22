@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 
 use api::rest::{Bm25Config, Document, DocumentOptions, Image, InferenceObject};
 use serde::de::IntoDeserializer;
@@ -8,12 +9,23 @@ use storage::content_manager::errors::StorageError;
 
 use super::service::InferenceData;
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Serialize, Clone)]
 pub struct InferenceInput {
     pub data: Value,
     pub data_type: InferenceDataType,
     pub model: String,
     pub options: Option<HashMap<String, Value>>,
+}
+
+impl fmt::Debug for InferenceInput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InferenceInput")
+            .field("data", &"[redacted]")
+            .field("data_type", &self.data_type)
+            .field("model", &self.model)
+            .field("options_present", &self.options.is_some())
+            .finish()
+    }
 }
 
 impl InferenceInput {
