@@ -1,3 +1,4 @@
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::SystemTime;
@@ -61,7 +62,7 @@ impl From<SnapshotPriority> for api::grpc::qdrant::ShardSnapshotPriority {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Validate, Clone)]
+#[derive(Deserialize, Serialize, JsonSchema, Validate, Clone)]
 pub struct SnapshotRecover {
     /// Examples:
     /// - URL `http://localhost:8080/collections/my_collection/snapshots/my_snapshot`
@@ -82,6 +83,17 @@ pub struct SnapshotRecover {
     /// Optional API key used when fetching the snapshot from a remote URL.
     #[serde(default)]
     pub api_key: Option<String>,
+}
+
+impl fmt::Debug for SnapshotRecover {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SnapshotRecover")
+            .field("location", &RedactedSnapshotUrl(&self.location))
+            .field("priority", &self.priority)
+            .field("checksum", &self.checksum)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[redacted]"))
+            .finish()
+    }
 }
 
 fn snapshot_description_example() -> SnapshotDescription {
@@ -156,7 +168,7 @@ pub fn get_checksum_path(snapshot_path: impl Into<PathBuf>) -> PathBuf {
     checksum_path.into()
 }
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+#[derive(Clone, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct ShardSnapshotRecover {
     pub location: ShardSnapshotLocation,
 
@@ -173,11 +185,61 @@ pub struct ShardSnapshotRecover {
     pub api_key: Option<String>,
 }
 
+impl fmt::Debug for ShardSnapshotRecover {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShardSnapshotRecover")
+            .field("location", &RedactedShardSnapshotLocation(&self.location))
+            .field("priority", &self.priority)
+            .field("checksum", &self.checksum)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[redacted]"))
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum ShardSnapshotLocation {
     Url(Url),
     Path(PathBuf),
+}
+
+struct RedactedSnapshotUrl<'a>(&'a Url);
+
+impl fmt::Debug for RedactedSnapshotUrl<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut location = self.0.clone();
+        if !location.username().is_empty() {
+            location
+                .set_username("[redacted]")
+                .map_err(|_| fmt::Error)?;
+        }
+        if location.password().is_some() {
+            location
+                .set_password(Some("[redacted]"))
+                .map_err(|_| fmt::Error)?;
+        }
+        if location.query().is_some() {
+            location.set_query(Some("[redacted]"));
+        }
+        if location.fragment().is_some() {
+            location.set_fragment(Some("[redacted]"));
+        }
+        f.debug_tuple("Url").field(&location.as_str()).finish()
+    }
+}
+
+struct RedactedShardSnapshotLocation<'a>(&'a ShardSnapshotLocation);
+
+impl fmt::Debug for RedactedShardSnapshotLocation<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            ShardSnapshotLocation::Url(location) => f
+                .debug_tuple("Url")
+                .field(&RedactedSnapshotUrl(location))
+                .finish(),
+            ShardSnapshotLocation::Path(path) => f.debug_tuple("Path").field(path).finish(),
+        }
+    }
 }
 
 impl TryFrom<Option<api::grpc::qdrant::ShardSnapshotLocation>> for ShardSnapshotLocation {
@@ -228,5 +290,82 @@ impl TryFrom<api::grpc::qdrant::ShardSnapshotLocation> for ShardSnapshotLocation
         };
 
         Ok(location)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_recover_debug_redacts_remote_credentials() {
+        let recover = SnapshotRecover {
+            location: Url::parse(
+                "https://snapshot-user:snapshot-password@example.com/snapshots/a.snapshot?api_key=qdrant-sec-query-key-sentinel#qdrant-sec-fragment-sentinel",
+            )
+            .unwrap(),
+            priority: Some(SnapshotPriority::Snapshot),
+            checksum: Some(
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                    .to_string(),
+            ),
+            api_key: Some("qdrant-sec-snapshot-api-key-sentinel".to_string()),
+        };
+
+        let rendered = format!("{recover:?}");
+
+        assert!(rendered.contains("[redacted]"), "{rendered}");
+        assert!(rendered.contains("example.com"), "{rendered}");
+        assert!(!rendered.contains("snapshot-user"), "{rendered}");
+        assert!(!rendered.contains("snapshot-password"), "{rendered}");
+        assert!(
+            !rendered.contains("qdrant-sec-query-key-sentinel"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("qdrant-sec-fragment-sentinel"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("qdrant-sec-snapshot-api-key-sentinel"),
+            "{rendered}",
+        );
+    }
+
+    #[test]
+    fn shard_snapshot_recover_debug_redacts_remote_credentials() {
+        let recover = ShardSnapshotRecover {
+            location: ShardSnapshotLocation::Url(
+                Url::parse(
+                    "https://shard-user:shard-password@example.com/shards/a.snapshot?token=qdrant-sec-shard-query-token#qdrant-sec-shard-fragment",
+                )
+                .unwrap(),
+            ),
+            priority: Some(SnapshotPriority::Replica),
+            checksum: Some(
+                "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+                    .to_string(),
+            ),
+            api_key: Some("qdrant-sec-shard-api-key-sentinel".to_string()),
+        };
+
+        let rendered = format!("{recover:?}");
+
+        assert!(rendered.contains("[redacted]"), "{rendered}");
+        assert!(rendered.contains("example.com"), "{rendered}");
+        assert!(!rendered.contains("shard-user"), "{rendered}");
+        assert!(!rendered.contains("shard-password"), "{rendered}");
+        assert!(
+            !rendered.contains("qdrant-sec-shard-query-token"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("qdrant-sec-shard-fragment"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("qdrant-sec-shard-api-key-sentinel"),
+            "{rendered}",
+        );
     }
 }
