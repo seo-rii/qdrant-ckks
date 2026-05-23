@@ -1,9 +1,9 @@
-use std::cmp;
 use std::collections::HashMap;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::{cmp, fmt};
 
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use collection::operations::types::PeerMetadata;
@@ -27,7 +27,7 @@ const STATE_FILE_NAME: &str = "raft_state.json";
 
 /// State of the Raft consensus, which should be saved between restarts.
 /// State of the collections, aliases and transfers are stored as regular storage.
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct Persistent {
     /// last known state of the Raft consensus
     #[serde(with = "RaftStateDef")]
@@ -54,6 +54,37 @@ pub struct Persistent {
     /// Tracks if there are some unsaved changes due to the failure on save
     #[serde(skip)]
     pub dirty: AtomicBool,
+}
+
+impl fmt::Debug for Persistent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let peer_address_count = self.peer_address_by_id.read().len();
+        let peer_metadata = self.peer_metadata_by_id.read();
+        let peer_metadata_count = peer_metadata.len();
+        let peer_crypto_fingerprint_count = peer_metadata
+            .values()
+            .filter(|metadata| metadata.crypto_runtime_capability_fingerprint().is_some())
+            .count();
+        let mut cluster_metadata_keys = self.cluster_metadata.keys().collect::<Vec<_>>();
+        cluster_metadata_keys.sort();
+
+        f.debug_struct("Persistent")
+            .field("state", &self.state)
+            .field("latest_snapshot_meta", &self.latest_snapshot_meta)
+            .field("apply_progress_queue", &self.apply_progress_queue)
+            .field("first_voter", &self.first_voter)
+            .field("peer_address_count", &peer_address_count)
+            .field("peer_metadata_count", &peer_metadata_count)
+            .field(
+                "peer_crypto_runtime_capability_fingerprint_count",
+                &peer_crypto_fingerprint_count,
+            )
+            .field("cluster_metadata_keys", &cluster_metadata_keys)
+            .field("this_peer_id", &self.this_peer_id)
+            .field("path", &self.path)
+            .field("dirty", &self.dirty.load(Ordering::Relaxed))
+            .finish()
+    }
 }
 
 impl Persistent {
@@ -394,6 +425,70 @@ impl Persistent {
             self.save()?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persistent_debug_redacts_peer_and_cluster_metadata_values() {
+        let mut peer_address_by_id = PeerAddressById::new();
+        peer_address_by_id.insert(
+            7,
+            "http://qdrant-sec-peer-address-sentinel:6335"
+                .parse()
+                .unwrap(),
+        );
+
+        let mut peer_metadata_by_id = PeerMetadataById::new();
+        peer_metadata_by_id.insert(
+            7,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "qdrant-sec-peer-fingerprint-sentinel".to_string(),
+            )),
+        );
+
+        let mut cluster_metadata = HashMap::new();
+        cluster_metadata.insert(
+            "crypto_policy".to_string(),
+            serde_json::json!("qdrant-sec-cluster-metadata-sentinel"),
+        );
+
+        let persistent = Persistent {
+            state: RaftState::default(),
+            latest_snapshot_meta: SnapshotMetadataSer::default(),
+            apply_progress_queue: EntryApplyProgressQueue::default(),
+            first_voter: Some(7),
+            peer_address_by_id: Arc::new(RwLock::new(peer_address_by_id)),
+            peer_metadata_by_id: Arc::new(RwLock::new(peer_metadata_by_id)),
+            cluster_metadata,
+            this_peer_id: 7,
+            path: PathBuf::from("/tmp/qdrant-sec-persistent-state"),
+            dirty: AtomicBool::new(false),
+        };
+
+        let rendered = format!("{persistent:?}");
+
+        assert!(rendered.contains("peer_address_count: 1"), "{rendered}");
+        assert!(
+            rendered.contains("peer_crypto_runtime_capability_fingerprint_count: 1"),
+            "{rendered}",
+        );
+        assert!(rendered.contains("crypto_policy"), "{rendered}");
+        assert!(
+            !rendered.contains("qdrant-sec-peer-address-sentinel"),
+            "{rendered}",
+        );
+        assert!(
+            !rendered.contains("qdrant-sec-peer-fingerprint-sentinel"),
+            "{rendered}",
+        );
+        assert!(
+            !rendered.contains("qdrant-sec-cluster-metadata-sentinel"),
+            "{rendered}",
+        );
     }
 }
 

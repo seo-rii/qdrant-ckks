@@ -2244,7 +2244,7 @@ pub struct IssuesReport {
 }
 
 /// Metadata describing extra properties for each peer
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Eq, PartialEq, Hash, Deserialize, Serialize, JsonSchema)]
 pub struct PeerMetadata {
     /// Peer Qdrant version
     #[schemars(schema_with = "String::json_schema")]
@@ -2252,6 +2252,18 @@ pub struct PeerMetadata {
     /// Non-secret digest of the crypto runtime capability policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) crypto_runtime_capability_fingerprint: Option<String>,
+}
+
+impl Debug for PeerMetadata {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PeerMetadata")
+            .field("version", &self.version)
+            .field(
+                "crypto_runtime_capability_fingerprint_present",
+                &self.crypto_runtime_capability_fingerprint().is_some(),
+            )
+            .finish()
+    }
 }
 
 impl PeerMetadata {
@@ -2303,6 +2315,18 @@ mod tests {
             PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(String::new()));
 
         assert_eq!(metadata.crypto_runtime_capability_fingerprint(), None);
+    }
+
+    #[test]
+    fn peer_metadata_debug_redacts_crypto_runtime_fingerprint() {
+        let metadata = PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+            "qdrant-sec-peer-fingerprint-sentinel".to_string(),
+        ));
+
+        let rendered = format!("{metadata:?}");
+
+        assert!(rendered.contains("crypto_runtime_capability_fingerprint_present"));
+        assert!(!rendered.contains("qdrant-sec-peer-fingerprint-sentinel"));
     }
 
     #[test]
