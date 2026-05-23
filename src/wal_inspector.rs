@@ -55,12 +55,7 @@ fn print_consensus_wal(wal_path: &Path, raw: bool) {
         .unwrap();
     for entry in entries {
         println!("==========================");
-        let command = ConsensusOperations::try_from(&entry);
-        let data = match command {
-            Ok(command) if raw => format!("{command:?}"),
-            Ok(command) => format!("{:?}", command.redacted_log()),
-            Err(_) => format!("{:?}", entry.data),
-        };
+        let data = consensus_entry_data_for_display(&entry, raw);
         println!(
             "Entry ID:{}\nterm:{}\nentry_type:{}\ndata:{:?}",
             entry.index, entry.term, entry.entry_type, data
@@ -102,6 +97,19 @@ fn print_collection_wal(wal_path: &Path, raw: bool) {
     }
 }
 
+fn consensus_entry_data_for_display(entry: &raft::eraftpb::Entry, raw: bool) -> String {
+    match ConsensusOperations::try_from(entry) {
+        Ok(command) if raw => format!("{command:?}"),
+        Ok(command) => format!("{:?}", command.redacted_log()),
+        Err(_) if raw => format!("{:?}", entry.data),
+        Err(_) => format!(
+            "UnparsedRaftEntry {{ data_bytes: {}, context_bytes: {} }}",
+            entry.data.len(),
+            entry.context.len(),
+        ),
+    }
+}
+
 fn collection_operation_for_display(operation: &CollectionUpdateOperations, raw: bool) -> String {
     if raw {
         format!("{operation:?}")
@@ -116,11 +124,33 @@ mod tests {
         CLIENT_ENCRYPTED_PAYLOAD_MARKER, ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_PAYLOAD_MARKER,
         ENCRYPTED_VECTOR_SIDECAR_FIELD,
     };
+    use raft::eraftpb::Entry;
     use segment::types::{Payload, PointIdType};
     use serde_json::json;
     use shard::operations::payload_ops::{PayloadOps, SetPayloadOp};
 
     use super::*;
+
+    #[test]
+    fn consensus_entry_display_redacts_unparsed_data_by_default() {
+        let entry = Entry {
+            term: 11,
+            index: 13,
+            data: b"qdrant-sec-unparsed-consensus-data-sentinel".to_vec(),
+            context: b"qdrant-sec-unparsed-consensus-context-sentinel".to_vec(),
+            ..Default::default()
+        };
+
+        let default_display = consensus_entry_data_for_display(&entry, false);
+        assert!(!default_display.contains("qdrant-sec-unparsed-consensus-data-sentinel"));
+        assert!(!default_display.contains("qdrant-sec-unparsed-consensus-context-sentinel"));
+        assert!(default_display.contains("data_bytes"));
+        assert!(default_display.contains("context_bytes"));
+
+        let raw_display = consensus_entry_data_for_display(&entry, true);
+        assert_eq!(raw_display, format!("{:?}", entry.data));
+        assert!(!raw_display.contains("data_bytes"));
+    }
 
     #[test]
     fn collection_wal_display_redacts_payloads_by_default() {
