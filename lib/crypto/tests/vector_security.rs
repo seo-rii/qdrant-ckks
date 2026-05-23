@@ -7,14 +7,16 @@ use std::time::{Duration, Instant};
 use data_encoding::BASE64URL_NOPAD;
 #[cfg(target_os = "linux")]
 use qdrant_sec::linux_landlock_write_deny_supported_for_tests;
+use qdrant_sec::vector::CkksPlaintextQueryScoreBatchItem;
 use qdrant_sec::{
     AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
     CKKS_PUBLIC_MATERIAL_MAX_CRYPTO_CONTEXT_BYTES, CKKS_PUBLIC_MATERIAL_MAX_PUBLIC_KEY_BYTES,
-    CkksBatchEncryptionInput, CkksEncryptedQueryScoreBatchInput, CkksEncryptionInput, CkksError,
-    CkksParameters, CkksPlaintextQueryScoreBatchInput, CkksPlaintextQueryScoreInput,
-    CkksPublicMaterial, CkksVectorBackend, CkksVectorBatchItem, CkksVectorEncryptor,
+    CkksBatchEncryptionInput, CkksEncryptedQueryScoreBatchInput, CkksEncryptedQueryScoreBatchItem,
+    CkksEncryptedQueryScoreInput, CkksEncryptionInput, CkksError, CkksParameters,
+    CkksPlaintextQueryScoreBatchInput, CkksPlaintextQueryScoreInput, CkksPublicMaterial,
+    CkksQueryEncryptionInput, CkksVectorBackend, CkksVectorBatchItem, CkksVectorEncryptor,
     CkksVectorSidecarDeleteTarget, CommandOpenFheBackend, ENCRYPTED_CKKS_VECTOR_MARKER,
-    EncryptedCkksVector, EncryptionContext, EncryptionError, SecretKey,
+    EncryptedCkksVector, EncryptionContext, EncryptionError, SecretKey, VerifiedCkksVector,
     ckks_vector_sidecar_envelope_key, ckks_vector_verified_sidecar_delete_key,
 };
 use serde_json::json;
@@ -211,6 +213,174 @@ fn public_material() -> CkksPublicMaterial {
         b"openfhe public key".to_vec(),
     )
     .unwrap()
+}
+
+#[test]
+fn debug_redacts_ckks_plaintext_and_ciphertext_material() {
+    let parameters = CkksParameters::openfhe_default_128_bit();
+    let material = public_material();
+    let values = [12345.625, -987.5];
+    let second_values = [777.25, 888.5];
+    let ciphertext = b"ckks-ciphertext-sentinel";
+    let second_ciphertext = b"ckks-second-ciphertext-sentinel";
+    let encrypted_query = b"ckks-encrypted-query-sentinel";
+    let context_debug = format!("{material:?}");
+    assert!(context_debug.contains("crypto_context_len"));
+    assert!(context_debug.contains("public_key_len"));
+    assert!(!context_debug.contains("openfhe crypto context"));
+    assert!(!context_debug.contains("openfhe public key"));
+
+    let encryption_debug = format!(
+        "{:?}",
+        CkksEncryptionInput {
+            parameters: &parameters,
+            public_material: &material,
+            collection: "docs",
+            point_id: "point-1",
+            vector_name: "embedding",
+            values: &values,
+        }
+    );
+    assert!(encryption_debug.contains("values_len"));
+    assert!(!encryption_debug.contains("12345.625"));
+    assert!(!encryption_debug.contains("-987.5"));
+
+    let batch_debug = format!(
+        "{:?}",
+        CkksBatchEncryptionInput {
+            parameters: &parameters,
+            public_material: &material,
+            collection: "docs",
+            vector_name: "embedding",
+            items: &[
+                CkksVectorBatchItem {
+                    point_id: "point-1",
+                    values: &values,
+                },
+                CkksVectorBatchItem {
+                    point_id: "point-2",
+                    values: &second_values,
+                },
+            ],
+        }
+    );
+    assert!(batch_debug.contains("values_len"));
+    assert!(!batch_debug.contains("777.25"));
+    assert!(!batch_debug.contains("888.5"));
+
+    let query_debug = format!(
+        "{:?}",
+        CkksQueryEncryptionInput {
+            parameters: &parameters,
+            public_material: &material,
+            collection: "docs",
+            vector_name: "embedding",
+            values: &values,
+        }
+    );
+    assert!(query_debug.contains("values_len"));
+    assert!(!query_debug.contains("12345.625"));
+
+    let plaintext_score_debug = format!(
+        "{:?}",
+        CkksPlaintextQueryScoreInput {
+            parameters: &parameters,
+            public_material: &material,
+            collection: "docs",
+            point_id: "point-1",
+            vector_name: "embedding",
+            distance: "dot",
+            query_values: &values,
+            ciphertext,
+        }
+    );
+    assert!(plaintext_score_debug.contains("query_values_len"));
+    assert!(plaintext_score_debug.contains("ciphertext_len"));
+    assert!(!plaintext_score_debug.contains("12345.625"));
+    assert!(!plaintext_score_debug.contains("ckks-ciphertext-sentinel"));
+
+    let plaintext_score_batch_debug = format!(
+        "{:?}",
+        CkksPlaintextQueryScoreBatchInput {
+            parameters: &parameters,
+            public_material: &material,
+            collection: "docs",
+            vector_name: "embedding",
+            distance: "dot",
+            query_values: &values,
+            items: &[
+                CkksPlaintextQueryScoreBatchItem {
+                    point_id: "point-1",
+                    ciphertext,
+                },
+                CkksPlaintextQueryScoreBatchItem {
+                    point_id: "point-2",
+                    ciphertext: second_ciphertext,
+                },
+            ],
+        }
+    );
+    assert!(plaintext_score_batch_debug.contains("ciphertext_len"));
+    assert!(!plaintext_score_batch_debug.contains("ckks-second-ciphertext-sentinel"));
+
+    let encrypted_score_debug = format!(
+        "{:?}",
+        CkksEncryptedQueryScoreInput {
+            parameters: &parameters,
+            public_material: &material,
+            collection: "docs",
+            point_id: "point-1",
+            vector_name: "embedding",
+            distance: "dot",
+            encrypted_query,
+            ciphertext,
+        }
+    );
+    assert!(encrypted_score_debug.contains("encrypted_query_len"));
+    assert!(encrypted_score_debug.contains("ciphertext_len"));
+    assert!(!encrypted_score_debug.contains("ckks-encrypted-query-sentinel"));
+    assert!(!encrypted_score_debug.contains("ckks-ciphertext-sentinel"));
+
+    let encrypted_score_batch_debug = format!(
+        "{:?}",
+        CkksEncryptedQueryScoreBatchInput {
+            parameters: &parameters,
+            public_material: &material,
+            collection: "docs",
+            vector_name: "embedding",
+            distance: "dot",
+            encrypted_query,
+            items: &[
+                CkksEncryptedQueryScoreBatchItem {
+                    point_id: "point-1",
+                    ciphertext,
+                },
+                CkksEncryptedQueryScoreBatchItem {
+                    point_id: "point-2",
+                    ciphertext: second_ciphertext,
+                },
+            ],
+        }
+    );
+    assert!(encrypted_score_batch_debug.contains("encrypted_query_len"));
+    assert!(encrypted_score_batch_debug.contains("ciphertext_len"));
+    assert!(!encrypted_score_batch_debug.contains("ckks-encrypted-query-sentinel"));
+    assert!(!encrypted_score_batch_debug.contains("ckks-second-ciphertext-sentinel"));
+
+    let verified_debug = format!(
+        "{:?}",
+        VerifiedCkksVector {
+            crypto_schema_version: 1,
+            encryption_epoch: 3,
+            key_id: "tenant-a:ckks".to_string(),
+            vector_name: "embedding".to_string(),
+            slots: values.len(),
+            context_digest: BASE64URL_NOPAD.encode(&[9_u8; 32]),
+            ciphertext: BASE64URL_NOPAD.encode(ciphertext),
+        }
+    );
+    assert!(verified_debug.contains("ciphertext_len"));
+    assert!(!verified_debug.contains(&BASE64URL_NOPAD.encode(ciphertext)));
 }
 
 fn test_ckks_encryptor<B: CkksVectorBackend>(

@@ -122,10 +122,19 @@ impl Default for CkksParameters {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CkksPublicMaterial {
     crypto_context: Vec<u8>,
     public_key: Vec<u8>,
+}
+
+impl Debug for CkksPublicMaterial {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CkksPublicMaterial")
+            .field("crypto_context_len", &self.crypto_context.len())
+            .field("public_key_len", &self.public_key.len())
+            .finish()
+    }
 }
 
 impl CkksPublicMaterial {
@@ -186,7 +195,7 @@ impl CkksPublicMaterial {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CkksEncryptionInput<'a> {
     pub parameters: &'a CkksParameters,
     pub public_material: &'a CkksPublicMaterial,
@@ -196,13 +205,35 @@ pub struct CkksEncryptionInput<'a> {
     pub values: &'a [f64],
 }
 
-#[derive(Clone, Copy, Debug)]
+impl Debug for CkksEncryptionInput<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CkksEncryptionInput")
+            .field("parameters", self.parameters)
+            .field("public_material", self.public_material)
+            .field("collection", &self.collection)
+            .field("point_id", &self.point_id)
+            .field("vector_name", &self.vector_name)
+            .field("values_len", &self.values.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy)]
 pub struct CkksVectorBatchItem<'a> {
     pub point_id: &'a str,
     pub values: &'a [f64],
 }
 
-#[derive(Clone, Debug)]
+impl Debug for CkksVectorBatchItem<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CkksVectorBatchItem")
+            .field("point_id", &self.point_id)
+            .field("values_len", &self.values.len())
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 pub struct CkksBatchEncryptionInput<'a> {
     pub parameters: &'a CkksParameters,
     pub public_material: &'a CkksPublicMaterial,
@@ -211,7 +242,19 @@ pub struct CkksBatchEncryptionInput<'a> {
     pub items: &'a [CkksVectorBatchItem<'a>],
 }
 
-#[derive(Clone, Debug)]
+impl Debug for CkksBatchEncryptionInput<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CkksBatchEncryptionInput")
+            .field("parameters", self.parameters)
+            .field("public_material", self.public_material)
+            .field("collection", &self.collection)
+            .field("vector_name", &self.vector_name)
+            .field("items", &self.items)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 pub struct CkksPlaintextQueryScoreInput<'a> {
     pub parameters: &'a CkksParameters,
     pub public_material: &'a CkksPublicMaterial,
@@ -223,13 +266,37 @@ pub struct CkksPlaintextQueryScoreInput<'a> {
     pub ciphertext: &'a [u8],
 }
 
-#[derive(Clone, Copy, Debug)]
+impl Debug for CkksPlaintextQueryScoreInput<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CkksPlaintextQueryScoreInput")
+            .field("parameters", self.parameters)
+            .field("public_material", self.public_material)
+            .field("collection", &self.collection)
+            .field("point_id", &self.point_id)
+            .field("vector_name", &self.vector_name)
+            .field("distance", &self.distance)
+            .field("query_values_len", &self.query_values.len())
+            .field("ciphertext_len", &self.ciphertext.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy)]
 pub struct CkksPlaintextQueryScoreBatchItem<'a> {
     pub point_id: &'a str,
     pub ciphertext: &'a [u8],
 }
 
-#[derive(Clone, Debug)]
+impl Debug for CkksPlaintextQueryScoreBatchItem<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CkksPlaintextQueryScoreBatchItem")
+            .field("point_id", &self.point_id)
+            .field("ciphertext_len", &self.ciphertext.len())
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 pub struct CkksPlaintextQueryScoreBatchInput<'a> {
     pub parameters: &'a CkksParameters,
     pub public_material: &'a CkksPublicMaterial,
@@ -240,7 +307,21 @@ pub struct CkksPlaintextQueryScoreBatchInput<'a> {
     pub items: &'a [CkksPlaintextQueryScoreBatchItem<'a>],
 }
 
-#[derive(Clone, Debug)]
+impl Debug for CkksPlaintextQueryScoreBatchInput<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CkksPlaintextQueryScoreBatchInput")
+            .field("parameters", self.parameters)
+            .field("public_material", self.public_material)
+            .field("collection", &self.collection)
+            .field("vector_name", &self.vector_name)
+            .field("distance", &self.distance)
+            .field("query_values_len", &self.query_values.len())
+            .field("items", &self.items)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 pub struct CkksQueryEncryptionInput<'a> {
     pub parameters: &'a CkksParameters,
     pub public_material: &'a CkksPublicMaterial,
@@ -249,7 +330,19 @@ pub struct CkksQueryEncryptionInput<'a> {
     pub values: &'a [f64],
 }
 
-#[derive(Clone, Debug)]
+impl Debug for CkksQueryEncryptionInput<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CkksQueryEncryptionInput")
+            .field("parameters", self.parameters)
+            .field("public_material", self.public_material)
+            .field("collection", &self.collection)
+            .field("vector_name", &self.vector_name)
+            .field("values_len", &self.values.len())
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 pub struct CkksEncryptedQueryScoreInput<'a> {
     pub parameters: &'a CkksParameters,
     pub public_material: &'a CkksPublicMaterial,
@@ -261,13 +354,37 @@ pub struct CkksEncryptedQueryScoreInput<'a> {
     pub ciphertext: &'a [u8],
 }
 
-#[derive(Clone, Copy, Debug)]
+impl Debug for CkksEncryptedQueryScoreInput<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CkksEncryptedQueryScoreInput")
+            .field("parameters", self.parameters)
+            .field("public_material", self.public_material)
+            .field("collection", &self.collection)
+            .field("point_id", &self.point_id)
+            .field("vector_name", &self.vector_name)
+            .field("distance", &self.distance)
+            .field("encrypted_query_len", &self.encrypted_query.len())
+            .field("ciphertext_len", &self.ciphertext.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy)]
 pub struct CkksEncryptedQueryScoreBatchItem<'a> {
     pub point_id: &'a str,
     pub ciphertext: &'a [u8],
 }
 
-#[derive(Clone, Debug)]
+impl Debug for CkksEncryptedQueryScoreBatchItem<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CkksEncryptedQueryScoreBatchItem")
+            .field("point_id", &self.point_id)
+            .field("ciphertext_len", &self.ciphertext.len())
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 pub struct CkksEncryptedQueryScoreBatchInput<'a> {
     pub parameters: &'a CkksParameters,
     pub public_material: &'a CkksPublicMaterial,
@@ -276,6 +393,20 @@ pub struct CkksEncryptedQueryScoreBatchInput<'a> {
     pub distance: &'a str,
     pub encrypted_query: &'a [u8],
     pub items: &'a [CkksEncryptedQueryScoreBatchItem<'a>],
+}
+
+impl Debug for CkksEncryptedQueryScoreBatchInput<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CkksEncryptedQueryScoreBatchInput")
+            .field("parameters", self.parameters)
+            .field("public_material", self.public_material)
+            .field("collection", &self.collection)
+            .field("vector_name", &self.vector_name)
+            .field("distance", &self.distance)
+            .field("encrypted_query_len", &self.encrypted_query.len())
+            .field("items", &self.items)
+            .finish()
+    }
 }
 
 pub trait CkksVectorBackend {
@@ -589,7 +720,7 @@ impl Debug for EncryptedCkksVector {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[serde(deny_unknown_fields)]
 pub struct VerifiedCkksVector {
@@ -602,6 +733,20 @@ pub struct VerifiedCkksVector {
     pub slots: usize,
     pub context_digest: String,
     pub ciphertext: String,
+}
+
+impl Debug for VerifiedCkksVector {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VerifiedCkksVector")
+            .field("crypto_schema_version", &self.crypto_schema_version)
+            .field("encryption_epoch", &self.encryption_epoch)
+            .field("key_id", &self.key_id)
+            .field("vector_name", &self.vector_name)
+            .field("slots", &self.slots)
+            .field("context_digest", &self.context_digest)
+            .field("ciphertext_len", &self.ciphertext.len())
+            .finish()
+    }
 }
 
 pub struct CkksVectorEncryptor<B> {

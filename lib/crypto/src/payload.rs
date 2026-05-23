@@ -1,3 +1,5 @@
+use std::fmt::{self, Debug, Formatter};
+
 use data_encoding::BASE64URL_NOPAD;
 use ring::signature::{ED25519, UnparsedPublicKey};
 use serde::{Deserialize, Serialize};
@@ -1364,7 +1366,7 @@ struct StoredPayloadEnvelope {
     envelope: EncryptedEnvelope,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ClientPayloadEnvelope {
     version: u16,
@@ -1385,6 +1387,24 @@ struct ClientPayloadEnvelope {
     signature: Option<ClientPayloadSignature>,
 }
 
+impl Debug for ClientPayloadEnvelope {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClientPayloadEnvelope")
+            .field("version", &self.version)
+            .field("kind", &self.kind)
+            .field("algorithm", &self.algorithm)
+            .field("key_id", &self.key_id)
+            .field("rk_id", &self.rk_id)
+            .field("rk_epoch", &self.rk_epoch)
+            .field("kdf_domain", &self.kdf_domain)
+            .field("aad", &self.aad)
+            .field("nonce", &"[redacted]")
+            .field("ciphertext_len", &self.ciphertext.len())
+            .field("signature_present", &self.signature.is_some())
+            .finish()
+    }
+}
+
 struct ValidatedClientPayloadEnvelope {
     envelope: ClientPayloadEnvelope,
     ciphertext_sha256_b64: String,
@@ -1401,12 +1421,23 @@ struct ClientPayloadAad {
     schema_version: u16,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ClientPayloadSignature {
     alg: String,
     key_id: String,
     sig: String,
+}
+
+impl Debug for ClientPayloadSignature {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClientPayloadSignature")
+            .field("alg", &self.alg)
+            .field("key_id", &self.key_id)
+            .field("sig", &"[redacted]")
+            .field("sig_len", &self.sig.len())
+            .finish()
+    }
 }
 
 fn validate_client_payload_signature(
@@ -1711,6 +1742,25 @@ mod tests {
             .and_then(Value::as_object_mut)
             .unwrap()
             .insert("kind".to_string(), Value::String(kind.to_string()));
+    }
+
+    #[test]
+    fn client_payload_debug_redacts_ciphertext_nonce_and_signature() {
+        let value = valid_client_payload_value();
+        let envelope = extract_client_envelope(&value, "document.body")
+            .unwrap()
+            .unwrap();
+        let debug = format!("{envelope:?}");
+
+        assert!(debug.contains("ciphertext_len"));
+        assert!(debug.contains("signature_present"));
+        assert!(!debug.contains(&BASE64URL_NOPAD.encode(&[1_u8; 12])));
+        assert!(!debug.contains(&BASE64URL_NOPAD.encode(&[2_u8; 16])));
+        assert!(!debug.contains(&BASE64URL_NOPAD.encode(&[3_u8; 64])));
+
+        let signature_debug = format!("{:?}", envelope.signature.as_ref().unwrap());
+        assert!(signature_debug.contains("sig_len"));
+        assert!(!signature_debug.contains(&BASE64URL_NOPAD.encode(&[3_u8; 64])));
     }
 
     #[test]
