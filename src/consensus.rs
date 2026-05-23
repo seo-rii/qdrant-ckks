@@ -709,7 +709,7 @@ impl Consensus {
                     log::trace!(
                         "Received a message from peer with progress: {:?}. Message: {:?}",
                         self.node.raft.prs().get(message.from),
-                        message,
+                        redacted_raft_message(&message),
                     );
                 }
 
