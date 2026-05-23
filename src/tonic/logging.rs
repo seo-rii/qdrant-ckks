@@ -7,6 +7,8 @@ use tonic::codegen::http::Response;
 use tower::Service;
 use tower_layer::Layer;
 
+use crate::common::error_reporting::redact_crypto_material_for_report;
+
 #[derive(Clone)]
 pub struct LoggingMiddleware<T> {
     inner: T,
@@ -19,6 +21,10 @@ impl LoggingMiddlewareLayer {
     pub fn new() -> Self {
         Self
     }
+}
+
+fn redacted_grpc_status_message(status: &tonic::Status) -> String {
+    redact_crypto_material_for_report(status.message())
 }
 
 impl<S> Service<tonic::codegen::http::Request<tonic::transport::Body>> for LoggingMiddleware<S>
@@ -56,6 +62,7 @@ where
                 Ok(response_tonic) => {
                     let grpc_status = tonic::Status::from_header_map(response_tonic.headers());
                     if let Some(grpc_status) = grpc_status {
+                        let redacted_message = redacted_grpc_status_message(&grpc_status);
                         match grpc_status.code() {
                             Code::Ok => {
                                 log::trace!("gRPC {method_name} Ok {elapsed_sec:.6}");
@@ -78,7 +85,7 @@ where
                                     "gRPC {} failed with {} {:?} {:.6}",
                                     method_name,
                                     grpc_status.code(),
-                                    grpc_status.message(),
+                                    redacted_message,
                                     elapsed_sec,
                                 );
                             }
@@ -90,7 +97,7 @@ where
                                 "gRPC {} unexpectedly failed with {} {:?} {:.6}",
                                 method_name,
                                 grpc_status.code(),
-                                grpc_status.message(),
+                                redacted_message,
                                 elapsed_sec,
                             ),
                         };
@@ -159,5 +166,24 @@ impl<S> Layer<S> for LoggingMiddlewareLayer {
 
     fn layer(&self, service: S) -> Self::Service {
         LoggingMiddleware { inner: service }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grpc_status_log_message_redacts_crypto_material() {
+        let status = tonic::Status::invalid_argument(
+            "invalid $qdrant_client_aead envelope ciphertext wrapped_key_b64",
+        );
+
+        let rendered = redacted_grpc_status_message(&status);
+
+        assert!(rendered.contains("redacted"));
+        assert!(!rendered.contains("$qdrant_client_aead"));
+        assert!(!rendered.contains("ciphertext"));
+        assert!(!rendered.contains("wrapped_key_b64"));
     }
 }
