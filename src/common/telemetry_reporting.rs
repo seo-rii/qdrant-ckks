@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use common::defaults::APP_USER_AGENT;
 use common::types::{DetailsLevel, TelemetryDetail};
-use reqwest::Client;
+use reqwest::{Client, StatusCode};
 use segment::common::anonymize::Anonymize;
 use storage::content_manager::errors::StorageResult;
 use storage::rbac::{Access, Auth, AuthType};
@@ -31,6 +31,19 @@ fn full_reporter_auth() -> Auth {
         AuthType::Internal,
         None,
     )
+}
+
+fn telemetry_failure_log_message(status: StatusCode, content_length: Option<u64>) -> String {
+    match content_length {
+        Some(content_length) => {
+            format!(
+                "Failed to report telemetry: resp status:{status:?} resp body omitted (content_length:{content_length})"
+            )
+        }
+        None => format!(
+            "Failed to report telemetry: resp status:{status:?} resp body omitted (content_length:unknown)"
+        ),
+    }
 }
 
 impl TelemetryReporter {
@@ -64,9 +77,8 @@ impl TelemetryReporter {
             .await?;
         if !resp.status().is_success() {
             log::error!(
-                "Failed to report telemetry: resp status:{:?} resp body:{:?}",
-                resp.status(),
-                resp.text().await?
+                "{}",
+                telemetry_failure_log_message(resp.status(), resp.content_length())
             );
         }
         Ok(())
@@ -84,5 +96,26 @@ impl TelemetryReporter {
             }
             tokio::time::sleep(REPORTING_INTERVAL).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn telemetry_failure_log_message_omits_response_body() {
+        let response_body = "$qdrant_client_aead ciphertext signature wrapped_key_b64";
+        let log_message = telemetry_failure_log_message(
+            StatusCode::BAD_GATEWAY,
+            Some(response_body.len() as u64),
+        );
+
+        assert!(log_message.contains("502"));
+        assert!(log_message.contains("body omitted"));
+        assert!(log_message.contains("content_length"));
+        assert!(!log_message.contains(response_body));
+        assert!(!log_message.contains("$qdrant_client_aead"));
+        assert!(!log_message.contains("wrapped_key_b64"));
     }
 }
