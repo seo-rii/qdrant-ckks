@@ -181,10 +181,8 @@ impl ChannelService {
 
         // Ensure there aren't more peer addresses than metadata
         if id_to_address.len() > id_to_metadata.len() {
-            let peers_without_metadata: HashMap<_, _> = id_to_address
-                .iter()
-                .filter(|(id, _uri)| !id_to_metadata.contains_key(id))
-                .collect();
+            let peers_without_metadata =
+                peers_without_metadata_for_log(&id_to_address, &id_to_metadata);
             log::info!(
                 "Not all peers at version:{version} because there are peers without metadata:{peers_without_metadata:?}"
             );
@@ -196,7 +194,10 @@ impl ChannelService {
             .all(|metadata| &metadata.version >= version);
 
         if !all {
-            log::info!("Not all peers at version:{version} peers:{id_to_metadata:?}");
+            let peers_below_version = peers_below_version_for_log(&id_to_metadata, version);
+            log::info!(
+                "Not all peers at version:{version} peers_below_version:{peers_below_version:?}"
+            );
         }
 
         all
@@ -263,6 +264,43 @@ impl ChannelService {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct PeerVersionLogEntry {
+    peer_id: PeerId,
+    version: String,
+    crypto_fingerprint_present: bool,
+}
+
+fn peers_without_metadata_for_log(
+    id_to_address: &HashMap<PeerId, Uri>,
+    id_to_metadata: &HashMap<PeerId, PeerMetadata>,
+) -> Vec<PeerId> {
+    let mut peers_without_metadata = id_to_address
+        .keys()
+        .filter(|id| !id_to_metadata.contains_key(id))
+        .copied()
+        .collect::<Vec<_>>();
+    peers_without_metadata.sort_unstable();
+    peers_without_metadata
+}
+
+fn peers_below_version_for_log(
+    id_to_metadata: &HashMap<PeerId, PeerMetadata>,
+    version: &Version,
+) -> Vec<PeerVersionLogEntry> {
+    let mut peers_below_version = id_to_metadata
+        .iter()
+        .filter(|(_peer_id, metadata)| &metadata.version < version)
+        .map(|(peer_id, metadata)| PeerVersionLogEntry {
+            peer_id: *peer_id,
+            version: metadata.version.to_string(),
+            crypto_fingerprint_present: metadata.crypto_runtime_capability_fingerprint().is_some(),
+        })
+        .collect::<Vec<_>>();
+    peers_below_version.sort_unstable_by_key(|entry| entry.peer_id);
+    peers_below_version
+}
+
 #[cfg(test)]
 impl Default for ChannelService {
     fn default() -> Self {
@@ -275,5 +313,35 @@ impl Default for ChannelService {
             api_key: None,
             alt_api_key: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn peer_version_logs_omit_peer_urls_and_crypto_fingerprint_values() {
+        let id_to_address = HashMap::from([(
+            7,
+            Uri::from_static("http://peer-with-token.example.test:6333"),
+        )]);
+        let id_to_metadata = HashMap::new();
+
+        let missing = peers_without_metadata_for_log(&id_to_address, &id_to_metadata);
+        let missing_log = format!("{missing:?}");
+        assert_eq!(missing, vec![7]);
+        assert!(!missing_log.contains("peer-with-token"));
+
+        let id_to_metadata = HashMap::from([(
+            3,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                "crypto-fingerprint-sentinel".to_string(),
+            )),
+        )]);
+        let peers_below = peers_below_version_for_log(&id_to_metadata, &Version::new(999, 0, 0));
+        let peers_below_log = format!("{peers_below:?}");
+        assert!(peers_below_log.contains("crypto_fingerprint_present: true"));
+        assert!(!peers_below_log.contains("crypto-fingerprint-sentinel"));
     }
 }
