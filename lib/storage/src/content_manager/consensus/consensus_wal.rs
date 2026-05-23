@@ -1,4 +1,5 @@
 use std::cmp;
+use std::fmt::{self, Debug, Formatter};
 use std::path::Path;
 
 use fs_err as fs;
@@ -224,7 +225,10 @@ impl ConsensusOpWal {
                         op = op.redacted_log(),
                     );
                 } else {
-                    log::debug!("Appending entry: {new_entry:?}");
+                    log::debug!(
+                        "Appending unparsed entry: {:?}",
+                        redacted_raft_entry(&new_entry)
+                    );
                 }
             }
 
@@ -361,6 +365,26 @@ impl ConsensusOpWal {
     }
 }
 
+fn redacted_raft_entry(entry: &RaftEntry) -> RedactedRaftEntry<'_> {
+    RedactedRaftEntry(entry)
+}
+
+struct RedactedRaftEntry<'a>(&'a RaftEntry);
+
+impl Debug for RedactedRaftEntry<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let entry = self.0;
+        f.debug_struct("RaftEntry")
+            .field("entry_type", &entry.entry_type)
+            .field("term", &entry.term)
+            .field("index", &entry.index)
+            .field("data_bytes", &entry.data.len())
+            .field("context_bytes", &entry.context.len())
+            .field("sync_log", &entry.sync_log)
+            .finish()
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct IndexOffset {
     pub wal_index: u64,
@@ -407,6 +431,26 @@ mod tests {
 
     fn init_logger() {
         let _ = env_logger::builder().is_test(true).try_init();
+    }
+
+    #[test]
+    fn redacted_raft_entry_hides_data_and_context_bytes() {
+        let entry = Entry {
+            entry_type: 7,
+            term: 11,
+            index: 13,
+            data: b"qdrant-sec-consensus-entry-data-sentinel".to_vec(),
+            context: b"qdrant-sec-consensus-entry-context-sentinel".to_vec(),
+            sync_log: true,
+        };
+
+        let log_line = format!("{:?}", redacted_raft_entry(&entry));
+
+        assert!(!log_line.contains("qdrant-sec-consensus-entry-data-sentinel"));
+        assert!(!log_line.contains("qdrant-sec-consensus-entry-context-sentinel"));
+        assert!(log_line.contains("data_bytes"));
+        assert!(log_line.contains("context_bytes"));
+        assert!(log_line.contains("entry_type"));
     }
 
     #[test]
