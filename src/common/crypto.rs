@@ -3127,6 +3127,17 @@ fn external_url_authority(parsed: &reqwest::Url) -> Option<String> {
     })
 }
 
+fn redacted_external_material_url_for_message(url: &str) -> String {
+    let Ok(mut redacted) = reqwest::Url::parse(url) else {
+        return "[invalid-url]".to_string();
+    };
+    let _ = redacted.set_username("");
+    let _ = redacted.set_password(None);
+    redacted.set_query(redacted.query().map(|_| "[redacted]"));
+    redacted.set_fragment(redacted.fragment().map(|_| "[redacted]"));
+    redacted.to_string()
+}
+
 fn is_valid_external_expected_host(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 253
@@ -3211,13 +3222,17 @@ fn validate_material_timeout_policy(
         ),
         Some(VAULT_TRANSIT_SOURCE) => validate_external_material_timeout_value(
             material_name,
-            material.path.as_deref().unwrap_or(VAULT_TRANSIT_SOURCE),
+            &redacted_external_material_url_for_message(
+                material.path.as_deref().unwrap_or(VAULT_TRANSIT_SOURCE),
+            ),
             "Vault Transit",
             Some(timeout_ms),
         ),
         Some("vault_kv2") => validate_external_material_timeout_value(
             material_name,
-            material.path.as_deref().unwrap_or("vault_kv2"),
+            &redacted_external_material_url_for_message(
+                material.path.as_deref().unwrap_or("vault_kv2"),
+            ),
             "Vault KV v2",
             Some(timeout_ms),
         ),
@@ -3278,17 +3293,18 @@ fn validate_material_vault_kv2_source(
     vault_field: Option<&str>,
     expected_host: Option<&str>,
 ) -> Result<(), CryptoSetupError> {
+    let redacted_url = redacted_external_material_url_for_message(url);
     let parsed =
         reqwest::Url::parse(url).map_err(|err| CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url.clone(),
             reason: format!("Vault KV v2 URL is invalid: {err}"),
         })?;
     let is_loopback_http = is_loopback_http_url(&parsed);
     if parsed.scheme() != "https" && !is_loopback_http {
         return Err(CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url,
             reason: "Vault KV v2 URL must use https, except loopback http for tests/dev"
                 .to_string(),
         });
@@ -3297,14 +3313,14 @@ fn validate_material_vault_kv2_source(
     if vault_path.is_empty() || vault_path == "/" {
         return Err(CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url,
             reason: "Vault KV v2 URL must include the secret data path".to_string(),
         });
     }
     if !vault_path.contains("/data/") || vault_path.ends_with("/data/") {
         return Err(CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url,
             reason: "Vault KV v2 URL must use the data endpoint path /.../data/<secret>"
                 .to_string(),
         });
@@ -3312,28 +3328,28 @@ fn validate_material_vault_kv2_source(
     if !parsed.username().is_empty() || parsed.password().is_some() {
         return Err(CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url,
             reason: "Vault KV v2 URL must not include credentials".to_string(),
         });
     }
     if parsed.query().is_some() || parsed.fragment().is_some() {
         return Err(CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url,
             reason: "Vault KV v2 URL must not include query or fragment components".to_string(),
         });
     }
     if !is_material_env_name(token_env) {
         return Err(CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url,
             reason: "Vault token env name is invalid".to_string(),
         });
     }
     let Some(vault_field) = vault_field else {
         return Err(CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url,
             reason: "vault_field is required for Vault KV v2 material".to_string(),
         });
     };
@@ -3345,13 +3361,13 @@ fn validate_material_vault_kv2_source(
     {
         return Err(CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url,
             reason: "vault_field is invalid".to_string(),
         });
     }
     validate_external_material_host_policy(
         material_name,
-        url,
+        &redacted_url,
         "Vault KV v2",
         &parsed,
         expected_host,
@@ -3411,17 +3427,18 @@ fn validate_material_vault_transit_source(
     token_env: &str,
     expected_host: Option<&str>,
 ) -> Result<(), CryptoSetupError> {
+    let redacted_url = redacted_external_material_url_for_message(url);
     let parsed =
         reqwest::Url::parse(url).map_err(|err| CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url.clone(),
             reason: format!("Vault Transit key URL is invalid: {err}"),
         })?;
     let is_loopback_http = is_loopback_http_url(&parsed);
     if parsed.scheme() != "https" && !is_loopback_http {
         return Err(CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url,
             reason: "Vault Transit URL must use https, except loopback http for tests/dev"
                 .to_string(),
         });
@@ -3430,7 +3447,7 @@ fn validate_material_vault_transit_source(
     if !vault_path.contains("/transit/keys/") || vault_path.ends_with("/transit/keys/") {
         return Err(CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url,
             reason: "Vault Transit URL must use the key metadata path /.../transit/keys/<key>"
                 .to_string(),
         });
@@ -3438,27 +3455,27 @@ fn validate_material_vault_transit_source(
     if !parsed.username().is_empty() || parsed.password().is_some() {
         return Err(CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url,
             reason: "Vault Transit URL must not include credentials".to_string(),
         });
     }
     if parsed.query().is_some() || parsed.fragment().is_some() {
         return Err(CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url,
             reason: "Vault Transit URL must not include query or fragment components".to_string(),
         });
     }
     if !is_material_env_name(token_env) {
         return Err(CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url,
             reason: "Vault token env name is invalid".to_string(),
         });
     }
     validate_external_material_host_policy(
         material_name,
-        url,
+        &redacted_url,
         "Vault Transit",
         &parsed,
         expected_host,
@@ -5883,10 +5900,11 @@ fn validate_aws_kms_endpoint_url(
     url: &str,
     expected_host: Option<&str>,
 ) -> Result<String, PayloadWriteSetupError> {
+    let redacted_url = redacted_external_material_url_for_message(url);
     let parsed = reqwest::Url::parse(url).map_err(|err| {
         PayloadWriteSetupError::InvalidMaterialFileSource {
             material: "<aws-kms>".to_string(),
-            path: url.to_string(),
+            path: redacted_url.clone(),
             reason: format!("AWS KMS endpoint URL is invalid: {err}"),
         }
     })?;
@@ -5897,7 +5915,7 @@ fn validate_aws_kms_endpoint_url(
     if parsed.scheme() != "https" && !is_loopback_http {
         return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
             material: "<aws-kms>".to_string(),
-            path: url.to_string(),
+            path: redacted_url,
             reason: "AWS KMS endpoint URL must use https, except loopback http for tests/dev"
                 .to_string(),
         });
@@ -5910,7 +5928,7 @@ fn validate_aws_kms_endpoint_url(
     {
         return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
             material: "<aws-kms>".to_string(),
-            path: url.to_string(),
+            path: redacted_url,
             reason: "AWS KMS endpoint URL must not include credentials, path, query, or fragment"
                 .to_string(),
         });
@@ -5921,7 +5939,7 @@ fn validate_aws_kms_endpoint_url(
         }
         return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
             material: "<aws-kms>".to_string(),
-            path: url.to_string(),
+            path: redacted_url,
             reason: "AWS KMS custom endpoint requires expected_host".to_string(),
         });
     };
@@ -5933,31 +5951,32 @@ fn validate_aws_kms_endpoint_url_host(
     url: &str,
     expected_host: &str,
 ) -> Result<(), PayloadWriteSetupError> {
+    let redacted_url = redacted_external_material_url_for_message(url);
     if !is_valid_external_expected_host(expected_host) {
         return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
             material: "<aws-kms>".to_string(),
-            path: url.to_string(),
+            path: redacted_url,
             reason: "AWS KMS expected_host is invalid".to_string(),
         });
     }
     let parsed = reqwest::Url::parse(url).map_err(|err| {
         PayloadWriteSetupError::InvalidMaterialFileSource {
             material: "<aws-kms>".to_string(),
-            path: url.to_string(),
+            path: redacted_url.clone(),
             reason: format!("AWS KMS endpoint URL is invalid: {err}"),
         }
     })?;
     let actual_host = external_url_authority(&parsed).ok_or_else(|| {
         PayloadWriteSetupError::InvalidMaterialFileSource {
             material: "<aws-kms>".to_string(),
-            path: url.to_string(),
+            path: redacted_url.clone(),
             reason: "AWS KMS endpoint URL must include a host".to_string(),
         }
     })?;
     if !actual_host.eq_ignore_ascii_case(expected_host) {
         return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
             material: "<aws-kms>".to_string(),
-            path: url.to_string(),
+            path: redacted_url,
             reason: format!(
                 "AWS KMS endpoint host {actual_host} does not match expected_host {expected_host}"
             ),
@@ -6074,7 +6093,10 @@ impl VaultTransitMasterKeyProvider {
                 },
                 err => PayloadWriteSetupError::UnreadableMaterialFile {
                     material: mk_id.to_string(),
-                    path: format!("{key_url}: {err}"),
+                    path: format!(
+                        "{}: {err}",
+                        redacted_external_material_url_for_message(key_url)
+                    ),
                 },
             },
         )?;
@@ -6255,10 +6277,11 @@ impl MasterKeyProvider for VaultTransitMasterKeyProvider {
 }
 
 fn vault_transit_action_url(key_url: &str, action: &str) -> Result<String, PayloadWriteSetupError> {
+    let redacted_key_url = redacted_external_material_url_for_message(key_url);
     let mut url = reqwest::Url::parse(key_url).map_err(|err| {
         PayloadWriteSetupError::InvalidMaterialFileSource {
             material: "<vault-transit>".to_string(),
-            path: key_url.to_string(),
+            path: redacted_key_url.clone(),
             reason: format!("Vault Transit key URL is invalid: {err}"),
         }
     })?;
@@ -6267,7 +6290,7 @@ fn vault_transit_action_url(key_url: &str, action: &str) -> Result<String, Paylo
     if action_path == path {
         return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
             material: "<vault-transit>".to_string(),
-            path: key_url.to_string(),
+            path: redacted_key_url,
             reason: "Vault Transit key URL must contain /transit/keys/".to_string(),
         });
     }
@@ -6432,7 +6455,7 @@ fn decode_direct_material_key(
             let vault_field = material.vault_field.as_deref().ok_or_else(|| {
                 PayloadWriteSetupError::InvalidMaterialFileSource {
                     material: material_name.to_string(),
-                    path: url.to_string(),
+                    path: redacted_external_material_url_for_message(url),
                     reason: "vault_field is required for Vault KV v2 material".to_string(),
                 }
             })?;
@@ -6582,10 +6605,12 @@ fn read_material_vault_kv2_to_string(
         },
         err => PayloadWriteSetupError::UnreadableMaterialFile {
             material: material_name.to_string(),
-            path: format!("{url}: {err}"),
+            path: format!("{}: {err}", redacted_external_material_url_for_message(url)),
         },
     })?;
-    let timeout = external_material_timeout(material_name, url, "Vault KV v2", timeout_ms)?;
+    let redacted_url = redacted_external_material_url_for_message(url);
+    let timeout =
+        external_material_timeout(material_name, &redacted_url, "Vault KV v2", timeout_ms)?;
     let token = Zeroizing::new(std::env::var(token_env).map_err(|_| {
         PayloadWriteSetupError::MissingMaterialEnv {
             material: material_name.to_string(),
@@ -6595,7 +6620,7 @@ fn read_material_vault_kv2_to_string(
     if token.is_empty() {
         return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url,
             reason: "Vault token env value must not be empty".to_string(),
         });
     }
@@ -6603,7 +6628,7 @@ fn read_material_vault_kv2_to_string(
         reqwest::header::HeaderValue::from_str(token.as_str()).map_err(|_| {
             PayloadWriteSetupError::InvalidMaterialFileSource {
                 material: material_name.to_string(),
-                path: url.to_string(),
+                path: redacted_url.clone(),
                 reason: "Vault token env value is not a valid HTTP header value".to_string(),
             }
         })?;
@@ -6614,7 +6639,7 @@ fn read_material_vault_kv2_to_string(
         .build()
         .map_err(|_| PayloadWriteSetupError::UnreadableMaterialFile {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url.clone(),
         })?;
     let response = client
         .get(url)
@@ -6625,12 +6650,12 @@ fn read_material_vault_kv2_to_string(
         .send()
         .map_err(|_| PayloadWriteSetupError::UnreadableMaterialFile {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url.clone(),
         })?;
     if !response.status().is_success() {
         return Err(PayloadWriteSetupError::UnreadableMaterialFile {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url,
         });
     }
     let mut limited_response = response.take(VAULT_KV2_RESPONSE_MAX_BYTES + 1);
@@ -6638,20 +6663,20 @@ fn read_material_vault_kv2_to_string(
     limited_response.read_to_end(&mut body_bytes).map_err(|_| {
         PayloadWriteSetupError::UnreadableMaterialFile {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url.clone(),
         }
     })?;
     if body_bytes.len() as u64 > VAULT_KV2_RESPONSE_MAX_BYTES {
         return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url,
             reason: "Vault KV v2 response exceeds maximum size".to_string(),
         });
     }
     let body = serde_json::from_slice::<Value>(&body_bytes).map_err(|_| {
         PayloadWriteSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url.clone(),
             reason: "Vault KV v2 response must be JSON".to_string(),
         }
     })?;
@@ -6662,7 +6687,7 @@ fn read_material_vault_kv2_to_string(
         .map(|value| Zeroizing::new(value.to_string()))
         .ok_or_else(|| PayloadWriteSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
-            path: url.to_string(),
+            path: redacted_url,
             reason: format!("Vault KV v2 response is missing data.data.{vault_field}"),
         })
 }
@@ -9931,29 +9956,44 @@ mod tests {
             kind: "symmetric_key_32".to_string(),
             source: Some("vault_kv2".to_string()),
             env: Some("QDRANT_TEST_VAULT_TOKEN".to_string()),
-            path: Some("https://vault.example.com/v1/secret/data/docs?version=1".to_string()),
+            path: Some(
+                "https://vault.example.com/v1/secret/data/docs?version=qdrant-sec-vault-query-sentinel"
+                    .to_string(),
+            ),
             vault_field: Some("material".to_string()),
             ..CryptoMaterialConfig::default()
         };
-        assert!(matches!(
-            validate_material("tenant-a/payload-v1", &query_material, false),
-            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
-                if reason.contains("query or fragment")
-        ));
+        match validate_material("tenant-a/payload-v1", &query_material, false) {
+            Err(CryptoSetupError::InvalidMaterialFileSource { path, reason, .. }) => {
+                assert!(reason.contains("query or fragment"));
+                assert!(path.contains("[redacted]"), "{path}");
+                assert!(!path.contains("qdrant-sec-vault-query-sentinel"), "{path}");
+            }
+            other => panic!("unexpected validation result: {other:?}"),
+        }
 
         let fragment_material = CryptoMaterialConfig {
             kind: "symmetric_key_32".to_string(),
             source: Some("vault_kv2".to_string()),
             env: Some("QDRANT_TEST_VAULT_TOKEN".to_string()),
-            path: Some("https://vault.example.com/v1/secret/data/docs#material".to_string()),
+            path: Some(
+                "https://vault.example.com/v1/secret/data/docs#qdrant-sec-vault-fragment-sentinel"
+                    .to_string(),
+            ),
             vault_field: Some("material".to_string()),
             ..CryptoMaterialConfig::default()
         };
-        assert!(matches!(
-            validate_material("tenant-a/payload-v1", &fragment_material, false),
-            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
-                if reason.contains("query or fragment")
-        ));
+        match validate_material("tenant-a/payload-v1", &fragment_material, false) {
+            Err(CryptoSetupError::InvalidMaterialFileSource { path, reason, .. }) => {
+                assert!(reason.contains("query or fragment"));
+                assert!(path.contains("[redacted]"), "{path}");
+                assert!(
+                    !path.contains("qdrant-sec-vault-fragment-sentinel"),
+                    "{path}"
+                );
+            }
+            other => panic!("unexpected validation result: {other:?}"),
+        }
     }
 
     #[test]
@@ -10000,8 +10040,11 @@ mod tests {
 
         assert!(matches!(
             validate_material("tenant-a/payload-v1", &credential_material, false),
-            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+            Err(CryptoSetupError::InvalidMaterialFileSource { path, reason, .. })
                 if reason.contains("credentials")
+                    && !path.contains("user")
+                    && !path.contains("pass")
+                    && path.contains("vault.example.com")
         ));
     }
 
@@ -10226,6 +10269,37 @@ mod tests {
     }
 
     #[test]
+    fn validate_material_vault_transit_source_redacts_url_credentials_in_errors() {
+        let vault_wrapping_material = CryptoMaterialConfig {
+            kind: "wrapping_key_32".to_string(),
+            source: Some(VAULT_TRANSIT_SOURCE.to_string()),
+            env: Some("QDRANT_TEST_VAULT_TRANSIT_TOKEN".to_string()),
+            path: Some(
+                "https://user:pass@vault.example.com/v1/transit/keys/docs?version=qdrant-sec-vault-transit-query#qdrant-sec-vault-transit-fragment"
+                    .to_string(),
+            ),
+            expected_host: Some("vault.example.com".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        match validate_material("tenant-a/mk-vault", &vault_wrapping_material, false) {
+            Err(CryptoSetupError::InvalidMaterialFileSource { path, reason, .. }) => {
+                assert!(reason.contains("credentials"), "{reason}");
+                assert!(path.contains("[redacted]"), "{path}");
+                assert!(path.contains("vault.example.com"), "{path}");
+                assert!(!path.contains("user"), "{path}");
+                assert!(!path.contains("pass"), "{path}");
+                assert!(!path.contains("qdrant-sec-vault-transit-query"), "{path}");
+                assert!(
+                    !path.contains("qdrant-sec-vault-transit-fragment"),
+                    "{path}"
+                );
+            }
+            other => panic!("unexpected validation result: {other:?}"),
+        }
+    }
+
+    #[test]
     fn decode_wrapped_resource_key_uses_vault_transit_decrypt() {
         let mut server = mockito::Server::new();
         let plaintext = BASE64.encode(&[37u8; 32]);
@@ -10334,6 +10408,25 @@ mod tests {
                 if reason.contains("does not match")
         ));
         assert!(validate_aws_kms_endpoint_url("http://127.0.0.1:4566/", None).is_ok());
+    }
+
+    #[test]
+    fn aws_kms_custom_endpoint_redacts_url_credentials_in_errors() {
+        match validate_aws_kms_endpoint_url(
+            "https://user:pass@kms-proxy.example.com/path?token=qdrant-sec-kms-query#qdrant-sec-kms-fragment",
+            Some("kms-proxy.example.com"),
+        ) {
+            Err(PayloadWriteSetupError::InvalidMaterialFileSource { path, reason, .. }) => {
+                assert!(reason.contains("credentials"), "{reason}");
+                assert!(path.contains("[redacted]"), "{path}");
+                assert!(path.contains("kms-proxy.example.com"), "{path}");
+                assert!(!path.contains("user"), "{path}");
+                assert!(!path.contains("pass"), "{path}");
+                assert!(!path.contains("qdrant-sec-kms-query"), "{path}");
+                assert!(!path.contains("qdrant-sec-kms-fragment"), "{path}");
+            }
+            other => panic!("unexpected endpoint validation result: {other:?}"),
+        }
     }
 
     #[test]
