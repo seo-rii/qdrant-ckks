@@ -22,7 +22,7 @@ const MAX_PEER_ID: u64 = (1 << 53) - 1;
 
 const DEFAULT_CONFIG: &str = include_str!("../config/config.yaml");
 
-#[derive(Debug, Deserialize, Validate, Clone)]
+#[derive(Deserialize, Validate, Clone)]
 pub struct ServiceConfig {
     #[validate(length(min = 1))]
     pub host: String,
@@ -95,6 +95,57 @@ pub struct ServiceConfig {
     #[serde(default)]
     #[validate(custom(function = validate_metrics_prefix))]
     pub metrics_prefix: Option<String>,
+}
+
+impl fmt::Debug for ServiceConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServiceConfig")
+            .field("host", &self.host)
+            .field("http_port", &self.http_port)
+            .field("grpc_port", &self.grpc_port)
+            .field("metrics_port", &self.metrics_port)
+            .field("max_request_size_mb", &self.max_request_size_mb)
+            .field(
+                "max_snapshot_upload_size_mb",
+                &self.max_snapshot_upload_size_mb,
+            )
+            .field("max_workers", &self.max_workers)
+            .field(
+                "http_keep_alive_timeout_sec",
+                &self.http_keep_alive_timeout_sec,
+            )
+            .field(
+                "http_client_request_timeout_sec",
+                &self.http_client_request_timeout_sec,
+            )
+            .field(
+                "http_client_disconnect_timeout_sec",
+                &self.http_client_disconnect_timeout_sec,
+            )
+            .field("enable_cors", &self.enable_cors)
+            .field("enable_tls", &self.enable_tls)
+            .field(
+                "verify_https_client_certificate",
+                &self.verify_https_client_certificate,
+            )
+            .field("api_key", &self.api_key.as_ref().map(|_| "[redacted]"))
+            .field(
+                "alt_api_key",
+                &self.alt_api_key.as_ref().map(|_| "[redacted]"),
+            )
+            .field(
+                "read_only_api_key",
+                &self.read_only_api_key.as_ref().map(|_| "[redacted]"),
+            )
+            .field("jwt_rbac", &self.jwt_rbac)
+            .field("hide_jwt_dashboard", &self.hide_jwt_dashboard)
+            .field("static_content_dir", &self.static_content_dir)
+            .field("enable_static_content", &self.enable_static_content)
+            .field("slow_query_secs", &self.slow_query_secs)
+            .field("hardware_reporting", &self.hardware_reporting)
+            .field("metrics_prefix", &self.metrics_prefix)
+            .finish()
+    }
 }
 
 impl ServiceConfig {
@@ -729,6 +780,29 @@ mod tests {
         config
             .validate()
             .expect("failed to validate default config");
+    }
+
+    #[test]
+    fn service_config_debug_redacts_api_keys() {
+        let mut config = Config::builder()
+            .add_source(File::from_str(DEFAULT_CONFIG, FileFormat::Yaml))
+            .build()
+            .expect("failed to build default config")
+            .try_deserialize::<Settings>()
+            .expect("failed to deserialize default config");
+        config.service.api_key = Some("qdrant-sec-api-key-sentinel".to_string());
+        config.service.alt_api_key = Some("qdrant-sec-alt-api-key-sentinel".to_string());
+        config.service.read_only_api_key = Some("qdrant-sec-read-only-key-sentinel".to_string());
+
+        let service_debug = format!("{:?}", config.service);
+        let settings_debug = format!("{config:?}");
+
+        for rendered in [service_debug, settings_debug] {
+            assert!(rendered.contains("[redacted]"));
+            assert!(!rendered.contains("qdrant-sec-api-key-sentinel"));
+            assert!(!rendered.contains("qdrant-sec-alt-api-key-sentinel"));
+            assert!(!rendered.contains("qdrant-sec-read-only-key-sentinel"));
+        }
     }
 
     #[expect(
