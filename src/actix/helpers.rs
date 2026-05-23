@@ -13,6 +13,8 @@ use storage::content_manager::errors::{StorageError, StorageResult};
 use storage::content_manager::toc::request_hw_counter::RequestHwCounter;
 use storage::dispatcher::Dispatcher;
 
+use crate::common::error_reporting::redact_crypto_material_for_report;
+
 pub fn get_request_hardware_counter(
     dispatcher: &Dispatcher,
     collection_name: String,
@@ -190,13 +192,26 @@ where
 }
 
 fn log_service_error(err: &StorageError) {
-    if let StorageError::ServiceError { backtrace, .. } = err {
-        log::error!("Error processing request: {err}");
+    let Some((message, backtrace)) = service_error_log_messages(err) else {
+        return;
+    };
+    log::error!("{message}");
 
-        if let Some(backtrace) = backtrace {
-            log::trace!("Backtrace: {backtrace}");
-        }
+    if let Some(backtrace) = backtrace {
+        log::trace!("{backtrace}");
     }
+}
+
+fn service_error_log_messages(err: &StorageError) -> Option<(String, Option<String>)> {
+    if let StorageError::ServiceError { backtrace, .. } = err {
+        return Some((
+            redact_crypto_material_for_report(&format!("Error processing request: {err}")),
+            backtrace.as_ref().map(|backtrace| {
+                redact_crypto_material_for_report(&format!("Backtrace: {backtrace}"))
+            }),
+        ));
+    }
+    None
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -275,5 +290,47 @@ impl From<CollectionError> for HttpError {
 impl From<std::io::Error> for HttpError {
     fn from(err: std::io::Error) -> Self {
         HttpError(err.into()) // TODO: Is this good enough?.. 🤔
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_error_log_messages_redact_crypto_material() {
+        let err = StorageError::ServiceError {
+            description:
+                "$qdrant_client_aead ciphertext=qdrant-sec-rest-error-ciphertext wrapped_key_b64=qdrant-sec-rest-error-wrapped-key"
+                    .to_string(),
+            backtrace: Some(
+                "frame signature_b64=qdrant-sec-rest-backtrace-signature Authorization=Bearer qdrant-sec-rest-backtrace-token"
+                    .to_string(),
+            ),
+        };
+
+        let (message, backtrace) =
+            service_error_log_messages(&err).expect("service error should produce log message");
+        let backtrace = backtrace.expect("backtrace should be redacted and preserved");
+
+        assert!(message.contains("redacted"), "{message}");
+        assert!(backtrace.contains("redacted"), "{backtrace}");
+        assert!(!message.contains("$qdrant_client_aead"), "{message}");
+        assert!(
+            !message.contains("qdrant-sec-rest-error-ciphertext"),
+            "{message}"
+        );
+        assert!(
+            !message.contains("qdrant-sec-rest-error-wrapped-key"),
+            "{message}"
+        );
+        assert!(
+            !backtrace.contains("qdrant-sec-rest-backtrace-signature"),
+            "{backtrace}",
+        );
+        assert!(
+            !backtrace.contains("qdrant-sec-rest-backtrace-token"),
+            "{backtrace}",
+        );
     }
 }
