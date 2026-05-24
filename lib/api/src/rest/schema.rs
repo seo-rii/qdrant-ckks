@@ -575,6 +575,7 @@ pub struct CkksEncryptedQueryVectorEnvelope {
     pub key_id: String,
     pub rk_id: String,
     pub rk_epoch: u64,
+    pub query_nonce: String,
     pub context_digest: String,
     pub slots: usize,
     pub ciphertext_sha256: String,

@@ -157,6 +157,7 @@ impl Generalizer for crate::operations::universal_query::collection_query::CkksE
             key_id: self.key_id.clone(),
             rk_id: self.rk_id.clone(),
             rk_epoch: self.rk_epoch,
+            query_nonce: "[redacted]".to_string(),
             context_digest: self.context_digest.clone(),
             slots: self.slots,
             ciphertext_sha256: "[redacted]".to_string(),
@@ -279,6 +280,7 @@ mod tests {
             key_id: "tenant-a:vector".to_string(),
             rk_id: "tenant-a/vector-v1".to_string(),
             rk_epoch: 1,
+            query_nonce: "qdrant-sec-query-nonce-sentinel".to_string(),
             context_digest: "context-digest".to_string(),
             slots: 4,
             ciphertext_sha256: "qdrant-sec-query-ciphertext-sha256-sentinel".to_string(),
@@ -292,6 +294,7 @@ mod tests {
 
         assert_eq!(generalized.ciphertext, "[redacted]");
         assert_eq!(generalized.ciphertext_sha256, "[redacted]");
+        assert_eq!(generalized.query_nonce, "[redacted]");
         assert_eq!(generalized.signature_b64, "[redacted]");
         assert_ne!(
             generalized.ciphertext,
@@ -305,5 +308,6 @@ mod tests {
             generalized.signature_b64,
             "qdrant-sec-query-signature-sentinel"
         );
+        assert_ne!(generalized.query_nonce, "qdrant-sec-query-nonce-sentinel");
     }
 }

@@ -16,6 +16,7 @@ const CKKS_ENCRYPTED_QUERY_SCHEME: &str = "openfhe-ckks";
 const CKKS_ENCRYPTED_QUERY_SECURITY_PROFILE: &str = "ckks-128-n16384-d4-scale50";
 const CKKS_ENCRYPTED_QUERY_CONTEXT_DIGEST_B64_LEN: usize = 43;
 const CKKS_ENCRYPTED_QUERY_SHA256_B64_LEN: usize = 43;
+const CKKS_ENCRYPTED_QUERY_NONCE_B64_LEN: usize = 16;
 const CKKS_ENCRYPTED_QUERY_SIGNATURE_B64_LEN: usize = 86;
 const CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_BYTES: usize = 16 * 1024 * 1024;
 const CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_ENCODED_BYTES: usize =
@@ -125,6 +126,26 @@ impl Validate for CkksEncryptedQueryVector {
             errors.add(
                 "rk_epoch",
                 ValidationError::new("empty_ckks_encrypted_query_rk_epoch"),
+            );
+        }
+        if self.envelope.query_nonce.is_empty() {
+            errors.add(
+                "query_nonce",
+                ValidationError::new("empty_ckks_encrypted_query_nonce"),
+            );
+        } else if self.envelope.query_nonce.len() != CKKS_ENCRYPTED_QUERY_NONCE_B64_LEN {
+            errors.add(
+                "query_nonce",
+                ValidationError::new("invalid_ckks_encrypted_query_nonce_length"),
+            );
+        } else if BASE64URL_NOPAD
+            .decode(self.envelope.query_nonce.as_bytes())
+            .map(|nonce| nonce.len() != 12)
+            .unwrap_or(true)
+        {
+            errors.add(
+                "query_nonce",
+                ValidationError::new("invalid_ckks_encrypted_query_nonce_base64url"),
             );
         }
         if self.envelope.signature.alg != "ed25519" {
@@ -495,6 +516,7 @@ mod tests {
                 key_id: "tenant-a:vector".to_string(),
                 rk_id: "tenant-a/vector-v1".to_string(),
                 rk_epoch: 1,
+                query_nonce: BASE64URL_NOPAD.encode(&[7_u8; 12]),
                 context_digest: BASE64URL_NOPAD.encode(&[3_u8; 32]),
                 slots: 2,
                 ciphertext_sha256: "MFUx3MUOvKMc8dWzHp_HbtUfZrO23VoDDGU5rmUy-Xk".to_string(),
@@ -556,6 +578,7 @@ mod tests {
                 key_id: String::new(),
                 rk_id: String::new(),
                 rk_epoch: 0,
+                query_nonce: String::new(),
                 context_digest: String::new(),
                 slots: 0,
                 ciphertext_sha256: String::new(),
@@ -571,6 +594,17 @@ mod tests {
         assert!(
             bad_query.validate().is_err(),
             "empty REST CKKS encrypted query metadata should error on validation"
+        );
+
+        let bad_query = CkksEncryptedQueryVector {
+            envelope: CkksEncryptedQueryVectorEnvelope {
+                query_nonce: BASE64URL_NOPAD.encode(&[7_u8; 11]),
+                ..valid_ckks_encrypted_query().envelope
+            },
+        };
+        assert!(
+            bad_query.validate().is_err(),
+            "wrong-length REST CKKS encrypted query nonce should error on validation"
         );
 
         let bad_query = CkksEncryptedQueryVector {

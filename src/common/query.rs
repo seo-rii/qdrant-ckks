@@ -143,6 +143,7 @@ enum CkksSidecarQuerySource<'a> {
         key_id: &'a str,
         rk_id: &'a str,
         rk_epoch: u64,
+        query_nonce: &'a str,
         context_digest: &'a str,
         slots: usize,
         ciphertext: Vec<u8>,
@@ -165,6 +166,7 @@ enum CkksSidecarHnswQuery<'a> {
         key_id: &'a str,
         rk_id: &'a str,
         rk_epoch: u64,
+        query_nonce: &'a str,
         context_digest: &'a str,
         slots: usize,
         ciphertext: &'a [u8],
@@ -600,6 +602,7 @@ fn ckks_legacy_search_as_query_request(
                 key_id: query.envelope.key_id.clone(),
                 rk_id: query.envelope.rk_id.clone(),
                 rk_epoch: query.envelope.rk_epoch,
+                query_nonce: query.envelope.query_nonce.clone(),
                 context_digest: query.envelope.context_digest.clone(),
                 slots: query.envelope.slots,
                 ciphertext_sha256: query.envelope.ciphertext_sha256.clone(),
@@ -1074,6 +1077,7 @@ async fn ckks_vector_search_points_with_scoring(
                 key_id,
                 rk_id,
                 rk_epoch,
+                query_nonce,
                 context_digest,
                 slots,
                 ciphertext,
@@ -1091,6 +1095,7 @@ async fn ckks_vector_search_points_with_scoring(
             key_id,
             rk_id,
             *rk_epoch,
+            query_nonce,
             context_digest,
             *slots,
             ciphertext,
@@ -1154,6 +1159,7 @@ async fn ckks_vector_search_points_with_scoring(
                             key_id,
                             rk_id,
                             rk_epoch,
+                            query_nonce,
                             context_digest,
                             slots,
                             ciphertext,
@@ -1167,6 +1173,7 @@ async fn ckks_vector_search_points_with_scoring(
                     key_id,
                     rk_id,
                     rk_epoch: *rk_epoch,
+                    query_nonce,
                     context_digest,
                     slots: *slots,
                     ciphertext,
@@ -1810,6 +1817,7 @@ async fn ckks_vector_search_points_with_scoring(
                         key_id,
                         rk_id,
                         rk_epoch,
+                        query_nonce,
                         context_digest,
                         slots,
                         ciphertext,
@@ -1823,6 +1831,7 @@ async fn ckks_vector_search_points_with_scoring(
                 key_id,
                 rk_id,
                 rk_epoch: *rk_epoch,
+                query_nonce,
                 context_digest,
                 slots: *slots,
                 ciphertext,
@@ -2164,6 +2173,7 @@ fn ckks_score_query_source_batch(
             key_id,
             rk_id,
             rk_epoch,
+            query_nonce,
             context_digest,
             slots,
             ciphertext,
@@ -2179,6 +2189,7 @@ fn ckks_score_query_source_batch(
             key_id,
             rk_id,
             *rk_epoch,
+            query_nonce,
             context_digest,
             *slots,
             ciphertext,
@@ -2219,6 +2230,7 @@ fn ckks_client_encrypted_query_source<'a>(
         &input.key_id,
         &input.rk_id,
         input.rk_epoch,
+        &input.query_nonce,
         &input.context_digest,
         input.slots,
         &input.ciphertext_sha256,
@@ -2243,6 +2255,7 @@ fn ckks_rest_client_encrypted_query_source<'a>(
         &input.envelope.key_id,
         &input.envelope.rk_id,
         input.envelope.rk_epoch,
+        &input.envelope.query_nonce,
         &input.envelope.context_digest,
         input.envelope.slots,
         &input.envelope.ciphertext_sha256,
@@ -2263,6 +2276,7 @@ fn ckks_client_encrypted_query_source_from_parts<'a>(
     key_id: &'a str,
     rk_id: &'a str,
     rk_epoch: u64,
+    query_nonce_b64: &'a str,
     context_digest_b64: &'a str,
     slots: usize,
     ciphertext_sha256_b64: &str,
@@ -2309,6 +2323,23 @@ fn ckks_client_encrypted_query_source_from_parts<'a>(
     if rk_epoch == 0 {
         return Err(StorageError::bad_input(format!(
             "encrypted vector '{vector_name}' client CKKS query rk_epoch must be greater than 0",
+        )));
+    }
+    if query_nonce_b64.len() != 16 {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query nonce must be 16 base64url characters",
+        )));
+    }
+    let query_nonce = BASE64URL_NOPAD
+        .decode(query_nonce_b64.as_bytes())
+        .map_err(|err| {
+            StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' client CKKS query nonce is not base64url: {err}",
+            ))
+        })?;
+    if query_nonce.len() != 12 {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query nonce must decode to 12 bytes",
         )));
     }
     if signature_alg != "ed25519" {
@@ -2412,6 +2443,7 @@ fn ckks_client_encrypted_query_source_from_parts<'a>(
         key_id,
         rk_id,
         rk_epoch,
+        query_nonce: query_nonce_b64,
         context_digest: context_digest_b64,
         slots,
         ciphertext,
@@ -2998,6 +3030,7 @@ fn ckks_sidecar_score_hnsw_query_batch(
             key_id,
             rk_id,
             rk_epoch,
+            query_nonce,
             context_digest,
             slots,
             ciphertext,
@@ -3013,6 +3046,7 @@ fn ckks_sidecar_score_hnsw_query_batch(
             key_id,
             rk_id,
             rk_epoch,
+            query_nonce,
             context_digest,
             slots,
             ciphertext,
@@ -8306,6 +8340,10 @@ mod tests {
         BASE64URL_NOPAD.encode(&[4_u8; 64])
     }
 
+    fn valid_query_nonce_b64() -> String {
+        BASE64URL_NOPAD.encode(&[7_u8; 12])
+    }
+
     #[test]
     fn ckks_client_encrypted_query_source_rejects_oversized_fixed_fields() {
         let context_digest = BASE64URL_NOPAD.encode(&[3_u8; 32]);
@@ -8314,6 +8352,7 @@ mod tests {
         let valid_ciphertext_sha256 =
             BASE64URL_NOPAD.encode(&Sha256::digest(valid_ciphertext_bytes));
         let valid_signature = valid_query_signature_b64();
+        let valid_nonce = valid_query_nonce_b64();
 
         let err = match ckks_client_encrypted_query_source_from_parts(
             "embedding",
@@ -8325,6 +8364,7 @@ mod tests {
             "tenant-a:vector",
             "tenant-a/vector-v1",
             1,
+            &valid_nonce,
             &"A".repeat(CKKS_CLIENT_QUERY_CONTEXT_DIGEST_B64_LEN + 1),
             2,
             &valid_ciphertext_sha256,
@@ -8348,6 +8388,7 @@ mod tests {
             "tenant-a:vector",
             "tenant-a/vector-v1",
             1,
+            &valid_nonce,
             &context_digest,
             2,
             &valid_ciphertext_sha256,
@@ -8365,6 +8406,7 @@ mod tests {
     #[test]
     fn ckks_client_encrypted_query_source_rejects_ciphertext_hash_mismatch() {
         let valid_signature = valid_query_signature_b64();
+        let valid_nonce = valid_query_nonce_b64();
         let err = match ckks_client_encrypted_query_source_from_parts(
             "embedding",
             1,
@@ -8375,6 +8417,7 @@ mod tests {
             "tenant-a:vector",
             "tenant-a/vector-v1",
             1,
+            &valid_nonce,
             &BASE64URL_NOPAD.encode(&[3_u8; 32]),
             2,
             &BASE64URL_NOPAD.encode(&Sha256::digest(b"other-ciphertext")),
@@ -8396,6 +8439,7 @@ mod tests {
         let ciphertext = BASE64URL_NOPAD.encode(b"ciphertext");
         let ciphertext_sha256 = BASE64URL_NOPAD.encode(&Sha256::digest(b"ciphertext"));
         let valid_signature = valid_query_signature_b64();
+        let valid_nonce = valid_query_nonce_b64();
 
         let err = match ckks_client_encrypted_query_source_from_parts(
             "embedding",
@@ -8407,6 +8451,7 @@ mod tests {
             "tenant-a:vector",
             "tenant-a/vector-v1",
             1,
+            &valid_nonce,
             &context_digest,
             2,
             &ciphertext_sha256,
@@ -8430,6 +8475,7 @@ mod tests {
             "tenant-a:vector",
             "tenant-a/vector-v1",
             1,
+            &valid_nonce,
             &context_digest,
             2,
             &ciphertext_sha256,
@@ -8453,6 +8499,7 @@ mod tests {
             "",
             "tenant-a/vector-v1",
             1,
+            &valid_nonce,
             &context_digest,
             2,
             &ciphertext_sha256,
@@ -8476,6 +8523,7 @@ mod tests {
             "tenant-a:vector",
             "",
             1,
+            &valid_nonce,
             &context_digest,
             2,
             &ciphertext_sha256,
@@ -8499,6 +8547,7 @@ mod tests {
             "tenant-a:vector",
             "tenant-a/vector-v1",
             0,
+            &valid_nonce,
             &context_digest,
             2,
             &ciphertext_sha256,
@@ -8511,6 +8560,30 @@ mod tests {
             Err(err) => err,
         };
         assert!(err.to_string().contains("rk_epoch"));
+
+        let err = match ckks_client_encrypted_query_source_from_parts(
+            "embedding",
+            1,
+            CKKS_SCHEME,
+            CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+            "docs-crypto-id",
+            "embedding",
+            "tenant-a:vector",
+            "tenant-a/vector-v1",
+            1,
+            &BASE64URL_NOPAD.encode(&[7_u8; 11]),
+            &context_digest,
+            2,
+            &ciphertext_sha256,
+            &ciphertext,
+            "ed25519",
+            "tenant-a:query-signing-v1",
+            &valid_signature,
+        ) {
+            Ok(_) => panic!("client encrypted query nonce must be required"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("nonce"));
     }
 
     #[test]

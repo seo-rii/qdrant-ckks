@@ -3204,12 +3204,14 @@ esac
         let signing_key = fake_ckks_query_signing_key_pair();
         let signature_alg = "ed25519".to_string();
         let signature_key_id = "tenant-a:query-signing-v1".to_string();
+        let query_nonce = BASE64URL_NOPAD.encode(&[7_u8; 12]);
         let signature_message = crate::common::crypto::ckks_client_query_signature_message(
             TEST_VECTOR_COLLECTION_CRYPTO_ID,
             DEFAULT_VECTOR_NAME,
             "tenant-a:vector",
             "tenant-a/vector-v1",
             1,
+            &query_nonce,
             &context_digest,
             slots,
             ciphertext,
@@ -3225,6 +3227,7 @@ esac
             key_id: "tenant-a:vector".to_string(),
             rk_id: "tenant-a/vector-v1".to_string(),
             rk_epoch: 1,
+            query_nonce,
             context_digest,
             slots,
             ciphertext_sha256: BASE64URL_NOPAD.encode(&Sha256::digest(ciphertext)),
@@ -3251,6 +3254,7 @@ esac
                 key_id: query.key_id,
                 rk_id: query.rk_id,
                 rk_epoch: query.rk_epoch,
+                query_nonce: query.query_nonce,
                 context_digest: query.context_digest,
                 slots: query.slots,
                 ciphertext_sha256: query.ciphertext_sha256,
@@ -3278,6 +3282,7 @@ esac
             key_id: query.key_id,
             rk_id: query.rk_id,
             rk_epoch: query.rk_epoch,
+            query_nonce: query.query_nonce,
             context_digest: query.context_digest,
             slots: query.slots as u64,
             ciphertext_sha256: query.ciphertext_sha256,
@@ -3579,6 +3584,7 @@ esac
                     &query.key_id,
                     &query.rk_id,
                     query.rk_epoch,
+                    &query.query_nonce,
                     &query.context_digest,
                     query.slots,
                     b"fake-ckks-query:2",
@@ -3596,6 +3602,7 @@ esac
             &query.key_id,
             &query.rk_id,
             query.rk_epoch,
+            &query.query_nonce,
             &query.context_digest,
             query.slots,
             b"fake-ckks-query:2",
@@ -3615,6 +3622,7 @@ esac
                 &query.key_id,
                 &query.rk_id,
                 query.rk_epoch,
+                &query.query_nonce,
                 &query.context_digest,
                 query.slots,
                 b"fake-ckks-query:2",
@@ -3639,6 +3647,7 @@ esac
                 &query.key_id,
                 &query.rk_id,
                 query.rk_epoch,
+                &query.query_nonce,
                 &query.context_digest,
                 query.slots,
                 b"fake-ckks-query:2",
@@ -3647,6 +3656,31 @@ esac
                 &bad_signature,
             )
             .expect_err("client encrypted query must verify the Ed25519 signature");
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("signature verification failed")
+        ));
+
+        let tampered_nonce = BASE64URL_NOPAD.encode(&[8_u8; 12]);
+        let err = plan
+            .validate_client_encrypted_query(
+                "docs",
+                "embedding",
+                &query.collection_id,
+                &query.vector_name,
+                &query.key_id,
+                &query.rk_id,
+                query.rk_epoch,
+                &tampered_nonce,
+                &query.context_digest,
+                query.slots,
+                b"fake-ckks-query:2",
+                &query.signature_alg,
+                &query.signature_key_id,
+                &query.signature_b64,
+            )
+            .expect_err("client encrypted query signature must bind query nonce");
         assert!(matches!(
             err,
             StorageError::BadInput { description }
@@ -3662,6 +3696,7 @@ esac
                 &query.key_id,
                 &query.rk_id,
                 query.rk_epoch,
+                &query.query_nonce,
                 &query.context_digest,
                 query.slots,
                 b"fake-ckks-query:2",
@@ -3685,6 +3720,7 @@ esac
                 &query.key_id,
                 &query.rk_id,
                 query.rk_epoch,
+                &query.query_nonce,
                 &query.context_digest,
                 query.slots,
                 b"fake-ckks-query:2",
@@ -3708,6 +3744,7 @@ esac
                 "other-key",
                 &query.rk_id,
                 query.rk_epoch,
+                &query.query_nonce,
                 &query.context_digest,
                 query.slots,
                 b"fake-ckks-query:2",
@@ -3731,6 +3768,7 @@ esac
                 &query.key_id,
                 "other-rk",
                 query.rk_epoch,
+                &query.query_nonce,
                 &query.context_digest,
                 query.slots,
                 b"fake-ckks-query:2",
@@ -3753,6 +3791,7 @@ esac
                 &query.key_id,
                 &query.rk_id,
                 query.rk_epoch + 1,
+                &query.query_nonce,
                 &query.context_digest,
                 query.slots,
                 b"fake-ckks-query:2",
@@ -3776,6 +3815,7 @@ esac
                 &query.key_id,
                 &query.rk_id,
                 query.rk_epoch,
+                &query.query_nonce,
                 &BASE64URL_NOPAD.encode(&[9u8; 32]),
                 query.slots,
                 b"fake-ckks-query:2",
@@ -3801,6 +3841,7 @@ esac
                 &query.key_id,
                 &query.rk_id,
                 query.rk_epoch,
+                &query.query_nonce,
                 &query.context_digest,
                 too_many_slots,
                 b"fake-ckks-query:2",

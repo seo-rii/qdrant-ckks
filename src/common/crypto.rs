@@ -975,6 +975,7 @@ impl VectorWritePlan {
         query_key_id: &str,
         query_rk_id: &str,
         query_rk_epoch: u64,
+        query_nonce: &str,
         context_digest: &str,
         slots: usize,
         encrypted_query: &[u8],
@@ -990,6 +991,7 @@ impl VectorWritePlan {
             query_key_id,
             query_rk_id,
             query_rk_epoch,
+            query_nonce,
             context_digest,
             slots,
             encrypted_query,
@@ -1048,6 +1050,7 @@ impl VectorWritePlan {
         query_key_id: &str,
         query_rk_id: &str,
         query_rk_epoch: u64,
+        query_nonce: &str,
         context_digest: &str,
         slots: usize,
         encrypted_query: &[u8],
@@ -1100,6 +1103,21 @@ impl VectorWritePlan {
                     "encrypted vector '{vector_name}' client CKKS query is incompatible with active CKKS parameters in collection {collection_name}: {err}",
                 ))
             })?;
+        if query_nonce.len() != 16 {
+            return Err(StorageError::bad_input(format!(
+                "encrypted query nonce must be 16 base64url characters for vector '{vector_name}' in collection {collection_name}",
+            )));
+        }
+        let nonce = BASE64URL_NOPAD.decode(query_nonce.as_bytes()).map_err(|_| {
+            StorageError::bad_input(format!(
+                "encrypted query nonce is not base64url for vector '{vector_name}' in collection {collection_name}",
+            ))
+        })?;
+        if nonce.len() != 12 {
+            return Err(StorageError::bad_input(format!(
+                "encrypted query nonce must decode to 12 bytes for vector '{vector_name}' in collection {collection_name}",
+            )));
+        }
         if signature_alg != "ed25519" {
             return Err(StorageError::bad_input(format!(
                 "encrypted query signature algorithm is not supported for vector '{vector_name}' in collection {collection_name}",
@@ -1131,6 +1149,7 @@ impl VectorWritePlan {
             query_key_id,
             query_rk_id,
             query_rk_epoch,
+            query_nonce,
             context_digest,
             slots,
             encrypted_query,
@@ -4790,6 +4809,7 @@ pub(crate) fn ckks_client_query_signature_message(
     key_id: &str,
     rk_id: &str,
     rk_epoch: u64,
+    query_nonce: &str,
     context_digest: &str,
     slots: usize,
     encrypted_query: &[u8],
@@ -4812,6 +4832,7 @@ pub(crate) fn ckks_client_query_signature_message(
         key_id,
         rk_id,
         &rk_epoch.to_string(),
+        query_nonce,
         context_digest,
         &slots.to_string(),
         &ciphertext_sha256,

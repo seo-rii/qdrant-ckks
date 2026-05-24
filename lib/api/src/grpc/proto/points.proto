@@ -150,6 +150,7 @@ message CkksEncryptedQueryVector {
   string signature_alg = 13;
   string signature_key_id = 14;
   string signature_b64 = 15;
+  string query_nonce = 16;
 }
 
 // Vector type to be used in queries.

@@ -434,6 +434,7 @@ fn convert_vector_input_with_inferred(
                     key_id: query.key_id,
                     rk_id: query.rk_id,
                     rk_epoch: query.rk_epoch,
+                    query_nonce: query.query_nonce,
                     context_digest: query.context_digest,
                     slots: query.slots.try_into().map_err(|_| {
                         Status::invalid_argument("CKKS encrypted query slots is too large")
@@ -577,6 +578,7 @@ mod tests {
                     key_id: "tenant-a:vector".to_string(),
                     rk_id: "tenant-a/vector-v1".to_string(),
                     rk_epoch: 1,
+                    query_nonce: BASE64URL_NOPAD.encode(&[7_u8; 12]),
                     context_digest: BASE64URL_NOPAD.encode(&[3_u8; 32]),
                     slots: 2,
                     ciphertext_sha256: "MFUx3MUOvKMc8dWzHp_HbtUfZrO23VoDDGU5rmUy-Xk".to_string(),
@@ -594,6 +596,7 @@ mod tests {
                 assert_eq!(query.version, 1);
                 assert_eq!(query.scheme, "openfhe-ckks");
                 assert_eq!(query.slots, 2);
+                assert_eq!(query.query_nonce, BASE64URL_NOPAD.encode(&[7_u8; 12]));
                 assert_eq!(query.ciphertext, BASE64URL_NOPAD.encode(b"ciphertext"));
             }
             _ => panic!("Expected client CKKS encrypted query"),
@@ -614,6 +617,7 @@ mod tests {
                     key_id: "tenant-a:vector".to_string(),
                     rk_id: "tenant-a/vector-v1".to_string(),
                     rk_epoch: 1,
+                    query_nonce: BASE64URL_NOPAD.encode(&[7_u8; 12]),
                     context_digest: "not base64url!".to_string(),
                     slots: 2,
                     ciphertext_sha256: "MFUx3MUOvKMc8dWzHp_HbtUfZrO23VoDDGU5rmUy-Xk".to_string(),

@@ -1069,6 +1069,7 @@ encrypted query envelope instead of a raw dense vector:
     "key_id": "tenant-a:vector",
     "rk_id": "tenant-a/vector-v1",
     "rk_epoch": 3,
+    "query_nonce": "base64url-no-pad-96-bit-query-nonce",
     "context_digest": "...",
     "slots": 1536,
     "ciphertext_sha256": "base64url-no-pad-sha256-of-ciphertext",
@@ -1084,16 +1085,19 @@ encrypted query envelope instead of a raw dense vector:
 
 The `collection_id`, `vector_name`, `key_id`, `rk_id`, and `rk_epoch` fields must
 match the active encrypted vector rule's stable collection crypto identity and
-resource-key lineage. The `context_digest` must match the active OpenFHE public
-material and CKKS parameter profile for that rule, `slots` must match each stored
-sidecar envelope being scored, `ciphertext_sha256` must match the decoded
-ciphertext bytes, and `ciphertext` is base64url without padding. The `signature`
-object is mandatory for client-supplied encrypted query envelopes: `alg` must be
-`ed25519`, `key_id` must select a configured `signature_public_keys` entry on the
-active `vector/openfhe-ckks@v1` runtime instance, and `sig` must verify the
-domain-separated query metadata and ciphertext under
+resource-key lineage. `query_nonce` is mandatory 96-bit base64url-no-padding
+client randomness and is cryptographically bound into the query signature; SDKs
+must regenerate it when retrying a request body. The `context_digest` must match
+the active OpenFHE public material and CKKS parameter profile for that rule,
+`slots` must match each stored sidecar envelope being scored,
+`ciphertext_sha256` must match the decoded ciphertext bytes, and `ciphertext` is
+base64url without padding. The `signature` object is mandatory for
+client-supplied encrypted query envelopes: `alg` must be `ed25519`, `key_id`
+must select a configured `signature_public_keys` entry on the active
+`vector/openfhe-ckks@v1` runtime instance, and `sig` must verify the
+domain-separated query metadata, query nonce, and ciphertext under
 `qdrant-sec/client-ckks-query-signature/v1`. gRPC carries the same proof through
-`signature_alg`, `signature_key_id`, and `signature_b64`.
+`query_nonce`, `signature_alg`, `signature_key_id`, and `signature_b64`.
 Qdrant does not decrypt or validate the CKKS ciphertext itself; it treats the
 validated bytes as the encrypted query input to the OpenFHE bridge scoring API.
 Result ordering and
