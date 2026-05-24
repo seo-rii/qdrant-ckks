@@ -376,6 +376,14 @@ async fn do_upsert_points_with_replay_cache(
     )
     .await?;
 
+    ensure_upsert_inference_inputs_do_not_touch_encrypted_vectors(
+        toc,
+        &collection_name,
+        &operation,
+        &auth,
+    )
+    .await?;
+
     let (mut operation, shard_key, usage, update_filter, update_mode) = match operation {
         PointInsertOperations::PointsBatch(batch) => {
             let PointsBatch {
@@ -531,6 +539,14 @@ pub async fn do_update_vectors(
         shard_key,
         update_filter,
     } = operation;
+
+    ensure_point_vectors_inference_inputs_do_not_touch_encrypted_vectors(
+        toc,
+        &collection_name,
+        &points,
+        &auth,
+    )
+    .await?;
 
     let (mut points, usage) =
         convert_point_vectors(points, InferenceType::Update, inference_params).await?;
@@ -1990,6 +2006,147 @@ async fn maybe_encrypt_update_vectors(
     Ok((sidecar_updates, provenance))
 }
 
+async fn ensure_upsert_inference_inputs_do_not_touch_encrypted_vectors(
+    toc: &Arc<TableOfContent>,
+    collection_name: &str,
+    operation: &PointInsertOperations,
+    auth: &Auth,
+) -> Result<(), StorageError> {
+    let collection_pass =
+        auth.check_collection_access(collection_name, AccessRequirements::new(), "upsert_points")?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let collection_config = collection.config_snapshot().await;
+    if let Some(vector_name) =
+        upsert_inference_inputs_touch_encrypted_config(operation, &collection_config.params)
+    {
+        return Err(encrypted_vector_inference_write_error(
+            collection_name,
+            &vector_name,
+        ));
+    }
+
+    Ok(())
+}
+
+async fn ensure_point_vectors_inference_inputs_do_not_touch_encrypted_vectors(
+    toc: &Arc<TableOfContent>,
+    collection_name: &str,
+    points: &[PointVectors],
+    auth: &Auth,
+) -> Result<(), StorageError> {
+    let collection_pass =
+        auth.check_collection_access(collection_name, AccessRequirements::new(), "update_vectors")?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let collection_config = collection.config_snapshot().await;
+    if let Some(vector_name) =
+        point_vectors_inference_inputs_touch_encrypted_config(points, &collection_config.params)
+    {
+        return Err(encrypted_vector_inference_write_error(
+            collection_name,
+            &vector_name,
+        ));
+    }
+
+    Ok(())
+}
+
+fn encrypted_vector_inference_write_error(
+    collection_name: &str,
+    vector_name: &str,
+) -> StorageError {
+    StorageError::bad_input(format!(
+        "encrypted vector '{vector_name}' in collection {collection_name} does not allow \
+         inference-derived update vectors; provide precomputed dense values or use an explicit \
+         client-side encrypted vector envelope path",
+    ))
+}
+
+fn upsert_inference_inputs_touch_encrypted_config(
+    operation: &PointInsertOperations,
+    params: &CollectionParams,
+) -> Option<String> {
+    match operation {
+        PointInsertOperations::PointsList(list) => list.points.iter().find_map(|point| {
+            vector_struct_inference_touches_encrypted_config(&point.vector, params)
+        }),
+        PointInsertOperations::PointsBatch(batch) => {
+            batch_vector_struct_inference_touches_encrypted_config(&batch.batch.vectors, params)
+        }
+    }
+}
+
+fn point_vectors_inference_inputs_touch_encrypted_config(
+    points: &[PointVectors],
+    params: &CollectionParams,
+) -> Option<String> {
+    points
+        .iter()
+        .find_map(|point| vector_struct_inference_touches_encrypted_config(&point.vector, params))
+}
+
+fn vector_struct_inference_touches_encrypted_config(
+    vector: &VectorStruct,
+    params: &CollectionParams,
+) -> Option<String> {
+    let encryption = params.effective_encryption()?;
+    for rule in &encryption.rules {
+        let collection::config::EncryptionSelector::VectorNames { names } = &rule.selector else {
+            continue;
+        };
+        for encrypted_name in names {
+            let touches = match vector {
+                VectorStruct::Document(_) | VectorStruct::Image(_) | VectorStruct::Object(_) => {
+                    encrypted_name == DEFAULT_VECTOR_NAME
+                }
+                VectorStruct::Named(vectors) => vectors
+                    .get(encrypted_name)
+                    .is_some_and(rest_vector_requires_inference),
+                VectorStruct::Single(_) | VectorStruct::MultiDense(_) => false,
+            };
+            if touches {
+                return Some(encrypted_name.clone());
+            }
+        }
+    }
+
+    None
+}
+
+fn batch_vector_struct_inference_touches_encrypted_config(
+    vectors: &BatchVectorStruct,
+    params: &CollectionParams,
+) -> Option<String> {
+    let encryption = params.effective_encryption()?;
+    for rule in &encryption.rules {
+        let collection::config::EncryptionSelector::VectorNames { names } = &rule.selector else {
+            continue;
+        };
+        for encrypted_name in names {
+            let touches = match vectors {
+                BatchVectorStruct::Document(_)
+                | BatchVectorStruct::Image(_)
+                | BatchVectorStruct::Object(_) => encrypted_name == DEFAULT_VECTOR_NAME,
+                BatchVectorStruct::Named(named) => named
+                    .get(encrypted_name)
+                    .is_some_and(|vectors| vectors.iter().any(rest_vector_requires_inference)),
+                BatchVectorStruct::Single(_) | BatchVectorStruct::MultiDense(_) => false,
+            };
+            if touches {
+                return Some(encrypted_name.clone());
+            }
+        }
+    }
+
+    None
+}
+
+fn rest_vector_requires_inference(vector: &Vector) -> bool {
+    matches!(
+        vector,
+        Vector::Document(_) | Vector::Image(_) | Vector::Object(_)
+    )
+}
+
 fn ensure_not_mixed_encrypted_and_plaintext_vector_mutation(
     collection_name: &str,
     encrypted_count: usize,
@@ -3094,6 +3251,14 @@ esac
         }
     }
 
+    fn test_document(text: &str) -> api::rest::Document {
+        api::rest::Document {
+            text: text.to_string(),
+            model: "test-model".to_string(),
+            options: None,
+        }
+    }
+
     #[test]
     fn mixed_encrypted_plaintext_vector_mutation_guard_rejects_mixed_requests() {
         let err = ensure_not_mixed_encrypted_and_plaintext_vector_mutation(
@@ -3117,6 +3282,112 @@ esac
             .unwrap();
         ensure_not_mixed_encrypted_and_plaintext_vector_mutation("docs", 0, 0, "delete_vectors")
             .unwrap();
+    }
+
+    #[test]
+    fn encrypted_vector_upsert_rejects_inference_inputs_before_conversion() {
+        let params = encrypted_vector_params();
+        let operation = PointInsertOperations::PointsList(api::rest::schema::PointsList {
+            points: vec![api::rest::PointStruct {
+                id: 1.into(),
+                vector: api::rest::VectorStruct::Named(HashMap::from([
+                    (
+                        "embedding".to_string(),
+                        api::rest::Vector::Document(test_document(
+                            "encrypted-vector-inference-sentinel",
+                        )),
+                    ),
+                    (
+                        "plain".to_string(),
+                        api::rest::Vector::Document(test_document("plain-vector-inference-ok")),
+                    ),
+                ])),
+                payload: None,
+            }],
+            shard_key: None,
+            update_filter: None,
+            update_mode: None,
+        });
+
+        assert_eq!(
+            upsert_inference_inputs_touch_encrypted_config(&operation, &params),
+            Some("embedding".to_string()),
+        );
+    }
+
+    #[test]
+    fn encrypted_vector_batch_upsert_rejects_inference_inputs_before_conversion() {
+        let params = encrypted_vector_params();
+        let operation = PointInsertOperations::PointsBatch(api::rest::schema::PointsBatch {
+            batch: api::rest::schema::Batch {
+                ids: vec![1.into()],
+                vectors: api::rest::schema::BatchVectorStruct::Named(HashMap::from([
+                    (
+                        "embedding".to_string(),
+                        vec![api::rest::Vector::Document(test_document(
+                            "encrypted-vector-batch-inference-sentinel",
+                        ))],
+                    ),
+                    (
+                        "plain".to_string(),
+                        vec![api::rest::Vector::Document(test_document(
+                            "plain-vector-batch-inference-ok",
+                        ))],
+                    ),
+                ])),
+                payloads: None,
+            },
+            shard_key: None,
+            update_filter: None,
+            update_mode: None,
+        });
+
+        assert_eq!(
+            upsert_inference_inputs_touch_encrypted_config(&operation, &params),
+            Some("embedding".to_string()),
+        );
+    }
+
+    #[test]
+    fn encrypted_vector_update_rejects_inference_inputs_before_conversion() {
+        let params = encrypted_vector_params();
+        let points = vec![api::rest::PointVectors {
+            id: 1.into(),
+            vector: api::rest::VectorStruct::Named(HashMap::from([(
+                "embedding".to_string(),
+                api::rest::Vector::Document(test_document(
+                    "encrypted-vector-update-inference-sentinel",
+                )),
+            )])),
+        }];
+
+        assert_eq!(
+            point_vectors_inference_inputs_touch_encrypted_config(&points, &params),
+            Some("embedding".to_string()),
+        );
+    }
+
+    #[test]
+    fn plaintext_vector_inference_inputs_remain_allowed() {
+        let params = encrypted_vector_params();
+        let operation = PointInsertOperations::PointsList(api::rest::schema::PointsList {
+            points: vec![api::rest::PointStruct {
+                id: 1.into(),
+                vector: api::rest::VectorStruct::Named(HashMap::from([(
+                    "plain".to_string(),
+                    api::rest::Vector::Document(test_document("plain-vector-inference-ok")),
+                )])),
+                payload: None,
+            }],
+            shard_key: None,
+            update_filter: None,
+            update_mode: None,
+        });
+
+        assert_eq!(
+            upsert_inference_inputs_touch_encrypted_config(&operation, &params),
+            None,
+        );
     }
 
     #[test]
