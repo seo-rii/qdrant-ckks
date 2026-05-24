@@ -17,6 +17,7 @@ use validator::Validate;
 
 use crate::actix::auth::ActixAuth;
 use crate::actix::helpers;
+use crate::common::error_reporting::redact_crypto_material_for_report;
 use crate::common::telemetry::TelemetryData;
 use crate::common::telemetry_ops::distributed_telemetry::DistributedTelemetryData;
 
@@ -44,6 +45,14 @@ pub struct ClusterTelemetryParams {
     details_level: Option<u32>,
     #[validate(range(min = 1))]
     timeout: Option<u64>,
+}
+
+fn cluster_telemetry_peer_error_for_log(
+    peer_id: impl std::fmt::Display,
+    err: impl std::fmt::Display,
+) -> String {
+    let redacted_error = redact_crypto_material_for_report(&err.to_string());
+    format!("Internal telemetry service failed for peer {peer_id}: {redacted_error}")
 }
 
 #[get("/cluster")]
@@ -275,7 +284,7 @@ async fn get_cluster_telemetry(
                     telemetries.push(telemetry);
                 }
                 Err((peer_id, err)) => {
-                    log::error!("Internal telemetry service failed for peer {peer_id}: {err:#?}");
+                    log::error!("{}", cluster_telemetry_peer_error_for_log(peer_id, err));
                     missing_peers.push(peer_id);
                 }
             };
@@ -299,4 +308,28 @@ pub fn config_cluster_api(cfg: &mut web::ServiceConfig) {
         .service(get_cluster_metadata_key)
         .service(update_cluster_metadata_key)
         .service(delete_cluster_metadata_key);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cluster_telemetry_peer_error_log_redacts_crypto_material() {
+        let rendered = cluster_telemetry_peer_error_for_log(
+            7,
+            "remote status included $qdrant_client_aead ciphertext=qdrant-sec-telemetry-error-sentinel",
+        );
+
+        assert!(rendered.contains("peer 7"), "{rendered}");
+        assert!(
+            rendered.contains("crypto material omitted"),
+            "expected redaction marker in {rendered}"
+        );
+        assert!(
+            !rendered.contains("qdrant-sec-telemetry-error-sentinel"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("$qdrant_client_aead"), "{rendered}");
+    }
 }
