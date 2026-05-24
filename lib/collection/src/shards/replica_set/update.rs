@@ -825,9 +825,22 @@ mod tests {
                 payload: Some(Payload(
                     json!({
                         "body": "qdrant-sec-replica-log-payload-sentinel",
+                        "$qdrant_sec": {
+                            "envelope": {
+                                "nonce": "qdrant-sec-replica-log-server-nonce-sentinel",
+                                "ciphertext": "qdrant-sec-replica-log-server-ciphertext-sentinel"
+                            }
+                        },
                         "$qdrant_client_aead": {
-                            "ciphertext": "qdrant-sec-replica-log-ciphertext-sentinel",
+                            "ciphertext": "qdrant-sec-replica-log-client-ciphertext-sentinel",
                             "signature": { "sig": "qdrant-sec-replica-log-signature-sentinel" }
+                        },
+                        "$qdrant_sec_vectors": {
+                            "embedding": {
+                                "envelope": {
+                                    "ciphertext": "qdrant-sec-replica-log-vector-ciphertext-sentinel"
+                                }
+                            }
                         }
                     })
                     .as_object()
@@ -843,8 +856,11 @@ mod tests {
 
         for output in [serialized.as_str(), error.as_str()] {
             assert!(!output.contains("qdrant-sec-replica-log-payload-sentinel"));
-            assert!(!output.contains("qdrant-sec-replica-log-ciphertext-sentinel"));
+            assert!(!output.contains("qdrant-sec-replica-log-server-nonce-sentinel"));
+            assert!(!output.contains("qdrant-sec-replica-log-server-ciphertext-sentinel"));
+            assert!(!output.contains("qdrant-sec-replica-log-client-ciphertext-sentinel"));
             assert!(!output.contains("qdrant-sec-replica-log-signature-sentinel"));
+            assert!(!output.contains("qdrant-sec-replica-log-vector-ciphertext-sentinel"));
             assert!(!output.contains("12345.125"));
             assert!(output.contains("[redacted]"));
         }
