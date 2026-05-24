@@ -13,6 +13,7 @@ use std::time::Duration;
 use data_encoding::BASE64URL_NOPAD;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use zeroize::Zeroizing;
 
 use crate::vector::{
     CKKS_SCHEME, CkksBatchEncryptionInput, CkksEncryptedQueryScoreBatchInput,
@@ -1106,14 +1107,16 @@ impl CommandOpenFheBackend {
             } else {
                 request_with_public_material
             };
-            let mut request_bytes = selected_request.to_vec();
+            let mut request_bytes = Zeroizing::new(selected_request.to_vec());
             request_bytes.push(b'\n');
 
             let write_result = {
                 let mut stdin = worker_process.stdin.lock().map_err(|_| {
                     CkksError::Backend("OpenFHE bridge stdin mutex was poisoned".to_string())
                 })?;
-                stdin.write_all(&request_bytes).and_then(|_| stdin.flush())
+                stdin
+                    .write_all(request_bytes.as_slice())
+                    .and_then(|_| stdin.flush())
             };
             if let Err(err) = write_result {
                 let retry = attempt == 0
@@ -1466,8 +1469,9 @@ impl CommandOpenFheBackend {
 fn serialize_bridge_request<T: Serialize>(
     request: &T,
     request_name: &str,
-) -> Result<Vec<u8>, CkksError> {
+) -> Result<Zeroizing<Vec<u8>>, CkksError> {
     serde_json::to_vec(request)
+        .map(Zeroizing::new)
         .map_err(|err| CkksError::Backend(format!("failed to serialize {request_name}: {err}")))
 }
 
@@ -1478,14 +1482,16 @@ trait CommandOpenFheContextRequest: Serialize + Clone {
 fn serialize_bridge_request_without_public_material<T: CommandOpenFheContextRequest>(
     request: &T,
     request_name: &str,
-) -> Result<Vec<u8>, CkksError> {
+) -> Result<Zeroizing<Vec<u8>>, CkksError> {
     let mut request = request.clone();
     request.remove_public_material();
-    serde_json::to_vec(&request).map_err(|err| {
-        CkksError::Backend(format!(
-            "failed to serialize cached-context {request_name}: {err}"
-        ))
-    })
+    serde_json::to_vec(&request)
+        .map(Zeroizing::new)
+        .map_err(|err| {
+            CkksError::Backend(format!(
+                "failed to serialize cached-context {request_name}: {err}"
+            ))
+        })
 }
 
 #[cfg(target_os = "linux")]
@@ -2089,6 +2095,36 @@ fn validate_bridge_security_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_zeroizing_bridge_request(_: &Zeroizing<Vec<u8>>) {}
+
+    #[test]
+    fn bridge_request_serialization_uses_zeroizing_buffers() {
+        let parameters = CkksParameters::default();
+        let request = serialize_bridge_request(
+            &CommandOpenFheQueryRequest {
+                version: 1,
+                operation: "encrypt_query",
+                scheme: CKKS_SCHEME,
+                collection: "docs",
+                vector_name: "text",
+                context_id: "ctx-1".to_string(),
+                parameters: Some(&parameters),
+                crypto_context: Some("crypto-context".to_string()),
+                public_key: Some("public-key".to_string()),
+                values: &[1.0, 2.0],
+            },
+            "test query request",
+        )
+        .unwrap();
+
+        assert_zeroizing_bridge_request(&request);
+        assert!(
+            std::str::from_utf8(request.as_slice())
+                .unwrap()
+                .contains("\"values\"")
+        );
+    }
 
     #[test]
     fn bridge_response_decode_rejects_oversized_ciphertext_before_decode() {
