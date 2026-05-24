@@ -677,16 +677,17 @@ patch:
 POST /crypto/resource-keys/retire
 {
   "materials": ["tenant-a/payload-rk-v3"],
-  "target_state": "destroyed"
+  "target_state": "disabled"
 }
 ```
 
-`target_state` may be `disabled` or `destroyed`. The endpoint rejects active RKs
-and any retired RK that is still referenced by a runtime crypto instance. A
+`target_state` is currently limited to `disabled`. The endpoint rejects active
+RKs and any retired RK that is still referenced by a runtime crypto instance. A
 `disabled` patch preserves wrapped key material for a future explicit rollback
-or enable operation; a `destroyed` patch removes `wrapped_by`, `nonce`,
-`wrap_algorithm`, and `wrapped_key_b64` so only non-secret audit metadata
-remains.
+or enable operation. `destroyed` retirement is intentionally rejected until it is
+bound to a persisted, non-dry-run migration completion proof; shredding wrapped
+RK material based only on runtime-reference cleanup can permanently orphan old
+envelopes.
 
 RK rotation still requires a data re-encryption job and should use the explicit
 re-encryption mode rather than normal write-path idempotency. The

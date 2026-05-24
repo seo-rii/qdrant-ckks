@@ -820,7 +820,7 @@ async fn rewrap_runtime_resource_keys(
 
 fn validate_runtime_resource_key_retirement_target(value: &str) -> Result<(), ValidationError> {
     match value {
-        "disabled" | "destroyed" => Ok(()),
+        "disabled" => Ok(()),
         _ => Err(ValidationError::new(
             "invalid_crypto_resource_key_retirement_target",
         )),
@@ -885,17 +885,10 @@ impl RuntimeResourceKeyRetireMaterialPatch {
             StorageError::service_error(format!("retired material {material_ref} is missing scope"))
         })?;
 
-        if target_state == "destroyed" {
-            return Ok(Self {
-                kind: material.kind.clone(),
-                rk_epoch,
-                state: target_state.to_string(),
-                scope,
-                wrapped_by: None,
-                wrap_algorithm: None,
-                nonce: None,
-                wrapped_key_b64: None,
-            });
+        if target_state != "disabled" {
+            return Err(StorageError::bad_request(format!(
+                "crypto resource-key retirement target {target_state} requires verified migration proof"
+            )));
         }
 
         Ok(Self {
@@ -1875,7 +1868,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_retire_response_destroy_patch_shreds_wrapped_material() {
+    fn runtime_retire_response_rejects_destroy_without_verified_migration_proof() {
         let mut settings = Settings::new(None).unwrap();
         settings.crypto = CryptoSettings {
             allow_inline_key_material: true,
@@ -1905,30 +1898,28 @@ mod tests {
                 target_state: "destroyed".to_string(),
             },
         )
-        .expect_err("active resource keys must not be destroyed through retirement");
+        .expect_err("destroyed resource-key retirement requires migration proof");
         assert!(
             active_err
                 .to_string()
-                .contains("must already have state retired"),
+                .contains("crypto resource-key retirement request is invalid"),
             "unexpected error: {active_err}",
         );
 
-        let response = build_runtime_resource_key_retire_response(
+        let retired_err = build_runtime_resource_key_retire_response(
             &settings,
             RuntimeResourceKeyRetireRequest {
                 materials: vec!["tenant-a/payload-rk-v2".to_string()],
                 target_state: "destroyed".to_string(),
             },
         )
-        .unwrap();
-        let patch = response.materials.get("tenant-a/payload-rk-v2").unwrap();
-        assert_eq!(patch.state, "destroyed");
-        assert_eq!(patch.rk_epoch, 2);
-        assert_eq!(patch.scope, "collection:docs");
-        assert!(patch.wrapped_by.is_none());
-        assert!(patch.wrap_algorithm.is_none());
-        assert!(patch.nonce.is_none());
-        assert!(patch.wrapped_key_b64.is_none());
+        .expect_err("retired resource keys must not be destroyed without migration proof");
+        assert!(
+            retired_err
+                .to_string()
+                .contains("crypto resource-key retirement request is invalid"),
+            "unexpected error: {retired_err}",
+        );
     }
 }
 
