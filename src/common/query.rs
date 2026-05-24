@@ -1,9 +1,17 @@
 use std::collections::{HashMap, VecDeque};
-use std::fs::{self, DirBuilder, OpenOptions};
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::fs::DirBuilder;
+use std::fs::{self, OpenOptions};
+use std::io::Read;
+#[cfg(test)]
+use std::io::Write;
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
+#[cfg(test)]
+use std::time::SystemTime;
 
 use api::rest::{RecommendStrategy, SearchGroupsRequestInternal, SearchRequestInternal};
 use collection::collection::ckks_search::{
@@ -41,7 +49,7 @@ use segment::data_types::vectors::{
 };
 use segment::index::hnsw_index::ckks_ciphertext_graph::{
     CkksCiphertextHnswGraph, CkksCiphertextIndexedRecord, CkksCiphertextScoreError,
-    CkksCiphertextVectorIndex, CkksCiphertextVectorIndexBuildError, ckks_ciphertext_from_payload,
+    CkksCiphertextVectorIndex, ckks_ciphertext_from_payload,
 };
 use segment::json_path::JsonPath;
 use segment::types::{
@@ -195,7 +203,9 @@ const CKKS_SIDECAR_HNSW_GRAPH_CACHE_CAPACITY: usize = 16;
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_DIR: &str = "ckks_sidecar_hnsw_graphs";
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_VERSION: u8 = 1;
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES: u64 = 64 * 1024 * 1024;
+#[cfg(test)]
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_FILES: usize = 32;
+#[cfg(test)]
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 const CKKS_CLIENT_QUERY_CONTEXT_DIGEST_B64_LEN: usize = 43;
 const CKKS_CLIENT_QUERY_CIPHERTEXT_SHA256_B64_LEN: usize = 43;
@@ -207,7 +217,6 @@ const CKKS_GROUPED_SEARCH_MAX_CANDIDATES: usize = 4096;
 const CKKS_SCORING_SOURCE_BATCH_MAX: usize = 32;
 const CKKS_MATRIX_SAMPLE_MAX: usize = 512;
 const CKKS_MATRIX_SCORE_PAIR_MAX: usize = CKKS_MATRIX_SAMPLE_MAX * CKKS_MATRIX_SAMPLE_MAX;
-const CKKS_SIDECAR_HNSW_GRAPH_BUILD_PAIR_MAX: usize = CKKS_MATRIX_SCORE_PAIR_MAX;
 
 static CKKS_SIDECAR_HNSW_GRAPH_CACHE: LazyLock<Mutex<CkksSidecarHnswGraphCache>> =
     LazyLock::new(|| Mutex::new(CkksSidecarHnswGraphCache::default()));
@@ -2284,6 +2293,7 @@ fn ckks_sidecar_hnsw_graph_cache_file_name(key: &CkksSidecarHnswGraphCacheKey) -
     format!("{}.json", BASE64URL_NOPAD.encode(digest.as_ref()))
 }
 
+#[cfg(test)]
 fn ckks_sidecar_hnsw_graph_cache_path(
     collection_path: &Path,
     key: &CkksSidecarHnswGraphCacheKey,
@@ -2474,6 +2484,7 @@ fn ckks_sidecar_hnsw_load_persisted_graph(
     Ok(Some(Arc::new(graph)))
 }
 
+#[cfg(test)]
 fn ckks_sidecar_hnsw_persist_graph(
     collection_path: &Path,
     key: &CkksSidecarHnswGraphCacheKey,
@@ -2600,6 +2611,7 @@ fn ckks_sidecar_hnsw_persist_graph(
     })
 }
 
+#[cfg(test)]
 fn ckks_sidecar_hnsw_prune_persisted_graphs(
     directory: &Path,
     keep_path: &Path,
@@ -3118,62 +3130,9 @@ fn ckks_sidecar_hnsw_search_points(
                 cache.insert(cache_key, graph.clone());
                 graph
             } else {
-                ensure_ckks_sidecar_hnsw_graph_build_budget(records.len())?;
-                let indexed_records = ckks_sidecar_indexed_records(records)?;
-                let index = CkksCiphertextVectorIndex::build(
-                    indexed_records,
-                    m,
-                    score_order,
-                    |indexed_record, candidates| {
-                        let record = &records[indexed_record.point_offset as usize];
-                        let candidates = candidates
-                            .iter()
-                            .map(|candidate| {
-                                let candidate = &records[candidate.point_offset as usize];
-                                (candidate.point_id.clone(), candidate.encrypted.clone())
-                            })
-                            .collect::<Vec<_>>();
-                        plan.score_stored_query_batch(
-                            collection_name,
-                            vector_name,
-                            &record.point_id,
-                            &record.encrypted,
-                            &candidates,
-                        )?
-                        .ok_or_else(|| {
-                            StorageError::service_error(format!(
-                                "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-                            ))
-                        })
-                    },
-                )
-                .map_err(|err| match err {
-                    CkksCiphertextVectorIndexBuildError::DuplicatePointOffset => {
-                        StorageError::service_error(
-                            "CKKS sidecar HNSW indexed records must have unique point offsets",
-                        )
-                    }
-                    CkksCiphertextVectorIndexBuildError::ScoreCountMismatch {
-                        expected,
-                        actual,
-                    } => StorageError::service_error(format!(
-                        "CKKS sidecar HNSW graph scorer returned {actual} score(s) for {expected} candidate(s)"
-                    )),
-                    CkksCiphertextVectorIndexBuildError::Scoring(err) => err,
-                })?;
-                let graph = Arc::new(index.graph().clone());
-                if let Err(err) =
-                    ckks_sidecar_hnsw_persist_graph(collection_path, &cache_key, &graph)
-                {
-                    log::warn!(
-                        "Failed to persist CKKS sidecar HNSW graph cache for collection {collection_name}, vector {vector_name}: {err}",
-                    );
-                }
-                let mut cache = CKKS_SIDECAR_HNSW_GRAPH_CACHE.lock().map_err(|_| {
-                    StorageError::service_error("CKKS sidecar HNSW graph cache mutex was poisoned")
-                })?;
-                cache.insert(cache_key, graph.clone());
-                graph
+                return Err(StorageError::bad_input(format!(
+                    "encrypted vector '{vector_name}' HNSW sidecar search requires an existing segment-native or persisted CKKS ciphertext graph; query-time graph build is disabled to avoid foreground pairwise CKKS scoring. Retry without hnsw_ef/exact=false to use brute-force sidecar scoring, or rebuild the encrypted vector index.",
+                )));
             }
         }
     };
@@ -3623,23 +3582,6 @@ fn ckks_grouped_candidate_limit(
         .saturating_mul(CKKS_GROUPED_SEARCH_CANDIDATE_OVERSAMPLING)
         .min(CKKS_GROUPED_SEARCH_MAX_CANDIDATES)
         .max(requested_hits))
-}
-
-fn ensure_ckks_sidecar_hnsw_graph_build_budget(records_len: usize) -> Result<(), StorageError> {
-    let previous_records = records_len.saturating_sub(1);
-    let pairs = records_len
-        .checked_mul(previous_records)
-        .and_then(|pairs| pairs.checked_div(2))
-        .ok_or_else(|| {
-            StorageError::bad_input("encrypted vector HNSW sidecar graph build budget is too large")
-        })?;
-    if pairs > CKKS_SIDECAR_HNSW_GRAPH_BUILD_PAIR_MAX {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector HNSW sidecar graph cache miss would require {pairs} pairwise CKKS scoring candidates; maximum is {CKKS_SIDECAR_HNSW_GRAPH_BUILD_PAIR_MAX}",
-        )));
-    }
-
-    Ok(())
 }
 
 fn ensure_ckks_matrix_budget(
@@ -8546,6 +8488,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn ckks_sidecar_hnsw_cache_miss_does_not_build_graph_on_query_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let records = vec![
+            ckks_sidecar_test_record(10, "ciphertext-a"),
+            ckks_sidecar_test_record(11, "ciphertext-b"),
+            ckks_sidecar_test_record(12, "ciphertext-c"),
+        ];
+
+        let err = ckks_sidecar_hnsw_search_points(
+            "test",
+            "cache-miss-no-query-build",
+            "embedding",
+            dir.path(),
+            &crate::common::crypto::VectorWritePlan::empty_for_test(),
+            &records,
+            CkksSidecarHnswQuery::Dense(&[1.0, 0.0]),
+            Distance::Dot,
+            Distance::Dot.distance_order(),
+            None,
+            1,
+            1,
+        )
+        .expect_err("query-time CKKS graph cache miss must fail fast");
+
+        assert!(
+            format!("{err}").contains("query-time graph build is disabled"),
+            "unexpected error: {err}",
+        );
+    }
+
     fn ckks_sidecar_test_segment_snapshot(
         records: Vec<CkksSidecarSearchRecord>,
     ) -> CkksCiphertextSegmentIndexSnapshot {
@@ -9479,37 +9452,6 @@ mod tests {
             query_values: source.as_slice(),
         };
         assert_eq!(ckks_sidecar_scoring_source_batches(&scoring), 1);
-    }
-
-    #[test]
-    fn ckks_sidecar_hnsw_graph_build_budget_rejects_unbounded_cache_miss_work() {
-        ensure_ckks_sidecar_hnsw_graph_build_budget(0).unwrap();
-        ensure_ckks_sidecar_hnsw_graph_build_budget(1).unwrap();
-
-        let mut largest_allowed_records = 1usize;
-        loop {
-            let next = largest_allowed_records + 1;
-            let next_pairs = next.checked_mul(next - 1).unwrap() / 2;
-            if next_pairs > CKKS_SIDECAR_HNSW_GRAPH_BUILD_PAIR_MAX {
-                break;
-            }
-            largest_allowed_records = next;
-        }
-
-        ensure_ckks_sidecar_hnsw_graph_build_budget(largest_allowed_records).unwrap();
-        let err = ensure_ckks_sidecar_hnsw_graph_build_budget(largest_allowed_records + 1)
-            .expect_err("cache miss graph build above pair budget must fail");
-        assert!(
-            format!("{err}").contains("cache miss"),
-            "unexpected error: {err}",
-        );
-
-        let err = ensure_ckks_sidecar_hnsw_graph_build_budget(usize::MAX)
-            .expect_err("overflowing graph build pair count must fail");
-        assert!(
-            format!("{err}").contains("budget"),
-            "unexpected error: {err}",
-        );
     }
 
     #[test]

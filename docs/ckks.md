@@ -12,9 +12,10 @@ removed from the dense vector write. REST/gRPC nearest-neighbor `search` and
 root direct `query` over an encrypted vector name use sidecar scoring that first
 asks the OpenFHE bridge to encrypt the query vector, then scores stored
 ciphertexts against that encrypted query ciphertext. When `hnsw_ef` is provided
-on a raw dense or stored point-id nearest-neighbor request, Qdrant builds an
-experimental ciphertext sidecar candidate graph and searches it with encrypted
-query scores; otherwise it uses the exact brute-force sidecar scan. The same
+on a raw dense or stored point-id nearest-neighbor request, Qdrant uses an
+existing segment-native or persisted experimental ciphertext sidecar candidate
+graph and searches it with encrypted query scores; otherwise it uses the exact
+brute-force sidecar scan. The same
 sidecar scorer also handles root direct `query` and `query/groups` requests
 that use a point id as the nearest-neighbor query. Qdrant loads that point's
 stored CKKS sidecar envelope
@@ -976,7 +977,7 @@ row.
 | WAL | Selected payload strings and CKKS vector metadata should be stored only as envelopes after encryption. | Payload sentinel leakage scans cover public server-side/client-side payload ingress and collection directory files, including WAL files. CKKS vector sidecar coverage verifies plaintext vectors are removed before storage and scans collection files for successful encrypted-vector f32/f64 byte patterns. `wal_inspector` redacts collection update operations by default and requires `--raw` to print raw encrypted markers. | Broaden cluster storage scans. |
 | Segment and optimizer temp files | Selected payload strings should appear as marker/envelope JSON; CKKS vector plaintext should not be stored by the CKKS envelope path. | Payload sentinel leakage scans cover persisted collection files after graceful stop, and public ingress leakage coverage also scans an explicit optimizer temp directory. `segment_inspector` redacts server payload, client payload, metadata ciphertext, and CKKS vector sidecar markers by default and requires `--raw-payload` for raw marker output. | Broaden optimizer coverage as new temp-file paths are introduced. |
 | Payload indexes | AEAD-encrypted fields are not searchable as plaintext. Exact-match search must use separate client-generated blind-index token fields. | Index creation over encrypted payload paths and parent/child overlaps is rejected. `metadata/blind-index-hmac@v1` token fields may be indexed only on the exact token field with `keyword` schema and filtered as opaque HMAC-SHA256 tokens, but parent/child token indexes, non-keyword token indexes, order-by, grouping, facets, and formulas over token fields fail closed. | Keep rejecting plaintext indexes over encrypted content; broaden blind-index SDK and query-mode coverage as new search flows are added. |
-| HNSW graph and quantization | CKKS ciphertext vectors are searched through sidecar ciphertext scoring, not through plaintext dense vector storage. | REST/gRPC nearest-neighbor search can score stored CKKS ciphertext envelopes through the OpenFHE bridge using the collection distance metric. `hnsw_ef` uses the segment-level CKKS ciphertext vector index primitive to build/search an encrypted-candidate graph; exact and non-HNSW requests use brute force. The serving graph cache is persisted under the collection directory by stable crypto identity plus ciphertext fingerprint for restart reuse. Segment optimization counts encrypted sidecar bytes, assigns immutable `CkksCiphertextHnsw` segment index artifacts, and persists their private graph files instead of plaintext HNSW, mmap conversion, or quantization. Persisted graphs must be private, owned by root or the Qdrant process user, stored under a trusted parent directory chain, reciprocal, and connected. Raw-dense recommend and raw-dense discover use the same encrypted-query sidecar scoring path but remain brute-force. Quantization remains unsupported for encrypted vectors, and collection validation rejects per-vector or collection-level quantization configs for encrypted vector names. | Broaden distributed rebuild/recovery coverage before treating it as a production-grade segment-native ciphertext index. |
+| HNSW graph and quantization | CKKS ciphertext vectors are searched through sidecar ciphertext scoring, not through plaintext dense vector storage. | REST/gRPC nearest-neighbor search can score stored CKKS ciphertext envelopes through the OpenFHE bridge using the collection distance metric. `hnsw_ef` uses existing segment-native or persisted CKKS ciphertext graph artifacts; exact and non-HNSW requests use brute force. Query-time foreground graph build is disabled so cache misses fail fast instead of performing O(n²) stored-ciphertext scoring. Segment optimization counts encrypted sidecar bytes, assigns immutable `CkksCiphertextHnsw` segment index artifacts, and persists their private graph files instead of plaintext HNSW, mmap conversion, or quantization. Persisted graphs must be private, owned by root or the Qdrant process user, stored under a trusted parent directory chain, reciprocal, and connected. Raw-dense recommend and raw-dense discover use the same encrypted-query sidecar scoring path but remain brute-force. Quantization remains unsupported for encrypted vectors, and collection validation rejects per-vector or collection-level quantization configs for encrypted vector names. | Broaden distributed rebuild/recovery coverage before treating it as a production-grade segment-native ciphertext index. |
 | Snapshots | Snapshot archives should contain encrypted payload/vector envelopes and enough metadata to preflight required keys/context and stable collection identity. | Payload sentinel leakage scan now creates and scans a collection snapshot archive. Collection snapshot creation rejects encrypted configs whose migration state is not `active`. Collection, shard, and CLI startup snapshot recover paths preflight runtime crypto settings for missing instance/material/backend, wrong wrapped-RK key, provider key-id mismatch, missing encrypted collection UUID, UUID mismatch, non-active migration state, and invalid CKKS public material. Valid-but-different CKKS public-material drift is covered by peer runtime parity and sidecar `context_digest` open/score checks. | Broaden restore coverage across cluster paths and add full archive-level sidecar scan coverage if restore starts validating stored sidecars before load. |
 | Shard transfer and replication | Sender and receiver must have matching crypto runtime material and CKKS context. | App telemetry, peer metadata, and distributed telemetry expose a non-secret crypto runtime capability fingerprint. Encrypted collection data-movement operations validate involved peer metadata and fail closed on missing or mismatched fingerprints. Automatic dead-replica recovery skips source peers without matching parity metadata. `/readyz` does not mark the node ready for encrypted collections while peer metadata fingerprints are missing or mismatched. | Broaden distributed integration coverage and cluster-wide parity tests. |
 | Telemetry, logs, and audit | No plaintext payload bodies, embeddings, ciphertext blobs, signatures, wrapping keys, or runtime key material should be emitted. | Bridge request bodies and stderr are not included in returned errors. Collection telemetry and slow-request log-value/request-hash smoke tests cover payload/vector/filter/query sentinels, crypto envelope fields, plural batch fields, and camel/kebab-case secret field spellings. Audit events do not include request bodies, and denied audit error strings redact qdrant-sec envelope markers plus secret-like crypto fields. App telemetry exposes only a non-secret crypto runtime capability fingerprint and regression tests assert inline/wrapped key material and verifier key options are not serialized. | Broaden audit/log capture coverage around any new request logging surfaces. |
@@ -1074,12 +1075,14 @@ Result ordering and
 `score_threshold` follow the configured Qdrant distance metric:
 `dot`/`cosine` are larger-is-better, while `euclid`/`manhattan` are
 smaller-is-better. If `hnsw_ef` is set and `exact=false`, nearest-neighbor
-search builds and searches a ciphertext sidecar candidate graph with
-stored-ciphertext-to-stored-ciphertext bridge scoring for graph links and
-encrypted-query bridge scoring for traversal candidates. Stored point-id
-nearest `query`/`query/groups` requests also use the sidecar graph when
-`hnsw_ef` is provided, scoring traversal candidates against the referenced
-point's stored ciphertext. Segment optimization counts CKKS vector sidecar
+search uses a ciphertext sidecar candidate graph with encrypted-query bridge
+scoring for traversal candidates. Query-time foreground graph construction is
+disabled: if no segment-native or persisted graph is available for the requested
+sidecar set, the request fails fast and callers must retry without `hnsw_ef` or
+rebuild the encrypted vector index. Stored point-id nearest `query`/`query/groups`
+requests also use the sidecar graph when `hnsw_ef` is provided, scoring
+traversal candidates against the referenced point's stored ciphertext. Segment
+optimization counts CKKS vector sidecar
 ciphertext bytes for encrypted vector thresholds and builds an immutable
 `CkksCiphertextHnsw` vector index artifact instead of plaintext HNSW, plain
 mmap conversion, or quantization. For unfiltered nearest-neighbor requests,
@@ -1096,21 +1099,23 @@ visited ciphertext candidates through the runtime bridge.
 
 The collection-level sidecar graph cache is keyed by stable collection crypto
 identity, vector name, score direction, graph parameters, and a fingerprint of
-the stored ciphertext sidecars, so rename/recreate boundaries and
-payload/vector changes build a new graph instead of reusing stale links. The
-cache is an acceleration for the current serving process and is also persisted
-under the collection directory for restart reuse. Persisted graph cache files
-are treated as untrusted hints:
+the stored ciphertext sidecars, so rename/recreate boundaries and payload/vector
+changes do not reuse stale links. The in-memory cache is an acceleration for the
+current serving process, and Qdrant may load pre-existing persisted graph hints
+under the collection directory. Persisted graph cache files are treated as
+untrusted hints:
 the cache directory must be a private non-symlink directory owned by root or the
 Qdrant process user, every non-sticky parent directory in the path must be
 owned by root or the Qdrant process user and not group/world-writable, cache
 files and stale temp files must be private regular files owned by root or the
 Qdrant process user, oversized files are rejected, and metadata/fingerprint
-mismatches or disconnected/non-reciprocal graphs are ignored before Qdrant
-rebuilds the graph. Trusted sticky ancestors such as `/tmp` are allowed only
-above the private cache directory so test and temp deployments can still use
-standard temporary roots. Qdrant prunes old persisted graph cache files by count
-and total size after writing a new graph. It is still not the plaintext-vector
+mismatches or disconnected/non-reciprocal graphs are ignored. Qdrant does not
+build a replacement collection-level graph on the read path because that would
+require foreground pairwise CKKS scoring. Trusted sticky ancestors such as `/tmp`
+are allowed only above the private cache directory so test and temp deployments
+can still use standard temporary roots. Query execution does not write new
+collection-level persisted graphs or prune cache files. It is still not the
+plaintext-vector
 `HNSWIndex` file format and should be treated as an experimental ciphertext
 candidate index until distributed rebuild and recovery coverage is broader.
 `search/groups`, `recommend/groups`, and root direct `query/groups` are
