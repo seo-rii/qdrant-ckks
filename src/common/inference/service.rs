@@ -139,12 +139,7 @@ impl InferenceService {
         let mut inference_service = INFERENCE_SERVICE.write();
 
         let service = Self::new(config);
-
-        if !service.is_address_valid() {
-            return Err(StorageError::service_error(
-                "Cannot initialize InferenceService: address is required but not provided or empty in config",
-            ));
-        }
+        service.validate()?;
 
         *inference_service = Some(Arc::new(service));
         Ok(())
@@ -155,9 +150,35 @@ impl InferenceService {
     }
 
     pub(crate) fn validate(&self) -> Result<(), StorageError> {
-        if !self.is_address_valid() {
+        let Some(address) = self.config.address.as_deref() else {
+            // BM25 local inference does not require a remote address.
+            return Ok(());
+        };
+
+        if address.is_empty() {
             return Err(StorageError::service_error(
-                "InferenceService configuration error: address is missing or empty",
+                "InferenceService configuration error: address is empty",
+            ));
+        }
+
+        let parsed = reqwest::Url::parse(address).map_err(|_| {
+            StorageError::service_error(
+                "InferenceService configuration error: address must be a valid http(s) URL",
+            )
+        })?;
+        if parsed.scheme() != "http" && parsed.scheme() != "https" {
+            return Err(StorageError::service_error(
+                "InferenceService configuration error: address must use http or https",
+            ));
+        }
+        if !parsed.username().is_empty() || parsed.password().is_some() {
+            return Err(StorageError::service_error(
+                "InferenceService configuration error: address must not include credentials",
+            ));
+        }
+        if parsed.query().is_some() || parsed.fragment().is_some() {
+            return Err(StorageError::service_error(
+                "InferenceService configuration error: address must not include query parameters or fragments",
             ));
         }
         Ok(())
@@ -401,11 +422,6 @@ impl InferenceService {
             }
         }
     }
-
-    fn is_address_valid(&self) -> bool {
-        self.config.address.is_none() // In BM25 we don't need an address so we allow InferenceService to have an empty address.
-            || self.config.address.as_ref().is_some_and(|i| !i.is_empty())
-    }
 }
 
 /// 2-way merge of lists with `PositionItems`. Also checks for skipped items and returns `None` in case an item is left out.
@@ -521,6 +537,55 @@ mod test {
         assert!(!rendered.contains("0.123456"), "{rendered}");
         assert!(!rendered.contains("0.234567"), "{rendered}");
         assert!(!rendered.contains("0.345678"), "{rendered}");
+    }
+
+    #[test]
+    fn inference_service_rejects_unsafe_endpoint_urls_without_echoing_secrets() {
+        for address in [
+            "ftp://inference.local/v1",
+            "https://user:password@inference.local/v1",
+            "https://inference.local/v1?token=qdrant-sec-inference-url-token",
+            "https://inference.local/v1#qdrant-sec-inference-url-fragment",
+            "not a url qdrant-sec-inference-url-token",
+        ] {
+            let service = InferenceService::new(Some(InferenceConfig {
+                address: Some(address.to_string()),
+                timeout: None,
+                token: None,
+                allowed_api_key_headers: Vec::new(),
+            }));
+
+            let err = service
+                .validate()
+                .expect_err("unsafe inference endpoint URL must fail validation");
+            let rendered = err.to_string();
+
+            assert!(rendered.contains("InferenceService configuration error"));
+            assert!(!rendered.contains("user"), "{rendered}");
+            assert!(!rendered.contains("password"), "{rendered}");
+            assert!(
+                !rendered.contains("qdrant-sec-inference-url-token"),
+                "{rendered}"
+            );
+            assert!(
+                !rendered.contains("qdrant-sec-inference-url-fragment"),
+                "{rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn inference_service_accepts_http_endpoint_path_without_query() {
+        let service = InferenceService::new(Some(InferenceConfig {
+            address: Some("https://inference.local/v1/embeddings".to_string()),
+            timeout: None,
+            token: None,
+            allowed_api_key_headers: Vec::new(),
+        }));
+
+        service
+            .validate()
+            .expect("safe inference endpoint URL with path should be accepted");
     }
 
     #[test]
