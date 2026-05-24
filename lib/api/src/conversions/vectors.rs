@@ -34,6 +34,20 @@ fn convert_to_plain_multi_vector(
         .collect())
 }
 
+fn document_vector_from_grpc(document: grpc::Document) -> Result<rest::Document, Status> {
+    rest::Document::try_from(document)
+        .map_err(|_| Status::invalid_argument("Invalid document vector input"))
+}
+
+fn image_vector_from_grpc(image: grpc::Image) -> Result<rest::Image, Status> {
+    rest::Image::try_from(image).map_err(|_| Status::invalid_argument("Invalid image vector input"))
+}
+
+fn object_vector_from_grpc(object: grpc::InferenceObject) -> Result<rest::InferenceObject, Status> {
+    rest::InferenceObject::try_from(object)
+        .map_err(|_| Status::invalid_argument("Invalid object vector input"))
+}
+
 impl TryFrom<rest::VectorOutput> for grpc::VectorOutput {
     type Error = OperationError;
 
@@ -193,14 +207,14 @@ impl TryFrom<grpc::Vectors> for rest::VectorStruct {
                                 ))
                             }
                             grpc::vector::Vector::Document(document) => Ok(
-                                rest::VectorStruct::Document(rest::Document::try_from(document)?),
+                                rest::VectorStruct::Document(document_vector_from_grpc(document)?),
                             ),
                             grpc::vector::Vector::Image(image) => {
-                                Ok(rest::VectorStruct::Image(rest::Image::try_from(image)?))
+                                Ok(rest::VectorStruct::Image(image_vector_from_grpc(image)?))
                             }
-                            grpc::vector::Vector::Object(object) => Ok(rest::VectorStruct::Object(
-                                rest::InferenceObject::try_from(object)?,
-                            )),
+                            grpc::vector::Vector::Object(object) => {
+                                Ok(rest::VectorStruct::Object(object_vector_from_grpc(object)?))
+                            }
                         };
                     }
 
@@ -265,14 +279,14 @@ impl TryFrom<grpc::Vector> for rest::Vector {
                     ))
                 }
                 grpc::vector::Vector::Document(document) => {
-                    Ok(rest::Vector::Document(rest::Document::try_from(document)?))
+                    Ok(rest::Vector::Document(document_vector_from_grpc(document)?))
                 }
                 grpc::vector::Vector::Image(image) => {
-                    Ok(rest::Vector::Image(rest::Image::try_from(image)?))
+                    Ok(rest::Vector::Image(image_vector_from_grpc(image)?))
                 }
-                grpc::vector::Vector::Object(object) => Ok(rest::Vector::Object(
-                    rest::InferenceObject::try_from(object)?,
-                )),
+                grpc::vector::Vector::Object(object) => {
+                    Ok(rest::Vector::Object(object_vector_from_grpc(object)?))
+                }
             };
         }
 
@@ -646,5 +660,86 @@ impl TryFrom<grpc::RawVector> for VectorInternal {
 impl From<NamedVectorStruct> for grpc::RawVector {
     fn from(value: NamedVectorStruct) -> Self {
         Self::from(value.to_vector())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::grpc::qdrant::value::Kind;
+    use crate::grpc::qdrant::{Document, Image, InferenceObject, Value};
+
+    #[expect(deprecated)]
+    fn vector_with_variant(vector: crate::grpc::vector::Vector) -> grpc::Vector {
+        grpc::Vector {
+            data: vec![],
+            indices: None,
+            vectors_count: None,
+            vector: Some(vector),
+        }
+    }
+
+    fn vector_struct_with_variant(vector: crate::grpc::vector::Vector) -> grpc::Vectors {
+        grpc::Vectors {
+            vectors_options: Some(grpc::vectors::VectorsOptions::Vector(vector_with_variant(
+                vector,
+            ))),
+        }
+    }
+
+    #[test]
+    fn grpc_vector_conversion_errors_do_not_echo_inference_inputs() {
+        let sentinel = "do-not-echo-api-vector-secret";
+        let bad_option = Value {
+            kind: Some(Kind::DoubleValue(f64::NAN)),
+        };
+
+        let document = crate::grpc::vector::Vector::Document(Document {
+            text: sentinel.to_string(),
+            model: "test-model".to_string(),
+            options: HashMap::from([("bad".to_string(), bad_option)]),
+        });
+        let err = rest::Vector::try_from(vector_with_variant(document.clone())).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert_eq!(err.message(), "Invalid document vector input");
+        assert!(!err.message().contains(sentinel), "{err:?}");
+        let err = rest::VectorStruct::try_from(vector_struct_with_variant(document)).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert_eq!(err.message(), "Invalid document vector input");
+        assert!(!err.message().contains(sentinel), "{err:?}");
+
+        let image = crate::grpc::vector::Vector::Image(Image {
+            image: Some(Value {
+                kind: Some(Kind::DoubleValue(f64::NAN)),
+            }),
+            model: sentinel.to_string(),
+            options: HashMap::new(),
+        });
+        let err = rest::Vector::try_from(vector_with_variant(image.clone())).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert_eq!(err.message(), "Invalid image vector input");
+        assert!(!err.message().contains(sentinel), "{err:?}");
+        let err = rest::VectorStruct::try_from(vector_struct_with_variant(image)).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert_eq!(err.message(), "Invalid image vector input");
+        assert!(!err.message().contains(sentinel), "{err:?}");
+
+        let object = crate::grpc::vector::Vector::Object(InferenceObject {
+            object: Some(Value {
+                kind: Some(Kind::DoubleValue(f64::NAN)),
+            }),
+            model: sentinel.to_string(),
+            options: HashMap::new(),
+        });
+        let err = rest::Vector::try_from(vector_with_variant(object.clone())).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert_eq!(err.message(), "Invalid object vector input");
+        assert!(!err.message().contains(sentinel), "{err:?}");
+        let err = rest::VectorStruct::try_from(vector_struct_with_variant(object)).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert_eq!(err.message(), "Invalid object vector input");
+        assert!(!err.message().contains(sentinel), "{err:?}");
     }
 }
