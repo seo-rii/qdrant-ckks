@@ -35,7 +35,7 @@ impl InferenceInput {
     ) -> Result<Bm25Config, StorageError> {
         let options = options.unwrap_or_default();
         Bm25Config::deserialize(options.into_deserializer())
-            .map_err(|err| StorageError::bad_input(format!("Invalid BM25 config: {err:#?}")))
+            .map_err(|_| StorageError::bad_input("Invalid BM25 config"))
     }
 }
 
@@ -90,5 +90,28 @@ impl From<InferenceData> for InferenceInput {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn bm25_config_parse_error_does_not_echo_option_values() {
+        let sentinel = "do-not-echo-bm25-option-secret";
+        let err = InferenceInput::parse_bm25_config(Some(HashMap::from([(
+            "k".to_string(),
+            json!(sentinel),
+        )])))
+        .expect_err("invalid BM25 config must fail");
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("Invalid BM25 config"), "{rendered}");
+        assert!(!rendered.contains(sentinel), "{rendered}");
     }
 }
