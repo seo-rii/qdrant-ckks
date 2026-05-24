@@ -243,6 +243,8 @@ impl InferenceService {
         inference_type: InferenceType,
         inference_params: InferenceParams,
     ) -> Result<InferenceResponse, StorageError> {
+        self.validate()?;
+
         // Assume that either:
         // - User doesn't have access to generating random JWT tokens (like in serverless)
         // - Inference server checks validity of the tokens.
@@ -839,9 +841,7 @@ mod test {
     #[tokio::test]
     async fn remote_inference_send_error_redacts_request_url() {
         let service = InferenceService::new(Some(InferenceConfig {
-            address: Some(
-                "http://127.0.0.1:1/infer?token=qdrant-sec-inference-send-query-token".to_string(),
-            ),
+            address: Some("http://127.0.0.1:1/infer".to_string()),
             timeout: None,
             token: None,
             allowed_api_key_headers: Vec::new(),
@@ -865,11 +865,40 @@ mod test {
             rendered.contains("Failed to send inference request"),
             "{rendered}"
         );
+        assert!(!rendered.contains("infer?token"), "{rendered}");
+    }
+
+    #[tokio::test]
+    async fn remote_inference_validates_config_before_send() {
+        let service = InferenceService::new(Some(InferenceConfig {
+            address: Some(
+                "https://inference.local/infer?token=qdrant-sec-inference-preflight-token"
+                    .to_string(),
+            ),
+            timeout: None,
+            token: None,
+            allowed_api_key_headers: Vec::new(),
+            expected_host: Some("inference.local".to_string()),
+        }));
+
+        let err = service
+            .infer_remote(
+                vec![make_normal_inference_input(
+                    "sensitive remote inference input",
+                    &mut StdRng::seed_from_u64(18),
+                )],
+                InferenceType::Update,
+                InferenceParams::new(InferenceApiKeys::default(), Some(Duration::from_secs(1))),
+            )
+            .await
+            .expect_err("invalid configured URL must fail before request send");
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("InferenceService configuration error"));
         assert!(
-            !rendered.contains("qdrant-sec-inference-send-query-token"),
+            !rendered.contains("qdrant-sec-inference-preflight-token"),
             "{rendered}"
         );
-        assert!(!rendered.contains("infer?token"), "{rendered}");
     }
 
     #[tokio::test]
