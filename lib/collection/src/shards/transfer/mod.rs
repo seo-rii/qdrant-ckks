@@ -49,6 +49,41 @@ pub enum TransferStage {
     Finalizing,
 }
 
+#[cfg(test)]
+mod tests {
+    use segment::types::{Condition, FieldCondition};
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn shard_transfer_debug_redacts_filter_literals() {
+        let transfer = ShardTransfer {
+            shard_id: 1,
+            to_shard_id: None,
+            from: 1,
+            to: 2,
+            sync: true,
+            method: Some(ShardTransferMethod::StreamRecords),
+            filter: Some(Filter::new_must(Condition::Field(
+                FieldCondition::new_match(
+                    "document.body".parse().unwrap(),
+                    serde_json::from_value(json!({
+                        "value": "qdrant-sec-transfer-filter-sentinel",
+                    }))
+                    .unwrap(),
+                ),
+            ))),
+        };
+
+        let rendered = format!("{transfer:?}");
+
+        assert!(rendered.contains("filter_present: true"));
+        assert!(!rendered.contains("qdrant-sec-transfer-filter-sentinel"));
+        assert!(!rendered.contains("document.body"));
+    }
+}
+
 impl TransferStage {
     /// Short lowercase name for display in comment
     pub fn as_str(&self) -> &'static str {
@@ -96,7 +131,7 @@ const CONSENSUS_CONFIRM_RETRY_DELAY: Duration = Duration::from_secs(1);
 /// Time after which confirming a consensus operation times out.
 const CONSENSUS_CONFIRM_TIMEOUT: Duration = defaults::CONSENSUS_META_OP_WAIT;
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShardTransfer {
     pub shard_id: ShardId,
     /// Target shard ID if different than source shard ID
@@ -116,6 +151,20 @@ pub struct ShardTransfer {
     // Optional filter to apply when transferring points
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter: Option<Filter>,
+}
+
+impl fmt::Debug for ShardTransfer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShardTransfer")
+            .field("shard_id", &self.shard_id)
+            .field("to_shard_id", &self.to_shard_id)
+            .field("from", &self.from)
+            .field("to", &self.to)
+            .field("sync", &self.sync)
+            .field("method", &self.method)
+            .field("filter_present", &self.filter.is_some())
+            .finish()
+    }
 }
 
 impl ShardTransfer {
