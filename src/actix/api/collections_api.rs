@@ -986,10 +986,23 @@ async fn run_payloads_for_crypto_migration(
                 "payload crypto migration completion plan is invalid: {err}",
             ))
         })?;
+        let mut run_record = PayloadCryptoMigrationRunRecord {
+            collection_name: collection_name.clone(),
+            stable_crypto_id: config
+                .stable_crypto_id(&collection_name)
+                .map_err(StorageError::from)?,
+            checkpoints: completion_plan.checkpoints.clone(),
+            completion_plan: completion_plan.clone(),
+            completed: false,
+            dry_run,
+        };
+
         let completed = if dry_run {
+            persist_payload_crypto_migration_run_record(collection.path(), &run_record)?;
             false
         } else {
-            dispatcher
+            persist_payload_crypto_migration_run_record(collection.path(), &run_record)?;
+            let completed = dispatcher
                 .submit_collection_meta_op(
                     CollectionMetaOperations::ApplyCryptoMigration(ApplyCryptoMigrationPlan {
                         collection_name: collection_name.clone(),
@@ -998,19 +1011,11 @@ async fn run_payloads_for_crypto_migration(
                     auth,
                     query.timeout(),
                 )
-                .await?
+                .await?;
+            run_record.completed = completed;
+            persist_payload_crypto_migration_run_record(collection.path(), &run_record)?;
+            completed
         };
-        persist_payload_crypto_migration_run_record(
-            collection.path(),
-            &PayloadCryptoMigrationRunRecord {
-                collection_name: collection_name.clone(),
-                stable_crypto_id: config.stable_crypto_id(&collection_name).map_err(StorageError::from)?,
-                checkpoints: completion_plan.checkpoints.clone(),
-                completion_plan: completion_plan.clone(),
-                completed,
-                dry_run,
-            },
-        )?;
 
         Ok(RunPayloadCryptoMigrationResponse {
             checkpoints: completion_plan.checkpoints.clone(),
@@ -1644,6 +1649,31 @@ mod tests {
         assert_eq!(persisted["completion_plan"]["from"], "rotating");
         assert_eq!(persisted["completion_plan"]["to"], "active");
         assert_eq!(persisted["checkpoints"][0]["status"], "verified");
+    }
+
+    #[test]
+    fn payload_crypto_migration_run_record_commits_after_pending_record() {
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-payload-migration-record-commit-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let mut record = payload_crypto_migration_run_test_record();
+        record.completed = false;
+
+        persist_payload_crypto_migration_run_record(dir.path(), &record).unwrap();
+        let record_path = dir.path().join(PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_FILE);
+        let pending: Value = serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
+        assert_eq!(pending["completed"], false);
+        assert_eq!(pending["completion_plan"]["from"], "rotating");
+        assert_eq!(pending["completion_plan"]["to"], "active");
+
+        record.completed = true;
+        persist_payload_crypto_migration_run_record(dir.path(), &record).unwrap();
+        let committed: Value =
+            serde_json::from_slice(&std::fs::read(record_path).unwrap()).unwrap();
+        assert_eq!(committed["completed"], true);
+        assert_eq!(committed["completion_plan"], pending["completion_plan"]);
+        assert_eq!(committed["checkpoints"], pending["checkpoints"]);
     }
 
     #[cfg(unix)]
