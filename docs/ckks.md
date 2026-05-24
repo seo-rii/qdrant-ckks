@@ -464,8 +464,9 @@ accepts only `key_id`, `material_fingerprint_id`, and `retired_materials`;
 options; `metadata/blind-index-hmac@v1` accepts only `key_id`,
 `expected_rk_id`, `min_rk_epoch`, and `max_rk_epoch`; `vector/openfhe-ckks@v1`
 accepts only `key_id`, `material_fingerprint_id`, `profile`,
-`crypto_context_b64`, `public_key_b64`, and `allow_plaintext_queries`. Unknown
-options fail startup/runtime validation instead of being silently ignored.
+`crypto_context_b64`, `public_key_b64`, `allow_plaintext_queries`, and
+`plaintext_query_tcb_ack`. Unknown options fail startup/runtime validation
+instead of being silently ignored.
 
 Provider `materials` roles are also allowlisted. Server-side payload AEAD and
 OpenFHE CKKS vector-envelope providers accept only `materials.sym_key`;
@@ -499,6 +500,8 @@ crypto:
         crypto_context_b64: base64url-no-pad-openfhe-context
         public_key_b64: base64url-no-pad-openfhe-public-key
         allow_plaintext_queries: false
+        # Required only when allow_plaintext_queries is true.
+        # plaintext_query_tcb_ack: qdrant-sec-ckks-plaintext-query-tcb-v1
 ```
 
 Direct MK/RK materials must set `source` explicitly; qdrant-sec does not infer
@@ -1035,12 +1038,13 @@ Nearest-neighbor search over an encrypted vector name is implemented for
 client-encrypted CKKS query envelopes and root direct point-id nearest `query`
 or `query/groups` requests when runtime `crypto` settings are available on the
 serving node. Raw dense REST/gRPC query vectors are rejected by default for
-`vector/openfhe-ckks@v1`; setting `allow_plaintext_queries: true` explicitly
-opts into a server-side query plaintext TCB for client-supplied numeric dense
-vectors. Query vectors produced by Qdrant inference (`document`, `image`, or
-`object` inputs) remain rejected for encrypted vector names because they would
-send client plaintext to the inference service before CKKS scoring. In the raw
-dense opt-in mode, Qdrant scrolls the encrypted sidecar payloads,
+`vector/openfhe-ckks@v1`; setting `allow_plaintext_queries: true` also requires
+`plaintext_query_tcb_ack: qdrant-sec-ckks-plaintext-query-tcb-v1`. This explicit
+acknowledgement opts into a server-side query plaintext TCB for client-supplied
+numeric dense vectors. Query vectors produced by Qdrant inference (`document`,
+`image`, or `object` inputs) remain rejected for encrypted vector names because
+they would send client plaintext to the inference service before CKKS scoring.
+In the raw dense opt-in mode, Qdrant scrolls the encrypted sidecar payloads,
 validates each CKKS envelope against the active OpenFHE public material/context
 digest, sends `encrypt_query` to the bridge, and then sends
 `score_encrypted_query_batch` requests over the encrypted query ciphertext plus

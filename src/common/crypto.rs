@@ -160,6 +160,8 @@ const CKKS_PROFILE_OPTION: &str = "profile";
 const CKKS_CRYPTO_CONTEXT_B64_OPTION: &str = "crypto_context_b64";
 const CKKS_PUBLIC_KEY_B64_OPTION: &str = "public_key_b64";
 const ALLOW_PLAINTEXT_QUERIES_OPTION: &str = "allow_plaintext_queries";
+const PLAINTEXT_QUERIES_TCB_ACK_OPTION: &str = "plaintext_query_tcb_ack";
+const PLAINTEXT_QUERIES_TCB_ACK_VALUE: &str = "qdrant-sec-ckks-plaintext-query-tcb-v1";
 const VAULT_KV2_RESPONSE_MAX_BYTES: u64 = 64 * 1024;
 const VAULT_TRANSIT_RESPONSE_MAX_BYTES: u64 = 64 * 1024;
 const EXTERNAL_MATERIAL_DEFAULT_TIMEOUT_MS: u64 = 5_000;
@@ -185,6 +187,7 @@ const VECTOR_OPENFHE_CKKS_ALLOWED_OPTIONS: &[&str] = &[
     CKKS_CRYPTO_CONTEXT_B64_OPTION,
     CKKS_PUBLIC_KEY_B64_OPTION,
     ALLOW_PLAINTEXT_QUERIES_OPTION,
+    PLAINTEXT_QUERIES_TCB_ACK_OPTION,
 ];
 const VECTOR_OPENFHE_CKKS_ALLOWED_MATERIAL_ROLES: &[&str] = &[PAYLOAD_SYM_KEY_ROLE];
 const OPENFHE_BACKEND_KIND_PROCESS: &str = "process";
@@ -255,6 +258,40 @@ fn unsupported_instance_option(options: &Value, allowed_options: &[&str]) -> Opt
         .keys()
         .find(|option| !allowed_options.contains(&option.as_str()))
         .cloned()
+}
+
+fn vector_plaintext_queries_allowed(instance: &CryptoInstanceConfig) -> Result<bool, String> {
+    let allow_plaintext_queries = match instance.options.get(ALLOW_PLAINTEXT_QUERIES_OPTION) {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(value)) => *value,
+        Some(_) => {
+            return Err(format!(
+                "{ALLOW_PLAINTEXT_QUERIES_OPTION} must be a boolean"
+            ));
+        }
+    };
+
+    match instance.options.get(PLAINTEXT_QUERIES_TCB_ACK_OPTION) {
+        Some(Value::String(value)) if allow_plaintext_queries => {
+            if value == PLAINTEXT_QUERIES_TCB_ACK_VALUE {
+                Ok(true)
+            } else {
+                Err(format!(
+                    "{PLAINTEXT_QUERIES_TCB_ACK_OPTION} must be {PLAINTEXT_QUERIES_TCB_ACK_VALUE}"
+                ))
+            }
+        }
+        Some(Value::String(_)) => Err(format!(
+            "{PLAINTEXT_QUERIES_TCB_ACK_OPTION} is only valid when {ALLOW_PLAINTEXT_QUERIES_OPTION}=true"
+        )),
+        Some(_) => Err(format!(
+            "{PLAINTEXT_QUERIES_TCB_ACK_OPTION} must be a string"
+        )),
+        None if allow_plaintext_queries => Err(format!(
+            "{ALLOW_PLAINTEXT_QUERIES_OPTION}=true requires {PLAINTEXT_QUERIES_TCB_ACK_OPTION}={PLAINTEXT_QUERIES_TCB_ACK_VALUE}"
+        )),
+        None => Ok(false),
+    }
 }
 
 fn unsupported_material_role(
@@ -1137,16 +1174,12 @@ fn generic_vector_write_plan(
                 rule.instance
             ))
         })?;
-        let allow_plaintext_queries = match instance.options.get(ALLOW_PLAINTEXT_QUERIES_OPTION) {
-            None | Some(Value::Null) => false,
-            Some(Value::Bool(value)) => *value,
-            Some(_) => {
-                return Err(StorageError::bad_input(format!(
-                    "collection {collection_name} vector crypto instance {} {ALLOW_PLAINTEXT_QUERIES_OPTION} option must be a boolean",
-                    rule.instance
-                )));
-            }
-        };
+        let allow_plaintext_queries = vector_plaintext_queries_allowed(instance).map_err(|err| {
+            StorageError::bad_input(format!(
+                "collection {collection_name} vector crypto instance {} plaintext query policy is invalid: {err}",
+                rule.instance
+            ))
+        })?;
 
         let key_id = resolve_payload_key_id(collection_name, encryption, &rule.instance, instance)
             .map_err(|err| {
@@ -2539,13 +2572,11 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                     });
                 }
             }
-            if let Some(value) = instance.options.get(ALLOW_PLAINTEXT_QUERIES_OPTION)
-                && !matches!(value, Value::Bool(_) | Value::Null)
-            {
+            if let Err(reason) = vector_plaintext_queries_allowed(instance) {
                 return Err(CryptoSetupError::InvalidInstanceOption {
                     instance: instance_name.clone(),
                     option: ALLOW_PLAINTEXT_QUERIES_OPTION.to_string(),
-                    reason: "expected a boolean".to_string(),
+                    reason,
                 });
             }
         }
@@ -4874,12 +4905,10 @@ fn validate_generic_collection_crypto_runtime(
                 rule.instance
             ))
         })?;
-        if let Some(value) = instance.options.get(ALLOW_PLAINTEXT_QUERIES_OPTION)
-            && !matches!(value, Value::Bool(_) | Value::Null)
-        {
+        if let Err(err) = vector_plaintext_queries_allowed(instance) {
             return Err(StorageError::bad_input(format!(
-                "collection {collection_name} vector crypto instance {} {ALLOW_PLAINTEXT_QUERIES_OPTION} option must be a boolean",
-                rule.instance
+                "collection {collection_name} vector crypto instance {} plaintext query policy is invalid: {err}",
+                rule.instance,
             )));
         }
 
@@ -14652,6 +14681,106 @@ mod tests {
         );
 
         validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap();
+
+        let mut settings_with_plaintext_queries_without_ack = settings.clone();
+        settings_with_plaintext_queries_without_ack
+            .crypto
+            .instances
+            .get_mut("docs_vector_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(ALLOW_PLAINTEXT_QUERIES_OPTION.to_string(), json!(true));
+        let err = validate_crypto_settings(&settings_with_plaintext_queries_without_ack.crypto)
+            .expect_err("plaintext query opt-in must require explicit TCB acknowledgement");
+        assert!(
+            matches!(
+                err,
+                CryptoSetupError::InvalidInstanceOption { ref instance, ref option, ref reason }
+                    if instance == "docs_vector_v1"
+                        && option == ALLOW_PLAINTEXT_QUERIES_OPTION
+                        && reason.contains(PLAINTEXT_QUERIES_TCB_ACK_OPTION)
+            ),
+            "unexpected error: {err:?}",
+        );
+        let err = validate_collection_crypto_runtime_inner(
+            &settings_with_plaintext_queries_without_ack,
+            "docs",
+            &params,
+        )
+        .expect_err("runtime validation must also reject plaintext query opt-in without TCB ack");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("plaintext query policy is invalid")
+                    && description.contains(PLAINTEXT_QUERIES_TCB_ACK_OPTION)),
+            "unexpected error: {err:?}",
+        );
+
+        let mut settings_with_wrong_plaintext_query_ack = settings.clone();
+        settings_with_wrong_plaintext_query_ack
+            .crypto
+            .instances
+            .get_mut("docs_vector_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(ALLOW_PLAINTEXT_QUERIES_OPTION.to_string(), json!(true));
+        settings_with_wrong_plaintext_query_ack
+            .crypto
+            .instances
+            .get_mut("docs_vector_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                PLAINTEXT_QUERIES_TCB_ACK_OPTION.to_string(),
+                json!("wrong-ack"),
+            );
+        let err = validate_crypto_settings(&settings_with_wrong_plaintext_query_ack.crypto)
+            .expect_err("plaintext query opt-in must use exact TCB acknowledgement");
+        assert!(
+            matches!(
+                err,
+                CryptoSetupError::InvalidInstanceOption { ref instance, ref option, ref reason }
+                    if instance == "docs_vector_v1"
+                        && option == ALLOW_PLAINTEXT_QUERIES_OPTION
+                        && reason.contains(PLAINTEXT_QUERIES_TCB_ACK_VALUE)
+            ),
+            "unexpected error: {err:?}",
+        );
+
+        let mut settings_with_plaintext_query_ack = settings.clone();
+        settings_with_plaintext_query_ack
+            .crypto
+            .instances
+            .get_mut("docs_vector_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(ALLOW_PLAINTEXT_QUERIES_OPTION.to_string(), json!(true));
+        settings_with_plaintext_query_ack
+            .crypto
+            .instances
+            .get_mut("docs_vector_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                PLAINTEXT_QUERIES_TCB_ACK_OPTION.to_string(),
+                json!(PLAINTEXT_QUERIES_TCB_ACK_VALUE),
+            );
+        validate_crypto_settings(&settings_with_plaintext_query_ack.crypto).unwrap();
+        validate_collection_crypto_runtime_inner(
+            &settings_with_plaintext_query_ack,
+            "docs",
+            &params,
+        )
+        .unwrap();
 
         let mut settings_with_wrong_payload_collection_scope = settings.clone();
         settings_with_wrong_payload_collection_scope

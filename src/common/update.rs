@@ -3145,6 +3145,7 @@ esac
                         "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
                         "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
                         "allow_plaintext_queries": true,
+                        "plaintext_query_tcb_ack": "qdrant-sec-ckks-plaintext-query-tcb-v1",
                     }),
                 },
             )]),
@@ -3463,6 +3464,15 @@ esac
             .as_object_mut()
             .unwrap()
             .remove("allow_plaintext_queries");
+        settings
+            .crypto
+            .instances
+            .get_mut("docs_vector_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .remove("plaintext_query_tcb_ack");
         let params = encrypted_vector_params();
         let plan = vector_write_plan_for_collection_with_crypto_id(
             &settings,
