@@ -2959,6 +2959,8 @@ mod tests {
         CryptoBackendConfig, CryptoInstanceConfig, CryptoMaterialConfig, CryptoSettings, Settings,
     };
 
+    const TEST_VECTOR_COLLECTION_CRYPTO_ID: &str = "32345678-90ab-cdef-1234-567890abcdef";
+
     fn payload_runtime_settings() -> Settings {
         let mut settings = Settings::new(None).unwrap();
         settings.crypto.instances = HashMap::from([(
@@ -3184,8 +3186,8 @@ esac
             version: 1,
             scheme: qdrant_sec::CKKS_SCHEME.to_string(),
             security_profile: qdrant_sec::CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50.to_string(),
-            collection_id: "docs-crypto-id".to_string(),
-            vector_name: "embedding".to_string(),
+            collection_id: TEST_VECTOR_COLLECTION_CRYPTO_ID.to_string(),
+            vector_name: DEFAULT_VECTOR_NAME.to_string(),
             key_id: "tenant-a:vector".to_string(),
             rk_id: "tenant-a/vector-v1".to_string(),
             rk_epoch: 1,
@@ -3431,7 +3433,7 @@ esac
         let plan = vector_write_plan_for_collection_with_crypto_id(
             &settings,
             "docs",
-            "docs-crypto-id",
+            TEST_VECTOR_COLLECTION_CRYPTO_ID,
             &params,
         )
         .unwrap()
@@ -3492,7 +3494,7 @@ esac
         let plan = vector_write_plan_for_collection_with_crypto_id(
             &settings,
             "docs",
-            "docs-crypto-id",
+            TEST_VECTOR_COLLECTION_CRYPTO_ID,
             &params,
         )
         .unwrap()
@@ -3518,12 +3520,13 @@ esac
         let plan = vector_write_plan_for_collection_with_crypto_id(
             &settings,
             "docs",
-            "docs-crypto-id",
+            TEST_VECTOR_COLLECTION_CRYPTO_ID,
             &params,
         )
         .unwrap()
         .unwrap();
-        let query = fake_ckks_client_query(b"fake-ckks-query:2", 2);
+        let mut query = fake_ckks_client_query(b"fake-ckks-query:2", 2);
+        query.vector_name = "embedding".to_string();
 
         plan.validate_client_encrypted_query(
             "docs",
@@ -3692,7 +3695,7 @@ esac
         let plan = vector_write_plan_for_collection_with_crypto_id(
             &settings,
             "docs",
-            "docs-crypto-id",
+            TEST_VECTOR_COLLECTION_CRYPTO_ID,
             &params,
         )
         .unwrap()
@@ -3722,7 +3725,7 @@ esac
         let plan = vector_write_plan_for_collection_with_crypto_id(
             &settings,
             "docs",
-            "docs-crypto-id",
+            TEST_VECTOR_COLLECTION_CRYPTO_ID,
             &params,
         )
         .unwrap()
@@ -3758,7 +3761,7 @@ esac
         let plan = vector_write_plan_for_collection_with_crypto_id(
             &settings,
             "docs",
-            "docs-crypto-id",
+            TEST_VECTOR_COLLECTION_CRYPTO_ID,
             &params,
         )
         .unwrap()
@@ -3804,7 +3807,7 @@ esac
         let plan = vector_write_plan_for_collection_with_crypto_id(
             &settings,
             "docs",
-            "docs-crypto-id",
+            TEST_VECTOR_COLLECTION_CRYPTO_ID,
             &params,
         )
         .unwrap()
@@ -7996,7 +7999,7 @@ esac
                                     }],
                                 }),
                                 strict_mode_config: None,
-                                uuid: None,
+                                uuid: Some(Uuid::parse_str(TEST_VECTOR_COLLECTION_CRYPTO_ID).unwrap()),
                                 metadata: None,
                             },
                         )
@@ -9207,6 +9210,142 @@ esac
                 hnsw_graph_candidate.version > 0,
                 "CKKS HNSW sidecar search must preserve the updated point version"
             );
+
+            let mut zero_trust_vector_settings = vector_settings.clone();
+            let zero_trust_options = zero_trust_vector_settings
+                .crypto
+                .instances
+                .get_mut("docs_vector_v1")
+                .unwrap()
+                .options
+                .as_object_mut()
+                .unwrap();
+            zero_trust_options.remove("allow_plaintext_queries");
+            zero_trust_options.remove("plaintext_query_tcb_ack");
+
+            let err = crate::common::query::do_core_search_points(
+                &toc,
+                "vector_docs",
+                SearchRequestInternal {
+                    vector: vec![0.0, 0.0].into(),
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    score_threshold: None,
+                }
+                .into(),
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&zero_trust_vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("does not allow plaintext query vectors")
+            ));
+
+            let err = crate::common::query::do_query_points(
+                &toc,
+                "vector_docs",
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&zero_trust_vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("does not allow plaintext query vectors")
+            ));
+
+            let err = crate::common::query::do_recommend_points(
+                &toc,
+                "vector_docs",
+                RecommendRequestInternal {
+                    positive: vec![RecommendExample::Dense(vec![0.0, 0.0])],
+                    negative: Vec::new(),
+                    strategy: Some(api::rest::RecommendStrategy::AverageVector),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                    using: None,
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&zero_trust_vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("does not allow plaintext query vectors")
+            ));
+
+            let err = crate::common::query::do_discover_points(
+                &toc,
+                "vector_docs",
+                DiscoverRequestInternal {
+                    target: Some(RecommendExample::Dense(vec![0.0, 0.0])),
+                    context: None,
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    using: None,
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&zero_trust_vector_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("does not allow plaintext query vectors")
+            ));
 
             for params in [
                 SearchParams {

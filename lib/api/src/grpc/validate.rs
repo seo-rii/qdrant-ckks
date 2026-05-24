@@ -428,12 +428,6 @@ impl Validate for grpc::CkksEncryptedQueryVector {
                 ValidationError::new("empty_ckks_encrypted_query_collection_id"),
             );
         }
-        if self.vector_name.is_empty() {
-            errors.add(
-                "vector_name",
-                ValidationError::new("empty_ckks_encrypted_query_vector_name"),
-            );
-        }
         if self.key_id.is_empty() {
             errors.add(
                 "key_id",
@@ -843,6 +837,19 @@ mod tests {
         assert!(
             good_request.validate().is_ok(),
             "valid CKKS encrypted query should pass validation"
+        );
+        let default_vector_request = SearchPoints {
+            collection_name: "docs".to_string(),
+            limit: 1,
+            ckks_encrypted_query: Some(CkksEncryptedQueryVector {
+                vector_name: String::new(),
+                ..valid_ckks_encrypted_query()
+            }),
+            ..Default::default()
+        };
+        assert!(
+            default_vector_request.validate().is_ok(),
+            "unnamed/default gRPC CKKS vector queries use an empty vector name"
         );
 
         let bad_request = SearchPoints {

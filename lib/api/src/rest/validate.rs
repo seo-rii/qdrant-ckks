@@ -108,12 +108,6 @@ impl Validate for CkksEncryptedQueryVector {
                 ValidationError::new("empty_ckks_encrypted_query_collection_id"),
             );
         }
-        if self.envelope.vector_name.is_empty() {
-            errors.add(
-                "vector_name",
-                ValidationError::new("empty_ckks_encrypted_query_vector_name"),
-            );
-        }
         if self.envelope.key_id.is_empty() {
             errors.add(
                 "key_id",
@@ -481,6 +475,17 @@ mod tests {
         assert!(
             valid_ckks_encrypted_query().validate().is_ok(),
             "valid REST CKKS encrypted query should pass validation"
+        );
+        assert!(
+            CkksEncryptedQueryVector {
+                envelope: CkksEncryptedQueryVectorEnvelope {
+                    vector_name: String::new(),
+                    ..valid_ckks_encrypted_query().envelope
+                },
+            }
+            .validate()
+            .is_ok(),
+            "unnamed/default REST CKKS vector queries use an empty vector name"
         );
 
         let bad_query = CkksEncryptedQueryVector {
