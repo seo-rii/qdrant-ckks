@@ -5051,6 +5051,16 @@ pub struct CkksEncryptedQueryVector {
     pub ciphertext: ::prost::alloc::string::String,
     #[prost(string, tag = "7")]
     pub ciphertext_sha256: ::prost::alloc::string::String,
+    #[prost(string, tag = "8")]
+    pub collection_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "9")]
+    pub vector_name: ::prost::alloc::string::String,
+    #[prost(string, tag = "10")]
+    pub key_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "11")]
+    pub rk_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "12")]
+    pub rk_epoch: u64,
 }
 /// Vector type to be used in queries.
 /// Ids will be substituted with their corresponding vectors from the collection.

@@ -1062,6 +1062,11 @@ encrypted query envelope instead of a raw dense vector:
     "version": 1,
     "scheme": "openfhe-ckks",
     "security_profile": "ckks-128-n16384-d4-scale50",
+    "collection_id": "collection-stable-crypto-id",
+    "vector_name": "text",
+    "key_id": "tenant-a:vector",
+    "rk_id": "tenant-a/vector-v1",
+    "rk_epoch": 3,
     "context_digest": "...",
     "slots": 1536,
     "ciphertext_sha256": "base64url-no-pad-sha256-of-ciphertext",
@@ -1070,8 +1075,10 @@ encrypted query envelope instead of a raw dense vector:
 }
 ```
 
-The `context_digest` must match the active OpenFHE public material and CKKS
-parameter profile for the encrypted vector rule, `slots` must match each stored
+The `collection_id`, `vector_name`, `key_id`, `rk_id`, and `rk_epoch` fields must
+match the active encrypted vector rule's stable collection crypto identity and
+resource-key lineage. The `context_digest` must match the active OpenFHE public
+material and CKKS parameter profile for that rule, `slots` must match each stored
 sidecar envelope being scored, `ciphertext_sha256` must match the decoded
 ciphertext bytes, and `ciphertext` is base64url without padding. Qdrant does not
 decrypt or validate the CKKS ciphertext itself; it treats the validated bytes as

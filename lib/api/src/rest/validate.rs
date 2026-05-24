@@ -102,6 +102,36 @@ impl Validate for CkksEncryptedQueryVector {
                 ValidationError::new("unsupported_ckks_encrypted_query_security_profile"),
             );
         }
+        if self.envelope.collection_id.is_empty() {
+            errors.add(
+                "collection_id",
+                ValidationError::new("empty_ckks_encrypted_query_collection_id"),
+            );
+        }
+        if self.envelope.vector_name.is_empty() {
+            errors.add(
+                "vector_name",
+                ValidationError::new("empty_ckks_encrypted_query_vector_name"),
+            );
+        }
+        if self.envelope.key_id.is_empty() {
+            errors.add(
+                "key_id",
+                ValidationError::new("empty_ckks_encrypted_query_key_id"),
+            );
+        }
+        if self.envelope.rk_id.is_empty() {
+            errors.add(
+                "rk_id",
+                ValidationError::new("empty_ckks_encrypted_query_rk_id"),
+            );
+        }
+        if self.envelope.rk_epoch == 0 {
+            errors.add(
+                "rk_epoch",
+                ValidationError::new("empty_ckks_encrypted_query_rk_epoch"),
+            );
+        }
         if self.envelope.context_digest.is_empty() {
             errors.add(
                 "context_digest",
@@ -433,6 +463,11 @@ mod tests {
                 version: 1,
                 scheme: "openfhe-ckks".to_string(),
                 security_profile: "ckks-128-n16384-d4-scale50".to_string(),
+                collection_id: "docs-crypto-id".to_string(),
+                vector_name: "embedding".to_string(),
+                key_id: "tenant-a:vector".to_string(),
+                rk_id: "tenant-a/vector-v1".to_string(),
+                rk_epoch: 1,
                 context_digest: BASE64URL_NOPAD.encode(&[3_u8; 32]),
                 slots: 2,
                 ciphertext_sha256: "MFUx3MUOvKMc8dWzHp_HbtUfZrO23VoDDGU5rmUy-Xk".to_string(),
@@ -473,6 +508,11 @@ mod tests {
 
         let bad_query = CkksEncryptedQueryVector {
             envelope: CkksEncryptedQueryVectorEnvelope {
+                collection_id: String::new(),
+                vector_name: String::new(),
+                key_id: String::new(),
+                rk_id: String::new(),
+                rk_epoch: 0,
                 context_digest: String::new(),
                 slots: 0,
                 ciphertext_sha256: String::new(),

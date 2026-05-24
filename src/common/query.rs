@@ -138,6 +138,11 @@ enum CkksSidecarScoring<'a> {
 enum CkksSidecarQuerySource<'a> {
     Dense(&'a [f32]),
     ClientEncrypted {
+        collection_id: &'a str,
+        vector_name: &'a str,
+        key_id: &'a str,
+        rk_id: &'a str,
+        rk_epoch: u64,
         context_digest: &'a str,
         slots: usize,
         ciphertext: Vec<u8>,
@@ -152,6 +157,11 @@ enum CkksSidecarQuerySource<'a> {
 enum CkksSidecarHnswQuery<'a> {
     Dense(&'a [f32]),
     ClientEncrypted {
+        collection_id: &'a str,
+        vector_name: &'a str,
+        key_id: &'a str,
+        rk_id: &'a str,
+        rk_epoch: u64,
         context_digest: &'a str,
         slots: usize,
         ciphertext: &'a [u8],
@@ -579,6 +589,11 @@ fn ckks_legacy_search_as_query_request(
                 version: query.envelope.version,
                 scheme: query.envelope.scheme.clone(),
                 security_profile: query.envelope.security_profile.clone(),
+                collection_id: query.envelope.collection_id.clone(),
+                vector_name: query.envelope.vector_name.clone(),
+                key_id: query.envelope.key_id.clone(),
+                rk_id: query.envelope.rk_id.clone(),
+                rk_epoch: query.envelope.rk_epoch,
                 context_digest: query.envelope.context_digest.clone(),
                 slots: query.envelope.slots,
                 ciphertext_sha256: query.envelope.ciphertext_sha256.clone(),
@@ -1045,6 +1060,11 @@ async fn ckks_vector_search_points_with_scoring(
     if let CkksSidecarScoring::NearestResolved {
         query:
             CkksSidecarQuerySource::ClientEncrypted {
+                collection_id,
+                vector_name: envelope_vector_name,
+                key_id,
+                rk_id,
+                rk_epoch,
                 context_digest,
                 slots,
                 ciphertext,
@@ -1054,6 +1074,11 @@ async fn ckks_vector_search_points_with_scoring(
         plan.validate_client_encrypted_query(
             collection_name,
             vector_name,
+            collection_id,
+            envelope_vector_name,
+            key_id,
+            rk_id,
+            *rk_epoch,
             context_digest,
             *slots,
             ciphertext,
@@ -1109,11 +1134,21 @@ async fn ckks_vector_search_points_with_scoring(
                 CkksSidecarScoring::NearestResolved {
                     query:
                         CkksSidecarQuerySource::ClientEncrypted {
+                            collection_id,
+                            vector_name: envelope_vector_name,
+                            key_id,
+                            rk_id,
+                            rk_epoch,
                             context_digest,
                             slots,
                             ciphertext,
                         },
                 } => CkksSidecarHnswQuery::ClientEncrypted {
+                    collection_id,
+                    vector_name: envelope_vector_name,
+                    key_id,
+                    rk_id,
+                    rk_epoch: *rk_epoch,
                     context_digest,
                     slots: *slots,
                     ciphertext,
@@ -1749,11 +1784,21 @@ async fn ckks_vector_search_points_with_scoring(
             CkksSidecarScoring::NearestResolved {
                 query:
                     CkksSidecarQuerySource::ClientEncrypted {
+                        collection_id,
+                        vector_name: envelope_vector_name,
+                        key_id,
+                        rk_id,
+                        rk_epoch,
                         context_digest,
                         slots,
                         ciphertext,
                     },
             } => CkksSidecarHnswQuery::ClientEncrypted {
+                collection_id,
+                vector_name: envelope_vector_name,
+                key_id,
+                rk_id,
+                rk_epoch: *rk_epoch,
                 context_digest,
                 slots: *slots,
                 ciphertext,
@@ -2087,6 +2132,11 @@ fn ckks_score_query_source_batch(
             query_values,
         )?,
         CkksSidecarQuerySource::ClientEncrypted {
+            collection_id,
+            vector_name: envelope_vector_name,
+            key_id,
+            rk_id,
+            rk_epoch,
             context_digest,
             slots,
             ciphertext,
@@ -2094,6 +2144,11 @@ fn ckks_score_query_source_batch(
             collection_name,
             vector_name,
             encrypted_items,
+            collection_id,
+            envelope_vector_name,
+            key_id,
+            rk_id,
+            *rk_epoch,
             context_digest,
             *slots,
             ciphertext,
@@ -2126,6 +2181,11 @@ fn ckks_client_encrypted_query_source<'a>(
         input.version,
         &input.scheme,
         &input.security_profile,
+        &input.collection_id,
+        &input.vector_name,
+        &input.key_id,
+        &input.rk_id,
+        input.rk_epoch,
         &input.context_digest,
         input.slots,
         &input.ciphertext_sha256,
@@ -2142,6 +2202,11 @@ fn ckks_rest_client_encrypted_query_source<'a>(
         input.envelope.version,
         &input.envelope.scheme,
         &input.envelope.security_profile,
+        &input.envelope.collection_id,
+        &input.envelope.vector_name,
+        &input.envelope.key_id,
+        &input.envelope.rk_id,
+        input.envelope.rk_epoch,
         &input.envelope.context_digest,
         input.envelope.slots,
         &input.envelope.ciphertext_sha256,
@@ -2154,6 +2219,11 @@ fn ckks_client_encrypted_query_source_from_parts<'a>(
     version: u8,
     scheme: &str,
     security_profile: &str,
+    collection_id: &'a str,
+    envelope_vector_name: &'a str,
+    key_id: &'a str,
+    rk_id: &'a str,
+    rk_epoch: u64,
     context_digest_b64: &'a str,
     slots: usize,
     ciphertext_sha256_b64: &str,
@@ -2172,6 +2242,31 @@ fn ckks_client_encrypted_query_source_from_parts<'a>(
     if security_profile != CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50 {
         return Err(StorageError::bad_input(format!(
             "encrypted vector '{vector_name}' client CKKS query profile must be {CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50}",
+        )));
+    }
+    if collection_id.is_empty() {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query collection_id must not be empty",
+        )));
+    }
+    if envelope_vector_name != vector_name {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query vector_name must match request vector",
+        )));
+    }
+    if key_id.is_empty() {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query key_id must not be empty",
+        )));
+    }
+    if rk_id.is_empty() {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query rk_id must not be empty",
+        )));
+    }
+    if rk_epoch == 0 {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query rk_epoch must be greater than 0",
         )));
     }
     if slots == 0 {
@@ -2243,6 +2338,11 @@ fn ckks_client_encrypted_query_source_from_parts<'a>(
     }
 
     Ok(CkksSidecarQuerySource::ClientEncrypted {
+        collection_id,
+        vector_name: envelope_vector_name,
+        key_id,
+        rk_id,
+        rk_epoch,
         context_digest: context_digest_b64,
         slots,
         ciphertext,
@@ -2821,6 +2921,11 @@ fn ckks_sidecar_score_hnsw_query_batch(
             query_values,
         )?,
         CkksSidecarHnswQuery::ClientEncrypted {
+            collection_id,
+            vector_name: envelope_vector_name,
+            key_id,
+            rk_id,
+            rk_epoch,
             context_digest,
             slots,
             ciphertext,
@@ -2828,6 +2933,11 @@ fn ckks_sidecar_score_hnsw_query_batch(
             collection_name,
             vector_name,
             encrypted_items,
+            collection_id,
+            envelope_vector_name,
+            key_id,
+            rk_id,
+            rk_epoch,
             context_digest,
             slots,
             ciphertext,
@@ -8127,6 +8237,11 @@ mod tests {
             1,
             CKKS_SCHEME,
             CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+            "docs-crypto-id",
+            "embedding",
+            "tenant-a:vector",
+            "tenant-a/vector-v1",
+            1,
             &"A".repeat(CKKS_CLIENT_QUERY_CONTEXT_DIGEST_B64_LEN + 1),
             2,
             &valid_ciphertext_sha256,
@@ -8142,6 +8257,11 @@ mod tests {
             1,
             CKKS_SCHEME,
             CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+            "docs-crypto-id",
+            "embedding",
+            "tenant-a:vector",
+            "tenant-a/vector-v1",
+            1,
             &context_digest,
             2,
             &valid_ciphertext_sha256,
@@ -8160,6 +8280,11 @@ mod tests {
             1,
             CKKS_SCHEME,
             CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+            "docs-crypto-id",
+            "embedding",
+            "tenant-a:vector",
+            "tenant-a/vector-v1",
+            1,
             &BASE64URL_NOPAD.encode(&[3_u8; 32]),
             2,
             &BASE64URL_NOPAD.encode(&Sha256::digest(b"other-ciphertext")),
@@ -8170,6 +8295,113 @@ mod tests {
         };
 
         assert!(err.to_string().contains("ciphertext_sha256"));
+    }
+
+    #[test]
+    fn ckks_client_encrypted_query_source_rejects_missing_lineage() {
+        let context_digest = BASE64URL_NOPAD.encode(&[3_u8; 32]);
+        let ciphertext = BASE64URL_NOPAD.encode(b"ciphertext");
+        let ciphertext_sha256 = BASE64URL_NOPAD.encode(&Sha256::digest(b"ciphertext"));
+
+        let err = match ckks_client_encrypted_query_source_from_parts(
+            "embedding",
+            1,
+            CKKS_SCHEME,
+            CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+            "",
+            "embedding",
+            "tenant-a:vector",
+            "tenant-a/vector-v1",
+            1,
+            &context_digest,
+            2,
+            &ciphertext_sha256,
+            &ciphertext,
+        ) {
+            Ok(_) => panic!("client encrypted query collection identity must be required"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("collection_id"));
+
+        let err = match ckks_client_encrypted_query_source_from_parts(
+            "embedding",
+            1,
+            CKKS_SCHEME,
+            CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+            "docs-crypto-id",
+            "other-vector",
+            "tenant-a:vector",
+            "tenant-a/vector-v1",
+            1,
+            &context_digest,
+            2,
+            &ciphertext_sha256,
+            &ciphertext,
+        ) {
+            Ok(_) => panic!("client encrypted query vector name must match the requested vector"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("vector_name"));
+
+        let err = match ckks_client_encrypted_query_source_from_parts(
+            "embedding",
+            1,
+            CKKS_SCHEME,
+            CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+            "docs-crypto-id",
+            "embedding",
+            "",
+            "tenant-a/vector-v1",
+            1,
+            &context_digest,
+            2,
+            &ciphertext_sha256,
+            &ciphertext,
+        ) {
+            Ok(_) => panic!("client encrypted query key id must be required"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("key_id"));
+
+        let err = match ckks_client_encrypted_query_source_from_parts(
+            "embedding",
+            1,
+            CKKS_SCHEME,
+            CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+            "docs-crypto-id",
+            "embedding",
+            "tenant-a:vector",
+            "",
+            1,
+            &context_digest,
+            2,
+            &ciphertext_sha256,
+            &ciphertext,
+        ) {
+            Ok(_) => panic!("client encrypted query RK id must be required"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("rk_id"));
+
+        let err = match ckks_client_encrypted_query_source_from_parts(
+            "embedding",
+            1,
+            CKKS_SCHEME,
+            CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+            "docs-crypto-id",
+            "embedding",
+            "tenant-a:vector",
+            "tenant-a/vector-v1",
+            0,
+            &context_digest,
+            2,
+            &ciphertext_sha256,
+            &ciphertext,
+        ) {
+            Ok(_) => panic!("client encrypted query RK epoch must be required"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("rk_epoch"));
     }
 
     #[test]

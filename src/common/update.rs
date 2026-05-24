@@ -3184,6 +3184,11 @@ esac
             version: 1,
             scheme: qdrant_sec::CKKS_SCHEME.to_string(),
             security_profile: qdrant_sec::CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50.to_string(),
+            collection_id: "docs-crypto-id".to_string(),
+            vector_name: "embedding".to_string(),
+            key_id: "tenant-a:vector".to_string(),
+            rk_id: "tenant-a/vector-v1".to_string(),
+            rk_epoch: 1,
             context_digest: public_material
                 .digest_for(&qdrant_sec::CkksParameters::openfhe_default_128_bit()),
             slots,
@@ -3203,6 +3208,11 @@ esac
                 version: query.version,
                 scheme: query.scheme,
                 security_profile: query.security_profile,
+                collection_id: query.collection_id,
+                vector_name: query.vector_name,
+                key_id: query.key_id,
+                rk_id: query.rk_id,
+                rk_epoch: query.rk_epoch,
                 context_digest: query.context_digest,
                 slots: query.slots,
                 ciphertext_sha256: query.ciphertext_sha256,
@@ -3220,6 +3230,11 @@ esac
             version: query.version.into(),
             scheme: query.scheme,
             security_profile: query.security_profile,
+            collection_id: query.collection_id,
+            vector_name: query.vector_name,
+            key_id: query.key_id,
+            rk_id: query.rk_id,
+            rk_epoch: query.rk_epoch,
             context_digest: query.context_digest,
             slots: query.slots as u64,
             ciphertext_sha256: query.ciphertext_sha256,
@@ -3513,6 +3528,11 @@ esac
         plan.validate_client_encrypted_query(
             "docs",
             "embedding",
+            &query.collection_id,
+            &query.vector_name,
+            &query.key_id,
+            &query.rk_id,
+            query.rk_epoch,
             &query.context_digest,
             query.slots,
             b"fake-ckks-query:2",
@@ -3524,6 +3544,110 @@ esac
             .validate_client_encrypted_query(
                 "docs",
                 "embedding",
+                "other-collection",
+                &query.vector_name,
+                &query.key_id,
+                &query.rk_id,
+                query.rk_epoch,
+                &query.context_digest,
+                query.slots,
+                b"fake-ckks-query:2",
+            )
+            .expect_err("client encrypted query must bind to collection crypto identity");
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("collection_id does not match")
+        ));
+
+        let err = plan
+            .validate_client_encrypted_query(
+                "docs",
+                "embedding",
+                &query.collection_id,
+                "other-vector",
+                &query.key_id,
+                &query.rk_id,
+                query.rk_epoch,
+                &query.context_digest,
+                query.slots,
+                b"fake-ckks-query:2",
+            )
+            .expect_err("client encrypted query must bind to vector name");
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("vector_name does not match")
+        ));
+
+        let err = plan
+            .validate_client_encrypted_query(
+                "docs",
+                "embedding",
+                &query.collection_id,
+                &query.vector_name,
+                "other-key",
+                &query.rk_id,
+                query.rk_epoch,
+                &query.context_digest,
+                query.slots,
+                b"fake-ckks-query:2",
+            )
+            .expect_err("client encrypted query must bind to active key id");
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("key_id does not match")
+        ));
+
+        let err = plan
+            .validate_client_encrypted_query(
+                "docs",
+                "embedding",
+                &query.collection_id,
+                &query.vector_name,
+                &query.key_id,
+                "other-rk",
+                query.rk_epoch,
+                &query.context_digest,
+                query.slots,
+                b"fake-ckks-query:2",
+            )
+            .expect_err("client encrypted query must bind to active RK id");
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description } if description.contains("rk_id does not match")
+        ));
+
+        let err = plan
+            .validate_client_encrypted_query(
+                "docs",
+                "embedding",
+                &query.collection_id,
+                &query.vector_name,
+                &query.key_id,
+                &query.rk_id,
+                query.rk_epoch + 1,
+                &query.context_digest,
+                query.slots,
+                b"fake-ckks-query:2",
+            )
+            .expect_err("client encrypted query must bind to active RK epoch");
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("rk_epoch does not match")
+        ));
+
+        let err = plan
+            .validate_client_encrypted_query(
+                "docs",
+                "embedding",
+                &query.collection_id,
+                &query.vector_name,
+                &query.key_id,
+                &query.rk_id,
+                query.rk_epoch,
                 &BASE64URL_NOPAD.encode(&[9u8; 32]),
                 query.slots,
                 b"fake-ckks-query:2",
@@ -3541,6 +3665,11 @@ esac
             .validate_client_encrypted_query(
                 "docs",
                 "embedding",
+                &query.collection_id,
+                &query.vector_name,
+                &query.key_id,
+                &query.rk_id,
+                query.rk_epoch,
                 &query.context_digest,
                 too_many_slots,
                 b"fake-ckks-query:2",

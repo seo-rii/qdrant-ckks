@@ -3011,6 +3011,11 @@ fn grpc_ckks_encrypted_query_to_rest_named_vector(
                 })?,
                 scheme: query.scheme,
                 security_profile: query.security_profile,
+                collection_id: query.collection_id,
+                vector_name: query.vector_name,
+                key_id: query.key_id,
+                rk_id: query.rk_id,
+                rk_epoch: query.rk_epoch,
                 context_digest: query.context_digest,
                 slots: query.slots.try_into().map_err(|_| {
                     Status::invalid_argument("CKKS encrypted query slots is too large")
@@ -3543,6 +3548,11 @@ mod tests {
             version: 1,
             scheme: "openfhe-ckks".to_string(),
             security_profile: "ckks-128-n16384-d4-scale50".to_string(),
+            collection_id: "docs-crypto-id".to_string(),
+            vector_name: "text".to_string(),
+            key_id: "tenant-a:vector".to_string(),
+            rk_id: "tenant-a/vector-v1".to_string(),
+            rk_epoch: 1,
             context_digest: BASE64URL_NOPAD.encode(&[3_u8; 32]),
             slots: 2,
             ciphertext_sha256: "960f1uTAQoGVZfumV71jfeMvFAiR1SdiZDC50Oy7ksY".to_string(),
@@ -3590,6 +3600,11 @@ mod tests {
                     query.envelope.security_profile,
                     "ckks-128-n16384-d4-scale50"
                 );
+                assert_eq!(query.envelope.collection_id, "docs-crypto-id");
+                assert_eq!(query.envelope.vector_name, "text");
+                assert_eq!(query.envelope.key_id, "tenant-a:vector");
+                assert_eq!(query.envelope.rk_id, "tenant-a/vector-v1");
+                assert_eq!(query.envelope.rk_epoch, 1);
                 assert_eq!(
                     query.envelope.context_digest,
                     BASE64URL_NOPAD.encode(&[3_u8; 32])

@@ -836,6 +836,10 @@ pub(crate) fn payload_write_plan_for_collection_with_crypto_id(
 
 struct VectorWriteRule {
     vector_name: String,
+    collection_id: String,
+    key_id: String,
+    rk_id: String,
+    rk_epoch: u64,
     distance: Distance,
     encryptor: CkksVectorEncryptor<CommandOpenFheBackend>,
     public_material: CkksPublicMaterial,
@@ -958,6 +962,11 @@ impl VectorWritePlan {
         collection_name: &str,
         vector_name: &str,
         encrypted_items: &[(String, EncryptedCkksVector)],
+        query_collection_id: &str,
+        query_vector_name: &str,
+        query_key_id: &str,
+        query_rk_id: &str,
+        query_rk_epoch: u64,
         context_digest: &str,
         slots: usize,
         encrypted_query: &[u8],
@@ -965,6 +974,11 @@ impl VectorWritePlan {
         self.validate_client_encrypted_query(
             collection_name,
             vector_name,
+            query_collection_id,
+            query_vector_name,
+            query_key_id,
+            query_rk_id,
+            query_rk_epoch,
             context_digest,
             slots,
             encrypted_query,
@@ -1015,6 +1029,11 @@ impl VectorWritePlan {
         &self,
         collection_name: &str,
         vector_name: &str,
+        query_collection_id: &str,
+        query_vector_name: &str,
+        query_key_id: &str,
+        query_rk_id: &str,
+        query_rk_epoch: u64,
         context_digest: &str,
         slots: usize,
         encrypted_query: &[u8],
@@ -1026,6 +1045,31 @@ impl VectorWritePlan {
         else {
             return Ok(None);
         };
+        if query_collection_id != rule.collection_id {
+            return Err(StorageError::bad_input(format!(
+                "encrypted query collection_id does not match active CKKS collection identity for vector '{vector_name}' in collection {collection_name}",
+            )));
+        }
+        if query_vector_name != rule.vector_name {
+            return Err(StorageError::bad_input(format!(
+                "encrypted query vector_name does not match encrypted vector '{vector_name}' in collection {collection_name}",
+            )));
+        }
+        if query_key_id != rule.key_id {
+            return Err(StorageError::bad_input(format!(
+                "encrypted query key_id does not match active CKKS key for vector '{vector_name}' in collection {collection_name}",
+            )));
+        }
+        if query_rk_id != rule.rk_id {
+            return Err(StorageError::bad_input(format!(
+                "encrypted query rk_id does not match active CKKS resource key for vector '{vector_name}' in collection {collection_name}",
+            )));
+        }
+        if query_rk_epoch != rule.rk_epoch {
+            return Err(StorageError::bad_input(format!(
+                "encrypted query rk_epoch does not match active CKKS resource key epoch for vector '{vector_name}' in collection {collection_name}",
+            )));
+        }
         let expected_digest = rule.encryptor.context_digest_for(&rule.public_material);
         if context_digest != expected_digest {
             return Err(StorageError::bad_input(format!(
@@ -1253,6 +1297,10 @@ fn generic_vector_write_plan(
             })?;
             rules.push(VectorWriteRule {
                 vector_name: vector_name.clone(),
+                collection_id: collection_crypto_id.to_string(),
+                key_id: key_id.to_string(),
+                rk_id: material_ref.clone(),
+                rk_epoch,
                 distance,
                 encryptor,
                 public_material: public_material.clone(),
