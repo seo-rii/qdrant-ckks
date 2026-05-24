@@ -1240,11 +1240,32 @@ fn ckks_vector_distance(
     collection_name: &str,
     vector_name: &str,
 ) -> Result<Distance, StorageError> {
-    params.get_distance(vector_name).map_err(|err| {
-        StorageError::bad_input(format!(
-            "collection {collection_name} encrypted vector '{vector_name}' is not configured: {err}",
-        ))
-    })
+    let Some(vector_params) = params.vectors.get_params(vector_name) else {
+        if params
+            .sparse_vectors
+            .as_ref()
+            .is_some_and(|sparse_vectors| sparse_vectors.contains_key(vector_name))
+        {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} encrypted vector '{vector_name}' is sparse-only: encrypted_vector_sparse_unsupported",
+            )));
+        }
+        return Err(StorageError::bad_input(format!(
+            "collection {collection_name} encrypted vector '{vector_name}' requires dense vector params: encrypted_vector_dense_vector_required",
+        )));
+    };
+    if vector_params.quantization_config.is_some() {
+        return Err(StorageError::bad_input(format!(
+            "collection {collection_name} encrypted vector '{vector_name}' uses vector quantization: encrypted_vector_quantization_unsupported",
+        )));
+    }
+    if vector_params.multivector_config.is_some() {
+        return Err(StorageError::bad_input(format!(
+            "collection {collection_name} encrypted vector '{vector_name}' uses multivector config: encrypted_vector_multivector_unsupported",
+        )));
+    }
+
+    Ok(vector_params.distance)
 }
 
 fn ckks_score_distance_name(distance: Distance) -> &'static str {
@@ -14858,6 +14879,74 @@ mod tests {
     }
 
     #[test]
+    fn validate_collection_crypto_runtime_rejects_sparse_only_encrypted_vector_selector() {
+        let (_bridge_dir, bridge_program, bridge_sha256_b64) = test_bridge_program();
+        let settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_vector_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: VECTOR_OPENFHE_CKKS_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            "tenant-a/vector-v1".to_string(),
+                        )]),
+                        backend_ref: Some("openfhe_local".to_string()),
+                        options: json!({
+                            "key_id": "tenant-a:docs",
+                            "material_fingerprint_id": "tenant-a/vector@v2",
+                            "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                            "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                            "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([(
+                    "tenant-a/vector-v1".to_string(),
+                    CryptoMaterialConfig {
+                        kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[8u8; 32])),
+                        rk_epoch: Some(1),
+                        ..CryptoMaterialConfig::default()
+                    },
+                )]),
+                backends: HashMap::from([(
+                    "openfhe_local".to_string(),
+                    CryptoBackendConfig {
+                        kind: "process_pool".to_string(),
+                        program: Some(bridge_program),
+                        sha256_b64: Some(bridge_sha256_b64),
+                        signature_public_key_b64: None,
+                        signature_b64: None,
+                        size: Some(1),
+                        timeout_ms: Some(5_000),
+                    },
+                )]),
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let mut params = encrypted_vector_params();
+        params.sparse_vectors = Some(BTreeMap::from([(
+            "embedding".to_string(),
+            collection::operations::types::SparseVectorParams {
+                index: None,
+                modifier: None,
+            },
+        )]));
+
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params)
+            .expect_err("runtime encrypted vector validation must reject sparse-only selectors");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("encrypted_vector_sparse_unsupported")
+                    && description.contains("embedding")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
     fn validate_create_collection_crypto_runtime_rejects_invalid_crypto_selectors() {
         let settings = Settings::new(None).unwrap();
         let params = CollectionParams {
@@ -15769,7 +15858,7 @@ mod tests {
 
         let backend = settings.crypto.backends.get_mut("openfhe_local").unwrap();
         backend.program = Some("/usr/local/bin/openfhe-bridge".to_string());
-        backend.sha256_b64 = Some("not+base64url".to_string());
+        backend.sha256_b64 = Some(format!("{}+", "A".repeat(BASE64URL_NOPAD_32_BYTE_LEN - 1)));
         let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
         assert!(
             matches!(err, StorageError::BadInput { description } if description.contains("sha256_b64 must be base64url without padding"))
