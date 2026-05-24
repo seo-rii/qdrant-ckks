@@ -323,6 +323,8 @@ pub struct RuntimeResourceKeyGenerateRequest {
     pub rk_epoch: u64,
     #[validate(custom(function = "validate_runtime_resource_key_scope"))]
     pub scope: String,
+    #[serde(default)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Validate)]
@@ -409,7 +411,10 @@ impl RuntimeResourceKeyRewrapMaterialPatch {
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Validate)]
 pub struct RuntimeResourceKeyGenerateResponse {
     pub wrapped_by: String,
+    pub dry_run: bool,
     pub settings_mutated: bool,
+    pub material_count: usize,
+    pub estimated_external_calls: usize,
     pub materials: BTreeMap<String, RuntimeResourceKeyRewrapMaterialPatch>,
 }
 
@@ -422,6 +427,38 @@ fn build_runtime_resource_key_generate_response(
             "crypto resource-key generation request is invalid: {err}"
         ))
     })?;
+    if settings.crypto.materials.contains_key(&request.material) {
+        return Err(StorageError::bad_request(format!(
+            "crypto resource-key generation failed: invalid wrapped material {}: material already exists",
+            request.material,
+        )));
+    }
+    let wrapping_material = settings
+        .crypto
+        .materials
+        .get(&request.wrapped_by)
+        .ok_or_else(|| {
+            StorageError::bad_request(format!(
+                "crypto resource-key generation failed: unknown wrapping material {} for generated material {}",
+                request.wrapped_by, request.material,
+            ))
+        })?;
+    if wrapping_material.kind != "wrapping_key_32" {
+        return Err(StorageError::bad_request(format!(
+            "crypto resource-key generation failed: wrapping material {} has unsupported kind {}",
+            request.wrapped_by, wrapping_material.kind,
+        )));
+    }
+    if request.dry_run {
+        return Ok(RuntimeResourceKeyGenerateResponse {
+            wrapped_by: request.wrapped_by,
+            dry_run: true,
+            settings_mutated: false,
+            material_count: 1,
+            estimated_external_calls: 1,
+            materials: BTreeMap::new(),
+        });
+    }
     let material = generate_wrapped_runtime_resource_key_material(
         &settings.crypto,
         &request.material,
@@ -439,7 +476,10 @@ fn build_runtime_resource_key_generate_response(
 
     Ok(RuntimeResourceKeyGenerateResponse {
         wrapped_by: request.wrapped_by,
+        dry_run: false,
         settings_mutated: false,
+        material_count: materials.len(),
+        estimated_external_calls: 1,
         materials,
     })
 }
@@ -470,6 +510,7 @@ fn runtime_resource_key_generate_request_audit_metadata(
         ("wrapped_by".to_string(), request.wrapped_by.clone()),
         ("rk_epoch".to_string(), request.rk_epoch.to_string()),
         ("scope".to_string(), request.scope.clone()),
+        ("dry_run".to_string(), request.dry_run.to_string()),
     ])
 }
 
@@ -479,9 +520,14 @@ fn runtime_resource_key_generate_response_audit_metadata(
     let mut metadata = BTreeMap::from([
         ("operation".to_string(), "generate".to_string()),
         ("wrapped_by".to_string(), response.wrapped_by.clone()),
+        ("dry_run".to_string(), response.dry_run.to_string()),
         (
             "material_count".to_string(),
-            response.materials.len().to_string(),
+            response.material_count.to_string(),
+        ),
+        (
+            "estimated_external_calls".to_string(),
+            response.estimated_external_calls.to_string(),
         ),
         (
             "settings_mutated".to_string(),
@@ -1368,12 +1414,16 @@ mod tests {
                 wrapped_by: "tenant-a/mk-v1".to_string(),
                 rk_epoch: 4,
                 scope: "collection:docs/payload:body".to_string(),
+                dry_run: false,
             },
         )
         .unwrap();
 
+        assert!(!response.dry_run);
         assert!(!response.settings_mutated);
         assert_eq!(response.wrapped_by, "tenant-a/mk-v1");
+        assert_eq!(response.material_count, 1);
+        assert_eq!(response.estimated_external_calls, 1);
         assert_eq!(
             settings
                 .crypto
@@ -1394,10 +1444,65 @@ mod tests {
     }
 
     #[test]
+    fn runtime_generate_dry_run_reports_external_calls_without_wrapping() {
+        let mut settings = Settings::new(None).unwrap();
+        settings.crypto = CryptoSettings {
+            allow_inline_key_material: true,
+            instances: HashMap::new(),
+            backends: HashMap::new(),
+            materials: HashMap::from([(
+                "tenant-a/mk-v1".to_string(),
+                CryptoMaterialConfig {
+                    kind: "wrapping_key_32".to_string(),
+                    source: Some("external-kms-without-local-secret".to_string()),
+                    ..CryptoMaterialConfig::default()
+                },
+            )]),
+        };
+
+        let response = build_runtime_resource_key_generate_response(
+            &settings,
+            RuntimeResourceKeyGenerateRequest {
+                material: "tenant-a/payload-rk-v4".to_string(),
+                wrapped_by: "tenant-a/mk-v1".to_string(),
+                rk_epoch: 4,
+                scope: "collection:docs/payload:body".to_string(),
+                dry_run: true,
+            },
+        )
+        .expect("dry-run should not call the external wrapping provider");
+
+        assert!(response.dry_run);
+        assert!(!response.settings_mutated);
+        assert_eq!(response.material_count, 1);
+        assert_eq!(response.estimated_external_calls, 1);
+        assert!(
+            response.materials.is_empty(),
+            "dry-run must not return secret-bearing material patches",
+        );
+
+        let err = build_runtime_resource_key_generate_response(
+            &settings,
+            RuntimeResourceKeyGenerateRequest {
+                material: "tenant-a/payload-rk-v4".to_string(),
+                wrapped_by: "tenant-a/mk-v1".to_string(),
+                rk_epoch: 4,
+                scope: "collection:docs/payload:body".to_string(),
+                dry_run: false,
+            },
+        )
+        .expect_err("non-dry-run must call and reject the unsupported provider");
+        assert!(err.to_string().contains("generation failed"), "{err}");
+    }
+
+    #[test]
     fn runtime_resource_key_admin_debug_redacts_wrapped_material() {
         let generate_response = RuntimeResourceKeyGenerateResponse {
             wrapped_by: "tenant-a/mk-v1".to_string(),
+            dry_run: false,
             settings_mutated: false,
+            material_count: 1,
+            estimated_external_calls: 1,
             materials: BTreeMap::from([(
                 "tenant-a/payload-rk-v4".to_string(),
                 RuntimeResourceKeyRewrapMaterialPatch {
@@ -1448,7 +1553,10 @@ mod tests {
     fn runtime_resource_key_admin_audit_metadata_excludes_wrapped_material() {
         let generate_response = RuntimeResourceKeyGenerateResponse {
             wrapped_by: "tenant-a/mk-v1".to_string(),
+            dry_run: false,
             settings_mutated: false,
+            material_count: 1,
+            estimated_external_calls: 1,
             materials: BTreeMap::from([(
                 "tenant-a/payload-rk-v4".to_string(),
                 RuntimeResourceKeyRewrapMaterialPatch {
@@ -1473,6 +1581,16 @@ mod tests {
         assert_eq!(
             generate_metadata.get("wrapped_by").map(String::as_str),
             Some("tenant-a/mk-v1")
+        );
+        assert_eq!(
+            generate_metadata.get("dry_run").map(String::as_str),
+            Some("false")
+        );
+        assert_eq!(
+            generate_metadata
+                .get("estimated_external_calls")
+                .map(String::as_str),
+            Some("1")
         );
         assert_eq!(
             generate_metadata.get("rk_epochs").map(String::as_str),
@@ -1547,6 +1665,7 @@ mod tests {
                 wrapped_by: "tenant-a/mk-v1".to_string(),
                 rk_epoch: 4,
                 scope: "collection:docs/payload:body".to_string(),
+                dry_run: false,
             },
         )
         .expect_err("duplicate generated material id must fail");
@@ -1562,6 +1681,7 @@ mod tests {
                 wrapped_by: "tenant-a/mk-v1".to_string(),
                 rk_epoch: 0,
                 scope: "collection:docs/payload:body".to_string(),
+                dry_run: false,
             },
         )
         .expect_err("zero resource-key epoch must fail validation");
