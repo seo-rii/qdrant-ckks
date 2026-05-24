@@ -820,9 +820,13 @@ Server-side inference is also a plaintext boundary. If clients submit
 embed that input before CKKS encryption or search scoring. The remote inference
 HTTP client does not follow redirects, and request-provided `*-api-key` headers
 are forwarded only when their exact header names are listed in
-`inference.allowed_api_key_headers`. Leave that list empty for zero-trust
-deployments and require clients to submit dense vectors or client-encrypted CKKS
-query envelopes produced outside Qdrant.
+`inference.allowed_api_key_headers`. Remote inference URLs must use HTTPS unless
+they target loopback HTTP for local development. Non-loopback endpoints must set
+`inference.expected_host` to the exact configured URL authority, including port
+when present; Qdrant rejects the endpoint before sending inference input or
+forwarding tokens if the URL host drifts. Leave `allowed_api_key_headers` empty
+for zero-trust deployments and require clients to submit dense vectors or
+client-encrypted CKKS query envelopes produced outside Qdrant.
 
 Collection encryption rules and runtime instances must use the same explicit
 provider instance and `key_id`; runtime validation rejects missing instances,

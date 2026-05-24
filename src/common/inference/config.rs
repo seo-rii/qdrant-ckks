@@ -9,6 +9,8 @@ pub struct InferenceConfig {
     pub token: Option<String>,
     #[serde(default)]
     pub allowed_api_key_headers: Vec<String>,
+    #[serde(default)]
+    pub expected_host: Option<String>,
 }
 
 impl fmt::Debug for InferenceConfig {
@@ -29,6 +31,7 @@ impl fmt::Debug for InferenceConfig {
             .field("timeout", &self.timeout)
             .field("token", &self.token.as_ref().map(|_| "[redacted]"))
             .field("allowed_api_key_headers", &self.allowed_api_key_headers)
+            .field("expected_host", &self.expected_host)
             .finish()
     }
 }
@@ -40,6 +43,7 @@ impl InferenceConfig {
             timeout: None,
             token: None,
             allowed_api_key_headers: Vec::new(),
+            expected_host: None,
         }
     }
 }
@@ -58,12 +62,15 @@ mod tests {
             timeout: Some(10),
             token: Some("qdrant-sec-inference-config-token-sentinel".to_string()),
             allowed_api_key_headers: vec!["openai-api-key".to_string()],
+            expected_host: Some("inference.local".to_string()),
         };
 
         let rendered = format!("{config:?}");
 
         assert!(rendered.contains("inference.local"), "{rendered}");
         assert!(rendered.contains("openai-api-key"), "{rendered}");
+        assert!(rendered.contains("expected_host"), "{rendered}");
+        assert!(rendered.contains("inference.local"), "{rendered}");
         assert!(rendered.contains("[redacted]"), "{rendered}");
         assert!(!rendered.contains("inference-user"), "{rendered}");
         assert!(!rendered.contains("inference-password"), "{rendered}");

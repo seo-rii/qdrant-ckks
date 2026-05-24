@@ -119,6 +119,7 @@ impl InferenceService {
             timeout,
             token: _,
             allowed_api_key_headers: _,
+            expected_host: _,
         } = &config;
 
         let timeout = timeout.unwrap_or(DEFAULT_INFERENCE_TIMEOUT_SECS);
@@ -186,6 +187,7 @@ impl InferenceService {
                 "InferenceService configuration error: address must not include query parameters or fragments",
             ));
         }
+        validate_expected_inference_host(&parsed, self.config.expected_host.as_deref())?;
         Ok(())
     }
 
@@ -439,6 +441,71 @@ fn is_loopback_http_url(parsed: &reqwest::Url) -> bool {
         })
 }
 
+fn is_loopback_inference_url(parsed: &reqwest::Url) -> bool {
+    is_loopback_http_url(parsed)
+        || parsed.host_str().is_some_and(|host| {
+            host.eq_ignore_ascii_case("localhost")
+                || host == "127.0.0.1"
+                || host == "::1"
+                || host == "[::1]"
+        })
+}
+
+fn inference_url_authority(parsed: &reqwest::Url) -> Option<String> {
+    let host = parsed.host_str()?;
+    Some(match parsed.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_string(),
+    })
+}
+
+fn is_valid_expected_inference_host(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 253
+        && !value.contains("://")
+        && !value.contains('/')
+        && !value.contains('?')
+        && !value.contains('#')
+        && !value
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+}
+
+fn validate_expected_inference_host(
+    parsed: &reqwest::Url,
+    expected_host: Option<&str>,
+) -> Result<(), StorageError> {
+    if expected_host.is_some_and(|host| !is_valid_expected_inference_host(host)) {
+        return Err(StorageError::service_error(
+            "InferenceService configuration error: expected_host is invalid",
+        ));
+    }
+
+    if is_loopback_inference_url(parsed) && expected_host.is_none() {
+        return Ok(());
+    }
+
+    let Some(expected_host) = expected_host else {
+        return Err(StorageError::service_error(
+            "InferenceService configuration error: expected_host is required for non-loopback endpoints",
+        ));
+    };
+
+    let Some(actual_host) = inference_url_authority(parsed) else {
+        return Err(StorageError::service_error(
+            "InferenceService configuration error: address must include a host",
+        ));
+    };
+
+    if !actual_host.eq_ignore_ascii_case(expected_host) {
+        return Err(StorageError::service_error(
+            "InferenceService configuration error: address host does not match expected_host",
+        ));
+    }
+
+    Ok(())
+}
+
 /// 2-way merge of lists with `PositionItems`. Also checks for skipped items and returns `None` in case an item is left out.
 fn merge_position_items<I>(
     left: impl IntoIterator<Item = I>,
@@ -556,19 +623,34 @@ mod test {
 
     #[test]
     fn inference_service_rejects_unsafe_endpoint_urls_without_echoing_secrets() {
-        for address in [
-            "ftp://inference.local/v1",
-            "http://inference.local/v1",
-            "https://user:password@inference.local/v1",
-            "https://inference.local/v1?token=qdrant-sec-inference-url-token",
-            "https://inference.local/v1#qdrant-sec-inference-url-fragment",
-            "not a url qdrant-sec-inference-url-token",
+        for (address, expected_host) in [
+            ("ftp://inference.local/v1", Some("inference.local")),
+            ("http://inference.local/v1", Some("inference.local")),
+            ("https://inference.local/v1", None),
+            ("https://wrong.inference.local/v1", Some("inference.local")),
+            (
+                "https://user:password@inference.local/v1",
+                Some("inference.local"),
+            ),
+            (
+                "https://inference.local/v1?token=qdrant-sec-inference-url-token",
+                Some("inference.local"),
+            ),
+            (
+                "https://inference.local/v1#qdrant-sec-inference-url-fragment",
+                Some("inference.local"),
+            ),
+            (
+                "not a url qdrant-sec-inference-url-token",
+                Some("inference.local"),
+            ),
         ] {
             let service = InferenceService::new(Some(InferenceConfig {
                 address: Some(address.to_string()),
                 timeout: None,
                 token: None,
                 allowed_api_key_headers: Vec::new(),
+                expected_host: expected_host.map(str::to_string),
             }));
 
             let err = service
@@ -597,6 +679,7 @@ mod test {
             timeout: None,
             token: None,
             allowed_api_key_headers: Vec::new(),
+            expected_host: Some("inference.local".to_string()),
         }));
 
         service
@@ -616,6 +699,7 @@ mod test {
                 timeout: None,
                 token: None,
                 allowed_api_key_headers: Vec::new(),
+                expected_host: None,
             }));
 
             service
@@ -722,6 +806,7 @@ mod test {
             timeout: None,
             token: Some("inference-token".to_string()),
             allowed_api_key_headers: vec!["openai-api-key".to_string()],
+            expected_host: None,
         }));
 
         let mut api_keys = InferenceApiKeys::new(None);
@@ -760,6 +845,7 @@ mod test {
             timeout: None,
             token: None,
             allowed_api_key_headers: Vec::new(),
+            expected_host: None,
         }));
 
         let err = service
@@ -809,6 +895,7 @@ mod test {
             timeout: None,
             token: None,
             allowed_api_key_headers: vec!["cohere-api-key".to_string()],
+            expected_host: None,
         }));
 
         let mut api_keys = InferenceApiKeys::new(None);
@@ -926,6 +1013,7 @@ mod test {
             timeout: None,
             token: Some(String::default()),
             allowed_api_key_headers: Vec::new(),
+            expected_host: None,
         };
 
         let service = InferenceService::new(Some(config));
