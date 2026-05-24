@@ -1,3 +1,4 @@
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use collection::collection::Collection;
@@ -60,6 +61,20 @@ pub fn validate_snapshot_peer_base_url_policy(
             "{operation} peer URL {} must use http or https",
             redacted_snapshot_url_for_message(url),
         )));
+    }
+    if url.scheme() == "http" {
+        let loopback_http = url.host_str().is_some_and(|host| {
+            host.eq_ignore_ascii_case("localhost") || {
+                host.parse::<IpAddr>()
+                    .is_ok_and(|address| address.is_loopback())
+            }
+        });
+        if !loopback_http {
+            return Err(StorageError::bad_input(format!(
+                "{operation} peer URL {} must use https unless the host is loopback",
+                redacted_snapshot_url_for_message(url),
+            )));
+        }
     }
     if !url.username().is_empty() || url.password().is_some() {
         return Err(StorageError::bad_input(format!(
@@ -672,13 +687,17 @@ mod tests {
         )
         .expect("origin-only HTTPS peer URL should be allowed");
         validate_snapshot_peer_base_url_policy(
-            &Url::parse("http://peer.example.test:6333/").unwrap(),
+            &Url::parse("http://127.0.0.1:6333/").unwrap(),
             "partial snapshot recover_from",
         )
-        .expect("origin-only HTTP peer URL should be allowed");
+        .expect("origin-only loopback HTTP peer URL should be allowed for local development");
 
         for (url, expected) in [
             ("file:///tmp/snapshot", "must use http or https"),
+            (
+                "http://peer.example.test:6333/",
+                "must use https unless the host is loopback",
+            ),
             (
                 "https://peer.example.test/collections/docs",
                 "without a path",
