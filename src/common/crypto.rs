@@ -239,6 +239,16 @@ fn zeroizing_json_body<T: Serialize>(
     Ok(body)
 }
 
+fn read_bounded_zeroizing_response_body<R: Read>(
+    reader: R,
+    max_bytes: u64,
+) -> std::io::Result<Zeroizing<Vec<u8>>> {
+    let mut limited_reader = reader.take(max_bytes + 1);
+    let mut body = Zeroizing::new(Vec::new());
+    limited_reader.read_to_end(&mut body)?;
+    Ok(body)
+}
+
 fn unsupported_instance_option(options: &Value, allowed_options: &[&str]) -> Option<String> {
     let options = options.as_object()?;
     options
@@ -5754,15 +5764,13 @@ impl AwsKmsMasterKeyProvider {
         if !response.status().is_success() {
             return Err(aws_kms_operation_error(operation));
         }
-        let mut limited_response = response.take(VAULT_TRANSIT_RESPONSE_MAX_BYTES + 1);
-        let mut body_bytes = Vec::new();
-        limited_response
-            .read_to_end(&mut body_bytes)
-            .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)?;
+        let body_bytes =
+            read_bounded_zeroizing_response_body(response, VAULT_TRANSIT_RESPONSE_MAX_BYTES)
+                .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)?;
         if body_bytes.len() as u64 > VAULT_TRANSIT_RESPONSE_MAX_BYTES {
             return Err(qdrant_sec::EncryptionError::InvalidEncoding);
         }
-        serde_json::from_slice::<Value>(&body_bytes)
+        serde_json::from_slice::<Value>(body_bytes.as_slice())
             .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)
     }
 }
@@ -6141,15 +6149,13 @@ impl VaultTransitMasterKeyProvider {
                 _ => qdrant_sec::EncryptionError::SealFailed,
             });
         }
-        let mut limited_response = response.take(VAULT_TRANSIT_RESPONSE_MAX_BYTES + 1);
-        let mut body_bytes = Vec::new();
-        limited_response
-            .read_to_end(&mut body_bytes)
-            .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)?;
+        let body_bytes =
+            read_bounded_zeroizing_response_body(response, VAULT_TRANSIT_RESPONSE_MAX_BYTES)
+                .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)?;
         if body_bytes.len() as u64 > VAULT_TRANSIT_RESPONSE_MAX_BYTES {
             return Err(qdrant_sec::EncryptionError::InvalidEncoding);
         }
-        serde_json::from_slice::<Value>(&body_bytes)
+        serde_json::from_slice::<Value>(body_bytes.as_slice())
             .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)
     }
 }
@@ -6658,14 +6664,16 @@ fn read_material_vault_kv2_to_string(
             path: redacted_url,
         });
     }
-    let mut limited_response = response.take(VAULT_KV2_RESPONSE_MAX_BYTES + 1);
-    let mut body_bytes = Vec::new();
-    limited_response.read_to_end(&mut body_bytes).map_err(|_| {
-        PayloadWriteSetupError::UnreadableMaterialFile {
-            material: material_name.to_string(),
-            path: redacted_url.clone(),
-        }
-    })?;
+    let body_bytes =
+        match read_bounded_zeroizing_response_body(response, VAULT_KV2_RESPONSE_MAX_BYTES) {
+            Ok(body) => body,
+            Err(_) => {
+                return Err(PayloadWriteSetupError::UnreadableMaterialFile {
+                    material: material_name.to_string(),
+                    path: redacted_url.clone(),
+                });
+            }
+        };
     if body_bytes.len() as u64 > VAULT_KV2_RESPONSE_MAX_BYTES {
         return Err(PayloadWriteSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
@@ -6673,7 +6681,7 @@ fn read_material_vault_kv2_to_string(
             reason: "Vault KV v2 response exceeds maximum size".to_string(),
         });
     }
-    let body = serde_json::from_slice::<Value>(&body_bytes).map_err(|_| {
+    let body = serde_json::from_slice::<Value>(body_bytes.as_slice()).map_err(|_| {
         PayloadWriteSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
             path: redacted_url.clone(),
@@ -10509,6 +10517,24 @@ mod tests {
     }
 
     fn assert_zeroizing_request_buffer(_: &Zeroizing<Vec<u8>>) {}
+
+    fn assert_zeroizing_response_buffer(_: &Zeroizing<Vec<u8>>) {}
+
+    #[test]
+    fn external_provider_response_bodies_keep_secret_material_in_zeroizing_buffers() {
+        let response = read_bounded_zeroizing_response_body(
+            std::io::Cursor::new(br#"{"Plaintext":"resource-key-sentinel"}"#),
+            VAULT_TRANSIT_RESPONSE_MAX_BYTES,
+        )
+        .unwrap();
+
+        assert_zeroizing_response_buffer(&response);
+        assert!(
+            std::str::from_utf8(response.as_slice())
+                .unwrap()
+                .contains("resource-key-sentinel")
+        );
+    }
 
     #[test]
     fn external_wrap_request_bodies_keep_plaintext_resource_key_in_zeroizing_buffers() {
