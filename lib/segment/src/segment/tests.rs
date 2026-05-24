@@ -30,16 +30,21 @@ use crate::entry::entry_point::{
 };
 use crate::entry::{SnapshotEntry as _, StorageSegmentEntry as _};
 use crate::id_tracker::IdTracker;
+use crate::index::hnsw_index::ckks_ciphertext_graph::{
+    CKKS_VECTOR_SIDECAR_MARKER, CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD, CkksCiphertextVectorIndex,
+    ckks_ciphertext_records_from_payload_index,
+};
 use crate::index::sparse_index::sparse_index_config::{SparseIndexConfig, SparseIndexType};
+use crate::index::{VectorIndex, VectorIndexEnum};
 use crate::json_path::JsonPath;
 use crate::segment_constructor::simple_segment_constructor::{
     VECTOR1_NAME, VECTOR2_NAME, build_multivec_segment, build_simple_segment,
 };
-use crate::segment_constructor::{build_segment, load_segment};
+use crate::segment_constructor::{build_segment, get_vector_index_path, load_segment};
 use crate::types::{
-    Condition, Distance, ExtendedPointId, FieldCondition, Filter, HasIdCondition, Indexes, Match,
-    Payload, PayloadContainer, PayloadFieldSchema, PayloadSchemaType, PointIdType, SearchParams,
-    SnapshotFormat, SparseVectorDataConfig, SparseVectorStorageType, ValueVariants,
+    Condition, Distance, ExtendedPointId, FieldCondition, Filter, HasIdCondition, HnswConfig,
+    Indexes, Match, Payload, PayloadContainer, PayloadFieldSchema, PayloadSchemaType, PointIdType,
+    SearchParams, SnapshotFormat, SparseVectorDataConfig, SparseVectorStorageType, ValueVariants,
     VectorDataConfig, VectorStorageType, WithPayload, WithVector,
 };
 use crate::utils::maybe_arc::MaybeArc;
@@ -184,6 +189,140 @@ fn test_from_filter_attributes() {
         )
         .unwrap();
     assert!(results_with_invalid_filter.is_empty());
+}
+
+#[test]
+fn ckks_ciphertext_index_refreshes_when_sidecar_payload_changes() {
+    init_logger();
+    let dir = Builder::new().prefix("ckks_segment_dir").tempdir().unwrap();
+    let hw_counter = HardwareCounterCell::new();
+    let mut segment = build_simple_segment(dir.path(), 2, Distance::Dot).unwrap();
+
+    segment
+        .upsert_point(1, 1.into(), only_default_vector(&[1.0, 0.0]), &hw_counter)
+        .unwrap();
+    segment
+        .upsert_point(2, 2.into(), only_default_vector(&[0.0, 1.0]), &hw_counter)
+        .unwrap();
+
+    let sidecar_payload = |ciphertext: &str| -> Payload {
+        serde_json::from_value(serde_json::json!({
+            CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD: {
+                DEFAULT_VECTOR_NAME: {
+                    CKKS_VECTOR_SIDECAR_MARKER: {
+                        "version": 1,
+                        "scheme": "openfhe-ckks",
+                        "envelope": {
+                            "version": 1,
+                            "algorithm": "AES-256-GCM",
+                            "key_id": "tenant-a:vector",
+                            "material_fingerprint": "tenant-a/vector@v1",
+                            "rk_id": "tenant-a/vector-rk@v1",
+                            "rk_epoch": 1,
+                            "nonce": "AAAAAAAAAAAAAAAA",
+                            "ciphertext": ciphertext
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap()
+    };
+
+    segment
+        .set_full_payload(
+            3,
+            1.into(),
+            &sidecar_payload("AAAAAAAAAAAAAAAAAAAAAA"),
+            &hw_counter,
+        )
+        .unwrap();
+    segment
+        .set_full_payload(
+            4,
+            2.into(),
+            &sidecar_payload("AQEBAQEBAQEBAQEBAQEBAQ"),
+            &hw_counter,
+        )
+        .unwrap();
+
+    let hnsw_config = HnswConfig {
+        m: 2,
+        ..HnswConfig::default()
+    };
+    segment
+        .segment_config
+        .vector_data
+        .get_mut(DEFAULT_VECTOR_NAME)
+        .unwrap()
+        .index = Indexes::CkksCiphertextHnsw {
+        hnsw_config,
+        vector_name: DEFAULT_VECTOR_NAME.to_string(),
+    };
+    let records = ckks_ciphertext_records_from_payload_index(
+        &*segment.id_tracker.borrow(),
+        &segment.payload_index.borrow(),
+        DEFAULT_VECTOR_NAME,
+        &hw_counter,
+    )
+    .unwrap();
+    let mut index =
+        CkksCiphertextVectorIndex::build_optimizer_candidate_graph(records, hnsw_config.m).unwrap();
+    let graph_file = CkksCiphertextVectorIndex::graph_file_path(get_vector_index_path(
+        &segment.segment_path,
+        DEFAULT_VECTOR_NAME,
+    ));
+    index.persist_graph_file(&graph_file).unwrap();
+    *segment.vector_data[DEFAULT_VECTOR_NAME]
+        .vector_index
+        .borrow_mut() = VectorIndexEnum::CkksCiphertextHnsw(index);
+
+    let indexed_vector_count = |segment: &Segment| {
+        let vector_index = segment.vector_data[DEFAULT_VECTOR_NAME]
+            .vector_index
+            .borrow();
+        match &*vector_index {
+            VectorIndexEnum::CkksCiphertextHnsw(index) => index.indexed_vector_count(),
+            _ => panic!("expected CKKS ciphertext index"),
+        }
+    };
+    assert_eq!(indexed_vector_count(&segment), 2);
+
+    segment
+        .set_full_payload(5, 1.into(), &Payload::default(), &hw_counter)
+        .unwrap();
+    assert_eq!(
+        indexed_vector_count(&segment),
+        1,
+        "removing an encrypted vector sidecar must refresh the segment-native CKKS index"
+    );
+
+    let reopened_records = ckks_ciphertext_records_from_payload_index(
+        &*segment.id_tracker.borrow(),
+        &segment.payload_index.borrow(),
+        DEFAULT_VECTOR_NAME,
+        &hw_counter,
+    )
+    .unwrap();
+    let reopened = CkksCiphertextVectorIndex::open_graph_file(reopened_records, &graph_file)
+        .unwrap()
+        .expect("refreshed CKKS ciphertext graph file must reopen");
+    assert_eq!(reopened.indexed_vector_count(), 1);
+
+    segment
+        .set_payload(
+            6,
+            1.into(),
+            &sidecar_payload("AgICAgICAgICAgICAgICAg"),
+            &None,
+            &hw_counter,
+        )
+        .unwrap();
+    assert_eq!(
+        indexed_vector_count(&segment),
+        2,
+        "adding an encrypted vector sidecar must refresh the segment-native CKKS index"
+    );
 }
 
 #[rstest]

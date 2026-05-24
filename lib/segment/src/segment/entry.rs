@@ -28,16 +28,21 @@ use crate::entry::entry_point::{
 };
 use crate::id_tracker::{IdTracker, PointMappingsGuard};
 use crate::index::field_index::{CardinalityEstimation, FieldIndex};
-use crate::index::hnsw_index::ckks_ciphertext_graph::ckks_ciphertext_records_from_payload_index;
+use crate::index::hnsw_index::ckks_ciphertext_graph::{
+    CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD, CkksCiphertextVectorIndex,
+    ckks_ciphertext_records_from_payload_index,
+};
 use crate::index::query_estimator::adjust_for_deferred_points;
-use crate::index::{BuildIndexResult, PayloadIndex, VectorIndex};
+use crate::index::{BuildIndexResult, PayloadIndex, VectorIndex, VectorIndexEnum};
 use crate::json_path::JsonPath;
 use crate::payload_storage::PayloadStorage;
+use crate::segment_constructor::get_vector_index_path;
 use crate::telemetry::SegmentTelemetry;
 use crate::types::{
-    ExtendedPointId, Filter, Payload, PayloadFieldSchema, PayloadIndexInfo, PayloadKeyType,
-    PayloadKeyTypeRef, PointIdType, ScoredPoint, SearchParams, SegmentConfig, SegmentInfo,
-    SegmentType, SeqNumberType, VectorDataInfo, VectorName, VectorNameBuf, WithPayload, WithVector,
+    ExtendedPointId, Filter, Indexes, Payload, PayloadFieldSchema, PayloadIndexInfo,
+    PayloadKeyType, PayloadKeyTypeRef, PointIdType, ScoredPoint, SearchParams, SegmentConfig,
+    SegmentInfo, SegmentType, SeqNumberType, VectorDataInfo, VectorName, VectorNameBuf,
+    WithPayload, WithVector,
 };
 use crate::vector_storage::VectorStorage;
 
@@ -57,6 +62,60 @@ impl Segment {
             .into_iter()
             .map(|record| record.ciphertext.len())
             .sum())
+    }
+
+    fn payload_contains_ckks_vector_sidecar(payload: &Payload) -> bool {
+        payload.0.contains_key(CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD)
+    }
+
+    fn payload_key_touches_ckks_vector_sidecar(key: &JsonPath) -> bool {
+        key.first_key == CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD
+    }
+
+    fn refresh_ckks_ciphertext_indexes_after_sidecar_payload_mutation(
+        &mut self,
+        op_num: SeqNumberType,
+    ) -> OperationResult<()> {
+        let ckks_indexes = self
+            .segment_config
+            .vector_data
+            .iter()
+            .filter_map(
+                |(index_vector_name, vector_config)| match &vector_config.index {
+                    Indexes::CkksCiphertextHnsw {
+                        hnsw_config,
+                        vector_name,
+                    } => Some((index_vector_name.clone(), *hnsw_config, vector_name.clone())),
+                    _ => None,
+                },
+            )
+            .collect::<Vec<_>>();
+
+        for (index_vector_name, hnsw_config, sidecar_vector_name) in ckks_indexes {
+            let records = ckks_ciphertext_records_from_payload_index(
+                &*self.id_tracker.borrow(),
+                &self.payload_index.borrow(),
+                &sidecar_vector_name,
+                &HardwareCounterCell::disposable(),
+            )?;
+            let mut index =
+                CkksCiphertextVectorIndex::build_optimizer_candidate_graph(records, hnsw_config.m)?;
+            let graph_file = CkksCiphertextVectorIndex::graph_file_path(get_vector_index_path(
+                &self.segment_path,
+                &index_vector_name,
+            ));
+            index.persist_graph_file(&graph_file)?;
+            let vector_data = self.vector_data.get(&index_vector_name).ok_or_else(|| {
+                OperationError::service_error(format!(
+                    "CKKS ciphertext index vector data '{index_vector_name}' is missing"
+                ))
+            })?;
+            *vector_data.vector_index.borrow_mut() = VectorIndexEnum::CkksCiphertextHnsw(index);
+            self.version_tracker
+                .set_vector(&index_vector_name, Some(op_num));
+        }
+
+        Ok(())
     }
 }
 
@@ -1083,12 +1142,24 @@ impl SegmentEntry for Segment {
         let internal_id = self.id_tracker.borrow().internal_id(point_id);
         self.handle_point_version_and_failure(op_num, internal_id, |segment| match internal_id {
             Some(internal_id) => {
+                let old_payload_has_sidecar = Self::payload_contains_ckks_vector_sidecar(
+                    &segment
+                        .payload_index
+                        .borrow()
+                        .get_payload(internal_id, hw_counter)?,
+                );
                 segment.payload_index.borrow_mut().overwrite_payload(
                     internal_id,
                     full_payload,
                     hw_counter,
                 )?;
                 segment.version_tracker.set_payload(Some(op_num));
+                if old_payload_has_sidecar
+                    || Self::payload_contains_ckks_vector_sidecar(full_payload)
+                {
+                    segment
+                        .refresh_ckks_ciphertext_indexes_after_sidecar_payload_mutation(op_num)?;
+                }
 
                 Ok((true, Some(internal_id)))
             }
@@ -1109,6 +1180,10 @@ impl SegmentEntry for Segment {
         let internal_id = self.id_tracker.borrow().internal_id(point_id);
         self.handle_point_version_and_failure(op_num, internal_id, |segment| match internal_id {
             Some(internal_id) => {
+                let payload_touches_ckks_sidecar = key
+                    .as_ref()
+                    .is_some_and(Self::payload_key_touches_ckks_vector_sidecar)
+                    || Self::payload_contains_ckks_vector_sidecar(payload);
                 segment.payload_index.borrow_mut().set_payload(
                     internal_id,
                     payload,
@@ -1116,6 +1191,10 @@ impl SegmentEntry for Segment {
                     hw_counter,
                 )?;
                 segment.version_tracker.set_payload(Some(op_num));
+                if payload_touches_ckks_sidecar {
+                    segment
+                        .refresh_ckks_ciphertext_indexes_after_sidecar_payload_mutation(op_num)?;
+                }
 
                 Ok((true, Some(internal_id)))
             }
@@ -1140,6 +1219,10 @@ impl SegmentEntry for Segment {
                     .borrow_mut()
                     .delete_payload(internal_id, key, hw_counter)?;
                 segment.version_tracker.set_payload(Some(op_num));
+                if Self::payload_key_touches_ckks_vector_sidecar(key) {
+                    segment
+                        .refresh_ckks_ciphertext_indexes_after_sidecar_payload_mutation(op_num)?;
+                }
 
                 Ok((true, Some(internal_id)))
             }
@@ -1158,11 +1241,21 @@ impl SegmentEntry for Segment {
         let internal_id = self.id_tracker.borrow().internal_id(point_id);
         self.handle_point_version_and_failure(op_num, internal_id, |segment| match internal_id {
             Some(internal_id) => {
+                let old_payload_has_sidecar = Self::payload_contains_ckks_vector_sidecar(
+                    &segment
+                        .payload_index
+                        .borrow()
+                        .get_payload(internal_id, hw_counter)?,
+                );
                 segment
                     .payload_index
                     .borrow_mut()
                     .clear_payload(internal_id, hw_counter)?;
                 segment.version_tracker.set_payload(Some(op_num));
+                if old_payload_has_sidecar {
+                    segment
+                        .refresh_ckks_ciphertext_indexes_after_sidecar_payload_mutation(op_num)?;
+                }
 
                 Ok((true, Some(internal_id)))
             }
