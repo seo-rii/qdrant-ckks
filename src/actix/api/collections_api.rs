@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 #[cfg(unix)]
@@ -624,8 +624,79 @@ fn validate_payload_crypto_migration_run_request_for_config(
     target_epoch: u64,
     request: &RunPayloadCryptoMigration,
     encryption: &collection::config::CollectionEncryptionConfig,
+    settings: &Settings,
 ) -> Result<(), CollectionError> {
     validate_payload_crypto_migration_run_request(migration_state, request)?;
+    let mut active_material_refs = BTreeSet::new();
+    let mut retired_material_refs = BTreeSet::new();
+    for rule in &encryption.rules {
+        if !matches!(rule.selector, EncryptionSelector::PayloadPaths { .. }) {
+            continue;
+        }
+        let Some(instance) = settings.crypto.instances.get(&rule.instance) else {
+            return Err(CollectionError::bad_input(format!(
+                "payload crypto migration rule {} references unknown crypto instance {}",
+                rule.id, rule.instance,
+            )));
+        };
+        if instance.provider != "payload/aes-256-gcm@v1" {
+            continue;
+        }
+        let Some(active_material) = instance.materials.get("sym_key") else {
+            return Err(CollectionError::bad_input(format!(
+                "payload crypto migration rule {} instance {} must configure materials.sym_key",
+                rule.id, rule.instance,
+            )));
+        };
+        active_material_refs.insert(active_material.clone());
+
+        if let Some(retired_materials) = instance.options.get("retired_materials") {
+            let Some(retired_materials) = retired_materials.as_array() else {
+                return Err(CollectionError::bad_input(format!(
+                    "payload crypto migration rule {} instance {} has malformed retired_materials",
+                    rule.id, rule.instance,
+                )));
+            };
+            for retired_material in retired_materials {
+                let Some(material_ref) = retired_material
+                    .as_object()
+                    .and_then(|entry| entry.get("material"))
+                    .and_then(serde_json::Value::as_str)
+                else {
+                    return Err(CollectionError::bad_input(format!(
+                        "payload crypto migration rule {} instance {} has malformed retired_materials",
+                        rule.id, rule.instance,
+                    )));
+                };
+                retired_material_refs.insert(material_ref.to_string());
+            }
+        }
+    }
+    if active_material_refs.len() > 1 {
+        return Err(CollectionError::bad_input(
+            "payload crypto migration run currently requires a single active server-side payload resource key",
+        ));
+    }
+    if let Some(active_material_ref) = active_material_refs.iter().next()
+        && active_material_ref != &request.active_rk_id
+    {
+        return Err(CollectionError::bad_input(format!(
+            "payload crypto migration active_rk_id {} does not match runtime active material {}",
+            request.active_rk_id, active_material_ref,
+        )));
+    }
+    if migration_state == CryptoMigrationState::Rotating {
+        let retired_rk_id = request
+            .retired_rk_id
+            .as_ref()
+            .expect("retired_rk_id was validated above");
+        if !retired_material_refs.contains(retired_rk_id) {
+            return Err(CollectionError::bad_input(format!(
+                "payload crypto migration retired_rk_id {retired_rk_id} is not configured as a runtime retired material",
+            )));
+        }
+    }
+
     let preflight_plan = CryptoMigrationPlan {
         from: migration_state,
         to: payload_crypto_migration_completion_state(migration_state)?,
@@ -864,6 +935,7 @@ async fn run_payloads_for_crypto_migration(
             target_epoch,
             &request,
             &encryption,
+            settings.get_ref(),
         )
         .map_err(StorageError::from)?;
 
@@ -1474,16 +1546,18 @@ mod tests {
     #[test]
     fn payload_crypto_migration_run_preflights_request_before_rewrite() {
         let rotating = migration_config(CryptoMigrationState::Rotating, 4);
+        let settings = crypto_settings_for_manifest();
 
         let missing_retired = validate_payload_crypto_migration_run_request_for_config(
             CryptoMigrationState::Rotating,
             4,
             &RunPayloadCryptoMigration {
-                active_rk_id: "rk/docs/4".to_string(),
+                active_rk_id: "tenant-a/server-rk-v4".to_string(),
                 retired_rk_id: None,
                 dry_run: false,
             },
             &rotating,
+            &settings,
         );
         assert!(
             missing_retired.is_err(),
@@ -1499,21 +1573,39 @@ mod tests {
                 dry_run: false,
             },
             &rotating,
+            &settings,
         );
         assert!(
             malformed_active_rk.is_err(),
             "migration run must reject malformed active_rk_id before rewriting payloads",
         );
 
+        let wrong_retired_rk = validate_payload_crypto_migration_run_request_for_config(
+            CryptoMigrationState::Rotating,
+            4,
+            &RunPayloadCryptoMigration {
+                active_rk_id: "tenant-a/server-rk-v4".to_string(),
+                retired_rk_id: Some("tenant-a/server-rk-v2".to_string()),
+                dry_run: false,
+            },
+            &rotating,
+            &settings,
+        );
+        assert!(
+            wrong_retired_rk.is_err(),
+            "migration run must reject retired_rk_id that is not in runtime retired_materials",
+        );
+
         validate_payload_crypto_migration_run_request_for_config(
             CryptoMigrationState::Rotating,
             4,
             &RunPayloadCryptoMigration {
-                active_rk_id: "rk/docs/4".to_string(),
-                retired_rk_id: Some("rk/docs/3".to_string()),
+                active_rk_id: "tenant-a/server-rk-v4".to_string(),
+                retired_rk_id: Some("tenant-a/server-rk-v3".to_string()),
                 dry_run: false,
             },
             &rotating,
+            &settings,
         )
         .unwrap();
     }
