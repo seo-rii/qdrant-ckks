@@ -136,7 +136,7 @@ fn https_client_identity(cert: &Path, key: &Path) -> Result<reqwest::tls::Identi
         fs::read(cert).map_err(|err| Error::failed_to_read(err, "certificate", cert))?,
     );
 
-    let mut key_file = fs::File::open(key).map_err(|err| Error::failed_to_read(err, "key", key))?;
+    let mut key_file = open_https_client_key_file(key)?;
 
     // Concatenate certificate and key into a single PEM bytes
     io::copy(&mut key_file, &mut *identity_pem)
@@ -145,6 +145,24 @@ fn https_client_identity(cert: &Path, key: &Path) -> Result<reqwest::tls::Identi
     let identity = reqwest::Identity::from_pem(&identity_pem)?;
 
     Ok(identity)
+}
+
+fn open_https_client_key_file(key: &Path) -> Result<fs::File> {
+    #[cfg(unix)]
+    {
+        use fs_err::os::unix::fs::OpenOptionsExt;
+
+        fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+            .open(key)
+            .map_err(|err| Error::failed_to_read(err, "key", key))
+    }
+
+    #[cfg(not(unix))]
+    {
+        fs::File::open(key).map_err(|err| Error::failed_to_read(err, "key", key))
+    }
 }
 
 pub type Result<T, E = Error> = result::Result<T, E>;
@@ -188,7 +206,7 @@ mod tests {
     use fs_err as fs;
     use reqwest::StatusCode;
 
-    use super::{https_client, https_client_identity};
+    use super::{https_client, https_client_identity, open_https_client_key_file};
 
     #[tokio::test]
     async fn api_key_client_does_not_follow_redirects() {
@@ -233,6 +251,23 @@ mod tests {
         let rendered = err.to_string();
 
         assert!(!rendered.contains(private_key_sentinel), "{rendered}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn https_client_identity_rejects_symlink_private_key() {
+        let directory = tempfile::tempdir().unwrap();
+        let key_target = directory.path().join("target-key.pem");
+        let key_symlink = directory.path().join("key.pem");
+
+        fs::write(&key_target, b"not a real key").unwrap();
+        std::os::unix::fs::symlink(&key_target, &key_symlink).unwrap();
+
+        let err = open_https_client_key_file(&key_symlink)
+            .expect_err("HTTPS client private key symlink must be rejected");
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("failed to read HTTPS client key file"));
     }
 }
 
