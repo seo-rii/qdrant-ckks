@@ -1,11 +1,13 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::AtomicBool;
 
 use common::counter::hardware_counter::HardwareCounterCell;
-use common::types::PointOffsetType;
+use common::types::{DeferredBehavior, PointOffsetType};
 use qdrant_sec::{
     ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD, EncryptedCkksVector,
 };
 use segment::common::operation_error::OperationError;
+use segment::entry::ReadSegmentEntry;
 use segment::id_tracker::IdTracker as _;
 use segment::index::hnsw_index::ckks_ciphertext_graph::ckks_ciphertext_indexed_record_from_payload;
 use segment::index::{PayloadIndex as _, VectorIndexEnum};
@@ -38,7 +40,14 @@ impl LocalShard {
 
         for locked_segment in segments {
             let LockedSegment::Original(segment) = locked_segment else {
-                snapshot.complete = false;
+                let segment = locked_segment.get_read().read();
+                snapshot.residual_records.extend(
+                    ckks_ciphertext_residual_records_from_read_segment(
+                        &*segment,
+                        vector_name,
+                        shard_key.clone(),
+                    )?,
+                );
                 continue;
             };
             let segment = segment.read();
@@ -155,6 +164,53 @@ impl LocalShard {
     }
 }
 
+fn ckks_ciphertext_residual_records_from_read_segment(
+    segment: &dyn ReadSegmentEntry,
+    vector_name: &str,
+    shard_key: Option<ShardKey>,
+) -> CollectionResult<Vec<CkksCiphertextSegmentSearchRecord>> {
+    let mut records = Vec::new();
+    let point_ids = segment
+        .read_filtered(
+            None,
+            None,
+            None,
+            &AtomicBool::new(false),
+            &HardwareCounterCell::disposable(),
+            DeferredBehavior::Exclude,
+        )
+        .map_err(collection_error_from_operation_error)?;
+    for id in point_ids {
+        let payload = segment
+            .payload(id, &HardwareCounterCell::disposable())
+            .map_err(collection_error_from_operation_error)?;
+        let Some(encrypted) = ckks_encrypted_vector_from_payload(&payload, vector_name)? else {
+            continue;
+        };
+        let Some(indexed_record) =
+            ckks_ciphertext_indexed_record_from_payload(0, &payload, vector_name).map_err(
+                |err| {
+                    CollectionError::service_error(format!(
+                        "stored CKKS vector sidecar entry '{vector_name}' failed validation: {err}",
+                    ))
+                },
+            )?
+        else {
+            return Err(CollectionError::service_error(format!(
+                "stored CKKS vector sidecar entry '{vector_name}' disappeared during validation",
+            )));
+        };
+        records.push(CkksCiphertextSegmentSearchRecord {
+            id,
+            shard_key: shard_key.clone(),
+            point_id: id.to_string(),
+            indexed_record,
+            encrypted,
+        });
+    }
+    Ok(records)
+}
+
 fn ckks_encrypted_vector_from_payload(
     payload: &Payload,
     vector_name: &str,
@@ -187,4 +243,74 @@ fn ckks_encrypted_vector_from_payload(
 
 fn collection_error_from_operation_error(err: OperationError) -> CollectionError {
     CollectionError::service_error(err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use common::counter::hardware_counter::HardwareCounterCell;
+    use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, only_default_vector};
+    use segment::entry::SegmentEntry as _;
+    use segment::segment_constructor::simple_segment_constructor::build_simple_segment;
+    use segment::types::{Distance, Payload};
+    use shard::locked_segment::LockedSegment;
+    use shard::proxy_segment::ProxySegment;
+    use tempfile::Builder;
+
+    use super::*;
+
+    #[test]
+    fn ckks_proxy_segment_visible_sidecars_are_residual_records() {
+        let directory = Builder::new()
+            .prefix("ckks-proxy-segment")
+            .tempdir()
+            .unwrap();
+        let hw_counter = HardwareCounterCell::new();
+        let mut segment = build_simple_segment(directory.path(), 2, Distance::Dot).unwrap();
+        segment
+            .upsert_point(1, 1.into(), only_default_vector(&[1.0, 0.0]), &hw_counter)
+            .unwrap();
+
+        let payload = Payload(
+            serde_json::from_value(serde_json::json!({
+                ENCRYPTED_VECTOR_SIDECAR_FIELD: {
+                    DEFAULT_VECTOR_NAME: {
+                        ENCRYPTED_CKKS_VECTOR_MARKER: {
+                            "version": 1,
+                            "scheme": "openfhe-ckks",
+                            "envelope": {
+                                "version": 1,
+                                "algorithm": "AES-256-GCM",
+                                "key_id": "tenant-a:vector",
+                                "material_fingerprint": "tenant-a/vector@v1",
+                                "rk_id": "tenant-a/vector-rk@v1",
+                                "rk_epoch": 1,
+                                "nonce": "AAAAAAAAAAAAAAAA",
+                                "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA"
+                            }
+                        }
+                    }
+                }
+            }))
+            .unwrap(),
+        );
+        segment
+            .set_full_payload(2, 1.into(), &payload, &hw_counter)
+            .unwrap();
+
+        let proxy = ProxySegment::new(LockedSegment::from(segment));
+        let locked_proxy = LockedSegment::from(proxy);
+        let proxy = locked_proxy.get_read().read();
+        let records =
+            ckks_ciphertext_residual_records_from_read_segment(&*proxy, DEFAULT_VECTOR_NAME, None)
+                .unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, 1.into());
+        assert_eq!(records[0].point_id, "1");
+        assert_eq!(
+            records[0].indexed_record.ciphertext,
+            b"AAAAAAAAAAAAAAAAAAAAAA"
+        );
+        assert_eq!(records[0].indexed_record.point_offset, 0);
+    }
 }
