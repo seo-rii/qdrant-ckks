@@ -52,11 +52,20 @@ impl fmt::Debug for InferenceRequest {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[cfg_attr(test, derive(Serialize))]
 pub struct InferenceResponse {
     pub embeddings: Vec<VectorPersisted>,
     pub usage: Option<InferenceUsage>,
+}
+
+impl fmt::Debug for InferenceResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InferenceResponse")
+            .field("embedding_count", &self.embeddings.len())
+            .field("usage", &self.usage)
+            .finish()
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
@@ -267,7 +276,9 @@ impl InferenceService {
                 }
             }
             Err(error) => {
-                if let Some(status) = error.status() {
+                let status = error.status();
+                let error = error.without_url();
+                if let Some(status) = status {
                     (error.to_string(), status, None)
                 } else {
                     return Err(StorageError::service_error(format!(
@@ -498,6 +509,21 @@ mod test {
     }
 
     #[test]
+    fn debug_redacts_inference_response_embeddings() {
+        let response = InferenceResponse {
+            embeddings: vec![VectorPersisted::Dense(vec![0.123456, 0.234567, 0.345678])],
+            usage: None,
+        };
+
+        let rendered = format!("{response:?}");
+
+        assert!(rendered.contains("embedding_count: 1"), "{rendered}");
+        assert!(!rendered.contains("0.123456"), "{rendered}");
+        assert!(!rendered.contains("0.234567"), "{rendered}");
+        assert!(!rendered.contains("0.345678"), "{rendered}");
+    }
+
+    #[test]
     fn remote_inference_error_redacts_provider_response_body() {
         for (status, body) in [
             (
@@ -622,6 +648,41 @@ mod test {
         );
         source_mock.expect(1).assert_async().await;
         target_mock.expect(0).assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn remote_inference_send_error_redacts_request_url() {
+        let service = InferenceService::new(Some(InferenceConfig {
+            address: Some(
+                "http://127.0.0.1:1/infer?token=qdrant-sec-inference-send-query-token".to_string(),
+            ),
+            timeout: None,
+            token: None,
+            allowed_api_key_headers: Vec::new(),
+        }));
+
+        let err = service
+            .infer_remote(
+                vec![make_normal_inference_input(
+                    "sensitive remote inference input",
+                    &mut StdRng::seed_from_u64(17),
+                )],
+                InferenceType::Update,
+                InferenceParams::new(InferenceApiKeys::default(), Some(Duration::from_secs(1))),
+            )
+            .await
+            .expect_err("unreachable local inference endpoint must fail");
+        let rendered = err.to_string();
+
+        assert!(
+            rendered.contains("Failed to send inference request"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("qdrant-sec-inference-send-query-token"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("infer?token"), "{rendered}");
     }
 
     #[tokio::test]
