@@ -276,8 +276,9 @@ pub struct RunPayloadCryptoMigrationResponse {
 }
 
 const PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_FILE: &str = "payload_crypto_migration_last_run.json";
+const PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_MAX_BYTES: u64 = 1024 * 1024;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct PayloadCryptoMigrationRunRecord {
     run_id: String,
     collection_name: String,
@@ -832,6 +833,107 @@ fn persist_payload_crypto_migration_run_record(
     Ok(())
 }
 
+fn load_payload_crypto_migration_run_record(
+    collection_path: &FsPath,
+) -> Result<PayloadCryptoMigrationRunRecord, StorageError> {
+    validate_payload_crypto_migration_record_directory(collection_path)?;
+    let record_path = collection_path.join(PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_FILE);
+    validate_payload_crypto_migration_record_target(&record_path)?;
+    let metadata = fs::metadata(&record_path).map_err(|err| {
+        StorageError::service_error(format!(
+            "failed to inspect payload crypto migration run record {record_path:?}: {err}",
+        ))
+    })?;
+    if metadata.len() > PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_MAX_BYTES {
+        return Err(StorageError::service_error(format!(
+            "payload crypto migration run record exceeds {} bytes: {record_path:?}",
+            PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_MAX_BYTES,
+        )));
+    }
+
+    let bytes = fs::read(&record_path).map_err(|err| {
+        StorageError::service_error(format!(
+            "failed to read payload crypto migration run record {record_path:?}: {err}",
+        ))
+    })?;
+    if bytes.len() as u64 > PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_MAX_BYTES {
+        return Err(StorageError::service_error(format!(
+            "payload crypto migration run record exceeds {} bytes after read: {record_path:?}",
+            PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_MAX_BYTES,
+        )));
+    }
+
+    serde_json::from_slice(&bytes).map_err(|err| {
+        StorageError::service_error(format!(
+            "failed to parse payload crypto migration run record {record_path:?}: {err}",
+        ))
+    })
+}
+
+fn validate_payload_crypto_migration_pending_run_record(
+    record: &PayloadCryptoMigrationRunRecord,
+    expected_run_id: &str,
+    expected_collection_name: &str,
+    expected_stable_crypto_id: &str,
+    expected_checkpoints_sha256_b64: &str,
+    expected_completion_plan_sha256_b64: &str,
+) -> Result<(), StorageError> {
+    if record.completed {
+        return Err(StorageError::service_error(
+            "payload crypto migration completion requires a pending run record",
+        ));
+    }
+    if record.dry_run {
+        return Err(StorageError::service_error(
+            "payload crypto migration completion cannot use a dry-run record",
+        ));
+    }
+    if record.run_id != expected_run_id {
+        return Err(StorageError::service_error(
+            "payload crypto migration run record id does not match the planned completion",
+        ));
+    }
+    if record.collection_name != expected_collection_name {
+        return Err(StorageError::service_error(format!(
+            "payload crypto migration run record collection {} does not match requested collection {}",
+            record.collection_name, expected_collection_name,
+        )));
+    }
+    if record.stable_crypto_id != expected_stable_crypto_id {
+        return Err(StorageError::service_error(
+            "payload crypto migration run record stable crypto id does not match current collection identity",
+        ));
+    }
+    if record.checkpoints_sha256_b64 != expected_checkpoints_sha256_b64 {
+        return Err(StorageError::service_error(
+            "payload crypto migration run record checkpoint digest does not match the planned completion",
+        ));
+    }
+    if record.completion_plan_sha256_b64 != expected_completion_plan_sha256_b64 {
+        return Err(StorageError::service_error(
+            "payload crypto migration run record completion plan digest does not match the planned completion",
+        ));
+    }
+
+    let actual_checkpoints_sha256_b64 =
+        payload_crypto_migration_run_record_digest_b64("checkpoints", &record.checkpoints)?;
+    if actual_checkpoints_sha256_b64 != record.checkpoints_sha256_b64 {
+        return Err(StorageError::service_error(
+            "payload crypto migration run record checkpoint digest is inconsistent with persisted checkpoints",
+        ));
+    }
+
+    let actual_completion_plan_sha256_b64 =
+        payload_crypto_migration_run_record_digest_b64("completion plan", &record.completion_plan)?;
+    if actual_completion_plan_sha256_b64 != record.completion_plan_sha256_b64 {
+        return Err(StorageError::service_error(
+            "payload crypto migration run record completion plan digest is inconsistent with persisted plan",
+        ));
+    }
+
+    Ok(())
+}
+
 trait PayloadCryptoMigrationRecordOpenOptionsExt {
     fn apply_private_payload_crypto_migration_record_open_options(&mut self) -> &mut Self;
 }
@@ -1056,6 +1158,16 @@ async fn run_payloads_for_crypto_migration(
             false
         } else {
             persist_payload_crypto_migration_run_record(collection.path(), &run_record)?;
+            let persisted_run_record =
+                load_payload_crypto_migration_run_record(collection.path())?;
+            validate_payload_crypto_migration_pending_run_record(
+                &persisted_run_record,
+                &run_record.run_id,
+                &collection_name,
+                &run_record.stable_crypto_id,
+                &run_record.checkpoints_sha256_b64,
+                &run_record.completion_plan_sha256_b64,
+            )?;
             let completed = dispatcher
                 .submit_collection_meta_op(
                     CollectionMetaOperations::ApplyCryptoMigration(ApplyCryptoMigrationPlan {
@@ -1772,6 +1884,93 @@ mod tests {
         );
         assert_eq!(committed["completion_plan"], pending["completion_plan"]);
         assert_eq!(committed["checkpoints"], pending["checkpoints"]);
+    }
+
+    #[test]
+    fn payload_crypto_migration_pending_run_record_loads_and_validates_for_completion() {
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-payload-migration-record-validate-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let mut record = payload_crypto_migration_run_test_record();
+        record.completed = false;
+
+        persist_payload_crypto_migration_run_record(dir.path(), &record).unwrap();
+        let loaded = load_payload_crypto_migration_run_record(dir.path()).unwrap();
+
+        assert_eq!(loaded.run_id, record.run_id);
+        validate_payload_crypto_migration_pending_run_record(
+            &loaded,
+            &record.run_id,
+            &record.collection_name,
+            &record.stable_crypto_id,
+            &record.checkpoints_sha256_b64,
+            &record.completion_plan_sha256_b64,
+        )
+        .expect("persisted pending run record must gate completion");
+    }
+
+    #[test]
+    fn payload_crypto_migration_pending_run_record_rejects_committed_record_before_completion() {
+        let record = payload_crypto_migration_run_test_record();
+
+        let err = validate_payload_crypto_migration_pending_run_record(
+            &record,
+            &record.run_id,
+            &record.collection_name,
+            &record.stable_crypto_id,
+            &record.checkpoints_sha256_b64,
+            &record.completion_plan_sha256_b64,
+        )
+        .expect_err("completed record must not authorize a new completion apply");
+        assert!(
+            err.to_string().contains("pending run record"),
+            "unexpected error: {err}",
+        );
+    }
+
+    #[test]
+    fn payload_crypto_migration_pending_run_record_rejects_tampered_checkpoint_digest() {
+        let mut record = payload_crypto_migration_run_test_record();
+        record.completed = false;
+        record.checkpoints[0].processed_points = 1;
+
+        let err = validate_payload_crypto_migration_pending_run_record(
+            &record,
+            &record.run_id,
+            &record.collection_name,
+            &record.stable_crypto_id,
+            &record.checkpoints_sha256_b64,
+            &record.completion_plan_sha256_b64,
+        )
+        .expect_err("tampered checkpoint body must not match persisted digest");
+        assert!(
+            err.to_string()
+                .contains("checkpoint digest is inconsistent"),
+            "unexpected error: {err}",
+        );
+    }
+
+    #[test]
+    fn payload_crypto_migration_pending_run_record_rejects_expected_plan_digest_mismatch() {
+        let mut record = payload_crypto_migration_run_test_record();
+        record.completed = false;
+        let wrong_completion_plan_sha256_b64 = BASE64URL_NOPAD.encode(&[7; 32]);
+
+        let err = validate_payload_crypto_migration_pending_run_record(
+            &record,
+            &record.run_id,
+            &record.collection_name,
+            &record.stable_crypto_id,
+            &record.checkpoints_sha256_b64,
+            &wrong_completion_plan_sha256_b64,
+        )
+        .expect_err("pending record must be bound to the exact completion plan digest");
+        assert!(
+            err.to_string()
+                .contains("completion plan digest does not match"),
+            "unexpected error: {err}",
+        );
     }
 
     #[cfg(unix)]
