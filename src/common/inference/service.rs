@@ -171,6 +171,11 @@ impl InferenceService {
                 "InferenceService configuration error: address must use http or https",
             ));
         }
+        if parsed.scheme() == "http" && !is_loopback_http_url(&parsed) {
+            return Err(StorageError::service_error(
+                "InferenceService configuration error: address must use https except loopback http for local development",
+            ));
+        }
         if !parsed.username().is_empty() || parsed.password().is_some() {
             return Err(StorageError::service_error(
                 "InferenceService configuration error: address must not include credentials",
@@ -424,6 +429,16 @@ impl InferenceService {
     }
 }
 
+fn is_loopback_http_url(parsed: &reqwest::Url) -> bool {
+    parsed.scheme() == "http"
+        && parsed.host_str().is_some_and(|host| {
+            host.eq_ignore_ascii_case("localhost")
+                || host == "127.0.0.1"
+                || host == "::1"
+                || host == "[::1]"
+        })
+}
+
 /// 2-way merge of lists with `PositionItems`. Also checks for skipped items and returns `None` in case an item is left out.
 fn merge_position_items<I>(
     left: impl IntoIterator<Item = I>,
@@ -543,6 +558,7 @@ mod test {
     fn inference_service_rejects_unsafe_endpoint_urls_without_echoing_secrets() {
         for address in [
             "ftp://inference.local/v1",
+            "http://inference.local/v1",
             "https://user:password@inference.local/v1",
             "https://inference.local/v1?token=qdrant-sec-inference-url-token",
             "https://inference.local/v1#qdrant-sec-inference-url-fragment",
@@ -575,7 +591,7 @@ mod test {
     }
 
     #[test]
-    fn inference_service_accepts_http_endpoint_path_without_query() {
+    fn inference_service_accepts_https_endpoint_path_without_query() {
         let service = InferenceService::new(Some(InferenceConfig {
             address: Some("https://inference.local/v1/embeddings".to_string()),
             timeout: None,
@@ -586,6 +602,26 @@ mod test {
         service
             .validate()
             .expect("safe inference endpoint URL with path should be accepted");
+    }
+
+    #[test]
+    fn inference_service_accepts_loopback_http_endpoint_for_local_development() {
+        for address in [
+            "http://127.0.0.1:6334/v1/embeddings",
+            "http://localhost:6334/v1/embeddings",
+            "http://[::1]:6334/v1/embeddings",
+        ] {
+            let service = InferenceService::new(Some(InferenceConfig {
+                address: Some(address.to_string()),
+                timeout: None,
+                token: None,
+                allowed_api_key_headers: Vec::new(),
+            }));
+
+            service
+                .validate()
+                .expect("loopback http inference endpoint should be accepted");
+        }
     }
 
     #[test]
