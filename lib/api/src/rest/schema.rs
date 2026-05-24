@@ -579,6 +579,15 @@ pub struct CkksEncryptedQueryVectorEnvelope {
     pub slots: usize,
     pub ciphertext_sha256: String,
     pub ciphertext: String,
+    pub signature: CkksEncryptedQuerySignature,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CkksEncryptedQuerySignature {
+    pub alg: String,
+    pub key_id: String,
+    pub sig: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Validate)]

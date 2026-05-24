@@ -146,6 +146,9 @@ enum CkksSidecarQuerySource<'a> {
         context_digest: &'a str,
         slots: usize,
         ciphertext: Vec<u8>,
+        signature_alg: &'a str,
+        signature_key_id: &'a str,
+        signature_b64: &'a str,
     },
     Stored {
         point_id: String,
@@ -165,6 +168,9 @@ enum CkksSidecarHnswQuery<'a> {
         context_digest: &'a str,
         slots: usize,
         ciphertext: &'a [u8],
+        signature_alg: &'a str,
+        signature_key_id: &'a str,
+        signature_b64: &'a str,
     },
     Stored {
         query_point_id: &'a str,
@@ -598,6 +604,9 @@ fn ckks_legacy_search_as_query_request(
                 slots: query.envelope.slots,
                 ciphertext_sha256: query.envelope.ciphertext_sha256.clone(),
                 ciphertext: query.envelope.ciphertext.clone(),
+                signature_alg: query.envelope.signature.alg.clone(),
+                signature_key_id: query.envelope.signature.key_id.clone(),
+                signature_b64: query.envelope.signature.sig.clone(),
             }),
         ))),
         using: query
@@ -1068,6 +1077,9 @@ async fn ckks_vector_search_points_with_scoring(
                 context_digest,
                 slots,
                 ciphertext,
+                signature_alg,
+                signature_key_id,
+                signature_b64,
             },
     } = &scoring
     {
@@ -1082,6 +1094,9 @@ async fn ckks_vector_search_points_with_scoring(
             context_digest,
             *slots,
             ciphertext,
+            signature_alg,
+            signature_key_id,
+            signature_b64,
         )?
         .ok_or_else(|| {
             StorageError::service_error(format!(
@@ -1142,6 +1157,9 @@ async fn ckks_vector_search_points_with_scoring(
                             context_digest,
                             slots,
                             ciphertext,
+                            signature_alg,
+                            signature_key_id,
+                            signature_b64,
                         },
                 } => CkksSidecarHnswQuery::ClientEncrypted {
                     collection_id,
@@ -1152,6 +1170,9 @@ async fn ckks_vector_search_points_with_scoring(
                     context_digest,
                     slots: *slots,
                     ciphertext,
+                    signature_alg,
+                    signature_key_id,
+                    signature_b64,
                 },
                 CkksSidecarScoring::StoredNearest {
                     query_point_id,
@@ -1792,6 +1813,9 @@ async fn ckks_vector_search_points_with_scoring(
                         context_digest,
                         slots,
                         ciphertext,
+                        signature_alg,
+                        signature_key_id,
+                        signature_b64,
                     },
             } => CkksSidecarHnswQuery::ClientEncrypted {
                 collection_id,
@@ -1802,6 +1826,9 @@ async fn ckks_vector_search_points_with_scoring(
                 context_digest,
                 slots: *slots,
                 ciphertext,
+                signature_alg,
+                signature_key_id,
+                signature_b64,
             },
             CkksSidecarScoring::StoredNearest {
                 query_point_id,
@@ -2140,6 +2167,9 @@ fn ckks_score_query_source_batch(
             context_digest,
             slots,
             ciphertext,
+            signature_alg,
+            signature_key_id,
+            signature_b64,
         } => plan.score_client_encrypted_query_batch(
             collection_name,
             vector_name,
@@ -2152,6 +2182,9 @@ fn ckks_score_query_source_batch(
             context_digest,
             *slots,
             ciphertext,
+            signature_alg,
+            signature_key_id,
+            signature_b64,
         )?,
         CkksSidecarQuerySource::Stored {
             point_id,
@@ -2190,6 +2223,9 @@ fn ckks_client_encrypted_query_source<'a>(
         input.slots,
         &input.ciphertext_sha256,
         &input.ciphertext,
+        &input.signature_alg,
+        &input.signature_key_id,
+        &input.signature_b64,
     )
 }
 
@@ -2211,6 +2247,9 @@ fn ckks_rest_client_encrypted_query_source<'a>(
         input.envelope.slots,
         &input.envelope.ciphertext_sha256,
         &input.envelope.ciphertext,
+        &input.envelope.signature.alg,
+        &input.envelope.signature.key_id,
+        &input.envelope.signature.sig,
     )
 }
 
@@ -2228,6 +2267,9 @@ fn ckks_client_encrypted_query_source_from_parts<'a>(
     slots: usize,
     ciphertext_sha256_b64: &str,
     ciphertext_b64: &str,
+    signature_alg: &'a str,
+    signature_key_id: &'a str,
+    signature_b64: &'a str,
 ) -> Result<CkksSidecarQuerySource<'a>, StorageError> {
     if version != 1 {
         return Err(StorageError::bad_input(format!(
@@ -2267,6 +2309,33 @@ fn ckks_client_encrypted_query_source_from_parts<'a>(
     if rk_epoch == 0 {
         return Err(StorageError::bad_input(format!(
             "encrypted vector '{vector_name}' client CKKS query rk_epoch must be greater than 0",
+        )));
+    }
+    if signature_alg != "ed25519" {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query signature alg must be ed25519",
+        )));
+    }
+    if signature_key_id.is_empty() {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query signature key_id must not be empty",
+        )));
+    }
+    if signature_b64.len() != 86 {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query signature must be 86 base64url characters",
+        )));
+    }
+    let signature = BASE64URL_NOPAD
+        .decode(signature_b64.as_bytes())
+        .map_err(|err| {
+            StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' client CKKS query signature is not base64url: {err}",
+            ))
+        })?;
+    if signature.len() != 64 {
+        return Err(StorageError::bad_input(format!(
+            "encrypted vector '{vector_name}' client CKKS query signature must decode to 64 bytes",
         )));
     }
     if slots == 0 {
@@ -2346,6 +2415,9 @@ fn ckks_client_encrypted_query_source_from_parts<'a>(
         context_digest: context_digest_b64,
         slots,
         ciphertext,
+        signature_alg,
+        signature_key_id,
+        signature_b64,
     })
 }
 
@@ -2929,6 +3001,9 @@ fn ckks_sidecar_score_hnsw_query_batch(
             context_digest,
             slots,
             ciphertext,
+            signature_alg,
+            signature_key_id,
+            signature_b64,
         } => plan.score_client_encrypted_query_batch(
             collection_name,
             vector_name,
@@ -2941,6 +3016,9 @@ fn ckks_sidecar_score_hnsw_query_batch(
             context_digest,
             slots,
             ciphertext,
+            signature_alg,
+            signature_key_id,
+            signature_b64,
         )?,
         CkksSidecarHnswQuery::Stored {
             query_point_id,
@@ -8224,6 +8302,10 @@ mod tests {
         point
     }
 
+    fn valid_query_signature_b64() -> String {
+        BASE64URL_NOPAD.encode(&[4_u8; 64])
+    }
+
     #[test]
     fn ckks_client_encrypted_query_source_rejects_oversized_fixed_fields() {
         let context_digest = BASE64URL_NOPAD.encode(&[3_u8; 32]);
@@ -8231,6 +8313,7 @@ mod tests {
         let valid_ciphertext = BASE64URL_NOPAD.encode(valid_ciphertext_bytes);
         let valid_ciphertext_sha256 =
             BASE64URL_NOPAD.encode(&Sha256::digest(valid_ciphertext_bytes));
+        let valid_signature = valid_query_signature_b64();
 
         let err = match ckks_client_encrypted_query_source_from_parts(
             "embedding",
@@ -8246,6 +8329,9 @@ mod tests {
             2,
             &valid_ciphertext_sha256,
             &valid_ciphertext,
+            "ed25519",
+            "tenant-a:query-signing-v1",
+            &valid_signature,
         ) {
             Ok(_) => panic!("oversized context digest must be rejected"),
             Err(err) => err,
@@ -8266,6 +8352,9 @@ mod tests {
             2,
             &valid_ciphertext_sha256,
             &"A".repeat(CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_ENCODED_BYTES + 1),
+            "ed25519",
+            "tenant-a:query-signing-v1",
+            &valid_signature,
         ) {
             Ok(_) => panic!("oversized ciphertext must be rejected"),
             Err(err) => err,
@@ -8275,6 +8364,7 @@ mod tests {
 
     #[test]
     fn ckks_client_encrypted_query_source_rejects_ciphertext_hash_mismatch() {
+        let valid_signature = valid_query_signature_b64();
         let err = match ckks_client_encrypted_query_source_from_parts(
             "embedding",
             1,
@@ -8289,6 +8379,9 @@ mod tests {
             2,
             &BASE64URL_NOPAD.encode(&Sha256::digest(b"other-ciphertext")),
             &BASE64URL_NOPAD.encode(b"ciphertext"),
+            "ed25519",
+            "tenant-a:query-signing-v1",
+            &valid_signature,
         ) {
             Ok(_) => panic!("ciphertext hash mismatch must fail before bridge scoring"),
             Err(err) => err,
@@ -8302,6 +8395,7 @@ mod tests {
         let context_digest = BASE64URL_NOPAD.encode(&[3_u8; 32]);
         let ciphertext = BASE64URL_NOPAD.encode(b"ciphertext");
         let ciphertext_sha256 = BASE64URL_NOPAD.encode(&Sha256::digest(b"ciphertext"));
+        let valid_signature = valid_query_signature_b64();
 
         let err = match ckks_client_encrypted_query_source_from_parts(
             "embedding",
@@ -8317,6 +8411,9 @@ mod tests {
             2,
             &ciphertext_sha256,
             &ciphertext,
+            "ed25519",
+            "tenant-a:query-signing-v1",
+            &valid_signature,
         ) {
             Ok(_) => panic!("client encrypted query collection identity must be required"),
             Err(err) => err,
@@ -8337,6 +8434,9 @@ mod tests {
             2,
             &ciphertext_sha256,
             &ciphertext,
+            "ed25519",
+            "tenant-a:query-signing-v1",
+            &valid_signature,
         ) {
             Ok(_) => panic!("client encrypted query vector name must match the requested vector"),
             Err(err) => err,
@@ -8357,6 +8457,9 @@ mod tests {
             2,
             &ciphertext_sha256,
             &ciphertext,
+            "ed25519",
+            "tenant-a:query-signing-v1",
+            &valid_signature,
         ) {
             Ok(_) => panic!("client encrypted query key id must be required"),
             Err(err) => err,
@@ -8377,6 +8480,9 @@ mod tests {
             2,
             &ciphertext_sha256,
             &ciphertext,
+            "ed25519",
+            "tenant-a:query-signing-v1",
+            &valid_signature,
         ) {
             Ok(_) => panic!("client encrypted query RK id must be required"),
             Err(err) => err,
@@ -8397,6 +8503,9 @@ mod tests {
             2,
             &ciphertext_sha256,
             &ciphertext,
+            "ed25519",
+            "tenant-a:query-signing-v1",
+            &valid_signature,
         ) {
             Ok(_) => panic!("client encrypted query RK epoch must be required"),
             Err(err) => err,

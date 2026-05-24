@@ -464,9 +464,9 @@ accepts only `key_id`, `material_fingerprint_id`, and `retired_materials`;
 options; `metadata/blind-index-hmac@v1` accepts only `key_id`,
 `expected_rk_id`, `min_rk_epoch`, and `max_rk_epoch`; `vector/openfhe-ckks@v1`
 accepts only `key_id`, `material_fingerprint_id`, `profile`,
-`crypto_context_b64`, `public_key_b64`, `allow_plaintext_queries`, and
-`plaintext_query_tcb_ack`. Unknown options fail startup/runtime validation
-instead of being silently ignored.
+`crypto_context_b64`, `public_key_b64`, `allow_plaintext_queries`,
+`plaintext_query_tcb_ack`, and `signature_public_keys`. Unknown options fail
+startup/runtime validation instead of being silently ignored.
 
 Provider `materials` roles are also allowlisted. Server-side payload AEAD and
 OpenFHE CKKS vector-envelope providers accept only `materials.sym_key`;
@@ -500,6 +500,8 @@ crypto:
         crypto_context_b64: base64url-no-pad-openfhe-context
         public_key_b64: base64url-no-pad-openfhe-public-key
         allow_plaintext_queries: false
+        signature_public_keys:
+          tenant-a/query-signing-v1: base64url-no-pad-ed25519-public-key
         # Required only when allow_plaintext_queries is true.
         # plaintext_query_tcb_ack: qdrant-sec-ckks-plaintext-query-tcb-v1
 ```
@@ -1070,7 +1072,12 @@ encrypted query envelope instead of a raw dense vector:
     "context_digest": "...",
     "slots": 1536,
     "ciphertext_sha256": "base64url-no-pad-sha256-of-ciphertext",
-    "ciphertext": "..."
+    "ciphertext": "...",
+    "signature": {
+      "alg": "ed25519",
+      "key_id": "tenant-a/query-signing-v1",
+      "sig": "base64url-no-pad-ed25519-signature"
+    }
   }
 }
 ```
@@ -1080,9 +1087,15 @@ match the active encrypted vector rule's stable collection crypto identity and
 resource-key lineage. The `context_digest` must match the active OpenFHE public
 material and CKKS parameter profile for that rule, `slots` must match each stored
 sidecar envelope being scored, `ciphertext_sha256` must match the decoded
-ciphertext bytes, and `ciphertext` is base64url without padding. Qdrant does not
-decrypt or validate the CKKS ciphertext itself; it treats the validated bytes as
-the encrypted query input to the OpenFHE bridge scoring API.
+ciphertext bytes, and `ciphertext` is base64url without padding. The `signature`
+object is mandatory for client-supplied encrypted query envelopes: `alg` must be
+`ed25519`, `key_id` must select a configured `signature_public_keys` entry on the
+active `vector/openfhe-ckks@v1` runtime instance, and `sig` must verify the
+domain-separated query metadata and ciphertext under
+`qdrant-sec/client-ckks-query-signature/v1`. gRPC carries the same proof through
+`signature_alg`, `signature_key_id`, and `signature_b64`.
+Qdrant does not decrypt or validate the CKKS ciphertext itself; it treats the
+validated bytes as the encrypted query input to the OpenFHE bridge scoring API.
 Result ordering and
 `score_threshold` follow the configured Qdrant distance metric:
 `dot`/`cosine` are larger-is-better, while `euclid`/`manhattan` are

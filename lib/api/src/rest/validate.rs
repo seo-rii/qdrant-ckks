@@ -16,6 +16,7 @@ const CKKS_ENCRYPTED_QUERY_SCHEME: &str = "openfhe-ckks";
 const CKKS_ENCRYPTED_QUERY_SECURITY_PROFILE: &str = "ckks-128-n16384-d4-scale50";
 const CKKS_ENCRYPTED_QUERY_CONTEXT_DIGEST_B64_LEN: usize = 43;
 const CKKS_ENCRYPTED_QUERY_SHA256_B64_LEN: usize = 43;
+const CKKS_ENCRYPTED_QUERY_SIGNATURE_B64_LEN: usize = 86;
 const CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_BYTES: usize = 16 * 1024 * 1024;
 const CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_ENCODED_BYTES: usize =
     (CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_BYTES + 2) / 3 * 4;
@@ -124,6 +125,38 @@ impl Validate for CkksEncryptedQueryVector {
             errors.add(
                 "rk_epoch",
                 ValidationError::new("empty_ckks_encrypted_query_rk_epoch"),
+            );
+        }
+        if self.envelope.signature.alg != "ed25519" {
+            errors.add(
+                "signature.alg",
+                ValidationError::new("unsupported_ckks_encrypted_query_signature_alg"),
+            );
+        }
+        if self.envelope.signature.key_id.is_empty() {
+            errors.add(
+                "signature.key_id",
+                ValidationError::new("empty_ckks_encrypted_query_signature_key_id"),
+            );
+        }
+        if self.envelope.signature.sig.is_empty() {
+            errors.add(
+                "signature.sig",
+                ValidationError::new("empty_ckks_encrypted_query_signature"),
+            );
+        } else if self.envelope.signature.sig.len() != CKKS_ENCRYPTED_QUERY_SIGNATURE_B64_LEN {
+            errors.add(
+                "signature.sig",
+                ValidationError::new("invalid_ckks_encrypted_query_signature_length"),
+            );
+        } else if BASE64URL_NOPAD
+            .decode(self.envelope.signature.sig.as_bytes())
+            .map(|signature| signature.len() != 64)
+            .unwrap_or(true)
+        {
+            errors.add(
+                "signature.sig",
+                ValidationError::new("invalid_ckks_encrypted_query_signature_base64url"),
             );
         }
         if self.envelope.context_digest.is_empty() {
@@ -466,6 +499,11 @@ mod tests {
                 slots: 2,
                 ciphertext_sha256: "MFUx3MUOvKMc8dWzHp_HbtUfZrO23VoDDGU5rmUy-Xk".to_string(),
                 ciphertext: BASE64URL_NOPAD.encode(b"ciphertext"),
+                signature: crate::rest::CkksEncryptedQuerySignature {
+                    alg: "ed25519".to_string(),
+                    key_id: "tenant-a:query-signing-v1".to_string(),
+                    sig: BASE64URL_NOPAD.encode(&[4_u8; 64]),
+                },
             },
         }
     }
@@ -522,12 +560,45 @@ mod tests {
                 slots: 0,
                 ciphertext_sha256: String::new(),
                 ciphertext: String::new(),
+                signature: crate::rest::CkksEncryptedQuerySignature {
+                    alg: String::new(),
+                    key_id: String::new(),
+                    sig: String::new(),
+                },
                 ..valid_ckks_encrypted_query().envelope
             },
         };
         assert!(
             bad_query.validate().is_err(),
             "empty REST CKKS encrypted query metadata should error on validation"
+        );
+
+        let bad_query = CkksEncryptedQueryVector {
+            envelope: CkksEncryptedQueryVectorEnvelope {
+                signature: crate::rest::CkksEncryptedQuerySignature {
+                    alg: "ed448".to_string(),
+                    ..valid_ckks_encrypted_query().envelope.signature
+                },
+                ..valid_ckks_encrypted_query().envelope
+            },
+        };
+        assert!(
+            bad_query.validate().is_err(),
+            "unsupported REST CKKS encrypted query signature algorithm should error on validation"
+        );
+
+        let bad_query = CkksEncryptedQueryVector {
+            envelope: CkksEncryptedQueryVectorEnvelope {
+                signature: crate::rest::CkksEncryptedQuerySignature {
+                    sig: BASE64URL_NOPAD.encode(&[4_u8; 63]),
+                    ..valid_ckks_encrypted_query().envelope.signature
+                },
+                ..valid_ckks_encrypted_query().envelope
+            },
+        };
+        assert!(
+            bad_query.validate().is_err(),
+            "wrong-length REST CKKS encrypted query signature should error on validation"
         );
 
         let bad_query = CkksEncryptedQueryVector {

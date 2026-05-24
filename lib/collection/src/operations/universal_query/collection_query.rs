@@ -165,6 +165,9 @@ pub struct CkksEncryptedQueryInput {
     pub slots: usize,
     pub ciphertext_sha256: String,
     pub ciphertext: String,
+    pub signature_alg: String,
+    pub signature_key_id: String,
+    pub signature_b64: String,
 }
 
 impl VectorInputInternal {

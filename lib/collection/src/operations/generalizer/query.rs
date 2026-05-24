@@ -161,6 +161,9 @@ impl Generalizer for crate::operations::universal_query::collection_query::CkksE
             slots: self.slots,
             ciphertext_sha256: "[redacted]".to_string(),
             ciphertext: "[redacted]".to_string(),
+            signature_alg: self.signature_alg.clone(),
+            signature_key_id: self.signature_key_id.clone(),
+            signature_b64: "[redacted]".to_string(),
         }
     }
 }
@@ -280,12 +283,16 @@ mod tests {
             slots: 4,
             ciphertext_sha256: "qdrant-sec-query-ciphertext-sha256-sentinel".to_string(),
             ciphertext: "qdrant-sec-query-ciphertext-sentinel".to_string(),
+            signature_alg: "ed25519".to_string(),
+            signature_key_id: "tenant-a:query-signing-v1".to_string(),
+            signature_b64: "qdrant-sec-query-signature-sentinel".to_string(),
         };
 
         let generalized = query.remove_details();
 
         assert_eq!(generalized.ciphertext, "[redacted]");
         assert_eq!(generalized.ciphertext_sha256, "[redacted]");
+        assert_eq!(generalized.signature_b64, "[redacted]");
         assert_ne!(
             generalized.ciphertext,
             "qdrant-sec-query-ciphertext-sentinel"
@@ -293,6 +300,10 @@ mod tests {
         assert_ne!(
             generalized.ciphertext_sha256,
             "qdrant-sec-query-ciphertext-sha256-sentinel"
+        );
+        assert_ne!(
+            generalized.signature_b64,
+            "qdrant-sec-query-signature-sentinel"
         );
     }
 }

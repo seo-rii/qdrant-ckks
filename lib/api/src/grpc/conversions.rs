@@ -3022,6 +3022,11 @@ fn grpc_ckks_encrypted_query_to_rest_named_vector(
                 })?,
                 ciphertext_sha256: query.ciphertext_sha256,
                 ciphertext: query.ciphertext,
+                signature: rest::CkksEncryptedQuerySignature {
+                    alg: query.signature_alg,
+                    key_id: query.signature_key_id,
+                    sig: query.signature_b64,
+                },
             },
         },
     ))
@@ -3557,6 +3562,9 @@ mod tests {
             slots: 2,
             ciphertext_sha256: "960f1uTAQoGVZfumV71jfeMvFAiR1SdiZDC50Oy7ksY".to_string(),
             ciphertext: BASE64URL_NOPAD.encode(b"test-ciphertext"),
+            signature_alg: "ed25519".to_string(),
+            signature_key_id: "tenant-a:query-signing-v1".to_string(),
+            signature_b64: BASE64URL_NOPAD.encode(&[4_u8; 64]),
         }
     }
 
@@ -3613,6 +3621,12 @@ mod tests {
                 assert_eq!(
                     query.envelope.ciphertext,
                     BASE64URL_NOPAD.encode(b"test-ciphertext")
+                );
+                assert_eq!(query.envelope.signature.alg, "ed25519");
+                assert_eq!(query.envelope.signature.key_id, "tenant-a:query-signing-v1");
+                assert_eq!(
+                    query.envelope.signature.sig,
+                    BASE64URL_NOPAD.encode(&[4_u8; 64])
                 );
             }
             other => panic!("expected CKKS encrypted query vector, got {other:?}"),

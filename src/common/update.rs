@@ -2900,7 +2900,7 @@ mod tests {
     use std::collections::{BTreeMap, HashMap};
     use std::fs;
     use std::num::NonZeroUsize;
-    use std::sync::Arc;
+    use std::sync::{Arc, OnceLock};
 
     use api::rest::{BaseGroupRequest, SearchGroupsRequestInternal};
     use collection::config::{
@@ -2960,6 +2960,19 @@ mod tests {
     };
 
     const TEST_VECTOR_COLLECTION_CRYPTO_ID: &str = "32345678-90ab-cdef-1234-567890abcdef";
+
+    fn fake_ckks_query_signing_key_pair() -> Ed25519KeyPair {
+        static PKCS8: OnceLock<Vec<u8>> = OnceLock::new();
+        let pkcs8 = PKCS8
+            .get_or_init(|| {
+                Ed25519KeyPair::generate_pkcs8(&SystemRandom::new())
+                    .unwrap()
+                    .as_ref()
+                    .to_vec()
+            })
+            .clone();
+        Ed25519KeyPair::from_pkcs8(&pkcs8).unwrap()
+    }
 
     fn payload_runtime_settings() -> Settings {
         let mut settings = Settings::new(None).unwrap();
@@ -3128,6 +3141,7 @@ esac
 
     fn vector_runtime_settings(bridge_path: &std::path::Path) -> Settings {
         let bridge_digest: [u8; 32] = Sha256::digest(fs::read(bridge_path).unwrap()).into();
+        let signing_key = fake_ckks_query_signing_key_pair();
         let mut settings = Settings::new(None).unwrap();
         settings.crypto = CryptoSettings {
             allow_inline_key_material: true,
@@ -3146,6 +3160,9 @@ esac
                         "profile": qdrant_sec::CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
                         "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
                         "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                        "signature_public_keys": {
+                            "tenant-a:query-signing-v1": BASE64URL_NOPAD.encode(signing_key.public_key().as_ref()),
+                        },
                         "allow_plaintext_queries": true,
                         "plaintext_query_tcb_ack": "qdrant-sec-ckks-plaintext-query-tcb-v1",
                     }),
@@ -3182,6 +3199,23 @@ esac
     fn fake_ckks_client_query(ciphertext: &[u8], slots: usize) -> CkksEncryptedQueryInput {
         let public_material =
             qdrant_sec::CkksPublicMaterial::new(b"openfhe context", b"openfhe public key").unwrap();
+        let context_digest =
+            public_material.digest_for(&qdrant_sec::CkksParameters::openfhe_default_128_bit());
+        let signing_key = fake_ckks_query_signing_key_pair();
+        let signature_alg = "ed25519".to_string();
+        let signature_key_id = "tenant-a:query-signing-v1".to_string();
+        let signature_message = crate::common::crypto::ckks_client_query_signature_message(
+            TEST_VECTOR_COLLECTION_CRYPTO_ID,
+            DEFAULT_VECTOR_NAME,
+            "tenant-a:vector",
+            "tenant-a/vector-v1",
+            1,
+            &context_digest,
+            slots,
+            ciphertext,
+            &signature_alg,
+            &signature_key_id,
+        );
         CkksEncryptedQueryInput {
             version: 1,
             scheme: qdrant_sec::CKKS_SCHEME.to_string(),
@@ -3191,11 +3225,13 @@ esac
             key_id: "tenant-a:vector".to_string(),
             rk_id: "tenant-a/vector-v1".to_string(),
             rk_epoch: 1,
-            context_digest: public_material
-                .digest_for(&qdrant_sec::CkksParameters::openfhe_default_128_bit()),
+            context_digest,
             slots,
             ciphertext_sha256: BASE64URL_NOPAD.encode(&Sha256::digest(ciphertext)),
             ciphertext: BASE64URL_NOPAD.encode(ciphertext),
+            signature_alg,
+            signature_key_id,
+            signature_b64: BASE64URL_NOPAD.encode(signing_key.sign(&signature_message).as_ref()),
         }
     }
 
@@ -3219,6 +3255,11 @@ esac
                 slots: query.slots,
                 ciphertext_sha256: query.ciphertext_sha256,
                 ciphertext: query.ciphertext,
+                signature: api::rest::CkksEncryptedQuerySignature {
+                    alg: query.signature_alg,
+                    key_id: query.signature_key_id,
+                    sig: query.signature_b64,
+                },
             },
         })
     }
@@ -3241,6 +3282,9 @@ esac
             slots: query.slots as u64,
             ciphertext_sha256: query.ciphertext_sha256,
             ciphertext: query.ciphertext,
+            signature_alg: query.signature_alg,
+            signature_key_id: query.signature_key_id,
+            signature_b64: query.signature_b64,
         }
     }
 
@@ -3527,6 +3571,22 @@ esac
         .unwrap();
         let mut query = fake_ckks_client_query(b"fake-ckks-query:2", 2);
         query.vector_name = "embedding".to_string();
+        query.signature_b64 = BASE64URL_NOPAD.encode(
+            fake_ckks_query_signing_key_pair()
+                .sign(&crate::common::crypto::ckks_client_query_signature_message(
+                    &query.collection_id,
+                    &query.vector_name,
+                    &query.key_id,
+                    &query.rk_id,
+                    query.rk_epoch,
+                    &query.context_digest,
+                    query.slots,
+                    b"fake-ckks-query:2",
+                    &query.signature_alg,
+                    &query.signature_key_id,
+                ))
+                .as_ref(),
+        );
 
         plan.validate_client_encrypted_query(
             "docs",
@@ -3539,9 +3599,59 @@ esac
             &query.context_digest,
             query.slots,
             b"fake-ckks-query:2",
+            &query.signature_alg,
+            &query.signature_key_id,
+            &query.signature_b64,
         )
         .unwrap()
         .unwrap();
+
+        let err = plan
+            .validate_client_encrypted_query(
+                "docs",
+                "embedding",
+                &query.collection_id,
+                &query.vector_name,
+                &query.key_id,
+                &query.rk_id,
+                query.rk_epoch,
+                &query.context_digest,
+                query.slots,
+                b"fake-ckks-query:2",
+                &query.signature_alg,
+                "tenant-a:unknown-query-signing-key",
+                &query.signature_b64,
+            )
+            .expect_err("client encrypted query must use a trusted signature key");
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("signature key_id is not trusted")
+        ));
+
+        let bad_signature = BASE64URL_NOPAD.encode(&[5_u8; 64]);
+        let err = plan
+            .validate_client_encrypted_query(
+                "docs",
+                "embedding",
+                &query.collection_id,
+                &query.vector_name,
+                &query.key_id,
+                &query.rk_id,
+                query.rk_epoch,
+                &query.context_digest,
+                query.slots,
+                b"fake-ckks-query:2",
+                &query.signature_alg,
+                &query.signature_key_id,
+                &bad_signature,
+            )
+            .expect_err("client encrypted query must verify the Ed25519 signature");
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("signature verification failed")
+        ));
 
         let err = plan
             .validate_client_encrypted_query(
@@ -3555,6 +3665,9 @@ esac
                 &query.context_digest,
                 query.slots,
                 b"fake-ckks-query:2",
+                &query.signature_alg,
+                &query.signature_key_id,
+                &query.signature_b64,
             )
             .expect_err("client encrypted query must bind to collection crypto identity");
         assert!(matches!(
@@ -3575,6 +3688,9 @@ esac
                 &query.context_digest,
                 query.slots,
                 b"fake-ckks-query:2",
+                &query.signature_alg,
+                &query.signature_key_id,
+                &query.signature_b64,
             )
             .expect_err("client encrypted query must bind to vector name");
         assert!(matches!(
@@ -3595,6 +3711,9 @@ esac
                 &query.context_digest,
                 query.slots,
                 b"fake-ckks-query:2",
+                &query.signature_alg,
+                &query.signature_key_id,
+                &query.signature_b64,
             )
             .expect_err("client encrypted query must bind to active key id");
         assert!(matches!(
@@ -3615,6 +3734,9 @@ esac
                 &query.context_digest,
                 query.slots,
                 b"fake-ckks-query:2",
+                &query.signature_alg,
+                &query.signature_key_id,
+                &query.signature_b64,
             )
             .expect_err("client encrypted query must bind to active RK id");
         assert!(matches!(
@@ -3634,6 +3756,9 @@ esac
                 &query.context_digest,
                 query.slots,
                 b"fake-ckks-query:2",
+                &query.signature_alg,
+                &query.signature_key_id,
+                &query.signature_b64,
             )
             .expect_err("client encrypted query must bind to active RK epoch");
         assert!(matches!(
@@ -3654,6 +3779,9 @@ esac
                 &BASE64URL_NOPAD.encode(&[9u8; 32]),
                 query.slots,
                 b"fake-ckks-query:2",
+                &query.signature_alg,
+                &query.signature_key_id,
+                &query.signature_b64,
             )
             .expect_err("wrong client encrypted query context must fail before scoring");
         assert!(matches!(
@@ -3676,6 +3804,9 @@ esac
                 &query.context_digest,
                 too_many_slots,
                 b"fake-ckks-query:2",
+                &query.signature_alg,
+                &query.signature_key_id,
+                &query.signature_b64,
             )
             .expect_err("oversized client encrypted query slot count must fail before scoring");
         assert!(matches!(

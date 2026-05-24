@@ -147,6 +147,9 @@ message CkksEncryptedQueryVector {
   string key_id = 10;
   string rk_id = 11;
   uint64 rk_epoch = 12;
+  string signature_alg = 13;
+  string signature_key_id = 14;
+  string signature_b64 = 15;
 }
 
 // Vector type to be used in queries.

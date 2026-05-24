@@ -440,6 +440,9 @@ fn convert_vector_input_with_inferred(
                     })?,
                     ciphertext_sha256: query.ciphertext_sha256,
                     ciphertext: query.ciphertext,
+                    signature_alg: query.signature_alg,
+                    signature_key_id: query.signature_key_id,
+                    signature_b64: query.signature_b64,
                 },
             ))
         }
@@ -578,6 +581,9 @@ mod tests {
                     slots: 2,
                     ciphertext_sha256: "MFUx3MUOvKMc8dWzHp_HbtUfZrO23VoDDGU5rmUy-Xk".to_string(),
                     ciphertext: BASE64URL_NOPAD.encode(b"ciphertext"),
+                    signature_alg: "ed25519".to_string(),
+                    signature_key_id: "tenant-a:query-signing-v1".to_string(),
+                    signature_b64: BASE64URL_NOPAD.encode(&[4_u8; 64]),
                 },
             )),
         };
@@ -612,6 +618,9 @@ mod tests {
                     slots: 2,
                     ciphertext_sha256: "MFUx3MUOvKMc8dWzHp_HbtUfZrO23VoDDGU5rmUy-Xk".to_string(),
                     ciphertext: BASE64URL_NOPAD.encode(b"ciphertext"),
+                    signature_alg: "ed25519".to_string(),
+                    signature_key_id: "tenant-a:query-signing-v1".to_string(),
+                    signature_b64: BASE64URL_NOPAD.encode(&[4_u8; 64]),
                 },
             )),
         };

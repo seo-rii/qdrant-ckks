@@ -14,6 +14,7 @@ const CKKS_ENCRYPTED_QUERY_SCHEME: &str = "openfhe-ckks";
 const CKKS_ENCRYPTED_QUERY_SECURITY_PROFILE: &str = "ckks-128-n16384-d4-scale50";
 const CKKS_ENCRYPTED_QUERY_CONTEXT_DIGEST_B64_LEN: usize = 43;
 const CKKS_ENCRYPTED_QUERY_SHA256_B64_LEN: usize = 43;
+const CKKS_ENCRYPTED_QUERY_SIGNATURE_B64_LEN: usize = 86;
 const CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_BYTES: usize = 16 * 1024 * 1024;
 const CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_ENCODED_BYTES: usize =
     (CKKS_ENCRYPTED_QUERY_CIPHERTEXT_MAX_BYTES + 2) / 3 * 4;
@@ -446,6 +447,38 @@ impl Validate for grpc::CkksEncryptedQueryVector {
                 ValidationError::new("empty_ckks_encrypted_query_rk_epoch"),
             );
         }
+        if self.signature_alg != "ed25519" {
+            errors.add(
+                "signature_alg",
+                ValidationError::new("unsupported_ckks_encrypted_query_signature_alg"),
+            );
+        }
+        if self.signature_key_id.is_empty() {
+            errors.add(
+                "signature_key_id",
+                ValidationError::new("empty_ckks_encrypted_query_signature_key_id"),
+            );
+        }
+        if self.signature_b64.is_empty() {
+            errors.add(
+                "signature_b64",
+                ValidationError::new("empty_ckks_encrypted_query_signature"),
+            );
+        } else if self.signature_b64.len() != CKKS_ENCRYPTED_QUERY_SIGNATURE_B64_LEN {
+            errors.add(
+                "signature_b64",
+                ValidationError::new("invalid_ckks_encrypted_query_signature_length"),
+            );
+        } else if BASE64URL_NOPAD
+            .decode(self.signature_b64.as_bytes())
+            .map(|signature| signature.len() != 64)
+            .unwrap_or(true)
+        {
+            errors.add(
+                "signature_b64",
+                ValidationError::new("invalid_ckks_encrypted_query_signature_base64url"),
+            );
+        }
         if self.context_digest.is_empty() {
             errors.add(
                 "context_digest",
@@ -823,6 +856,9 @@ mod tests {
             slots: 2,
             ciphertext_sha256: "MFUx3MUOvKMc8dWzHp_HbtUfZrO23VoDDGU5rmUy-Xk".to_string(),
             ciphertext: BASE64URL_NOPAD.encode(b"ciphertext"),
+            signature_alg: "ed25519".to_string(),
+            signature_key_id: "tenant-a:query-signing-v1".to_string(),
+            signature_b64: BASE64URL_NOPAD.encode(&[4_u8; 64]),
         }
     }
 
@@ -879,6 +915,9 @@ mod tests {
                 slots: 0,
                 ciphertext_sha256: String::new(),
                 ciphertext: String::new(),
+                signature_alg: String::new(),
+                signature_key_id: String::new(),
+                signature_b64: String::new(),
                 ..valid_ckks_encrypted_query()
             }),
             ..Default::default()
@@ -886,6 +925,34 @@ mod tests {
         assert!(
             bad_request.validate().is_err(),
             "empty CKKS encrypted query metadata should error on validation"
+        );
+
+        let bad_request = SearchPoints {
+            collection_name: "docs".to_string(),
+            limit: 1,
+            ckks_encrypted_query: Some(CkksEncryptedQueryVector {
+                signature_alg: "ed448".to_string(),
+                ..valid_ckks_encrypted_query()
+            }),
+            ..Default::default()
+        };
+        assert!(
+            bad_request.validate().is_err(),
+            "unsupported CKKS encrypted query signature algorithm should error on validation"
+        );
+
+        let bad_request = SearchPoints {
+            collection_name: "docs".to_string(),
+            limit: 1,
+            ckks_encrypted_query: Some(CkksEncryptedQueryVector {
+                signature_b64: BASE64URL_NOPAD.encode(&[4_u8; 63]),
+                ..valid_ckks_encrypted_query()
+            }),
+            ..Default::default()
+        };
+        assert!(
+            bad_request.validate().is_err(),
+            "wrong-length CKKS encrypted query signature should error on validation"
         );
 
         let bad_request = SearchPoints {

@@ -15,11 +15,11 @@ use data_encoding::{BASE64, BASE64URL_NOPAD};
 use qdrant_sec::{
     AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
     CKKS_PUBLIC_MATERIAL_MAX_CRYPTO_CONTEXT_BYTES, CKKS_PUBLIC_MATERIAL_MAX_PUBLIC_KEY_BYTES,
-    CKKS_VECTOR_KEY_DOMAIN, CLIENT_PAYLOAD_ENVELOPE_BINDING, CkksParameters, CkksPublicMaterial,
-    CkksVectorEncryptor, CkksVectorVerifiedSidecarKey, ClientPayloadNonceReplayKey,
-    ClientPayloadSignatureVerification, ClientPayloadValidationContext,
-    ClientPayloadVerifiedEnvelopeKey, CommandOpenFheBackend, EncryptedCkksVector,
-    ExistingPayloadMode, LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_B64_LEN,
+    CKKS_SCHEME, CKKS_VECTOR_KEY_DOMAIN, CLIENT_PAYLOAD_ENVELOPE_BINDING, CkksParameters,
+    CkksPublicMaterial, CkksVectorEncryptor, CkksVectorVerifiedSidecarKey,
+    ClientPayloadNonceReplayKey, ClientPayloadSignatureVerification,
+    ClientPayloadValidationContext, ClientPayloadVerifiedEnvelopeKey, CommandOpenFheBackend,
+    EncryptedCkksVector, ExistingPayloadMode, LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_B64_LEN,
     LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_LEN, LocalMasterKeyProvider, METADATA_AES_GCM_PROVIDER,
     METADATA_BLIND_INDEX_PROVIDER, METADATA_EXACT_MATCH_TOKEN_BINDING, METADATA_VALUE_BINDING,
     MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER,
@@ -188,6 +188,7 @@ const VECTOR_OPENFHE_CKKS_ALLOWED_OPTIONS: &[&str] = &[
     CKKS_PUBLIC_KEY_B64_OPTION,
     ALLOW_PLAINTEXT_QUERIES_OPTION,
     PLAINTEXT_QUERIES_TCB_ACK_OPTION,
+    SIGNATURE_PUBLIC_KEYS_OPTION,
 ];
 const VECTOR_OPENFHE_CKKS_ALLOWED_MATERIAL_ROLES: &[&str] = &[PAYLOAD_SYM_KEY_ROLE];
 const OPENFHE_BACKEND_KIND_PROCESS: &str = "process";
@@ -491,6 +492,12 @@ enum ClientPayloadSignatureVerifier {
 }
 
 impl ClientPayloadSignatureVerifier {
+    fn public_key_for_key_id(&self, signature_key_id: &str) -> Option<&[u8]> {
+        match self {
+            Self::Registry(public_keys) => public_keys.get(signature_key_id).map(Vec::as_slice),
+        }
+    }
+
     fn verification_for_value<'a>(
         &'a self,
         value: &Value,
@@ -844,6 +851,7 @@ struct VectorWriteRule {
     encryptor: CkksVectorEncryptor<CommandOpenFheBackend>,
     public_material: CkksPublicMaterial,
     allow_plaintext_queries: bool,
+    query_signature_verifier: ClientPayloadSignatureVerifier,
 }
 
 pub(crate) struct VectorWritePlan {
@@ -970,6 +978,9 @@ impl VectorWritePlan {
         context_digest: &str,
         slots: usize,
         encrypted_query: &[u8],
+        signature_alg: &str,
+        signature_key_id: &str,
+        signature_b64: &str,
     ) -> Result<Option<Vec<f32>>, StorageError> {
         self.validate_client_encrypted_query(
             collection_name,
@@ -982,6 +993,9 @@ impl VectorWritePlan {
             context_digest,
             slots,
             encrypted_query,
+            signature_alg,
+            signature_key_id,
+            signature_b64,
         )?;
         let Some(rule) = self
             .rules
@@ -1037,6 +1051,9 @@ impl VectorWritePlan {
         context_digest: &str,
         slots: usize,
         encrypted_query: &[u8],
+        signature_alg: &str,
+        signature_key_id: &str,
+        signature_b64: &str,
     ) -> Result<Option<()>, StorageError> {
         let Some(rule) = self
             .rules
@@ -1081,6 +1098,50 @@ impl VectorWritePlan {
             .map_err(|err| {
                 StorageError::bad_input(format!(
                     "encrypted vector '{vector_name}' client CKKS query is incompatible with active CKKS parameters in collection {collection_name}: {err}",
+                ))
+            })?;
+        if signature_alg != "ed25519" {
+            return Err(StorageError::bad_input(format!(
+                "encrypted query signature algorithm is not supported for vector '{vector_name}' in collection {collection_name}",
+            )));
+        }
+        let Some(public_key) = rule
+            .query_signature_verifier
+            .public_key_for_key_id(signature_key_id)
+        else {
+            return Err(StorageError::bad_input(format!(
+                "encrypted query signature key_id is not trusted for vector '{vector_name}' in collection {collection_name}",
+            )));
+        };
+        let signature = BASE64URL_NOPAD
+            .decode(signature_b64.as_bytes())
+            .map_err(|_| {
+                StorageError::bad_input(format!(
+                    "encrypted query signature is not base64url for vector '{vector_name}' in collection {collection_name}",
+                ))
+            })?;
+        if signature.len() != 64 {
+            return Err(StorageError::bad_input(format!(
+                "encrypted query signature must decode to 64 bytes for vector '{vector_name}' in collection {collection_name}",
+            )));
+        }
+        let message = ckks_client_query_signature_message(
+            query_collection_id,
+            query_vector_name,
+            query_key_id,
+            query_rk_id,
+            query_rk_epoch,
+            context_digest,
+            slots,
+            encrypted_query,
+            signature_alg,
+            signature_key_id,
+        );
+        UnparsedPublicKey::new(&ED25519, public_key)
+            .verify(&message, &signature)
+            .map_err(|_| {
+                StorageError::bad_input(format!(
+                    "encrypted query signature verification failed for vector '{vector_name}' in collection {collection_name}",
                 ))
             })?;
 
@@ -1224,6 +1285,13 @@ fn generic_vector_write_plan(
                 rule.instance
             ))
         })?;
+        let query_signature_verifier =
+            client_payload_signature_verifier(instance, &rule.instance).map_err(|err| {
+                StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {} client query signature verifier is invalid: {err}",
+                    rule.instance
+                ))
+            })?;
 
         let key_id = resolve_payload_key_id(collection_name, encryption, &rule.instance, instance)
             .map_err(|err| {
@@ -1305,6 +1373,13 @@ fn generic_vector_write_plan(
                 encryptor,
                 public_material: public_material.clone(),
                 allow_plaintext_queries,
+                query_signature_verifier: ClientPayloadSignatureVerifier::Registry(
+                    match &query_signature_verifier {
+                        ClientPayloadSignatureVerifier::Registry(public_keys) => {
+                            public_keys.clone()
+                        }
+                    },
+                ),
             });
         }
     }
@@ -4706,6 +4781,46 @@ fn is_crypto_identifier(value: &str) -> bool {
         && value.bytes().all(|byte| {
             byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-' | b'/' | b'@')
         })
+}
+
+pub(crate) fn ckks_client_query_signature_message(
+    collection_id: &str,
+    vector_name: &str,
+    key_id: &str,
+    rk_id: &str,
+    rk_epoch: u64,
+    context_digest: &str,
+    slots: usize,
+    encrypted_query: &[u8],
+    signature_alg: &str,
+    signature_key_id: &str,
+) -> Vec<u8> {
+    fn append_field(message: &mut Vec<u8>, value: &[u8]) {
+        message.extend_from_slice(&(value.len() as u64).to_be_bytes());
+        message.extend_from_slice(value);
+    }
+
+    let ciphertext_sha256 = BASE64URL_NOPAD.encode(&Sha256::digest(encrypted_query));
+    let mut message = b"qdrant-sec/client-ckks-query-signature/v1\0".to_vec();
+    for value in [
+        "1",
+        CKKS_SCHEME,
+        CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+        collection_id,
+        vector_name,
+        key_id,
+        rk_id,
+        &rk_epoch.to_string(),
+        context_digest,
+        &slots.to_string(),
+        &ciphertext_sha256,
+        signature_alg,
+        signature_key_id,
+    ] {
+        append_field(&mut message, value.as_bytes());
+    }
+    append_field(&mut message, encrypted_query);
+    message
 }
 
 fn is_server_aead_key_id(value: &str) -> bool {

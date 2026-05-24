@@ -202,6 +202,9 @@ fn convert_vector_input_with_inferred(
                     slots: query.envelope.slots,
                     ciphertext_sha256: query.envelope.ciphertext_sha256,
                     ciphertext: query.envelope.ciphertext,
+                    signature_alg: query.envelope.signature.alg,
+                    signature_key_id: query.envelope.signature.key_id,
+                    signature_b64: query.envelope.signature.sig,
                 },
             ))
         }
@@ -381,8 +384,8 @@ mod tests {
     use std::collections::HashMap;
 
     use api::rest::schema::{
-        CkksEncryptedQueryVector, CkksEncryptedQueryVectorEnvelope, Document, Image,
-        InferenceObject, NearestQuery,
+        CkksEncryptedQuerySignature, CkksEncryptedQueryVector, CkksEncryptedQueryVectorEnvelope,
+        Document, Image, InferenceObject, NearestQuery,
     };
     use collection::operations::point_ops::VectorPersisted;
     use data_encoding::BASE64URL_NOPAD;
@@ -462,6 +465,11 @@ mod tests {
                 slots: 2,
                 ciphertext_sha256: "MFUx3MUOvKMc8dWzHp_HbtUfZrO23VoDDGU5rmUy-Xk".to_string(),
                 ciphertext: BASE64URL_NOPAD.encode(b"ciphertext"),
+                signature: CkksEncryptedQuerySignature {
+                    alg: "ed25519".to_string(),
+                    key_id: "tenant-a:query-signing-v1".to_string(),
+                    sig: BASE64URL_NOPAD.encode(&[4_u8; 64]),
+                },
             },
         });
 
@@ -494,6 +502,11 @@ mod tests {
                 slots: 2,
                 ciphertext_sha256: "MFUx3MUOvKMc8dWzHp_HbtUfZrO23VoDDGU5rmUy-Xk".to_string(),
                 ciphertext: BASE64URL_NOPAD.encode(b"ciphertext"),
+                signature: CkksEncryptedQuerySignature {
+                    alg: "ed25519".to_string(),
+                    key_id: "tenant-a:query-signing-v1".to_string(),
+                    sig: BASE64URL_NOPAD.encode(&[4_u8; 64]),
+                },
             },
         });
 
