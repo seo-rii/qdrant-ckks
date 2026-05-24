@@ -188,7 +188,7 @@ pub struct ShardSnapshotRecover {
 impl fmt::Debug for ShardSnapshotRecover {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ShardSnapshotRecover")
-            .field("location", &RedactedShardSnapshotLocation(&self.location))
+            .field("location", &self.location)
             .field("priority", &self.priority)
             .field("checksum", &self.checksum)
             .field("api_key", &self.api_key.as_ref().map(|_| "[redacted]"))
@@ -196,11 +196,23 @@ impl fmt::Debug for ShardSnapshotRecover {
     }
 }
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+#[derive(Clone, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum ShardSnapshotLocation {
     Url(Url),
     Path(PathBuf),
+}
+
+impl fmt::Debug for ShardSnapshotLocation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ShardSnapshotLocation::Url(location) => f
+                .debug_tuple("Url")
+                .field(&RedactedSnapshotUrl(location))
+                .finish(),
+            ShardSnapshotLocation::Path(path) => f.debug_tuple("Path").field(path).finish(),
+        }
+    }
 }
 
 struct RedactedSnapshotUrl<'a>(&'a Url);
@@ -225,20 +237,6 @@ impl fmt::Debug for RedactedSnapshotUrl<'_> {
             location.set_fragment(Some("[redacted]"));
         }
         f.debug_tuple("Url").field(&location.as_str()).finish()
-    }
-}
-
-struct RedactedShardSnapshotLocation<'a>(&'a ShardSnapshotLocation);
-
-impl fmt::Debug for RedactedShardSnapshotLocation<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {
-            ShardSnapshotLocation::Url(location) => f
-                .debug_tuple("Url")
-                .field(&RedactedSnapshotUrl(location))
-                .finish(),
-            ShardSnapshotLocation::Path(path) => f.debug_tuple("Path").field(path).finish(),
-        }
     }
 }
 
@@ -275,9 +273,7 @@ impl TryFrom<api::grpc::qdrant::ShardSnapshotLocation> for ShardSnapshotLocation
         let location = match location {
             shard_snapshot_location::Location::Url(url) => {
                 let url = Url::parse(&url).map_err(|err| {
-                    tonic::Status::invalid_argument(format!(
-                        "Invalid shard snapshot URL {url}: {err}",
-                    ))
+                    tonic::Status::invalid_argument(format!("Invalid shard snapshot URL: {err}",))
                 })?;
 
                 Self::Url(url)
@@ -367,5 +363,56 @@ mod tests {
             !rendered.contains("qdrant-sec-shard-api-key-sentinel"),
             "{rendered}",
         );
+    }
+
+    #[test]
+    fn shard_snapshot_location_debug_redacts_remote_credentials() {
+        let location = ShardSnapshotLocation::Url(
+            Url::parse(
+                "https://location-user:location-password@example.com/shards/a.snapshot?token=qdrant-sec-location-query-token#qdrant-sec-location-fragment",
+            )
+            .unwrap(),
+        );
+
+        let rendered = format!("{location:?}");
+
+        assert!(rendered.contains("[redacted]"), "{rendered}");
+        assert!(rendered.contains("example.com"), "{rendered}");
+        assert!(!rendered.contains("location-user"), "{rendered}");
+        assert!(!rendered.contains("location-password"), "{rendered}");
+        assert!(
+            !rendered.contains("qdrant-sec-location-query-token"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("qdrant-sec-location-fragment"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn invalid_grpc_shard_snapshot_url_redacts_remote_credentials() {
+        let location = api::grpc::qdrant::ShardSnapshotLocation {
+            location: Some(api::grpc::qdrant::shard_snapshot_location::Location::Url(
+                "https://grpc-user:grpc-password@example.com:bad/shards/a.snapshot?token=qdrant-sec-grpc-query-token#qdrant-sec-grpc-fragment"
+                    .to_string(),
+            )),
+        };
+
+        let status = ShardSnapshotLocation::try_from(location)
+            .expect_err("invalid URL must fail without echoing the raw URL");
+        let rendered = status.message();
+
+        assert!(
+            rendered.contains("Invalid shard snapshot URL"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("grpc-user"), "{rendered}");
+        assert!(!rendered.contains("grpc-password"), "{rendered}");
+        assert!(
+            !rendered.contains("qdrant-sec-grpc-query-token"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("qdrant-sec-grpc-fragment"), "{rendered}");
     }
 }
