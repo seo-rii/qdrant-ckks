@@ -174,8 +174,12 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "Mmr"
                         | "ciphertext"
                         | "ciphertexts"
+                        | "ciphertext_sha256"
+                        | "ciphertexts_sha256"
                         | "ciphertext_b64"
                         | "ciphertexts_b64"
+                        | "ciphertext_sha256_b64"
+                        | "ciphertexts_sha256_b64"
                         | "encrypted_query"
                         | "encrypted_queries"
                         | "encrypted_query_b64"
@@ -277,8 +281,12 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "publickeyb64"
                         | "signaturepublickeys"
                         | "signaturepublickeyb64"
+                        | "ciphertextsha256"
+                        | "ciphertextssha256"
                         | "ciphertextb64"
                         | "ciphertextsb64"
+                        | "ciphertextsha256b64"
+                        | "ciphertextssha256b64"
                         | "encryptedqueryb64"
                         | "encryptedqueriesb64"
                         | "nonceb64"
@@ -535,6 +543,7 @@ mod tests {
                     "rk_id": "tenant-a/payload-rk",
                     "nonce": "qdrant-sec-log-nonce-sentinel",
                     "ciphertext": "qdrant-sec-log-ciphertext-sentinel",
+                    "ciphertext_sha256": "qdrant-sec-log-ciphertext-sha256-sentinel",
                     "signature": {
                         "alg": "ed25519",
                         "key_id": "tenant-a/signing-key",
@@ -555,6 +564,7 @@ mod tests {
 
         assert!(!serialized.contains("qdrant-sec-log-nonce-sentinel"));
         assert!(!serialized.contains("qdrant-sec-log-ciphertext-sentinel"));
+        assert!(!serialized.contains("qdrant-sec-log-ciphertext-sha256-sentinel"));
         assert!(!serialized.contains("qdrant-sec-log-signature-sentinel"));
         assert!(!serialized.contains("qdrant-sec-log-context-digest-sentinel"));
         assert!(!serialized.contains("qdrant-sec-log-encrypted-query-sentinel"));
@@ -565,7 +575,7 @@ mod tests {
 
     #[test]
     fn encrypted_envelope_request_hash_uses_redacted_material() {
-        let envelope = |nonce: &str, ciphertext: &str, signature: &str| {
+        let envelope = |nonce: &str, ciphertext: &str, ciphertext_sha256: &str, signature: &str| {
             let mut value = json!({
                 "client_payload": {
                     "$qdrant_client_aead": {
@@ -573,6 +583,7 @@ mod tests {
                         "rk_id": "tenant-a/payload-rk",
                         "nonce": nonce,
                         "ciphertext": ciphertext,
+                        "ciphertext_sha256": ciphertext_sha256,
                         "signature": {
                             "alg": "ed25519",
                             "key_id": "tenant-a/signing-key",
@@ -585,8 +596,18 @@ mod tests {
             value
         };
 
-        let first = envelope("nonce-a", "ciphertext-a", "signature-a");
-        let second = envelope("nonce-b", "ciphertext-b", "signature-b");
+        let first = envelope(
+            "nonce-a",
+            "ciphertext-a",
+            "ciphertext-sha256-a",
+            "signature-a",
+        );
+        let second = envelope(
+            "nonce-b",
+            "ciphertext-b",
+            "ciphertext-sha256-b",
+            "signature-b",
+        );
 
         assert_eq!(first, second);
         assert_eq!(
@@ -631,8 +652,12 @@ mod tests {
                     "qdrant-sec-ciphertexts-log-sentinel-a",
                     "qdrant-sec-ciphertexts-log-sentinel-b"
                 ],
+                "ciphertext_sha256": "qdrant-sec-ciphertext-sha256-log-sentinel",
+                "ciphertexts_sha256": ["qdrant-sec-ciphertexts-sha256-log-sentinel"],
                 "ciphertext_b64": "qdrant-sec-ciphertext-b64-log-sentinel",
                 "ciphertexts_b64": ["qdrant-sec-ciphertexts-b64-log-sentinel"],
+                "ciphertext_sha256_b64": "qdrant-sec-ciphertext-sha256-b64-log-sentinel",
+                "ciphertexts_sha256_b64": ["qdrant-sec-ciphertexts-sha256-b64-log-sentinel"],
                 "nonce": "qdrant-sec-nonce-log-sentinel",
                 "nonces": ["qdrant-sec-nonces-log-sentinel"],
                 "nonce_b64": "qdrant-sec-nonce-b64-log-sentinel",
@@ -672,8 +697,12 @@ mod tests {
             "qdrant-sec-ciphertext-log-sentinel",
             "qdrant-sec-ciphertexts-log-sentinel-a",
             "qdrant-sec-ciphertexts-log-sentinel-b",
+            "qdrant-sec-ciphertext-sha256-log-sentinel",
+            "qdrant-sec-ciphertexts-sha256-log-sentinel",
             "qdrant-sec-ciphertext-b64-log-sentinel",
             "qdrant-sec-ciphertexts-b64-log-sentinel",
+            "qdrant-sec-ciphertext-sha256-b64-log-sentinel",
+            "qdrant-sec-ciphertexts-sha256-b64-log-sentinel",
             "qdrant-sec-nonce-log-sentinel",
             "qdrant-sec-nonces-log-sentinel",
             "qdrant-sec-nonce-b64-log-sentinel",
@@ -717,6 +746,8 @@ mod tests {
                 "valueB64": "qdrant-sec-camel-value-log-sentinel",
                 "nonceB64": "qdrant-sec-camel-nonce-b64-log-sentinel",
                 "ciphertextB64": "qdrant-sec-camel-ciphertext-b64-log-sentinel",
+                "ciphertextSha256": "qdrant-sec-camel-ciphertext-sha256-log-sentinel",
+                "ciphertextSha256B64": "qdrant-sec-camel-ciphertext-sha256-b64-log-sentinel",
                 "signatureB64": "qdrant-sec-camel-signature-b64-log-sentinel",
                 "signaturePublicKeys": [{
                     "keyId": "tenant-a/client-signing-v1",
@@ -746,6 +777,8 @@ mod tests {
             "qdrant-sec-camel-value-log-sentinel",
             "qdrant-sec-camel-nonce-b64-log-sentinel",
             "qdrant-sec-camel-ciphertext-b64-log-sentinel",
+            "qdrant-sec-camel-ciphertext-sha256-log-sentinel",
+            "qdrant-sec-camel-ciphertext-sha256-b64-log-sentinel",
             "qdrant-sec-camel-signature-b64-log-sentinel",
             "qdrant-sec-camel-signature-public-keys-log-sentinel",
             "qdrant-sec-camel-api-key-log-sentinel",
