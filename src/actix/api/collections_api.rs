@@ -16,7 +16,9 @@ use collection::config::{
 use collection::operations::cluster_ops::ClusterOperations;
 use collection::operations::types::CollectionError;
 use collection::operations::verification::new_unchecked_verification_pass;
+use data_encoding::BASE64URL_NOPAD;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use shard::operations::optimization::OptimizationsRequestOptions;
 use storage::content_manager::collection_meta_ops::{
     ApplyCryptoMigrationPlan, ChangeAliasesOperation, CollectionMetaOperations, CreateCollection,
@@ -277,12 +279,48 @@ const PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_FILE: &str = "payload_crypto_migration_l
 
 #[derive(Debug, Serialize)]
 struct PayloadCryptoMigrationRunRecord {
+    run_id: String,
     collection_name: String,
     stable_crypto_id: String,
+    checkpoints_sha256_b64: String,
+    completion_plan_sha256_b64: String,
     checkpoints: Vec<CryptoMigrationCheckpoint>,
     completion_plan: CryptoMigrationPlan,
     completed: bool,
     dry_run: bool,
+}
+
+fn payload_crypto_migration_run_record_digest_b64<T: Serialize>(
+    label: &str,
+    value: &T,
+) -> Result<String, StorageError> {
+    let bytes = serde_json::to_vec(value).map_err(|err| {
+        StorageError::service_error(format!(
+            "failed to serialize payload crypto migration {label} for digest: {err}",
+        ))
+    })?;
+    Ok(BASE64URL_NOPAD.encode(&Sha256::digest(bytes)))
+}
+
+fn payload_crypto_migration_run_id(
+    stable_crypto_id: &str,
+    dry_run: bool,
+    checkpoints_sha256_b64: &str,
+    completion_plan_sha256_b64: &str,
+) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(b"qdrant-sec/payload-crypto-migration-run/v1");
+    hasher.update(stable_crypto_id.as_bytes());
+    hasher.update([u8::from(dry_run)]);
+    hasher.update(checkpoints_sha256_b64.as_bytes());
+    hasher.update(completion_plan_sha256_b64.as_bytes());
+    hasher.update(std::process::id().to_be_bytes());
+    hasher.update(now.to_be_bytes());
+    BASE64URL_NOPAD.encode(&hasher.finalize())
 }
 
 #[derive(Debug, Serialize)]
@@ -986,11 +1024,27 @@ async fn run_payloads_for_crypto_migration(
                 "payload crypto migration completion plan is invalid: {err}",
             ))
         })?;
+        let stable_crypto_id = config
+            .stable_crypto_id(&collection_name)
+            .map_err(StorageError::from)?;
+        let checkpoints_sha256_b64 = payload_crypto_migration_run_record_digest_b64(
+            "checkpoints",
+            &completion_plan.checkpoints,
+        )?;
+        let completion_plan_sha256_b64 =
+            payload_crypto_migration_run_record_digest_b64("completion plan", &completion_plan)?;
+        let run_id = payload_crypto_migration_run_id(
+            &stable_crypto_id,
+            dry_run,
+            &checkpoints_sha256_b64,
+            &completion_plan_sha256_b64,
+        );
         let mut run_record = PayloadCryptoMigrationRunRecord {
+            run_id,
             collection_name: collection_name.clone(),
-            stable_crypto_id: config
-                .stable_crypto_id(&collection_name)
-                .map_err(StorageError::from)?,
+            stable_crypto_id,
+            checkpoints_sha256_b64,
+            completion_plan_sha256_b64,
             checkpoints: completion_plan.checkpoints.clone(),
             completion_plan: completion_plan.clone(),
             completed: false,
@@ -1261,9 +1315,26 @@ mod tests {
         )
         .unwrap();
 
+        let checkpoints_sha256_b64 = payload_crypto_migration_run_record_digest_b64(
+            "checkpoints",
+            &completion_plan.checkpoints,
+        )
+        .unwrap();
+        let completion_plan_sha256_b64 =
+            payload_crypto_migration_run_record_digest_b64("completion plan", &completion_plan)
+                .unwrap();
+
         PayloadCryptoMigrationRunRecord {
+            run_id: payload_crypto_migration_run_id(
+                "12345678-90ab-cdef-1234-567890abcdef",
+                false,
+                &checkpoints_sha256_b64,
+                &completion_plan_sha256_b64,
+            ),
             collection_name: "docs".to_string(),
             stable_crypto_id: "12345678-90ab-cdef-1234-567890abcdef".to_string(),
+            checkpoints_sha256_b64,
+            completion_plan_sha256_b64,
             checkpoints: completion_plan.checkpoints.clone(),
             completion_plan,
             completed: true,
@@ -1649,6 +1720,24 @@ mod tests {
         assert_eq!(persisted["completion_plan"]["from"], "rotating");
         assert_eq!(persisted["completion_plan"]["to"], "active");
         assert_eq!(persisted["checkpoints"][0]["status"], "verified");
+        assert!(persisted["run_id"].as_str().is_some_and(|run_id| {
+            BASE64URL_NOPAD
+                .decode(run_id.as_bytes())
+                .is_ok_and(|bytes| bytes.len() == 32)
+        }));
+        assert_eq!(
+            persisted["checkpoints_sha256_b64"],
+            payload_crypto_migration_run_record_digest_b64("checkpoints", &record.checkpoints)
+                .unwrap()
+        );
+        assert_eq!(
+            persisted["completion_plan_sha256_b64"],
+            payload_crypto_migration_run_record_digest_b64(
+                "completion plan",
+                &record.completion_plan,
+            )
+            .unwrap()
+        );
     }
 
     #[test]
@@ -1672,6 +1761,15 @@ mod tests {
         let committed: Value =
             serde_json::from_slice(&std::fs::read(record_path).unwrap()).unwrap();
         assert_eq!(committed["completed"], true);
+        assert_eq!(committed["run_id"], pending["run_id"]);
+        assert_eq!(
+            committed["completion_plan_sha256_b64"],
+            pending["completion_plan_sha256_b64"]
+        );
+        assert_eq!(
+            committed["checkpoints_sha256_b64"],
+            pending["checkpoints_sha256_b64"]
+        );
         assert_eq!(committed["completion_plan"], pending["completion_plan"]);
         assert_eq!(committed["checkpoints"], pending["checkpoints"]);
     }
