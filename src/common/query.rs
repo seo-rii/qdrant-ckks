@@ -217,6 +217,8 @@ const CKKS_GROUPED_SEARCH_MAX_CANDIDATES: usize = 4096;
 const CKKS_SCORING_SOURCE_BATCH_MAX: usize = 32;
 const CKKS_MATRIX_SAMPLE_MAX: usize = 512;
 const CKKS_MATRIX_SCORE_PAIR_MAX: usize = CKKS_MATRIX_SAMPLE_MAX * CKKS_MATRIX_SAMPLE_MAX;
+const CKKS_SEARCH_FILL_RETRY_SLACK: usize = 32;
+const CKKS_SEARCH_FILL_RETRY_MULTIPLIER: usize = 4;
 
 static CKKS_SIDECAR_HNSW_GRAPH_CACHE: LazyLock<Mutex<CkksSidecarHnswGraphCache>> =
     LazyLock::new(|| Mutex::new(CkksSidecarHnswGraphCache::default()));
@@ -1127,9 +1129,7 @@ async fn ckks_vector_search_points_with_scoring(
                     "non-nearest or unsupported CKKS HNSW sidecar search was rejected before segment search"
                 ),
             };
-            let hnsw_top = offset
-                .saturating_add(limit)
-                .min(candidate_scan_limit.unwrap_or(usize::MAX));
+            let hnsw_top = ckks_scored_fill_candidate_limit(offset, limit, candidate_scan_limit);
             let mut segment_scored_by_id = HashMap::<_, ScoredPoint>::new();
             let indexed_points = ckks_sidecar_hnsw_search_segment_snapshots(
                 collection_name,
@@ -1190,14 +1190,11 @@ async fn ckks_vector_search_points_with_scoring(
 
             let mut scored = segment_scored_by_id.into_values().collect::<Vec<_>>();
             sort_ckks_scored_points(score_order, &mut scored);
-            let mut top = scored
-                .into_iter()
-                .skip(offset)
-                .take(limit)
-                .collect::<Vec<_>>();
-            ckks_fill_scored_points_payload_or_vectors(
+            let top = ckks_select_and_fill_scored_points_payload_or_vectors(
                 collection,
-                &mut top,
+                scored,
+                offset,
+                limit,
                 with_payload.unwrap_or(WithPayloadInterface::Bool(false)),
                 with_vector,
                 read_consistency,
@@ -1772,9 +1769,7 @@ async fn ckks_vector_search_points_with_scoring(
                 "non-nearest or unsupported CKKS HNSW sidecar search was rejected before scrolling"
             ),
         };
-        let hnsw_top = offset
-            .saturating_add(limit)
-            .min(candidate_scan_limit.unwrap_or(usize::MAX));
+        let hnsw_top = ckks_scored_fill_candidate_limit(offset, limit, candidate_scan_limit);
         let hnsw_points = ckks_sidecar_hnsw_search_points(
             collection_name,
             collection_crypto_id,
@@ -1812,12 +1807,13 @@ async fn ckks_vector_search_points_with_scoring(
     {
         let mut candidates = scored_by_id.into_values().collect::<Vec<_>>();
         sort_ckks_scored_points(score_order, &mut candidates);
-        candidates.truncate((*candidates_limit).max(limit));
+        let selection_limit = ckks_scored_fill_candidate_limit(0, limit, Some(candidates.len()));
+        candidates.truncate((*candidates_limit).max(selection_limit));
         let mut selected = Vec::new();
         if !candidates.is_empty() && limit > 0 {
             selected.push(0usize);
             let mut remaining = (1..candidates.len()).collect::<Vec<_>>();
-            while selected.len() < limit && !remaining.is_empty() {
+            while selected.len() < selection_limit && !remaining.is_empty() {
                 let mut best_position = 0usize;
                 let mut best_score = f32::NEG_INFINITY;
                 for (position, candidate_idx) in remaining.iter().copied().enumerate() {
@@ -1868,13 +1864,15 @@ async fn ckks_vector_search_points_with_scoring(
             }
         }
 
-        let mut top = selected
+        let top_candidates = selected
             .into_iter()
             .filter_map(|idx| candidates.get(idx).cloned())
             .collect::<Vec<_>>();
-        ckks_fill_scored_points_payload_or_vectors(
+        let top = ckks_select_and_fill_scored_points_payload_or_vectors(
             collection,
-            &mut top,
+            top_candidates,
+            0,
+            limit,
             with_payload.unwrap_or(WithPayloadInterface::Bool(false)),
             with_vector,
             read_consistency,
@@ -1889,16 +1887,62 @@ async fn ckks_vector_search_points_with_scoring(
 
     let mut scored = scored_by_id.into_values().collect::<Vec<_>>();
     sort_ckks_scored_points(score_order, &mut scored);
-    let mut top = scored
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .collect::<Vec<_>>();
+    ckks_select_and_fill_scored_points_payload_or_vectors(
+        collection,
+        scored,
+        offset,
+        limit,
+        with_payload.unwrap_or(WithPayloadInterface::Bool(false)),
+        with_vector,
+        read_consistency,
+        shard_selection,
+        timeout,
+        hw_measurement_acc,
+    )
+    .await
+}
 
+fn ckks_scored_fill_candidate_limit(
+    offset: usize,
+    limit: usize,
+    candidate_scan_limit: Option<usize>,
+) -> usize {
+    if limit == 0 {
+        return 0;
+    }
+
+    let requested = offset.saturating_add(limit);
+    let refill_slack = limit
+        .saturating_mul(CKKS_SEARCH_FILL_RETRY_MULTIPLIER.saturating_sub(1))
+        .max(CKKS_SEARCH_FILL_RETRY_SLACK);
+    requested
+        .saturating_add(refill_slack)
+        .min(candidate_scan_limit.unwrap_or(usize::MAX))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn ckks_select_and_fill_scored_points_payload_or_vectors(
+    collection: &collection::collection::Collection,
+    scored: Vec<ScoredPoint>,
+    offset: usize,
+    limit: usize,
+    with_payload: WithPayloadInterface,
+    with_vector: WithVector,
+    read_consistency: Option<ReadConsistency>,
+    shard_selection: &ShardSelectorInternal,
+    timeout: Option<Duration>,
+    hw_measurement_acc: HwMeasurementAcc,
+) -> Result<Vec<ScoredPoint>, StorageError> {
+    if scored.is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let candidate_limit = ckks_scored_fill_candidate_limit(offset, limit, Some(scored.len()));
+    let mut candidates = scored.into_iter().take(candidate_limit).collect::<Vec<_>>();
     ckks_fill_scored_points_payload_or_vectors(
         collection,
-        &mut top,
-        with_payload.unwrap_or(WithPayloadInterface::Bool(false)),
+        &mut candidates,
+        with_payload,
         with_vector,
         read_consistency,
         shard_selection,
@@ -1907,7 +1951,7 @@ async fn ckks_vector_search_points_with_scoring(
     )
     .await?;
 
-    Ok(top)
+    Ok(candidates.into_iter().skip(offset).take(limit).collect())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6255,14 +6299,11 @@ pub async fn do_query_batch_points(
                                 .take_while(|point| point.score >= score_threshold)
                                 .collect();
                         }
-                        let mut top = fused
-                            .into_iter()
-                            .skip(request.offset)
-                            .take(request.limit)
-                            .collect::<Vec<_>>();
-                        ckks_fill_scored_points_payload_or_vectors(
+                        let top = ckks_select_and_fill_scored_points_payload_or_vectors(
                             &collection,
-                            &mut top,
+                            fused,
+                            request.offset,
+                            request.limit,
                             request.with_payload.clone(),
                             WithVector::Bool(false),
                             read_consistency,
@@ -8146,6 +8187,65 @@ mod tests {
         assert_eq!(points[0].version, 42);
         assert_eq!(points[0].payload.as_ref().unwrap().0["body"], "kept");
         assert_eq!(points[0].shard_key, Some(ShardKey::from("tenant-b")));
+    }
+
+    #[test]
+    fn ckks_fill_candidate_limit_adds_bounded_refill_slack() {
+        let requested = 7;
+        let candidate_limit = ckks_scored_fill_candidate_limit(2, 5, None);
+        assert_eq!(candidate_limit, requested + CKKS_SEARCH_FILL_RETRY_SLACK);
+
+        assert_eq!(ckks_scored_fill_candidate_limit(2, 5, Some(9)), 9);
+        assert_eq!(ckks_scored_fill_candidate_limit(2, 0, None), 0);
+
+        let large_limit = 64;
+        assert_eq!(
+            ckks_scored_fill_candidate_limit(0, large_limit, None),
+            large_limit * CKKS_SEARCH_FILL_RETRY_MULTIPLIER,
+        );
+    }
+
+    #[test]
+    fn ckks_fill_can_refill_top_k_from_extra_candidates() {
+        let candidate_limit = ckks_scored_fill_candidate_limit(0, 2, Some(3));
+        assert_eq!(candidate_limit, 3);
+
+        let mut candidates = vec![
+            scored_point(1, 9.0),
+            scored_point(2, 8.0),
+            scored_point(3, 7.0),
+        ]
+        .into_iter()
+        .take(candidate_limit)
+        .collect::<Vec<_>>();
+        let records = vec![
+            RecordInternal {
+                id: 2.into(),
+                version: 42,
+                payload: None,
+                vector: None,
+                shard_key: None,
+                order_value: None,
+            },
+            RecordInternal {
+                id: 3.into(),
+                version: 43,
+                payload: None,
+                vector: None,
+                shard_key: None,
+                order_value: None,
+            },
+        ];
+
+        ckks_hydrate_scored_points_from_records(&mut candidates, records);
+        let top = candidates.into_iter().take(2).collect::<Vec<_>>();
+
+        assert_eq!(
+            top.iter().map(|point| point.id).collect::<Vec<_>>(),
+            vec![2.into(), 3.into()],
+        );
+        assert_eq!(top[0].version, 42);
+        assert_eq!(top[1].version, 43);
     }
 
     #[test]
