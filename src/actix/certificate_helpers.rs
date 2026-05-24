@@ -3,7 +3,7 @@ use std::io::{self, BufRead, BufReader};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use fs_err::File;
+use fs_err::{File, OpenOptions};
 use parking_lot::RwLock;
 use rustls::client::VerifierBuilderError;
 use rustls::pki_types::CertificateDer;
@@ -122,8 +122,23 @@ fn load_certified_key(tls_config: &TlsConfig) -> Result<Arc<CertifiedKey>> {
     }
 
     // Load private key
-    let private_key_item =
-        with_buf_read(&tls_config.key, rustls_pemfile::read_one)?.ok_or(Error::NoPrivateKey)?;
+    #[cfg(unix)]
+    let key_file = {
+        use fs_err::os::unix::fs::OpenOptionsExt;
+
+        OpenOptions::new()
+            .read(true)
+            .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+            .open(&tls_config.key)
+            .map_err(|err| Error::OpenFile(err, tls_config.key.clone()))?
+    };
+    #[cfg(not(unix))]
+    let key_file =
+        File::open(&tls_config.key).map_err(|err| Error::OpenFile(err, tls_config.key.clone()))?;
+    let mut key_reader = BufReader::new(key_file);
+    let private_key_item = rustls_pemfile::read_one(&mut key_reader)
+        .map_err(|err| Error::ReadFile(err, tls_config.key.clone()))?
+        .ok_or(Error::NoPrivateKey)?;
     let private_key = match private_key_item {
         Item::Pkcs1Key(pkey) => rustls_pki_types::PrivateKeyDer::from(pkey),
         Item::Pkcs8Key(pkey) => rustls_pki_types::PrivateKeyDer::from(pkey),
@@ -203,4 +218,36 @@ pub enum Error {
     ClientCertVerifier(#[source] VerifierBuilderError),
     #[error("No ca_cert provided")]
     NoCaCert,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn load_certified_key_rejects_symlink_private_key() {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let cert_path = manifest_dir.join("tests/e2e_tests/test_data/cert/cert.pem");
+        let key_target = manifest_dir.join("tests/e2e_tests/test_data/cert/key.pem");
+        let key_symlink = directory.path().join("key.pem");
+        std::os::unix::fs::symlink(&key_target, &key_symlink).unwrap();
+
+        let tls_config = TlsConfig {
+            cert: cert_path.display().to_string(),
+            key: key_symlink.display().to_string(),
+            ca_cert: None,
+            cert_ttl: None,
+        };
+
+        let result = load_certified_key(&tls_config);
+
+        assert!(
+            matches!(result, Err(Error::OpenFile(_, _))),
+            "TLS private key symlink must be rejected",
+        );
+    }
 }
