@@ -77,6 +77,24 @@ use crate::shards::telemetry::RemoteShardTelemetry;
 /// Timeout for transferring and recovering a shard snapshot on a remote peer.
 const SHARD_SNAPSHOT_TRANSFER_RECOVER_TIMEOUT: Duration = MAX_GRPC_CHANNEL_TIMEOUT;
 
+fn recover_shard_snapshot_url_request(
+    collection_name: &str,
+    shard_id: ShardId,
+    url: &Url,
+    snapshot_priority: SnapshotPriority,
+) -> RecoverShardSnapshotRequest {
+    RecoverShardSnapshotRequest {
+        collection_name: collection_name.into(),
+        shard_id,
+        snapshot_location: Some(ShardSnapshotLocation {
+            location: Some(Location::Url(url.to_string())),
+        }),
+        snapshot_priority: api::grpc::qdrant::ShardSnapshotPriority::from(snapshot_priority) as i32,
+        checksum: None,
+        api_key: None,
+    }
+}
+
 /// RemoteShard
 ///
 /// Remote Shard is a representation of a shard that is located on a remote peer.
@@ -845,8 +863,9 @@ impl RemoteShard {
     ///
     /// This method specifies a timeout of 24 hours.
     ///
-    /// Setting an API key may leak when requesting a snapshot file from a malicious server.
-    /// This is potentially dangerous if a user has control over what URL is accessed.
+    /// This method intentionally does not forward service-wide API keys. URL-based recovery on the
+    /// receiver side rejects caller-provided HTTP(S) URLs with API keys, and shard transfer must use
+    /// a narrower transfer-scoped credential before reintroducing authenticated snapshot download.
     ///
     /// # Cancel safety
     ///
@@ -857,24 +876,17 @@ impl RemoteShard {
         shard_id: ShardId,
         url: &Url,
         snapshot_priority: SnapshotPriority,
-        api_key: Option<&str>,
     ) -> CollectionResult<RecoverSnapshotResponse> {
         let res = self
             .with_shard_snapshots_client_timeout(
                 |mut client| async move {
                     client
-                        .recover(RecoverShardSnapshotRequest {
-                            collection_name: collection_name.into(),
+                        .recover(recover_shard_snapshot_url_request(
+                            collection_name,
                             shard_id,
-                            snapshot_location: Some(ShardSnapshotLocation {
-                                location: Some(Location::Url(url.to_string())),
-                            }),
-                            snapshot_priority: api::grpc::qdrant::ShardSnapshotPriority::from(
-                                snapshot_priority,
-                            ) as i32,
-                            checksum: None,
-                            api_key: api_key.map(Into::into),
-                        })
+                            url,
+                            snapshot_priority,
+                        ))
                         .await
                 },
                 Some(SHARD_SNAPSHOT_TRANSFER_RECOVER_TIMEOUT),
@@ -1460,5 +1472,32 @@ impl ShardOperation for RemoteShard {
 
     async fn stop_gracefully(self) {
         // No background operations to stop on RemoteShard
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use url::Url;
+
+    use super::*;
+
+    #[test]
+    fn shard_snapshot_transfer_recover_request_never_forwards_service_api_key() {
+        let url = Url::parse("https://peer-1.local/snapshots/docs.snapshot").unwrap();
+        let request =
+            recover_shard_snapshot_url_request("docs", 7, &url, SnapshotPriority::ShardTransfer);
+
+        assert_eq!(request.collection_name, "docs");
+        assert_eq!(request.shard_id, 7);
+        assert!(
+            request.api_key.is_none(),
+            "shard transfer URL recovery must not forward service-wide API keys",
+        );
+        assert_eq!(
+            request
+                .snapshot_location
+                .and_then(|location| location.location),
+            Some(Location::Url(url.to_string())),
+        );
     }
 }
