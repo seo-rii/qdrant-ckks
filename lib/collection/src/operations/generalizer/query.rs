@@ -154,7 +154,7 @@ impl Generalizer for crate::operations::universal_query::collection_query::CkksE
             security_profile: self.security_profile.clone(),
             context_digest: self.context_digest.clone(),
             slots: self.slots,
-            ciphertext_sha256: self.ciphertext_sha256.clone(),
+            ciphertext_sha256: "[redacted]".to_string(),
             ciphertext: "[redacted]".to_string(),
         }
     }
@@ -252,5 +252,37 @@ impl Generalizer for NaiveFeedbackCoefficients {
             b: 0.0.into(),
             c: 0.0.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::operations::universal_query::collection_query::CkksEncryptedQueryInput;
+
+    #[test]
+    fn ckks_encrypted_query_generalizer_redacts_ciphertext_and_hash() {
+        let query = CkksEncryptedQueryInput {
+            version: 1,
+            scheme: "openfhe-ckks".to_string(),
+            security_profile: "ckks-128-n16384-d4-scale50".to_string(),
+            context_digest: "context-digest".to_string(),
+            slots: 4,
+            ciphertext_sha256: "qdrant-sec-query-ciphertext-sha256-sentinel".to_string(),
+            ciphertext: "qdrant-sec-query-ciphertext-sentinel".to_string(),
+        };
+
+        let generalized = query.remove_details();
+
+        assert_eq!(generalized.ciphertext, "[redacted]");
+        assert_eq!(generalized.ciphertext_sha256, "[redacted]");
+        assert_ne!(
+            generalized.ciphertext,
+            "qdrant-sec-query-ciphertext-sentinel"
+        );
+        assert_ne!(
+            generalized.ciphertext_sha256,
+            "qdrant-sec-query-ciphertext-sha256-sentinel"
+        );
     }
 }
