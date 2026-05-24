@@ -3065,6 +3065,115 @@ set -euo pipefail
     assert_eq!(counts.lines().filter(|line| *line == "request").count(), 2);
 }
 
+#[cfg(unix)]
+#[test]
+fn command_openfhe_backend_clones_do_not_exceed_pool_size_while_busy() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("cloned-pool-openfhe-bridge.sh");
+    let count_path = dir.path().join("cloned-pool-counts.log");
+    let release_path = dir.path().join("release");
+    fs::write(
+        &script_path,
+        format!(
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+count_file={}
+release_file={}
+printf 'start\n' >> "$count_file"
+while IFS= read -r _request; do
+  printf 'request\n' >> "$count_file"
+  while [ ! -f "$release_file" ]; do
+    sleep 0.01
+  done
+  printf '{{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}}\n'
+done
+"#,
+            count_path.display(),
+            release_path.display(),
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+        .with_args([script_path.display().to_string()])
+        .with_pool_size(NonZeroUsize::new(1).unwrap());
+    assert!(
+        backend.shares_worker_pool_for_tests(&backend.clone()),
+        "cloned backend handles must share worker-pool state",
+    );
+    let pool_owner = backend.clone();
+    let first_encryptor = test_ckks_encryptor(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend.clone(),
+    )
+    .unwrap();
+    let second_encryptor = test_ckks_encryptor(
+        "tenant-a:ckks",
+        "embedding",
+        CkksParameters::openfhe_default_128_bit(),
+        SecretKey::from_bytes([29u8; 32]),
+        backend,
+    )
+    .unwrap();
+
+    let first = std::thread::spawn(move || {
+        first_encryptor
+            .encrypt("docs", "point-1", &public_material(), &[1.0])
+            .unwrap();
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let counts = fs::read_to_string(&count_path).unwrap_or_default();
+        if counts.lines().filter(|line| *line == "request").count() == 1 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "first cloned OpenFHE bridge request did not become busy before timeout"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let second = std::thread::spawn(move || {
+        second_encryptor
+            .encrypt("docs", "point-2", &public_material(), &[2.0])
+            .unwrap();
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    let counts_before_release = fs::read_to_string(&count_path).unwrap();
+    assert_eq!(
+        counts_before_release
+            .lines()
+            .filter(|line| *line == "start")
+            .count(),
+        1,
+        "a second backend clone must not spawn another bridge while the shared pool is full",
+    );
+    assert_eq!(
+        counts_before_release
+            .lines()
+            .filter(|line| *line == "request")
+            .count(),
+        1,
+        "the second request must wait behind the full shared pool instead of using a new worker",
+    );
+    fs::write(&release_path, b"release").unwrap();
+    first.join().unwrap();
+    second.join().unwrap();
+    drop(pool_owner);
+
+    let counts = fs::read_to_string(count_path).unwrap();
+    assert_eq!(counts.lines().filter(|line| *line == "request").count(), 2);
+}
+
 #[test]
 fn encrypted_ckks_vector_has_stable_json_shape() {
     let encrypted = encryptor()
