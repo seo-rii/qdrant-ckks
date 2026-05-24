@@ -225,6 +225,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "token"
                         | "access_token"
                         | "refresh_token"
+                        | "access_key_id"
+                        | "secret_access_key"
                         | "bearer_token"
                         | "id_token"
                         | "jwt"
@@ -233,6 +235,13 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "vault_token"
                         | "x_vault_token"
                         | "x-vault-token"
+                        | "aws_security_token"
+                        | "x_amz_security_token"
+                        | "x-amz-security-token"
+                        | "x_amz_credential"
+                        | "x-amz-credential"
+                        | "x_amz_signature"
+                        | "x-amz-signature"
                         | "client_secret"
                         | "credential"
                         | "credentials"
@@ -247,11 +256,17 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "setcookie"
                         | "accesstoken"
                         | "refreshtoken"
+                        | "accesskeyid"
+                        | "secretaccesskey"
                         | "bearertoken"
                         | "idtoken"
                         | "sessiontoken"
                         | "vaulttoken"
                         | "xvaulttoken"
+                        | "awssecuritytoken"
+                        | "xamzsecuritytoken"
+                        | "xamzcredential"
+                        | "xamzsignature"
                         | "clientsecret"
                         | "privatekey"
                         | "privatekeyb64"
@@ -761,6 +776,8 @@ mod tests {
                 "token": "qdrant-sec-token-log-sentinel",
                 "access_token": "qdrant-sec-access-token-log-sentinel",
                 "refresh_token": "qdrant-sec-refresh-token-log-sentinel",
+                "access_key_id": "qdrant-sec-access-key-id-log-sentinel",
+                "secret_access_key": "qdrant-sec-secret-access-key-log-sentinel",
                 "bearer_token": "qdrant-sec-bearer-token-log-sentinel",
                 "id_token": "qdrant-sec-id-token-log-sentinel",
                 "jwt": "qdrant-sec-jwt-log-sentinel",
@@ -768,6 +785,10 @@ mod tests {
                 "session_token": "qdrant-sec-session-token-log-sentinel",
                 "vault_token": "qdrant-sec-vault-token-log-sentinel",
                 "x-vault-token": "qdrant-sec-x-vault-token-log-sentinel",
+                "aws_security_token": "qdrant-sec-aws-security-token-log-sentinel",
+                "X-Amz-Security-Token": "qdrant-sec-x-amz-security-token-log-sentinel",
+                "X-Amz-Credential": "qdrant-sec-x-amz-credential-log-sentinel",
+                "X-Amz-Signature": "qdrant-sec-x-amz-signature-log-sentinel",
                 "client_secret": "qdrant-sec-client-secret-log-sentinel",
                 "credential": "qdrant-sec-credential-log-sentinel",
                 "credentials": "qdrant-sec-credentials-log-sentinel",
@@ -811,6 +832,8 @@ mod tests {
             "qdrant-sec-token-log-sentinel",
             "qdrant-sec-access-token-log-sentinel",
             "qdrant-sec-refresh-token-log-sentinel",
+            "qdrant-sec-access-key-id-log-sentinel",
+            "qdrant-sec-secret-access-key-log-sentinel",
             "qdrant-sec-bearer-token-log-sentinel",
             "qdrant-sec-id-token-log-sentinel",
             "qdrant-sec-jwt-log-sentinel",
@@ -818,6 +841,10 @@ mod tests {
             "qdrant-sec-session-token-log-sentinel",
             "qdrant-sec-vault-token-log-sentinel",
             "qdrant-sec-x-vault-token-log-sentinel",
+            "qdrant-sec-aws-security-token-log-sentinel",
+            "qdrant-sec-x-amz-security-token-log-sentinel",
+            "qdrant-sec-x-amz-credential-log-sentinel",
+            "qdrant-sec-x-amz-signature-log-sentinel",
             "qdrant-sec-client-secret-log-sentinel",
             "qdrant-sec-credential-log-sentinel",
             "qdrant-sec-credentials-log-sentinel",
@@ -860,12 +887,20 @@ mod tests {
             "oauth": {
                 "access_token": "access-secret-a",
                 "refresh_token": "refresh-secret-a",
+                "access_key_id": "access-key-id-secret-a",
+                "secret_access_key": "secret-access-key-a",
                 "id_token": "id-token-secret-a",
                 "jwt": "jwt-secret-a",
                 "client_secret": "client-secret-a"
             },
             "vault": {
                 "x-vault-token": "vault-secret-a"
+            },
+            "aws": {
+                "X-Amz-Security-Token": "amz-security-token-a",
+                "X-Amz-Credential": "amz-credential-a",
+                "X-Amz-Signature": "amz-signature-a",
+                "aws_security_token": "aws-security-token-a"
             },
             "session": {
                 "session_token": "session-secret-a",
@@ -898,12 +933,20 @@ mod tests {
             "oauth": {
                 "access_token": "access-secret-b",
                 "refresh_token": "refresh-secret-b",
+                "access_key_id": "access-key-id-secret-b",
+                "secret_access_key": "secret-access-key-b",
                 "id_token": "id-token-secret-b",
                 "jwt": "jwt-secret-b",
                 "client_secret": "client-secret-b"
             },
             "vault": {
                 "x-vault-token": "vault-secret-b"
+            },
+            "aws": {
+                "X-Amz-Security-Token": "amz-security-token-b",
+                "X-Amz-Credential": "amz-credential-b",
+                "X-Amz-Signature": "amz-signature-b",
+                "aws_security_token": "aws-security-token-b"
             },
             "session": {
                 "session_token": "session-secret-b",
