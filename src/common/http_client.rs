@@ -5,6 +5,7 @@ use common::defaults::APP_USER_AGENT;
 use fs_err as fs;
 use reqwest::header::{HeaderMap, HeaderValue, InvalidHeaderValue};
 use storage::content_manager::errors::StorageError;
+use zeroize::Zeroizing;
 
 use super::auth::HTTP_HEADER_API_KEY;
 use crate::settings::{Settings, TlsConfig};
@@ -131,13 +132,14 @@ fn https_client_ca_cert(ca_cert: impl AsRef<Path>) -> Result<reqwest::tls::Certi
 }
 
 fn https_client_identity(cert: &Path, key: &Path) -> Result<reqwest::tls::Identity> {
-    let mut identity_pem =
-        fs::read(cert).map_err(|err| Error::failed_to_read(err, "certificate", cert))?;
+    let mut identity_pem = Zeroizing::new(
+        fs::read(cert).map_err(|err| Error::failed_to_read(err, "certificate", cert))?,
+    );
 
     let mut key_file = fs::File::open(key).map_err(|err| Error::failed_to_read(err, "key", key))?;
 
     // Concatenate certificate and key into a single PEM bytes
-    io::copy(&mut key_file, &mut identity_pem)
+    io::copy(&mut key_file, &mut *identity_pem)
         .map_err(|err| Error::failed_to_read(err, "key", key))?;
 
     let identity = reqwest::Identity::from_pem(&identity_pem)?;
@@ -183,9 +185,10 @@ impl From<Error> for StorageError {
 
 #[cfg(test)]
 mod tests {
+    use fs_err as fs;
     use reqwest::StatusCode;
 
-    use super::https_client;
+    use super::{https_client, https_client_identity};
 
     #[tokio::test]
     async fn api_key_client_does_not_follow_redirects() {
@@ -207,6 +210,29 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FOUND);
         redirect.expect(1).assert_async().await;
         target.expect(0).assert_async().await;
+    }
+
+    #[test]
+    fn https_client_identity_error_does_not_echo_private_key_contents() {
+        let directory = tempfile::tempdir().unwrap();
+        let cert_path = directory.path().join("cert.pem");
+        let key_path = directory.path().join("key.pem");
+        let private_key_sentinel = "qdrant-sec-tls-private-key-sentinel";
+
+        fs::write(&cert_path, b"not a certificate").unwrap();
+        fs::write(
+            &key_path,
+            format!(
+                "-----BEGIN PRIVATE KEY-----\n{private_key_sentinel}\n-----END PRIVATE KEY-----\n"
+            ),
+        )
+        .unwrap();
+
+        let err = https_client_identity(&cert_path, &key_path)
+            .expect_err("invalid identity material must fail");
+        let rendered = err.to_string();
+
+        assert!(!rendered.contains(private_key_sentinel), "{rendered}");
     }
 }
 
