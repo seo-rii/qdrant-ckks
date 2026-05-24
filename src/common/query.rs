@@ -7716,24 +7716,48 @@ fn ckks_discover_query_as_core_discover(
     discover: &segment::vector_storage::query::DiscoverQuery<VectorInputInternal>,
     vector_name: &str,
 ) -> Result<segment::vector_storage::query::DiscoverQuery<VectorInternal>, StorageError> {
-    let VectorInputInternal::Vector(VectorInternal::Dense(target)) = &discover.target else {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' discover cannot resolve point-id or non-dense target examples because plaintext vectors are not stored",
-        )));
+    let target = match &discover.target {
+        VectorInputInternal::Vector(VectorInternal::Dense(target)) => target,
+        VectorInputInternal::InferredVector(_) => {
+            return Err(StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' discover does not allow inference-derived target examples",
+            )));
+        }
+        _ => {
+            return Err(StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' discover cannot resolve point-id or non-dense target examples because plaintext vectors are not stored",
+            )));
+        }
     };
     let pairs = discover
         .pairs
         .iter()
         .map(|pair| {
-            let VectorInputInternal::Vector(VectorInternal::Dense(positive)) = &pair.positive else {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' discover cannot resolve point-id or non-dense positive context examples because plaintext vectors are not stored",
-                )));
+            let positive = match &pair.positive {
+                VectorInputInternal::Vector(VectorInternal::Dense(positive)) => positive,
+                VectorInputInternal::InferredVector(_) => {
+                    return Err(StorageError::bad_input(format!(
+                        "encrypted vector '{vector_name}' discover does not allow inference-derived positive context examples",
+                    )));
+                }
+                _ => {
+                    return Err(StorageError::bad_input(format!(
+                        "encrypted vector '{vector_name}' discover cannot resolve point-id or non-dense positive context examples because plaintext vectors are not stored",
+                    )));
+                }
             };
-            let VectorInputInternal::Vector(VectorInternal::Dense(negative)) = &pair.negative else {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' discover cannot resolve point-id or non-dense negative context examples because plaintext vectors are not stored",
-                )));
+            let negative = match &pair.negative {
+                VectorInputInternal::Vector(VectorInternal::Dense(negative)) => negative,
+                VectorInputInternal::InferredVector(_) => {
+                    return Err(StorageError::bad_input(format!(
+                        "encrypted vector '{vector_name}' discover does not allow inference-derived negative context examples",
+                    )));
+                }
+                _ => {
+                    return Err(StorageError::bad_input(format!(
+                        "encrypted vector '{vector_name}' discover cannot resolve point-id or non-dense negative context examples because plaintext vectors are not stored",
+                    )));
+                }
             };
             Ok(ContextPair {
                 positive: VectorInternal::Dense(positive.clone()),
@@ -7756,15 +7780,31 @@ fn ckks_context_query_as_core_context(
         .pairs
         .iter()
         .map(|pair| {
-            let VectorInputInternal::Vector(VectorInternal::Dense(positive)) = &pair.positive else {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' context query cannot resolve point-id or non-dense positive examples because plaintext vectors are not stored",
-                )));
+            let positive = match &pair.positive {
+                VectorInputInternal::Vector(VectorInternal::Dense(positive)) => positive,
+                VectorInputInternal::InferredVector(_) => {
+                    return Err(StorageError::bad_input(format!(
+                        "encrypted vector '{vector_name}' context query does not allow inference-derived positive examples",
+                    )));
+                }
+                _ => {
+                    return Err(StorageError::bad_input(format!(
+                        "encrypted vector '{vector_name}' context query cannot resolve point-id or non-dense positive examples because plaintext vectors are not stored",
+                    )));
+                }
             };
-            let VectorInputInternal::Vector(VectorInternal::Dense(negative)) = &pair.negative else {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' context query cannot resolve point-id or non-dense negative examples because plaintext vectors are not stored",
-                )));
+            let negative = match &pair.negative {
+                VectorInputInternal::Vector(VectorInternal::Dense(negative)) => negative,
+                VectorInputInternal::InferredVector(_) => {
+                    return Err(StorageError::bad_input(format!(
+                        "encrypted vector '{vector_name}' context query does not allow inference-derived negative examples",
+                    )));
+                }
+                _ => {
+                    return Err(StorageError::bad_input(format!(
+                        "encrypted vector '{vector_name}' context query cannot resolve point-id or non-dense negative examples because plaintext vectors are not stored",
+                    )));
+                }
             };
             Ok(ContextPair {
                 positive: VectorInternal::Dense(positive.clone()),
@@ -8163,6 +8203,61 @@ mod tests {
             err,
             StorageError::BadInput { description }
                 if description.contains("inference-derived positive examples")
+        ));
+
+        let err = ckks_discover_query_as_core_discover(
+            &segment::vector_storage::query::DiscoverQuery::new(
+                VectorInputInternal::InferredVector(VectorInternal::Dense(vec![0.1, 0.2])),
+                vec![ContextPair {
+                    positive: VectorInputInternal::Vector(VectorInternal::Dense(vec![0.3, 0.4])),
+                    negative: VectorInputInternal::Vector(VectorInternal::Dense(vec![0.5, 0.6])),
+                }],
+            ),
+            "embedding",
+        )
+        .expect_err("CKKS discover must reject inference-derived target plaintext");
+
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("inference-derived target examples")
+        ));
+
+        let err = ckks_discover_query_as_core_discover(
+            &segment::vector_storage::query::DiscoverQuery::new(
+                VectorInputInternal::Vector(VectorInternal::Dense(vec![0.1, 0.2])),
+                vec![ContextPair {
+                    positive: VectorInputInternal::InferredVector(VectorInternal::Dense(vec![
+                        0.3, 0.4,
+                    ])),
+                    negative: VectorInputInternal::Vector(VectorInternal::Dense(vec![0.5, 0.6])),
+                }],
+            ),
+            "embedding",
+        )
+        .expect_err("CKKS discover must reject inference-derived context plaintext");
+
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("inference-derived positive context examples")
+        ));
+
+        let err = ckks_context_query_as_core_context(
+            &segment::vector_storage::query::ContextQuery::new(vec![ContextPair {
+                positive: VectorInputInternal::Vector(VectorInternal::Dense(vec![0.1, 0.2])),
+                negative: VectorInputInternal::InferredVector(VectorInternal::Dense(vec![
+                    0.3, 0.4,
+                ])),
+            }]),
+            "embedding",
+        )
+        .expect_err("CKKS context must reject inference-derived pair plaintext");
+
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("inference-derived negative examples")
         ));
     }
 
