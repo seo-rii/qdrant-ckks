@@ -1,3 +1,4 @@
+use std::fmt;
 use std::future::{Ready, ready};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -52,8 +53,8 @@ use crate::common::collections::*;
 use crate::common::crypto::validate_recovered_collection_crypto_config;
 use crate::common::http_client::HttpClient;
 use crate::common::snapshots::{
-    try_take_partial_snapshot_recovery_lock, validate_snapshot_peer_base_url_policy,
-    validate_snapshot_url_api_key_policy,
+    redacted_snapshot_url_for_message, try_take_partial_snapshot_recovery_lock,
+    validate_snapshot_peer_base_url_policy, validate_snapshot_url_api_key_policy,
 };
 use crate::settings::Settings;
 
@@ -827,10 +828,22 @@ async fn recover_partial_snapshot(
     helpers::time_or_accept(future, wait.unwrap_or(true)).await
 }
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+#[derive(Clone, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct PartialSnapshotRecoverFrom {
     peer_url: Url,
     api_key: Option<String>,
+}
+
+impl fmt::Debug for PartialSnapshotRecoverFrom {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PartialSnapshotRecoverFrom")
+            .field(
+                "peer_url",
+                &redacted_snapshot_url_for_message(&self.peer_url),
+            )
+            .field("api_key", &self.api_key.as_ref().map(|_| "[redacted]"))
+            .finish()
+    }
 }
 
 #[post("/collections/{collection_name}/shards/{shard}/snapshot/partial/recover_from")]
@@ -1061,6 +1074,36 @@ mod tests {
         assert!(
             serde_urlencoded::from_str::<SnapshotExportParam>("encrypted_payload=redacted")
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn partial_snapshot_recover_from_debug_redacts_remote_credentials() {
+        let request = PartialSnapshotRecoverFrom {
+            peer_url: Url::parse(
+                "https://partial-user:partial-password@example.com?token=qdrant-sec-partial-query-token#qdrant-sec-partial-fragment",
+            )
+            .unwrap(),
+            api_key: Some("qdrant-sec-partial-api-key".to_string()),
+        };
+
+        let rendered = format!("{request:?}");
+
+        assert!(rendered.contains("[redacted]"), "{rendered}");
+        assert!(rendered.contains("example.com"), "{rendered}");
+        assert!(!rendered.contains("partial-user"), "{rendered}");
+        assert!(!rendered.contains("partial-password"), "{rendered}");
+        assert!(
+            !rendered.contains("qdrant-sec-partial-query-token"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("qdrant-sec-partial-fragment"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("qdrant-sec-partial-api-key"),
+            "{rendered}"
         );
     }
 

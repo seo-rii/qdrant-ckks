@@ -83,7 +83,7 @@ pub fn validate_snapshot_peer_base_url_policy(
     Ok(())
 }
 
-fn redacted_snapshot_url_for_message(url: &Url) -> String {
+pub(crate) fn redacted_snapshot_url_for_message(url: &Url) -> String {
     let mut redacted = url.clone();
     let _ = redacted.set_username("");
     let _ = redacted.set_password(None);
