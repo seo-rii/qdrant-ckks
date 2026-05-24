@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::Arc;
 
 use collection::collection_state::State;
@@ -14,6 +15,21 @@ use storage::content_manager::shard_distribution::ShardDistributionProposal;
 use storage::content_manager::toc::TableOfContent;
 use storage::dispatcher::Dispatcher;
 use storage::rbac::{Access, AccessRequirements, Auth};
+
+async fn submit_migration_meta_ops<F, Fut>(
+    operations: impl IntoIterator<Item = CollectionMetaOperations>,
+    mut submit: F,
+) -> Result<(), StorageError>
+where
+    F: FnMut(CollectionMetaOperations) -> Fut,
+    Fut: Future<Output = Result<bool, StorageError>>,
+{
+    for operation in operations {
+        submit(operation).await?;
+    }
+
+    Ok(())
+}
 
 /// Processes the existing collections, which were created outside the consensus:
 /// - during the migration from single to cluster
@@ -134,30 +150,166 @@ pub async fn handle_existing_collections(
             }
         }
 
-        for operation in consensus_operations {
-            dispatcher_arc
-                .submit_collection_meta_op(operation, full_auth.clone(), None)
-                .await?;
-        }
+        submit_migration_meta_ops(consensus_operations, |operation| {
+            dispatcher_arc.submit_collection_meta_op(operation, full_auth.clone(), None)
+        })
+        .await?;
+
+        let mut replica_state_operations = Vec::new();
 
         for (shard_id, shard_info) in shards {
             if shard_info.replicas.contains_key(&this_peer_id) {
-                dispatcher_arc
-                    .submit_collection_meta_op(
-                        CollectionMetaOperations::SetShardReplicaState(SetShardReplicaState {
-                            collection_name: collection_name.clone(),
-                            shard_id,
-                            peer_id: this_peer_id,
-                            state: ReplicaState::Active,
-                            from_state: None,
-                        }),
-                        full_auth.clone(),
-                        None,
-                    )
-                    .await?;
+                replica_state_operations.push(CollectionMetaOperations::SetShardReplicaState(
+                    SetShardReplicaState {
+                        collection_name: collection_name.clone(),
+                        shard_id,
+                        peer_id: this_peer_id,
+                        state: ReplicaState::Active,
+                        from_state: None,
+                    },
+                ));
             }
         }
+
+        submit_migration_meta_ops(replica_state_operations, |operation| {
+            dispatcher_arc.submit_collection_meta_op(operation, full_auth.clone(), None)
+        })
+        .await?;
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use collection::operations::types::VectorsConfig;
+
+    use super::*;
+
+    const THIS_PEER_ID: PeerId = 7;
+
+    fn create_collection_operation() -> CollectionMetaOperations {
+        CollectionMetaOperations::CreateCollection(
+            CreateCollectionOperation::new(
+                "docs".to_string(),
+                CreateCollection {
+                    vectors: VectorsConfig::default(),
+                    sparse_vectors: None,
+                    shard_number: None,
+                    sharding_method: Some(ShardingMethod::Custom),
+                    replication_factor: None,
+                    write_consistency_factor: None,
+                    on_disk_payload: None,
+                    hnsw_config: None,
+                    wal_config: None,
+                    optimizers_config: None,
+                    quantization_config: None,
+                    encryption: None,
+                    strict_mode_config: None,
+                    uuid: None,
+                    metadata: None,
+                },
+            )
+            .unwrap(),
+        )
+    }
+
+    fn create_shard_key_operation() -> CollectionMetaOperations {
+        CollectionMetaOperations::CreateShardKey(CreateShardKey {
+            collection_name: "docs".to_string(),
+            shard_key: "tenant-a".into(),
+            placement: vec![vec![THIS_PEER_ID]],
+            initial_state: None,
+        })
+    }
+
+    fn replica_state_operation() -> CollectionMetaOperations {
+        CollectionMetaOperations::SetShardReplicaState(SetShardReplicaState {
+            collection_name: "docs".to_string(),
+            shard_id: 0,
+            peer_id: THIS_PEER_ID,
+            state: ReplicaState::Active,
+            from_state: None,
+        })
+    }
+
+    fn operation_label(operation: &CollectionMetaOperations) -> &'static str {
+        match operation {
+            CollectionMetaOperations::CreateCollection(_) => "create_collection",
+            CollectionMetaOperations::CreateShardKey(_) => "create_shard_key",
+            CollectionMetaOperations::SetShardReplicaState(_) => "set_shard_replica_state",
+            _ => "other",
+        }
+    }
+
+    #[tokio::test]
+    async fn migration_submission_stops_after_create_collection_failure() {
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let operations = vec![
+            create_collection_operation(),
+            create_shard_key_operation(),
+            replica_state_operation(),
+        ];
+
+        let result = submit_migration_meta_ops(operations, |operation| {
+            let submitted = Arc::clone(&submitted);
+            async move {
+                let label = operation_label(&operation);
+                submitted.lock().unwrap().push(label);
+
+                if label == "create_collection" {
+                    Err(StorageError::bad_input(
+                        "injected create collection failure",
+                    ))
+                } else {
+                    Ok(true)
+                }
+            }
+        })
+        .await;
+
+        let err = result.unwrap_err();
+        assert!(
+            format!("{err}").contains("injected create collection failure"),
+            "{err}",
+        );
+        assert_eq!(submitted.lock().unwrap().as_slice(), ["create_collection"]);
+    }
+
+    #[tokio::test]
+    async fn migration_submission_stops_before_replica_state_after_shard_key_failure() {
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let operations = vec![
+            create_collection_operation(),
+            create_shard_key_operation(),
+            replica_state_operation(),
+        ];
+
+        let result = submit_migration_meta_ops(operations, |operation| {
+            let submitted = Arc::clone(&submitted);
+            async move {
+                let label = operation_label(&operation);
+                submitted.lock().unwrap().push(label);
+
+                if label == "create_shard_key" {
+                    Err(StorageError::bad_input("injected create shard key failure"))
+                } else {
+                    Ok(true)
+                }
+            }
+        })
+        .await;
+
+        let err = result.unwrap_err();
+        assert!(
+            format!("{err}").contains("injected create shard key failure"),
+            "{err}",
+        );
+        assert_eq!(
+            submitted.lock().unwrap().as_slice(),
+            ["create_collection", "create_shard_key"],
+        );
+    }
 }
