@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 #[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path as FsPath;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -708,7 +708,12 @@ fn persist_payload_crypto_migration_run_record(
         ))
     })?;
     set_private_payload_crypto_migration_record_permissions(&record_path)?;
-    if let Ok(parent) = fs::File::open(collection_path) {
+    let mut parent_options = fs::OpenOptions::new();
+    parent_options.read(true);
+    #[cfg(unix)]
+    parent_options
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_DIRECTORY | nix::libc::O_NOFOLLOW);
+    if let Ok(parent) = parent_options.open(collection_path) {
         parent.sync_all().map_err(|err| {
             StorageError::service_error(format!(
                 "failed to sync payload crypto migration run record parent {collection_path:?}: {err}"
@@ -740,22 +745,36 @@ impl PayloadCryptoMigrationRecordOpenOptionsExt for fs::OpenOptions {
 fn validate_payload_crypto_migration_record_directory(
     collection_path: &FsPath,
 ) -> Result<(), StorageError> {
-    let metadata = fs::symlink_metadata(collection_path).map_err(|err| {
-        StorageError::service_error(format!(
-            "failed to inspect payload crypto migration run record directory {collection_path:?}: {err}",
-        ))
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(StorageError::service_error(format!(
-            "payload crypto migration run record directory must be a regular non-symlink directory: {collection_path:?}",
-        )));
-    }
-
     #[cfg(unix)]
-    if metadata.permissions().mode() & 0o022 != 0 {
-        return Err(StorageError::service_error(format!(
-            "payload crypto migration run record directory must not be group/world-writable: {collection_path:?}",
-        )));
+    let effective_uid = nix::unistd::Uid::effective().as_raw();
+    let mut directory = Some(collection_path);
+    while let Some(path) = directory {
+        let metadata = fs::symlink_metadata(path).map_err(|err| {
+            StorageError::service_error(format!(
+                "failed to inspect payload crypto migration run record directory {path:?}: {err}",
+            ))
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(StorageError::service_error(format!(
+                "payload crypto migration run record directory must be a regular non-symlink directory: {path:?}",
+            )));
+        }
+
+        #[cfg(unix)]
+        {
+            if metadata.uid() != 0 && metadata.uid() != effective_uid {
+                return Err(StorageError::service_error(format!(
+                    "payload crypto migration run record directory must be owned by root or the Qdrant process user: {path:?}",
+                )));
+            }
+            if metadata.permissions().mode() & 0o022 != 0 {
+                return Err(StorageError::service_error(format!(
+                    "payload crypto migration run record directory must not be group/world-writable: {path:?}",
+                )));
+            }
+        }
+
+        directory = path.parent();
     }
 
     Ok(())
@@ -1576,6 +1595,55 @@ mod tests {
         .expect_err("payload migration run record must reject writable collection directory");
         assert!(
             err.to_string().contains("group/world-writable"),
+            "unexpected error: {err}",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn payload_crypto_migration_run_record_rejects_writable_ancestor_directory() {
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-payload-migration-record-ancestor-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let writable_ancestor = dir.path().join("writable-ancestor");
+        let collection_dir = writable_ancestor.join("collection");
+        std::fs::create_dir_all(&collection_dir).unwrap();
+        let mut permissions = std::fs::metadata(&writable_ancestor).unwrap().permissions();
+        permissions.set_mode(0o722);
+        std::fs::set_permissions(&writable_ancestor, permissions).unwrap();
+
+        let err = persist_payload_crypto_migration_run_record(
+            &collection_dir,
+            &payload_crypto_migration_run_test_record(),
+        )
+        .expect_err("payload migration run record must reject writable ancestor directory");
+        assert!(
+            err.to_string().contains("group/world-writable"),
+            "unexpected error: {err}",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn payload_crypto_migration_run_record_rejects_symlink_ancestor_directory() {
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-payload-migration-record-symlink-parent-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let real_parent = dir.path().join("real-parent");
+        let symlink_parent = dir.path().join("symlink-parent");
+        let collection_dir = symlink_parent.join("collection");
+        std::fs::create_dir_all(real_parent.join("collection")).unwrap();
+        symlink(&real_parent, &symlink_parent).unwrap();
+
+        let err = persist_payload_crypto_migration_run_record(
+            &collection_dir,
+            &payload_crypto_migration_run_test_record(),
+        )
+        .expect_err("payload migration run record must reject symlink ancestor directory");
+        assert!(
+            err.to_string().contains("non-symlink directory"),
             "unexpected error: {err}",
         );
     }
