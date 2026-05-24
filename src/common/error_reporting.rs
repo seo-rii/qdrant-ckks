@@ -65,6 +65,7 @@ pub(crate) fn redact_crypto_material_for_report(value: &str) -> String {
         "ciphertext",
         "encryptedquery",
         "authorization",
+        "apikey",
         "accesskeyid",
         "awssessiontoken",
         "awssecuritytoken",
@@ -144,6 +145,8 @@ mod tests {
     fn test_build_report_payload_redacts_aws_and_auth_spellings() {
         for secret in [
             "Authorization: Bearer authorization-sentinel",
+            "api_key=api-key-sentinel",
+            "apiKey=api-key-sentinel",
             "X-Amz-Security-Token: aws-token-sentinel",
             "session_token=session-token-sentinel",
             "sessionToken=session-token-sentinel",

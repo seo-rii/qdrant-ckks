@@ -147,6 +147,7 @@ fn redact_audit_error(error: &str) -> String {
     const MARKERS: &[&str] = &["$qdrant_sec", "$qdrant_client_aead", "$qdrant_sec_vectors"];
     const COMPACT_KEYS: &[&str] = &[
         "authorization",
+        "apikey",
         "ciphertext",
         "ciphertextb64",
         "contextdigest",
@@ -216,6 +217,8 @@ mod tests {
             "invalid wrappedKeyB64: wrapped-key-sentinel",
             "bridge public-key-b64 mismatch: public-key-sentinel",
             "vault x-vault-token rejected: vault-token-sentinel",
+            "api_key rejected: api-key-sentinel",
+            "apiKey rejected: api-key-sentinel",
             "Authorization header rejected: bearer-sentinel",
             "X-Amz-Security-Token rejected: aws-token-sentinel",
             "session_token rejected: session-token-sentinel",
