@@ -1998,7 +1998,8 @@ fn material_key_attestation_commitment(
 
 fn sanitized_crypto_instance_options(instance: &CryptoInstanceConfig) -> serde_json::Value {
     let mut options = instance.options.clone();
-    if instance.provider == PAYLOAD_CLIENT_AEAD_PROVIDER
+    if (instance.provider == PAYLOAD_CLIENT_AEAD_PROVIDER
+        || instance.provider == VECTOR_OPENFHE_CKKS_PROVIDER)
         && let Some(signature_public_keys) = options
             .as_object_mut()
             .and_then(|options| options.get_mut(SIGNATURE_PUBLIC_KEYS_OPTION))
@@ -8914,24 +8915,40 @@ mod tests {
     fn crypto_runtime_capability_fingerprint_tracks_client_verifier_policy() {
         let settings = Settings {
             crypto: CryptoSettings {
-                instances: HashMap::from([(
-                    "docs_client_payload_v1".to_string(),
-                    CryptoInstanceConfig {
-                        provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
-                        materials: HashMap::new(),
-                        backend_ref: None,
-                        options: json!({
-                            "key_id": "tenant-a:docs",
-                            EXPECTED_RK_ID_OPTION: "tenant-a:docs",
-                            MIN_RK_EPOCH_OPTION: 3,
-                            MAX_RK_EPOCH_OPTION: 3,
-                            SIGNATURE_PUBLIC_KEYS_OPTION: client_signature_registry(
-                                "tenant-a:signing-v1",
-                                &[11_u8; 32],
-                            ),
-                        }),
-                    },
-                )]),
+                instances: HashMap::from([
+                    (
+                        "docs_client_payload_v1".to_string(),
+                        CryptoInstanceConfig {
+                            provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
+                            materials: HashMap::new(),
+                            backend_ref: None,
+                            options: json!({
+                                "key_id": "tenant-a:docs",
+                                EXPECTED_RK_ID_OPTION: "tenant-a:docs",
+                                MIN_RK_EPOCH_OPTION: 3,
+                                MAX_RK_EPOCH_OPTION: 3,
+                                SIGNATURE_PUBLIC_KEYS_OPTION: client_signature_registry(
+                                    "tenant-a:signing-v1",
+                                    &[11_u8; 32],
+                                ),
+                            }),
+                        },
+                    ),
+                    (
+                        "docs_vector_v1".to_string(),
+                        CryptoInstanceConfig {
+                            provider: VECTOR_OPENFHE_CKKS_PROVIDER.to_string(),
+                            materials: HashMap::new(),
+                            backend_ref: None,
+                            options: json!({
+                                SIGNATURE_PUBLIC_KEYS_OPTION: client_signature_registry(
+                                    "tenant-a:query-signing-v1",
+                                    &[21_u8; 32],
+                                ),
+                            }),
+                        },
+                    ),
+                ]),
                 ..CryptoSettings::default()
             },
             ..Settings::new(None).unwrap()
@@ -8951,6 +8968,16 @@ mod tests {
             "client verifier fingerprint view must not serialize raw public keys",
         );
         assert!(sanitized_options.contains("encoded_sha256_b64"));
+        let raw_query_public_key_b64 = BASE64URL_NOPAD.encode(&[21_u8; 32]);
+        let sanitized_vector_options = serde_json::to_string(&sanitized_crypto_instance_options(
+            settings.crypto.instances.get("docs_vector_v1").unwrap(),
+        ))
+        .unwrap();
+        assert!(
+            !sanitized_vector_options.contains(&raw_query_public_key_b64),
+            "client CKKS query verifier fingerprint view must not serialize raw public keys",
+        );
+        assert!(sanitized_vector_options.contains("encoded_sha256_b64"));
 
         let mut peer_with_oversized_verifier = settings.clone();
         let oversized_public_key_b64 = "A".repeat(10_000);
@@ -9006,6 +9033,36 @@ mod tests {
         )
         .expect_err("client verifier policy drift must fail runtime parity validation");
         assert!(err.to_string().contains("peer-client-verifier"));
+
+        let mut peer_with_different_query_verifier = settings.clone();
+        peer_with_different_query_verifier
+            .crypto
+            .instances
+            .get_mut("docs_vector_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                SIGNATURE_PUBLIC_KEYS_OPTION.to_string(),
+                client_signature_registry("tenant-a:query-signing-v1", &[22_u8; 32]),
+            );
+        assert_ne!(
+            fingerprint,
+            crypto_runtime_capability_fingerprint(&peer_with_different_query_verifier),
+            "client CKKS query verifier public key drift must change the parity fingerprint",
+        );
+        let peer_query_verifier_fingerprint =
+            crypto_runtime_capability_fingerprint(&peer_with_different_query_verifier);
+        let err = validate_crypto_runtime_capability_parity(
+            &settings,
+            [(
+                "peer-query-verifier",
+                peer_query_verifier_fingerprint.as_str(),
+            )],
+        )
+        .expect_err("client CKKS query verifier policy drift must fail runtime parity validation");
+        assert!(err.to_string().contains("peer-query-verifier"));
 
         let mut peer_with_different_epoch = settings.clone();
         peer_with_different_epoch
