@@ -374,6 +374,7 @@ impl From<tonic::transport::Error> for StorageError {
 
 impl From<reqwest::Error> for StorageError {
     fn from(err: reqwest::Error) -> Self {
+        let err = err.without_url();
         StorageError::ServiceError {
             description: format!("Http request error: {err}"),
             backtrace: Some(Backtrace::force_capture().to_string()),
@@ -402,5 +403,41 @@ impl From<PersistError> for StorageError {
 impl From<cancel::Error> for StorageError {
     fn from(err: cancel::Error) -> Self {
         CollectionError::from(err).into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StorageError;
+
+    #[tokio::test]
+    async fn reqwest_storage_error_redacts_url_query_tokens() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/snapshot")
+            .with_status(500)
+            .create_async()
+            .await;
+        let url = format!(
+            "{}/snapshot?token=qdrant-sec-reqwest-query-token",
+            server.url()
+        );
+
+        let error = reqwest::Client::new()
+            .get(url)
+            .send()
+            .await
+            .expect("mock server request should complete")
+            .error_for_status()
+            .expect_err("HTTP 500 must become a reqwest status error");
+        let storage_error = StorageError::from(error);
+        let rendered = storage_error.to_string();
+
+        assert!(rendered.contains("Http request error"), "{rendered}");
+        assert!(
+            !rendered.contains("qdrant-sec-reqwest-query-token"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("snapshot?token"), "{rendered}");
     }
 }
