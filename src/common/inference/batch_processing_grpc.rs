@@ -64,17 +64,17 @@ fn collect_vector_input(vector: &VectorInput, batch: &mut BatchAccumGrpc) -> Res
         Variant::CkksEncryptedQuery(_) => {}
         Variant::Document(document) => {
             let doc = rest::Document::try_from(document.clone())
-                .map_err(|e| Status::internal(format!("Document conversion error: {e:?}")))?;
+                .map_err(|_| Status::invalid_argument("Invalid document inference input"))?;
             batch.add(InferenceData::Document(doc));
         }
         Variant::Image(image) => {
             let img = rest::Image::try_from(image.clone())
-                .map_err(|e| Status::internal(format!("Image conversion error: {e:?}")))?;
+                .map_err(|_| Status::invalid_argument("Invalid image inference input"))?;
             batch.add(InferenceData::Image(img));
         }
         Variant::Object(object) => {
             let obj = rest::InferenceObject::try_from(object.clone())
-                .map_err(|e| Status::internal(format!("Object conversion error: {e:?}")))?;
+                .map_err(|_| Status::invalid_argument("Invalid object inference input"))?;
             batch.add(InferenceData::Object(obj));
         }
     }
@@ -522,5 +522,56 @@ mod tests {
             err.message()
                 .contains("does not allow image inference query inputs")
         );
+    }
+
+    #[test]
+    fn grpc_batch_conversion_errors_do_not_echo_inference_inputs() {
+        let sentinel = "do-not-echo-grpc-batch-secret";
+        let bad_value = api::grpc::qdrant::Value {
+            kind: Some(api::grpc::qdrant::value::Kind::DoubleValue(f64::NAN)),
+        };
+
+        let mut batch = BatchAccumGrpc::new();
+        let doc = VectorInput {
+            variant: Some(Variant::Document(api::grpc::qdrant::Document {
+                text: sentinel.to_string(),
+                model: "test-model".to_string(),
+                options: std::collections::HashMap::from([("bad".to_string(), bad_value)]),
+            })),
+        };
+        let err = collect_vector_input(&doc, &mut batch).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert_eq!(err.message(), "Invalid document inference input");
+        assert!(!err.message().contains(sentinel), "{err:?}");
+
+        let mut batch = BatchAccumGrpc::new();
+        let image = VectorInput {
+            variant: Some(Variant::Image(api::grpc::qdrant::Image {
+                image: Some(api::grpc::qdrant::Value {
+                    kind: Some(api::grpc::qdrant::value::Kind::DoubleValue(f64::NAN)),
+                }),
+                model: sentinel.to_string(),
+                options: std::collections::HashMap::new(),
+            })),
+        };
+        let err = collect_vector_input(&image, &mut batch).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert_eq!(err.message(), "Invalid image inference input");
+        assert!(!err.message().contains(sentinel), "{err:?}");
+
+        let mut batch = BatchAccumGrpc::new();
+        let object = VectorInput {
+            variant: Some(Variant::Object(api::grpc::qdrant::InferenceObject {
+                object: Some(api::grpc::qdrant::Value {
+                    kind: Some(api::grpc::qdrant::value::Kind::DoubleValue(f64::NAN)),
+                }),
+                model: sentinel.to_string(),
+                options: std::collections::HashMap::new(),
+            })),
+        };
+        let err = collect_vector_input(&object, &mut batch).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert_eq!(err.message(), "Invalid object inference input");
+        assert!(!err.message().contains(sentinel), "{err:?}");
     }
 }

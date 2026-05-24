@@ -381,7 +381,7 @@ fn convert_vector_input_with_inferred(
         Variant::Document(doc) => {
             let doc: rest::Document = doc
                 .try_into()
-                .map_err(|e| Status::internal(format!("Document conversion error: {e}")))?;
+                .map_err(|_| Status::invalid_argument("Invalid document inference input"))?;
             let data = InferenceData::Document(doc);
             let vector = inferred
                 .get_vector(&data)
@@ -394,7 +394,7 @@ fn convert_vector_input_with_inferred(
         Variant::Image(img) => {
             let img: rest::Image = img
                 .try_into()
-                .map_err(|e| Status::internal(format!("Image conversion error: {e}",)))?;
+                .map_err(|_| Status::invalid_argument("Invalid image inference input"))?;
             let data = InferenceData::Image(img);
 
             let vector = inferred
@@ -408,7 +408,7 @@ fn convert_vector_input_with_inferred(
         Variant::Object(obj) => {
             let obj: rest::InferenceObject = obj
                 .try_into()
-                .map_err(|e| Status::internal(format!("Object conversion error: {e}")))?;
+                .map_err(|_| Status::invalid_argument("Invalid object inference input"))?;
             let data = InferenceData::Object(obj);
             let vector = inferred
                 .get_vector(&data)
@@ -681,5 +681,56 @@ mod tests {
                 .message()
                 .contains("positive is missing"),
         );
+    }
+
+    #[test]
+    fn grpc_query_conversion_errors_do_not_echo_inference_inputs() {
+        let sentinel = "do-not-echo-grpc-query-secret";
+        let inferred = BatchAccumInferred {
+            objects: HashMap::new(),
+        };
+        let bad_value = Value {
+            kind: Some(Kind::DoubleValue(f64::NAN)),
+        };
+
+        let document = grpc::VectorInput {
+            variant: Some(Variant::Document(api::grpc::qdrant::Document {
+                text: sentinel.to_string(),
+                model: "test-model".to_string(),
+                options: HashMap::from([("bad".to_string(), bad_value)]),
+            })),
+        };
+        let err = convert_vector_input_with_inferred(document, &inferred).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert_eq!(err.message(), "Invalid document inference input");
+        assert!(!err.message().contains(sentinel), "{err:?}");
+
+        let image = grpc::VectorInput {
+            variant: Some(Variant::Image(api::grpc::qdrant::Image {
+                image: Some(Value {
+                    kind: Some(Kind::DoubleValue(f64::NAN)),
+                }),
+                model: sentinel.to_string(),
+                options: HashMap::new(),
+            })),
+        };
+        let err = convert_vector_input_with_inferred(image, &inferred).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert_eq!(err.message(), "Invalid image inference input");
+        assert!(!err.message().contains(sentinel), "{err:?}");
+
+        let object = grpc::VectorInput {
+            variant: Some(Variant::Object(api::grpc::qdrant::InferenceObject {
+                object: Some(Value {
+                    kind: Some(Kind::DoubleValue(f64::NAN)),
+                }),
+                model: sentinel.to_string(),
+                options: HashMap::new(),
+            })),
+        };
+        let err = convert_vector_input_with_inferred(object, &inferred).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert_eq!(err.message(), "Invalid object inference input");
+        assert!(!err.message().contains(sentinel), "{err:?}");
     }
 }
