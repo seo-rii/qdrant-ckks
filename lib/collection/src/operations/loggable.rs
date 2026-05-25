@@ -172,6 +172,12 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "geo_polygon"
                         | "Vector"
                         | "Mmr"
+                        | "score"
+                        | "scores"
+                        | "plaintext_score"
+                        | "plaintext_scores"
+                        | "score_plaintext"
+                        | "score_plaintexts"
                         | "ciphertext"
                         | "ciphertexts"
                         | "ciphertext_sha256"
@@ -281,6 +287,10 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "publickeyb64"
                         | "signaturepublickeys"
                         | "signaturepublickeyb64"
+                        | "plaintextscore"
+                        | "plaintextscores"
+                        | "scoreplaintext"
+                        | "scoreplaintexts"
                         | "ciphertextsha256"
                         | "ciphertextssha256"
                         | "ciphertextb64"
@@ -727,6 +737,35 @@ mod tests {
             "qdrant-sec-wrapped-keys-log-sentinel",
             "qdrant-sec-inline-key-log-sentinel",
             "qdrant-sec-inline-keys-log-sentinel",
+        ] {
+            assert!(!serialized.contains(sentinel));
+        }
+        assert!(serialized.contains("[redacted]"));
+    }
+
+    #[test]
+    fn log_value_redacts_ckks_plaintext_score_fields() {
+        let mut value = json!({
+            "bridge_response": {
+                "score": "qdrant-sec-ckks-score-log-sentinel",
+                "scores": ["qdrant-sec-ckks-scores-log-sentinel"],
+                "plaintext_score": "qdrant-sec-ckks-plaintext-score-log-sentinel",
+                "plaintext_scores": ["qdrant-sec-ckks-plaintext-scores-log-sentinel"],
+                "score_plaintext": "qdrant-sec-ckks-score-plaintext-log-sentinel",
+                "score_plaintexts": ["qdrant-sec-ckks-score-plaintexts-log-sentinel"]
+            }
+        });
+
+        redact_sensitive_log_fields(&mut value);
+        let serialized = serde_json::to_string(&value).unwrap();
+
+        for sentinel in [
+            "qdrant-sec-ckks-score-log-sentinel",
+            "qdrant-sec-ckks-scores-log-sentinel",
+            "qdrant-sec-ckks-plaintext-score-log-sentinel",
+            "qdrant-sec-ckks-plaintext-scores-log-sentinel",
+            "qdrant-sec-ckks-score-plaintext-log-sentinel",
+            "qdrant-sec-ckks-score-plaintexts-log-sentinel",
         ] {
             assert!(!serialized.contains(sentinel));
         }
