@@ -194,6 +194,71 @@ fn client_payload_envelope_validates_expected_aad_and_key_policy() {
 }
 
 #[test]
+fn client_payload_signature_message_matches_sdk_test_vector() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../docs/qdrant-sec-client-payload-signature-test-vector.json"
+    ))
+    .expect("client payload signature test vector must be valid JSON");
+    let get = |key: &str| {
+        fixture
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("test vector must define string field {key}"))
+    };
+    let mut envelope = json!({
+        CLIENT_ENCRYPTED_PAYLOAD_MARKER: {
+            "version": fixture.get("version").and_then(Value::as_u64).unwrap(),
+            "kind": get("kind"),
+            "algorithm": get("algorithm"),
+            "key_id": get("key_id"),
+            "rk_id": get("rk_id"),
+            "rk_epoch": fixture.get("rk_epoch").and_then(Value::as_u64).unwrap(),
+            "kdf_domain": get("kdf_domain"),
+            "aad": {
+                "collection_id": get("collection_id"),
+                "point_id": get("point_id"),
+                "field_path": get("field_path"),
+                "schema_version": fixture.get("schema_version").and_then(Value::as_u64).unwrap(),
+            },
+            "nonce": get("nonce"),
+            "ciphertext": get("ciphertext"),
+            "signature": {
+                "alg": get("signature_alg"),
+                "key_id": get("signature_key_id"),
+                "sig": BASE64URL_NOPAD.encode(&[0_u8; 64]),
+            },
+        },
+    });
+    let field_path = get("field_path");
+    let message = client_payload_signature_message(&envelope, field_path).unwrap();
+
+    assert_eq!(
+        message.len() as u64,
+        fixture
+            .get("signature_message_len")
+            .and_then(Value::as_u64)
+            .unwrap(),
+    );
+    assert_eq!(
+        BASE64URL_NOPAD.encode(&message),
+        get("signature_message_b64"),
+    );
+
+    envelope
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut("aad")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("field_path".to_string(), Value::String("other".to_string()));
+    let changed_message = client_payload_signature_message(&envelope, "other").unwrap();
+    assert_ne!(message, changed_message);
+}
+
+#[test]
 fn payload_envelopes_reject_unknown_metadata_fields() {
     let context = ClientPayloadValidationContext {
         collection_id: "docs",

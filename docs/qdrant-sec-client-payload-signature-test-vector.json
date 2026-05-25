@@ -1,0 +1,20 @@
+{
+  "payload_signature_domain": "qdrant-sec/client-payload-signature/v1",
+  "version": 1,
+  "kind": "payload_text",
+  "algorithm": "AES-256-GCM",
+  "key_id": "tenant-a/client-rk-2026-04",
+  "rk_id": "tenant-a/client-rk-2026-04",
+  "rk_epoch": 3,
+  "kdf_domain": "qdrant-sec/client-payload-text/v1",
+  "collection_id": "collection-uuid",
+  "point_id": "point-1",
+  "field_path": "document.body",
+  "schema_version": 1,
+  "nonce": "AAAAAAAAAAAAAAAA",
+  "ciphertext": "Y2lwaGVydGV4dC1ieXRlcw",
+  "signature_alg": "ed25519",
+  "signature_key_id": "tenant-a/client-signing-v1",
+  "signature_message_len": 320,
+  "signature_message_b64": "AAAAJnFkcmFudC1zZWMvY2xpZW50LXBheWxvYWQtc2lnbmF0dXJlL3YxAAEAAAAMcGF5bG9hZF90ZXh0AAAAC0FFUy0yNTYtR0NNAQAAABp0ZW5hbnQtYS9jbGllbnQtcmstMjAyNi0wNAEAAAAadGVuYW50LWEvY2xpZW50LXJrLTIwMjYtMDQBAAAAAAAAAAMBAAAAIXFkcmFudC1zZWMvY2xpZW50LXBheWxvYWQtdGV4dC92MQAAAA9jb2xsZWN0aW9uLXV1aWQAAAAHcG9pbnQtMQAAAA1kb2N1bWVudC5ib2R5AAEAAAAQQUFBQUFBQUFBQUFBQUFBQQAAABZZMmx3YUdWeWRHVjRkQzFpZVhSbGN3AAAAB2VkMjU1MTkAAAAadGVuYW50LWEvY2xpZW50LXNpZ25pbmctdjE"
+}

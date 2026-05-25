@@ -278,6 +278,9 @@ envelopes. Client envelopes must include `rk_id`, `rk_epoch`, and
 even though Qdrant cannot unwrap the client key. The Ed25519 signature covers the
 client envelope header, AAD, nonce, ciphertext, signature algorithm, and
 signature key id.
+`docs/qdrant-sec-client-payload-signature-test-vector.json` freezes the
+canonical length-prefixed signing bytes so external SDKs can verify
+interoperability against the server implementation.
 
 Storage does not trust marker shape alone. Public write plans must validate the
 client envelope and produce a runtime-verified proof keyed by collection id,
