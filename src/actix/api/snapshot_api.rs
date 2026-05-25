@@ -74,10 +74,27 @@ pub struct SnapshottingParam {
     pub wait: Option<bool>,
 }
 
-#[derive(Deserialize, Serialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SnapshotEncryptedPayloadExportMode {
     Raw,
+}
+
+impl<'de> Deserialize<'de> for SnapshotEncryptedPayloadExportMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "raw" => Ok(Self::Raw),
+            _ => Err(serde::de::Error::custom(
+                "snapshot archive export only supports encrypted_payload=raw; \
+                 use /collections/{collection_name}/points/export?encrypted_payload=redacted \
+                 or encrypted_payload=decrypted for audited payload export",
+            )),
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize, JsonSchema, Validate, Default)]
@@ -1067,14 +1084,25 @@ mod tests {
             Some(SnapshotEncryptedPayloadExportMode::Raw)
         );
 
-        assert!(
-            serde_urlencoded::from_str::<SnapshotExportParam>("encrypted_payload=decrypted")
-                .is_err()
-        );
-        assert!(
-            serde_urlencoded::from_str::<SnapshotExportParam>("encrypted_payload=redacted")
-                .is_err()
-        );
+        for mode in ["decrypted", "redacted"] {
+            let err = match serde_urlencoded::from_str::<SnapshotExportParam>(&format!(
+                "encrypted_payload={mode}"
+            )) {
+                Ok(_) => {
+                    panic!("snapshot archive export must reject non-raw encrypted payload modes")
+                }
+                Err(err) => err,
+            };
+            let rendered = err.to_string();
+            assert!(
+                rendered.contains("points/export"),
+                "snapshot export error should point users to audited points export: {rendered}",
+            );
+            assert!(
+                rendered.contains("encrypted_payload=raw"),
+                "snapshot export error should explain raw archive mode: {rendered}",
+            );
+        }
     }
 
     #[test]
