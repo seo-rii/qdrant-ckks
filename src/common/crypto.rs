@@ -1977,6 +1977,7 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
                 "source": material.source,
                 "env": material.env,
                 "path": material.path,
+                "fd": material.fd,
                 "has_fd": material.fd.is_some(),
                 "has_value_b64": material.value_b64.is_some(),
                 "vault_field": material.vault_field,
@@ -10239,6 +10240,48 @@ mod tests {
             fingerprint,
             crypto_runtime_capability_fingerprint(&peer_with_different_timeout),
             "external provider timeout policy drift must change the non-secret runtime parity fingerprint",
+        );
+    }
+
+    #[test]
+    fn crypto_runtime_capability_fingerprint_tracks_fd_material_descriptor_policy() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: None,
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
+                materials: HashMap::from([(
+                    "tenant-a/mk".to_string(),
+                    CryptoMaterialConfig {
+                        kind: WRAPPING_KEY_32_KIND.to_string(),
+                        source: Some("fd".to_string()),
+                        fd: Some(3),
+                        ..CryptoMaterialConfig::default()
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let fingerprint = crypto_runtime_capability_fingerprint(&settings);
+
+        let mut peer_with_different_fd = settings.clone();
+        peer_with_different_fd
+            .crypto
+            .materials
+            .get_mut("tenant-a/mk")
+            .unwrap()
+            .fd = Some(4);
+
+        assert_ne!(
+            fingerprint,
+            crypto_runtime_capability_fingerprint(&peer_with_different_fd),
+            "fd-backed material descriptor drift must change the non-secret runtime parity fingerprint",
         );
     }
 
