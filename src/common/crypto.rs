@@ -8381,6 +8381,21 @@ mod tests {
         validate_crypto_settings(&strict_client_settings)
             .expect("strict zero-trust profile should accept only server-blind providers");
 
+        let strict_fingerprint = crypto_runtime_capability_fingerprint(&Settings {
+            crypto: strict_client_settings.clone(),
+            ..Settings::new(None).unwrap()
+        });
+        let mut non_strict_settings = strict_client_settings.clone();
+        non_strict_settings.zero_trust_profile = None;
+        assert_ne!(
+            strict_fingerprint,
+            crypto_runtime_capability_fingerprint(&Settings {
+                crypto: non_strict_settings,
+                ..Settings::new(None).unwrap()
+            }),
+            "strict zero-trust profile drift must change the runtime parity fingerprint",
+        );
+
         let mut invalid_profile = strict_client_settings.clone();
         invalid_profile.zero_trust_profile = Some("marketing-zero-trust".to_string());
         assert!(matches!(
@@ -8431,6 +8446,10 @@ mod tests {
             (
                 VECTOR_OPENFHE_CKKS_PROVIDER,
                 "trusted-bridge vector provider is not allowed",
+            ),
+            (
+                VECTOR_CLIENT_CKKS_PROVIDER,
+                "vector/client-ckks@v1 is required for strict vector zero-trust but is not implemented",
             ),
         ] {
             let mut with_server_provider = strict_client_settings.clone();
