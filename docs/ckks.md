@@ -390,6 +390,14 @@ params:
 Clients should compute `body__blind_eq` outside Qdrant with a domain-separated
 blind-index key such as `qdrant-sec/client-payload-blind-index/v1`, then query
 that token field with ordinary exact-match payload filters.
+Blind-index tokens deliberately leak equality patterns: the same normalized
+plaintext under the same tenant, stable collection crypto id, field path, and
+RK epoch produces the same token. Low-cardinality values such as status flags,
+booleans, country codes, or small enums can therefore leak frequency
+information even though Qdrant never sees the blind-index key. SDKs should
+domain-separate the token key by tenant, collection crypto id, field path,
+provider id, `rk_id`, and `rk_epoch`, and operators should avoid blind-indexing
+fields where equality or frequency leakage is unacceptable.
 Token payload values must be base64url-no-padding strings that decode to a
 32-byte HMAC-SHA256 output. Qdrant does not hold the blind-index key, but it
 does fail closed on missing, non-string, malformed, or wrong-length token
@@ -465,7 +473,8 @@ options; `metadata/blind-index-hmac@v1` accepts only `key_id`,
 `expected_rk_id`, `min_rk_epoch`, and `max_rk_epoch`; `vector/openfhe-ckks@v1`
 accepts only `key_id`, `material_fingerprint_id`, `profile`,
 `crypto_context_b64`, `public_key_b64`, `allow_plaintext_queries`,
-`plaintext_query_tcb_ack`, and `signature_public_keys`. Unknown options fail
+`plaintext_query_tcb_ack`, `score_plaintext_output_tcb_ack`, and
+`signature_public_keys`. Unknown options fail
 startup/runtime validation instead of being silently ignored.
 
 Provider `materials` roles are also allowlisted. Server-side payload AEAD and
@@ -473,6 +482,12 @@ OpenFHE CKKS vector-envelope providers accept only `materials.sym_key`;
 client-side AEAD and blind-index token providers must not configure any server
 material or backend. Unexpected material roles fail validation instead of being
 silently ignored.
+
+`vector/client-ckks@v1` is reserved for a future server-blind vector envelope
+provider and is currently rejected at startup/runtime validation. Today,
+`vector/openfhe-ckks@v1` is a trusted-bridge model: Qdrant/bridge may see
+plaintext embeddings at ingest and plaintext scores at search. Do not use the
+server-side OpenFHE provider as a zero-trust vector insert contract.
 
 For tests and future vector-envelope work, a generic OpenFHE backend is
 configured under `crypto.backends` and referenced from a
@@ -499,6 +514,10 @@ crypto:
         profile: ckks-128-n16384-d4-scale50
         crypto_context_b64: base64url-no-pad-openfhe-context
         public_key_b64: base64url-no-pad-openfhe-public-key
+        # Required for every vector/openfhe-ckks@v1 instance because the bridge
+        # returns finite plaintext ranking scores to Qdrant, even when the query
+        # vector itself is supplied as an encrypted CKKS envelope.
+        score_plaintext_output_tcb_ack: qdrant-sec-ckks-score-output-tcb-v1
         allow_plaintext_queries: false
         signature_public_keys:
           tenant-a/query-signing-v1: base64url-no-pad-ed25519-public-key
@@ -758,6 +777,7 @@ crypto:
         profile: ckks-128-n16384-d4-scale50
         crypto_context_b64: base64url-no-pad-openfhe-context
         public_key_b64: base64url-no-pad-openfhe-public-key
+        score_plaintext_output_tcb_ack: qdrant-sec-ckks-score-output-tcb-v1
     docs_payload_v1:
       provider: payload/aes-256-gcm@v1
       materials:
@@ -1026,8 +1046,10 @@ intended to prevent mixing ciphertexts created for incompatible contexts.
 CKKS parameters are restricted to the allowlisted
 `ckks-128-n16384-d4-scale50` profile in this branch. Generic
 `vector/openfhe-ckks@v1` runtime instances must set this `profile` option plus
-`crypto_context_b64` and `public_key_b64`; a missing profile, missing public
-material, or raw profile name is rejected before collection creation.
+`crypto_context_b64`, `public_key_b64`, and
+`score_plaintext_output_tcb_ack: qdrant-sec-ckks-score-output-tcb-v1`; a
+missing profile, missing public material, missing score-output TCB
+acknowledgement, or raw profile name is rejected before collection creation.
 `batch_size` may be lower than the profile slot count, but raw
 modulus/depth/scale combinations are rejected. OpenFHE bridge encrypt, batch
 encrypt, and scoring responses must include `security_profile`; Qdrant verifies
@@ -1234,7 +1256,11 @@ indefinitely or force unbounded memory growth. Returned errors do not include
 the request body or bridge stderr.
 
 The OpenFHE bridge is part of the trusted computing base because it receives
-plaintext embeddings before producing CKKS ciphertext. Runtime configuration
+plaintext embeddings before producing CKKS ciphertext and returns finite
+plaintext ranking scores to Qdrant for CKKS sidecar search. Encrypted query
+envelopes keep query vectors out of Qdrant's numeric request body, but they do
+not make vector ranking server-blind: the bridge and Qdrant still learn score
+ordering and returned score values. Runtime configuration
 therefore accepts only absolute bridge paths that resolve to executable regular
 files, rejects symlinks and group/world-writable binaries or parent directories
 on Unix, and requires the binary plus every parent directory to be owned by root

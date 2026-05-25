@@ -25,9 +25,9 @@ use qdrant_sec::{
     MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER,
     PAYLOAD_FIELD_BINDING, PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
     RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, ServerPayloadVerifiedEnvelopeKey,
-    VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER, WrappedKeyBlob,
-    client_payload_nonce_replay_key, client_payload_signature_key_id, rewrap_resource_key,
-    validate_client_payload_value_for_runtime,
+    VECTOR_CLIENT_CKKS_PROVIDER, VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER,
+    WrappedKeyBlob, client_payload_nonce_replay_key, client_payload_signature_key_id,
+    rewrap_resource_key, validate_client_payload_value_for_runtime,
 };
 use ring::hmac;
 use ring::signature::{ED25519, UnparsedPublicKey};
@@ -162,6 +162,8 @@ const CKKS_PUBLIC_KEY_B64_OPTION: &str = "public_key_b64";
 const ALLOW_PLAINTEXT_QUERIES_OPTION: &str = "allow_plaintext_queries";
 const PLAINTEXT_QUERIES_TCB_ACK_OPTION: &str = "plaintext_query_tcb_ack";
 const PLAINTEXT_QUERIES_TCB_ACK_VALUE: &str = "qdrant-sec-ckks-plaintext-query-tcb-v1";
+const SCORE_OUTPUT_TCB_ACK_OPTION: &str = "score_plaintext_output_tcb_ack";
+const SCORE_OUTPUT_TCB_ACK_VALUE: &str = "qdrant-sec-ckks-score-output-tcb-v1";
 const VAULT_KV2_RESPONSE_MAX_BYTES: u64 = 64 * 1024;
 const VAULT_TRANSIT_RESPONSE_MAX_BYTES: u64 = 64 * 1024;
 const EXTERNAL_MATERIAL_DEFAULT_TIMEOUT_MS: u64 = 5_000;
@@ -188,6 +190,7 @@ const VECTOR_OPENFHE_CKKS_ALLOWED_OPTIONS: &[&str] = &[
     CKKS_PUBLIC_KEY_B64_OPTION,
     ALLOW_PLAINTEXT_QUERIES_OPTION,
     PLAINTEXT_QUERIES_TCB_ACK_OPTION,
+    SCORE_OUTPUT_TCB_ACK_OPTION,
     SIGNATURE_PUBLIC_KEYS_OPTION,
 ];
 const VECTOR_OPENFHE_CKKS_ALLOWED_MATERIAL_ROLES: &[&str] = &[PAYLOAD_SYM_KEY_ROLE];
@@ -292,6 +295,19 @@ fn vector_plaintext_queries_allowed(instance: &CryptoInstanceConfig) -> Result<b
             "{ALLOW_PLAINTEXT_QUERIES_OPTION}=true requires {PLAINTEXT_QUERIES_TCB_ACK_OPTION}={PLAINTEXT_QUERIES_TCB_ACK_VALUE}"
         )),
         None => Ok(false),
+    }
+}
+
+fn vector_score_output_tcb_acknowledged(instance: &CryptoInstanceConfig) -> Result<(), String> {
+    match instance.options.get(SCORE_OUTPUT_TCB_ACK_OPTION) {
+        Some(Value::String(value)) if value == SCORE_OUTPUT_TCB_ACK_VALUE => Ok(()),
+        Some(Value::String(_)) => Err(format!(
+            "{SCORE_OUTPUT_TCB_ACK_OPTION} must be {SCORE_OUTPUT_TCB_ACK_VALUE}"
+        )),
+        Some(_) => Err(format!("{SCORE_OUTPUT_TCB_ACK_OPTION} must be a string")),
+        None => Err(format!(
+            "vector/openfhe-ckks@v1 returns finite plaintext scores from the OpenFHE bridge and requires {SCORE_OUTPUT_TCB_ACK_OPTION}={SCORE_OUTPUT_TCB_ACK_VALUE}"
+        )),
     }
 }
 
@@ -856,12 +872,25 @@ struct VectorWriteRule {
 
 pub(crate) struct VectorWritePlan {
     rules: Vec<VectorWriteRule>,
+    ckks_grouped_max_candidates: usize,
+    ckks_scoring_source_batch_max: usize,
+    ckks_query_nonce_replay_ttl: std::time::Duration,
+    ckks_query_nonce_replay_cache_max_entries: usize,
 }
 
 impl VectorWritePlan {
     #[cfg(test)]
     pub(crate) fn empty_for_test() -> Self {
-        Self { rules: Vec::new() }
+        Self {
+            rules: Vec::new(),
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl: std::time::Duration::from_secs(
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
+        }
     }
 
     pub(crate) fn contains_vector_name(&self, vector_name: &str) -> bool {
@@ -875,6 +904,22 @@ impl VectorWritePlan {
             .iter()
             .find(|rule| rule.vector_name == vector_name)
             .map(|rule| rule.distance)
+    }
+
+    pub(crate) fn ckks_grouped_max_candidates(&self) -> usize {
+        self.ckks_grouped_max_candidates
+    }
+
+    pub(crate) fn ckks_scoring_source_batch_max(&self) -> usize {
+        self.ckks_scoring_source_batch_max
+    }
+
+    pub(crate) fn ckks_query_nonce_replay_ttl(&self) -> std::time::Duration {
+        self.ckks_query_nonce_replay_ttl
+    }
+
+    pub(crate) fn ckks_query_nonce_replay_cache_max_entries(&self) -> usize {
+        self.ckks_query_nonce_replay_cache_max_entries
     }
 
     pub(crate) fn encrypt_dense_vector_payload_value(
@@ -1304,6 +1349,12 @@ fn generic_vector_write_plan(
                 rule.instance
             ))
         })?;
+        vector_score_output_tcb_acknowledged(instance).map_err(|err| {
+            StorageError::bad_input(format!(
+                "collection {collection_name} vector crypto instance {} score output TCB policy is invalid: {err}",
+                rule.instance
+            ))
+        })?;
         let query_signature_verifier =
             client_payload_signature_verifier(instance, &rule.instance).map_err(|err| {
                 StorageError::bad_input(format!(
@@ -1406,7 +1457,16 @@ fn generic_vector_write_plan(
     if rules.is_empty() {
         Ok(None)
     } else {
-        Ok(Some(VectorWritePlan { rules }))
+        Ok(Some(VectorWritePlan {
+            rules,
+            ckks_grouped_max_candidates: runtime_settings.ckks_grouped_max_candidates,
+            ckks_scoring_source_batch_max: runtime_settings.ckks_scoring_source_batch_max,
+            ckks_query_nonce_replay_ttl: std::time::Duration::from_secs(
+                runtime_settings.ckks_query_nonce_replay_ttl_secs,
+            ),
+            ckks_query_nonce_replay_cache_max_entries: runtime_settings
+                .ckks_query_nonce_replay_cache_max_entries,
+        }))
     }
 }
 
@@ -2280,6 +2340,7 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
             PAYLOAD_AES_GCM_PROVIDER
                 | PAYLOAD_CLIENT_AEAD_PROVIDER
                 | VECTOR_OPENFHE_CKKS_PROVIDER
+                | VECTOR_CLIENT_CKKS_PROVIDER
                 | METADATA_AES_GCM_PROVIDER
                 | METADATA_BLIND_INDEX_PROVIDER
         ) {
@@ -2287,6 +2348,14 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                 instance: instance_name.clone(),
                 option: "provider".to_string(),
                 reason: format!("unsupported provider {}", instance.provider),
+            });
+        }
+        if instance.provider == VECTOR_CLIENT_CKKS_PROVIDER {
+            return Err(CryptoSetupError::InvalidInstanceOption {
+                instance: instance_name.clone(),
+                option: "provider".to_string(),
+                reason: "vector/client-ckks@v1 is reserved for future server-blind vector envelopes and is not implemented; use vector/openfhe-ckks@v1 for trusted-bridge CKKS sidecar vectors"
+                    .to_string(),
             });
         }
         if instance.provider == PAYLOAD_CLIENT_AEAD_PROVIDER
@@ -2719,6 +2788,13 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                 return Err(CryptoSetupError::InvalidInstanceOption {
                     instance: instance_name.clone(),
                     option: ALLOW_PLAINTEXT_QUERIES_OPTION.to_string(),
+                    reason,
+                });
+            }
+            if let Err(reason) = vector_score_output_tcb_acknowledged(instance) {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: SCORE_OUTPUT_TCB_ACK_OPTION.to_string(),
                     reason,
                 });
             }
@@ -7317,6 +7393,12 @@ mod tests {
     #[test]
     fn validate_crypto_settings_rejects_missing_material_and_backend_refs() {
         let mut settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::from([(
                 "docs_payload_v1".to_string(),
@@ -7333,6 +7415,7 @@ mod tests {
                         "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
                         "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
                         "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                            "score_plaintext_output_tcb_ack": SCORE_OUTPUT_TCB_ACK_VALUE,
                     }),
                 },
             )]),
@@ -7371,8 +7454,139 @@ mod tests {
     }
 
     #[test]
+    fn validate_crypto_settings_requires_vector_score_output_tcb_ack() {
+        let (_bridge_dir, bridge_program, bridge_sha256_b64) = test_bridge_program();
+        let mut settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
+            allow_inline_key_material: true,
+            instances: HashMap::from([(
+                "docs_vector_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: VECTOR_OPENFHE_CKKS_PROVIDER.to_string(),
+                    materials: HashMap::from([(
+                        PAYLOAD_SYM_KEY_ROLE.to_string(),
+                        "tenant-a/vector-v1".to_string(),
+                    )]),
+                    backend_ref: Some("openfhe_local".to_string()),
+                    options: json!({
+                        "key_id": "tenant-a:docs",
+                        "material_fingerprint_id": "tenant-a/vector@v1",
+                        "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                        "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                        "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                    }),
+                },
+            )]),
+            materials: HashMap::from([(
+                "tenant-a/vector-v1".to_string(),
+                CryptoMaterialConfig {
+                    kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                    source: Some("inline".to_string()),
+                    value_b64: Some(BASE64URL_NOPAD.encode(&[9_u8; 32])),
+                    rk_epoch: Some(1),
+                    ..CryptoMaterialConfig::default()
+                },
+            )]),
+            backends: HashMap::from([(
+                "openfhe_local".to_string(),
+                CryptoBackendConfig {
+                    kind: "process_pool".to_string(),
+                    program: Some(bridge_program),
+                    sha256_b64: Some(bridge_sha256_b64),
+                    signature_public_key_b64: None,
+                    signature_b64: None,
+                    size: Some(1),
+                    timeout_ms: Some(5_000),
+                },
+            )]),
+        };
+
+        let err = validate_crypto_settings(&settings)
+            .expect_err("vector scoring must require explicit plaintext-score TCB acknowledgement");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref instance, ref option, ref reason }
+                if instance == "docs_vector_v1"
+                    && option == SCORE_OUTPUT_TCB_ACK_OPTION
+                    && reason.contains(SCORE_OUTPUT_TCB_ACK_VALUE)),
+            "unexpected error: {err:?}",
+        );
+
+        settings
+            .instances
+            .get_mut("docs_vector_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                SCORE_OUTPUT_TCB_ACK_OPTION.to_string(),
+                json!("wrong-score-output-ack"),
+            );
+        let err = validate_crypto_settings(&settings)
+            .expect_err("wrong vector scoring TCB acknowledgement must fail");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == SCORE_OUTPUT_TCB_ACK_OPTION
+                    && reason.contains(SCORE_OUTPUT_TCB_ACK_VALUE)),
+            "unexpected error: {err:?}",
+        );
+
+        settings
+            .instances
+            .get_mut("docs_vector_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                SCORE_OUTPUT_TCB_ACK_OPTION.to_string(),
+                json!(SCORE_OUTPUT_TCB_ACK_VALUE),
+            );
+        validate_crypto_settings(&settings).unwrap();
+    }
+
+    #[test]
+    fn validate_crypto_settings_rejects_reserved_client_ckks_vector_provider() {
+        let settings = CryptoSettings {
+            instances: HashMap::from([(
+                "docs_vector_client_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: VECTOR_CLIENT_CKKS_PROVIDER.to_string(),
+                    options: json!({
+                        "key_id": "tenant-a:docs",
+                    }),
+                    ..CryptoInstanceConfig::default()
+                },
+            )]),
+            ..CryptoSettings::default()
+        };
+
+        let err = validate_crypto_settings(&settings)
+            .expect_err("reserved client-side vector provider must be fail-closed");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref instance, ref option, ref reason }
+                if instance == "docs_vector_client_v1"
+                    && option == "provider"
+                    && reason.contains("reserved")
+                    && reason.contains("not implemented")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
     fn validate_crypto_settings_rejects_invalid_registry_names() {
         let invalid_material_settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::new(),
             materials: HashMap::from([(
@@ -7394,6 +7608,12 @@ mod tests {
         );
 
         let invalid_backend_settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::new(),
             materials: HashMap::new(),
@@ -7418,6 +7638,12 @@ mod tests {
         );
 
         let invalid_instance_settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::from([(
                 "docs payload v1".to_string(),
@@ -7439,6 +7665,12 @@ mod tests {
         );
 
         let invalid_provider_settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::from([(
                 "docs_payload_v1".to_string(),
@@ -7458,6 +7690,12 @@ mod tests {
         ));
 
         let unsupported_provider_settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::from([(
                 "docs_payload_v1".to_string(),
@@ -7477,6 +7715,12 @@ mod tests {
         ));
 
         let client_provider_with_server_material_settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::from([(
                 "docs_payload_client_v1".to_string(),
@@ -7507,6 +7751,12 @@ mod tests {
         ));
 
         let payload_provider_with_backend_settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::from([(
                 "docs_payload_v1".to_string(),
@@ -7537,6 +7787,12 @@ mod tests {
         ));
 
         let invalid_role_settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::from([(
                 "docs_payload_v1".to_string(),
@@ -7570,6 +7826,12 @@ mod tests {
     #[test]
     fn validate_crypto_settings_requires_provider_bindings() {
         let payload_without_sym_key = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::from([(
                 "docs_payload_v1".to_string(),
@@ -7589,6 +7851,12 @@ mod tests {
         ));
 
         let payload_without_fingerprint = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::from([(
                 "docs_payload_v1".to_string(),
@@ -7619,6 +7887,12 @@ mod tests {
         ));
 
         let metadata_without_fingerprint = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::from([(
                 "docs_metadata_value_v1".to_string(),
@@ -7650,6 +7924,12 @@ mod tests {
         ));
 
         let metadata_with_invalid_retired_material = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::from([(
                 "docs_metadata_value_v1".to_string(),
@@ -7696,6 +7976,12 @@ mod tests {
         ));
 
         let payload_with_retired_active_key = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::from([(
                 "docs_payload_v1".to_string(),
@@ -7744,6 +8030,12 @@ mod tests {
         ));
 
         let vector_without_backend = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::from([(
                 "docs_vector_v1".to_string(),
@@ -7787,6 +8079,12 @@ mod tests {
             },
         });
         let valid_client_settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::from([(
                 "docs_payload_client_v1".to_string(),
@@ -7947,6 +8245,12 @@ mod tests {
     #[test]
     fn validate_crypto_settings_rejects_unsupported_provider_options() {
         let payload_with_client_option = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::from([(
                 "docs_payload_v1".to_string(),
@@ -8002,6 +8306,12 @@ mod tests {
         ));
 
         let metadata_with_client_option = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::from([(
                 "docs_metadata_value_v1".to_string(),
@@ -8077,6 +8387,12 @@ mod tests {
         let bridge_program = bridge_path.display().to_string();
         let bridge_sha256_b64 = BASE64URL_NOPAD.encode(&Sha256::digest(b"#!/bin/sh\nexit 0\n"));
         let vector_with_payload_option = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::from([(
                 "docs_vector_v1".to_string(),
@@ -8093,6 +8409,7 @@ mod tests {
                         "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
                         "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
                         "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                            "score_plaintext_output_tcb_ack": SCORE_OUTPUT_TCB_ACK_VALUE,
                         "retired_materials": [],
                     }),
                 },
@@ -8155,6 +8472,12 @@ mod tests {
     #[test]
     fn validate_crypto_settings_rejects_invalid_server_provider_key_id_options() {
         let payload_with_invalid_key_id = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::from([(
                 "docs_payload_v1".to_string(),
@@ -8204,6 +8527,12 @@ mod tests {
 
         let bridge_program = std::env::current_exe().unwrap().display().to_string();
         let vector_with_invalid_key_id = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::from([(
                 "docs_vector_v1".to_string(),
@@ -8220,6 +8549,7 @@ mod tests {
                         "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
                         "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
                         "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                            "score_plaintext_output_tcb_ack": SCORE_OUTPUT_TCB_ACK_VALUE,
                     }),
                 },
             )]),
@@ -8270,6 +8600,12 @@ mod tests {
     #[test]
     fn validate_crypto_settings_rejects_invalid_retired_payload_materials() {
         let mut settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::from([(
                 "docs_payload_v1".to_string(),
@@ -8524,6 +8860,13 @@ mod tests {
     fn crypto_runtime_capability_fingerprint_redacts_key_material() {
         let mut settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_payload_v1".to_string(),
@@ -8691,6 +9034,13 @@ mod tests {
     fn validate_runtime_config_accepts_metadata_blind_index_provider() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 instances: HashMap::from([(
                     "docs_body_blind_v1".to_string(),
                     CryptoInstanceConfig {
@@ -8732,6 +9082,13 @@ mod tests {
     fn crypto_runtime_capability_parity_rejects_peer_mismatch() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_payload_v1".to_string(),
@@ -8878,6 +9235,13 @@ mod tests {
         };
         let settings_for_rk = |rk_secret: [u8; 32]| Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_payload_v1".to_string(),
@@ -8936,6 +9300,13 @@ mod tests {
     fn crypto_runtime_capability_fingerprint_tracks_client_verifier_policy() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 instances: HashMap::from([
                     (
                         "docs_client_payload_v1".to_string(),
@@ -9122,6 +9493,13 @@ mod tests {
     fn crypto_runtime_capability_fingerprint_tracks_backend_policy() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 backends: HashMap::from([(
                     "openfhe_bridge_v1".to_string(),
                     CryptoBackendConfig {
@@ -9262,6 +9640,13 @@ mod tests {
     fn crypto_runtime_capability_fingerprint_tracks_vector_public_material() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 instances: HashMap::from([(
                     "docs_vector_v1".to_string(),
                     CryptoInstanceConfig {
@@ -9277,6 +9662,7 @@ mod tests {
                             "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
                             "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
                             "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                            "score_plaintext_output_tcb_ack": SCORE_OUTPUT_TCB_ACK_VALUE,
                         }),
                     },
                 )]),
@@ -9422,6 +9808,13 @@ mod tests {
     fn crypto_runtime_capability_fingerprint_tracks_vault_material_field() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 materials: HashMap::from([(
                     "tenant-a/mk".to_string(),
                     CryptoMaterialConfig {
@@ -9570,6 +9963,12 @@ mod tests {
     #[test]
     fn validate_crypto_settings_can_reject_inline_key_material() {
         let settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: false,
             materials: HashMap::from([(
                 "tenant-a/payload-v1".to_string(),
@@ -10632,6 +11031,12 @@ mod tests {
             ..CryptoMaterialConfig::default()
         };
         let settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: false,
             instances: HashMap::new(),
             backends: HashMap::new(),
@@ -11011,6 +11416,12 @@ mod tests {
             ..CryptoMaterialConfig::default()
         };
         let settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: false,
             instances: HashMap::new(),
             backends: HashMap::new(),
@@ -11236,6 +11647,12 @@ mod tests {
     #[test]
     fn validate_crypto_settings_rejects_wrapped_resource_key_without_mk() {
         let settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             materials: HashMap::from([(
                 "tenant-a/payload-rk-v1".to_string(),
                 CryptoMaterialConfig {
@@ -11281,6 +11698,12 @@ mod tests {
         };
 
         let missing_epoch = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             materials: HashMap::from([
                 ("tenant-a/mk-v1".to_string(), wrapping_material.clone()),
@@ -11297,6 +11720,12 @@ mod tests {
         );
 
         let missing_scope = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             materials: HashMap::from([
                 ("tenant-a/mk-v1".to_string(), wrapping_material),
@@ -11332,6 +11761,12 @@ mod tests {
             ..CryptoMaterialConfig::default()
         };
         let settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             materials: HashMap::from([
                 ("tenant-a/mk-v1".to_string(), wrapping_material),
@@ -11374,6 +11809,12 @@ mod tests {
     #[test]
     fn validate_crypto_settings_enforces_destroyed_resource_key_shredding() {
         let destroyed = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             materials: HashMap::from([(
                 "tenant-a/payload-rk-v1".to_string(),
                 CryptoMaterialConfig {
@@ -11389,6 +11830,12 @@ mod tests {
         validate_crypto_settings(&destroyed).unwrap();
 
         let retained_key_material = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             materials: HashMap::from([(
                 "tenant-a/payload-rk-v1".to_string(),
                 CryptoMaterialConfig {
@@ -11425,6 +11872,12 @@ mod tests {
             ..CryptoMaterialConfig::default()
         };
         let settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             materials: HashMap::from([
                 ("tenant-a/mk-v1".to_string(), wrapping_material),
@@ -11842,6 +12295,12 @@ mod tests {
     fn openfhe_backend_factory_tracks_crypto_material_env_names() {
         let (_dir, program, sha256_b64) = test_bridge_program();
         let settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             materials: HashMap::from([
                 (
                     "tenant-a/payload-rk".to_string(),
@@ -12069,6 +12528,13 @@ mod tests {
     fn payload_write_plan_encrypts_generic_payload_fields() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_payload_v1".to_string(),
@@ -12215,6 +12681,13 @@ mod tests {
     fn payload_write_plan_rejects_collection_name_scoped_resource_key_for_stable_crypto_id() {
         let mut settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_payload_v1".to_string(),
@@ -12302,6 +12775,13 @@ mod tests {
     fn payload_write_plan_reencrypts_stale_envelopes_only_in_migration_mode() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_payload_v1".to_string(),
@@ -12472,6 +12952,13 @@ mod tests {
     fn payload_write_plan_requires_explicit_material_fingerprint_id() {
         let mut settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_payload_v1".to_string(),
@@ -12558,6 +13045,13 @@ mod tests {
             signed_client_envelope("docs", "point-1", "body", "tenant-a/client-signing-v1");
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 instances: HashMap::from([(
                     "docs_payload_client_v1".to_string(),
                     CryptoInstanceConfig {
@@ -12619,6 +13113,13 @@ mod tests {
             signed_client_envelope("docs", "point-1", "body", "tenant-a/client-signing-v1");
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 instances: HashMap::from([(
                     "docs_payload_client_v1".to_string(),
                     CryptoInstanceConfig {
@@ -12691,6 +13192,13 @@ mod tests {
             signed_client_envelope("docs", "point-1", "body", "tenant-a/client-signing-v1");
         let mut settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 instances: HashMap::from([(
                     "docs_payload_client_v1".to_string(),
                     CryptoInstanceConfig {
@@ -12745,6 +13253,13 @@ mod tests {
     fn validate_collection_crypto_runtime_requires_attestation_for_server_keys_in_clustered_mode() {
         let mut settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_payload_v1".to_string(),
@@ -12814,6 +13329,13 @@ mod tests {
     fn payload_write_plan_rejects_non_client_values_for_client_provider() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 instances: HashMap::from([(
                     "docs_payload_client_v1".to_string(),
                     CryptoInstanceConfig {
@@ -12893,6 +13415,13 @@ mod tests {
         );
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 instances: HashMap::from([(
                     "docs_payload_client_v1".to_string(),
                     CryptoInstanceConfig {
@@ -12955,6 +13484,13 @@ mod tests {
             signed_client_envelope("docs", "point-2", "body", "tenant-a/client-signing-v1");
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 instances: HashMap::from([(
                     "docs_payload_client_v1".to_string(),
                     CryptoInstanceConfig {
@@ -13016,6 +13552,13 @@ mod tests {
             signed_client_envelope("docs", "point-1", "body", "tenant-a/client-signing-v1");
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 instances: HashMap::from([(
                     "docs_payload_client_v1".to_string(),
                     CryptoInstanceConfig {
@@ -13110,6 +13653,13 @@ mod tests {
             signed_client_envelope("docs", "point-2", "body", "tenant-a/client-signing-v2");
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 instances: HashMap::from([(
                     "docs_payload_client_v1".to_string(),
                     CryptoInstanceConfig {
@@ -13192,6 +13742,13 @@ mod tests {
     fn payload_write_plan_requires_client_envelope_binding_for_client_provider() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 instances: HashMap::from([(
                     "docs_payload_client_v1".to_string(),
                     CryptoInstanceConfig {
@@ -13240,6 +13797,13 @@ mod tests {
     fn payload_write_plan_rejects_client_binding_for_server_provider() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 instances: HashMap::from([(
                     "docs_payload_v1".to_string(),
                     CryptoInstanceConfig {
@@ -13306,6 +13870,13 @@ mod tests {
         };
         let raw_settings_with_options = |options: serde_json::Value| Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 instances: HashMap::from([(
                     "docs_payload_client_v1".to_string(),
                     CryptoInstanceConfig {
@@ -13701,6 +14272,13 @@ mod tests {
 
         let settings_with_instance = |instance: CryptoInstanceConfig| Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 instances: HashMap::from([("docs_payload_client_v1".to_string(), instance)]),
                 materials: HashMap::from([(
                     "tenant-a/server-rk".to_string(),
@@ -13811,6 +14389,13 @@ mod tests {
 
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 instances: HashMap::from([(
                     "docs_payload_client_v1".to_string(),
                     CryptoInstanceConfig {
@@ -13935,6 +14520,13 @@ mod tests {
 
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 instances: HashMap::from([(
                     "docs_payload_client_v1".to_string(),
                     CryptoInstanceConfig {
@@ -14037,6 +14629,13 @@ mod tests {
 
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_payload_v1".to_string(),
@@ -14197,6 +14796,12 @@ mod tests {
         wrapped_rk_config.wrapped_key_b64 = Some(wrapped.wrapped_key);
 
         let runtime_settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::new(),
             materials: HashMap::from([
@@ -14331,6 +14936,12 @@ mod tests {
     fn runtime_resource_key_generation_creates_new_wrapped_active_key() {
         let mk_material = "tenant-a/mk-v1";
         let runtime_settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             materials: HashMap::from([(
                 mk_material.to_string(),
@@ -14485,6 +15096,12 @@ mod tests {
             ..CryptoMaterialConfig::default()
         };
         let runtime_settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::new(),
             materials: HashMap::from([
@@ -14727,6 +15344,12 @@ mod tests {
             );
         }
         let runtime_settings = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::new(),
             materials,
@@ -14812,6 +15435,13 @@ mod tests {
         let bridge_sha256_b64 = BASE64URL_NOPAD.encode(&Sha256::digest(bridge_bytes));
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([
                     (
@@ -14844,6 +15474,7 @@ mod tests {
                                 "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
                                 "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
                                 "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                            "score_plaintext_output_tcb_ack": SCORE_OUTPUT_TCB_ACK_VALUE,
                             }),
                         },
                     ),
@@ -15253,6 +15884,13 @@ mod tests {
         let (_bridge_dir, bridge_program, bridge_sha256_b64) = test_bridge_program();
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_vector_v1".to_string(),
@@ -15269,6 +15907,7 @@ mod tests {
                             "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
                             "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
                             "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                            "score_plaintext_output_tcb_ack": SCORE_OUTPUT_TCB_ACK_VALUE,
                         }),
                     },
                 )]),
@@ -15356,6 +15995,13 @@ mod tests {
     fn validate_collection_crypto_runtime_accepts_metadata_blind_index_selectors() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 instances: HashMap::from([(
                     "docs_metadata_v1".to_string(),
                     CryptoInstanceConfig {
@@ -15421,6 +16067,13 @@ mod tests {
     fn metadata_value_aead_rule_encrypts_selected_metadata_field() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_metadata_value_v1".to_string(),
@@ -15719,6 +16372,13 @@ mod tests {
 
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_payload_v1".to_string(),
@@ -15787,6 +16447,13 @@ mod tests {
     fn validate_recovered_collection_crypto_config_rejects_payload_key_id_mismatch() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_payload_v1".to_string(),
@@ -15853,6 +16520,13 @@ mod tests {
     fn validate_recovered_collection_crypto_config_rejects_missing_payload_material() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_payload_v1".to_string(),
@@ -15911,6 +16585,13 @@ mod tests {
     fn validate_recovered_collection_crypto_config_rejects_missing_vector_metadata_material() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_vector_v1".to_string(),
@@ -15927,6 +16608,7 @@ mod tests {
                             "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
                             "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
                             "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                            "score_plaintext_output_tcb_ack": SCORE_OUTPUT_TCB_ACK_VALUE,
                         }),
                     },
                 )]),
@@ -16068,6 +16750,13 @@ mod tests {
 
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_vector_v1".to_string(),
@@ -16084,6 +16773,7 @@ mod tests {
                             "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
                             "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
                             "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                            "score_plaintext_output_tcb_ack": SCORE_OUTPUT_TCB_ACK_VALUE,
                         }),
                     },
                 )]),
@@ -16145,6 +16835,13 @@ mod tests {
     fn validate_collection_crypto_runtime_rejects_invalid_vector_backend_metadata() {
         let mut settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_vector_v1".to_string(),
@@ -16161,6 +16858,7 @@ mod tests {
                             "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
                             "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
                             "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                            "score_plaintext_output_tcb_ack": SCORE_OUTPUT_TCB_ACK_VALUE,
                         }),
                     },
                 )]),
@@ -16286,6 +16984,13 @@ mod tests {
     fn validate_collection_crypto_runtime_rejects_vector_provider_mismatch() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_payload_v1".to_string(),
@@ -16343,6 +17048,13 @@ mod tests {
     fn validate_collection_crypto_runtime_rejects_unallowlisted_vector_profile() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_vector_v1".to_string(),
@@ -16416,6 +17128,13 @@ mod tests {
     fn validate_collection_crypto_runtime_requires_vector_profile() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_vector_v1".to_string(),
@@ -16488,6 +17207,13 @@ mod tests {
     fn validate_collection_crypto_runtime_requires_vector_material_fingerprint_id() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_vector_v1".to_string(),
@@ -16503,6 +17229,7 @@ mod tests {
                             "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
                             "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
                             "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                            "score_plaintext_output_tcb_ack": SCORE_OUTPUT_TCB_ACK_VALUE,
                         }),
                     },
                 )]),
@@ -16562,6 +17289,13 @@ mod tests {
     fn validate_collection_crypto_runtime_requires_vector_resource_key_epoch() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_vector_v1".to_string(),
@@ -16578,6 +17312,7 @@ mod tests {
                             "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
                             "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
                             "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                            "score_plaintext_output_tcb_ack": SCORE_OUTPUT_TCB_ACK_VALUE,
                         }),
                     },
                 )]),
@@ -16636,6 +17371,13 @@ mod tests {
     fn validate_collection_crypto_runtime_rejects_vector_missing_metadata_key_material() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_vector_v1".to_string(),
@@ -16648,6 +17390,7 @@ mod tests {
                             "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
                             "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
                             "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                            "score_plaintext_output_tcb_ack": SCORE_OUTPUT_TCB_ACK_VALUE,
                         }),
                     },
                 )]),

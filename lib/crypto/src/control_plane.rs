@@ -10,6 +10,7 @@ pub const GENERIC_CIPHERTEXT_MARKER: &str = "$qdrant_ciphertext";
 pub const PAYLOAD_AES_GCM_PROVIDER: &str = "payload/aes-256-gcm@v1";
 pub const PAYLOAD_CLIENT_AEAD_PROVIDER: &str = "payload/client-aead@v1";
 pub const VECTOR_OPENFHE_CKKS_PROVIDER: &str = "vector/openfhe-ckks@v1";
+pub const VECTOR_CLIENT_CKKS_PROVIDER: &str = "vector/client-ckks@v1";
 pub const METADATA_AES_GCM_PROVIDER: &str = "metadata/aes-256-gcm@v1";
 pub const METADATA_BLIND_INDEX_PROVIDER: &str = "metadata/blind-index-hmac@v1";
 pub const PAYLOAD_FIELD_BINDING: &str = "payload-field/v1";
@@ -295,6 +296,7 @@ mod tests {
             registry.register_payload_provider(PAYLOAD_AES_GCM_PROVIDER);
             registry.register_payload_provider(PAYLOAD_CLIENT_AEAD_PROVIDER);
             registry.register_vector_provider(VECTOR_OPENFHE_CKKS_PROVIDER);
+            registry.register_vector_provider(VECTOR_CLIENT_CKKS_PROVIDER);
             registry.register_metadata_provider(METADATA_AES_GCM_PROVIDER);
             registry.register_metadata_provider(METADATA_BLIND_INDEX_PROVIDER);
         }
@@ -455,7 +457,7 @@ mod tests {
         );
         assert_eq!(
             registry.vector_provider_ids().collect::<Vec<_>>(),
-            vec![VECTOR_OPENFHE_CKKS_PROVIDER],
+            vec![VECTOR_CLIENT_CKKS_PROVIDER, VECTOR_OPENFHE_CKKS_PROVIDER],
         );
         assert_eq!(
             registry.metadata_provider_ids().collect::<Vec<_>>(),

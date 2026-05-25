@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
 use common::counter::hardware_accumulator::HwMeasurementAcc;
+use common::fs::sync_parent_dir_async;
+use fs_err::tokio as tokio_fs;
 use segment::types::ShardKey;
 
 use crate::collection::Collection;
@@ -13,6 +15,7 @@ use crate::operations::{
 use crate::shards::replica_set::ShardReplicaSet;
 use crate::shards::replica_set::replica_set_state::ReplicaState;
 use crate::shards::shard::{PeerId, ShardId, ShardsPlacement};
+use crate::shards::shard_config::ShardConfig;
 use crate::shards::shard_trait::WaitUntil;
 
 impl Collection {
@@ -58,7 +61,9 @@ impl Collection {
 
     /// # Cancel safety
     ///
-    /// This method is *not* cancel safe.
+    /// Public callers execute this meta operation in a spawned task, so HTTP request cancellation
+    /// does not cancel the shard-key creation future. Synchronous error paths after a replica set
+    /// is created roll back the uncommitted shard directory or the whole new shard key.
     pub async fn create_shard_key(
         &self,
         shard_key: ShardKey,
@@ -123,30 +128,69 @@ impl Collection {
                 )
                 .await?;
 
-            for (field_name, field_schema) in payload_schema.iter() {
-                let create_index_op = CollectionUpdateOperations::FieldIndexOperation(
-                    FieldIndexOperations::CreateIndex(CreateIndex {
-                        field_name: field_name.clone(),
-                        field_schema: Some(field_schema.clone()),
-                    }),
-                );
+            let add_result = async {
+                validate_payload_index_schema_for_encryption(
+                    payload_schema.iter(),
+                    &self.state().await.config.params,
+                    "create shard key",
+                )?;
 
-                replica_set
-                    .update_local(
-                        OperationWithClockTag::from(create_index_op),
-                        WaitUntil::Visible,
-                        None,
-                        hw_counter.clone(),
-                        false,
-                    ) // TODO: Assign clock tag!? 🤔
-                    .await?;
+                for (field_name, field_schema) in payload_schema.iter() {
+                    let create_index_op = CollectionUpdateOperations::FieldIndexOperation(
+                        FieldIndexOperations::CreateIndex(CreateIndex {
+                            field_name: field_name.clone(),
+                            field_schema: Some(field_schema.clone()),
+                        }),
+                    );
+
+                    replica_set
+                        .update_local(
+                            OperationWithClockTag::from(create_index_op),
+                            WaitUntil::Visible,
+                            None,
+                            hw_counter.clone(),
+                            false,
+                        ) // TODO: Assign clock tag!? 🤔
+                        .await?;
+                }
+
+                let current_payload_schema = self.payload_index_schema.read().schema.clone();
+                let current_state = self.state().await;
+                validate_payload_index_schema_for_encryption(
+                    current_payload_schema.iter(),
+                    &current_state.config.params,
+                    "create shard key",
+                )?;
+
+                Ok::<_, CollectionError>(())
+            }
+            .await;
+
+            if let Err(err) = add_result {
+                cleanup_unadded_replica_set(replica_set).await?;
+                return Err(err);
             }
 
-            self.shards_holder
+            if let Err(err) = self
+                .shards_holder
                 .write()
                 .await
                 .add_shard(shard_id, replica_set, Some(shard_key.clone()))
-                .await?;
+                .await
+            {
+                if let Err(cleanup_err) = self
+                    .shards_holder
+                    .write()
+                    .await
+                    .remove_shard_key(&shard_key)
+                    .await
+                {
+                    log::error!(
+                        "failed to rollback shard key {shard_key} after add_shard failure: {cleanup_err}",
+                    );
+                }
+                return Err(err);
+            }
         }
 
         Ok(())
@@ -228,5 +272,25 @@ impl Collection {
             }
         }
         Ok(replicas)
+    }
+}
+
+async fn cleanup_unadded_replica_set(replica_set: ShardReplicaSet) -> CollectionResult<()> {
+    let shard_path = replica_set.shard_path.clone();
+    replica_set.stop_gracefully().await;
+
+    let shard_config_path = ShardConfig::get_config_path(&shard_path);
+    match tokio_fs::remove_file(&shard_config_path).await {
+        Ok(()) => {
+            sync_parent_dir_async(&shard_config_path).await?;
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(CollectionError::service_error(err.to_string())),
+    }
+
+    match tokio_fs::remove_dir_all(&shard_path).await {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(CollectionError::service_error(err.to_string())),
     }
 }

@@ -576,6 +576,53 @@ mod ckks_tests {
     }
 
     #[test]
+    fn startup_crypto_state_rejects_in_flight_migration_states() {
+        for migration_state in [
+            CryptoMigrationState::Disabled,
+            CryptoMigrationState::Encrypting,
+            CryptoMigrationState::Rotating,
+            CryptoMigrationState::Decrypting,
+        ] {
+            let config = CollectionConfigInternal {
+                params: CollectionParams {
+                    encryption: Some(CollectionEncryptionConfig {
+                        version: 1,
+                        key_id: Some("tenant-a:docs".to_string()),
+                        crypto_schema_version: 1,
+                        encryption_epoch: 3,
+                        migration_state,
+                        rules: vec![EncryptionRuleRef {
+                            id: "body_conf".to_string(),
+                            selector: EncryptionSelector::PayloadPaths {
+                                paths: vec!["body".to_string()],
+                            },
+                            instance: "docs_payload_v1".to_string(),
+                            binding: Some("payload-field/v1".to_string()),
+                        }],
+                    }),
+                    ..CollectionParams::empty()
+                },
+                hnsw_config: HnswConfig::default(),
+                optimizer_config: OptimizersConfig::fixture(),
+                wal_config: WalConfig::default(),
+                quantization_config: None,
+                strict_mode_config: None,
+                uuid: Some(Uuid::from_u128(0x1234567890abcdef1234567890abcdef)),
+                metadata: None,
+            };
+
+            let err = config
+                .validate_startup_crypto_state()
+                .expect_err("startup must fail closed for non-active migration state");
+            assert!(matches!(
+                err,
+                CollectionError::BadInput { description }
+                    if description.contains("verified migration recovery manifest")
+            ));
+        }
+    }
+
+    #[test]
     fn crypto_migration_state_allows_only_job_state_machine_edges() {
         use CryptoMigrationState::{Active, Decrypting, Disabled, Encrypting, Rotating};
 
@@ -2618,6 +2665,21 @@ impl CollectionConfigInternal {
         if let Err(ref errs) = self.validate() {
             validation::warn_validation_errors("Collection configuration file", errs);
         }
+    }
+
+    pub fn validate_startup_crypto_state(&self) -> CollectionResult<()> {
+        if let Some(encryption) = &self.params.encryption
+            && encryption.migration_state != CryptoMigrationState::Active
+        {
+            return Err(CollectionError::bad_input(format!(
+                "collection startup found in-flight or disabled crypto migration state {:?}; \
+                 restart recovery requires migration_state=active, no encryption config, or a \
+                 verified migration recovery manifest",
+                encryption.migration_state,
+            )));
+        }
+
+        Ok(())
     }
 
     /// Get warnings related to this configuration

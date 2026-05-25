@@ -229,6 +229,13 @@ mod tests {
     fn app_telemetry_includes_crypto_runtime_capability_fingerprint() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 instances: HashMap::from([(
                     "docs_payload_v1".to_string(),
                     CryptoInstanceConfig {
@@ -278,6 +285,13 @@ mod tests {
         let signature_public_key = "qdrant-sec-telemetry-signature-public-key-sentinel";
         let mut settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_payload_client_v1".to_string(),

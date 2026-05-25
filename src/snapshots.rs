@@ -242,6 +242,13 @@ mod tests {
     fn cli_snapshot_crypto_preflight_rejects_missing_runtime_material() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 instances: HashMap::from([(
                     "docs_payload_v1".to_string(),
                     CryptoInstanceConfig {
@@ -312,6 +319,13 @@ mod tests {
 
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_payload_v1".to_string(),
@@ -409,6 +423,13 @@ mod tests {
 
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_payload_v1".to_string(),
@@ -484,6 +505,13 @@ mod tests {
     fn cli_snapshot_crypto_preflight_rejects_missing_vector_backend() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_vector_v1".to_string(),
@@ -500,6 +528,7 @@ mod tests {
                             "profile": "ckks-128-n16384-d4-scale50",
                             "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
                             "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                            "score_plaintext_output_tcb_ack": "qdrant-sec-ckks-score-output-tcb-v1",
                         }),
                     },
                 )]),

@@ -320,6 +320,18 @@ crypto:
   # Keep false in production/security mode to reject `source: inline` key material.
   # Set true only for local development fixtures.
   allow_inline_key_material: false
+  # Maximum number of candidate points CKKS grouped search/query may score
+  # before grouping. This bounds OpenFHE bridge work for small grouped results.
+  ckks_grouped_max_candidates: 4096
+  # Maximum number of expensive CKKS scoring source batches per request.
+  # Recommend/discover/context source lists are rejected before bridge scoring
+  # when they exceed this bound.
+  ckks_scoring_source_batch_max: 32
+  # Process-local TTL for client CKKS encrypted query nonces. Reusing the same
+  # signed query nonce within this window is rejected before bridge scoring.
+  ckks_query_nonce_replay_ttl_secs: 300
+  # Maximum process-local client CKKS query nonce replay entries retained.
+  ckks_query_nonce_replay_cache_max_entries: 100000
   instances: {}
   materials: {}
   backends: {}
@@ -340,6 +352,7 @@ crypto:
   #       key_id: tenant-a:docs
   #       material_fingerprint_id: tenant-a/vector@v1
   #       profile: ckks-128-n16384-d4-scale50
+  #       score_plaintext_output_tcb_ack: qdrant-sec-ckks-score-output-tcb-v1
   # materials:
   #   tenant-a/mk-v1:
   #     kind: wrapping_key_32

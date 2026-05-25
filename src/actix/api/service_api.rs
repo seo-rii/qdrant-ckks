@@ -1393,6 +1393,12 @@ mod tests {
     fn runtime_generate_response_returns_applyable_new_resource_key_patch() {
         let mut settings = Settings::new(None).unwrap();
         settings.crypto = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::new(),
             backends: HashMap::new(),
@@ -1447,6 +1453,12 @@ mod tests {
     fn runtime_generate_dry_run_reports_external_calls_without_wrapping() {
         let mut settings = Settings::new(None).unwrap();
         settings.crypto = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::new(),
             backends: HashMap::new(),
@@ -1638,6 +1650,12 @@ mod tests {
     fn runtime_generate_response_rejects_duplicate_material_and_bad_epoch() {
         let mut settings = Settings::new(None).unwrap();
         settings.crypto = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::new(),
             backends: HashMap::new(),
@@ -1697,6 +1715,12 @@ mod tests {
     fn runtime_rewrap_response_returns_applyable_material_patch_without_mutating_settings() {
         let mut settings = Settings::new(None).unwrap();
         settings.crypto = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::new(),
             backends: HashMap::new(),
@@ -1800,6 +1824,13 @@ mod tests {
     fn runtime_rewrap_dry_run_reports_targets_without_unwrapping_materials() {
         let settings = Settings {
             crypto: CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::new(),
                 backends: HashMap::new(),
@@ -1904,6 +1935,12 @@ mod tests {
     fn runtime_retire_response_requires_unreferenced_retired_materials() {
         let mut settings = Settings::new(None).unwrap();
         settings.crypto = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::from([(
                 "docs_payload_v1".to_string(),
@@ -1991,6 +2028,12 @@ mod tests {
     fn runtime_retire_response_rejects_destroy_without_verified_migration_proof() {
         let mut settings = Settings::new(None).unwrap();
         settings.crypto = CryptoSettings {
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
             allow_inline_key_material: true,
             instances: HashMap::new(),
             backends: HashMap::new(),

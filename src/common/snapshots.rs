@@ -806,6 +806,13 @@ mod tests {
     fn shard_snapshot_recovery_validates_ckks_vector_public_material() {
         let settings = Settings {
             crypto: crate::settings::CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_vector_v1".to_string(),
@@ -822,6 +829,7 @@ mod tests {
                             "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
                             "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
                             "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                            "score_plaintext_output_tcb_ack": "qdrant-sec-ckks-score-output-tcb-v1",
                         }),
                     },
                 )]),
@@ -907,6 +915,13 @@ mod tests {
     fn shard_snapshot_recovery_rejects_missing_ckks_vector_metadata_material() {
         let settings = Settings {
             crypto: crate::settings::CryptoSettings {
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
                 instances: HashMap::from([(
                     "docs_vector_v1".to_string(),
@@ -923,6 +938,7 @@ mod tests {
                             "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
                             "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
                             "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                            "score_plaintext_output_tcb_ack": "qdrant-sec-ckks-score-output-tcb-v1",
                         }),
                     },
                 )]),

@@ -432,6 +432,14 @@ impl Collection {
             )
         });
         collection_config.validate_and_warn();
+        collection_config
+            .validate_startup_crypto_state()
+            .unwrap_or_else(|err| {
+                panic!(
+                    "Collection at {} has unsupported crypto migration startup state: {err}",
+                    path.display(),
+                )
+            });
 
         let sharding_method = collection_config.params.sharding_method.unwrap_or_default();
         let mut shard_holder =

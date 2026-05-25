@@ -438,10 +438,38 @@ const fn default_allow_inline_key_material() -> bool {
     false
 }
 
+pub(crate) const fn default_ckks_grouped_max_candidates() -> usize {
+    4096
+}
+
+pub(crate) const fn default_ckks_scoring_source_batch_max() -> usize {
+    32
+}
+
+pub(crate) const fn default_ckks_query_nonce_replay_ttl_secs() -> u64 {
+    300
+}
+
+pub(crate) const fn default_ckks_query_nonce_replay_cache_max_entries() -> usize {
+    100_000
+}
+
 #[derive(Debug, Deserialize, Clone, Validate)]
 pub struct CryptoSettings {
     #[serde(default = "default_allow_inline_key_material")]
     pub allow_inline_key_material: bool,
+    #[serde(default = "default_ckks_grouped_max_candidates")]
+    #[validate(range(min = 1))]
+    pub ckks_grouped_max_candidates: usize,
+    #[serde(default = "default_ckks_scoring_source_batch_max")]
+    #[validate(range(min = 1))]
+    pub ckks_scoring_source_batch_max: usize,
+    #[serde(default = "default_ckks_query_nonce_replay_ttl_secs")]
+    #[validate(range(min = 1))]
+    pub ckks_query_nonce_replay_ttl_secs: u64,
+    #[serde(default = "default_ckks_query_nonce_replay_cache_max_entries")]
+    #[validate(range(min = 1))]
+    pub ckks_query_nonce_replay_cache_max_entries: usize,
     #[serde(default)]
     #[validate(nested)]
     pub instances: HashMap<String, CryptoInstanceConfig>,
@@ -457,6 +485,11 @@ impl Default for CryptoSettings {
     fn default() -> Self {
         Self {
             allow_inline_key_material: default_allow_inline_key_material(),
+            ckks_grouped_max_candidates: default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs: default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                default_ckks_query_nonce_replay_cache_max_entries(),
             instances: HashMap::new(),
             materials: HashMap::new(),
             backends: HashMap::new(),
@@ -880,6 +913,22 @@ mod tests {
         assert_eq!(
             config.service.max_snapshot_upload_size_mb,
             default_max_snapshot_upload_size_mb()
+        );
+        assert_eq!(
+            config.crypto.ckks_grouped_max_candidates,
+            default_ckks_grouped_max_candidates()
+        );
+        assert_eq!(
+            config.crypto.ckks_scoring_source_batch_max,
+            default_ckks_scoring_source_batch_max()
+        );
+        assert_eq!(
+            config.crypto.ckks_query_nonce_replay_ttl_secs,
+            default_ckks_query_nonce_replay_ttl_secs()
+        );
+        assert_eq!(
+            config.crypto.ckks_query_nonce_replay_cache_max_entries,
+            default_ckks_query_nonce_replay_cache_max_entries()
         );
     }
 

@@ -9,9 +9,9 @@ use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::Duration;
 #[cfg(test)]
 use std::time::SystemTime;
+use std::time::{Duration, Instant};
 
 use api::rest::{RecommendStrategy, SearchGroupsRequestInternal, SearchRequestInternal};
 use collection::collection::ckks_search::{
@@ -217,6 +217,39 @@ fn ckks_sidecar_scoring_source_batches(scoring: &CkksSidecarScoring<'_>) -> usiz
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn record_ckks_client_query_nonce(
+    collection_id: &str,
+    vector_name: &str,
+    key_id: &str,
+    rk_id: &str,
+    rk_epoch: u64,
+    query_nonce: &str,
+    signature_key_id: &str,
+    plan: &crate::common::crypto::VectorWritePlan,
+) -> Result<(), StorageError> {
+    let key = format!(
+        "{collection_id}\x1f{vector_name}\x1f{key_id}\x1f{rk_id}\x1f{rk_epoch}\x1f{query_nonce}\x1f{signature_key_id}",
+    );
+    let mut cache = CKKS_CLIENT_QUERY_NONCE_REPLAY_CACHE.lock().unwrap();
+    if cache.record(
+        key,
+        Instant::now(),
+        plan.ckks_query_nonce_replay_ttl(),
+        plan.ckks_query_nonce_replay_cache_max_entries(),
+    ) {
+        return Ok(());
+    }
+
+    log::warn!(
+        "rejected replayed client CKKS query nonce for collection_id={collection_id}, vector={vector_name}, key_id={key_id}, rk_id={rk_id}, rk_epoch={rk_epoch}, signature_key_id={signature_key_id}",
+    );
+
+    Err(StorageError::bad_input(format!(
+        "encrypted query nonce for vector '{vector_name}' was already used recently; regenerate the client-side CKKS query envelope with a fresh query_nonce before retrying",
+    )))
+}
+
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_CAPACITY: usize = 16;
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_DIR: &str = "ckks_sidecar_hnsw_graphs";
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_VERSION: u8 = 1;
@@ -231,8 +264,6 @@ const CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_BYTES: usize = 16 * 1024 * 1024;
 const CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_ENCODED_BYTES: usize =
     (CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_BYTES + 2) / 3 * 4;
 const CKKS_GROUPED_SEARCH_CANDIDATE_OVERSAMPLING: usize = 32;
-const CKKS_GROUPED_SEARCH_MAX_CANDIDATES: usize = 4096;
-const CKKS_SCORING_SOURCE_BATCH_MAX: usize = 32;
 const CKKS_MATRIX_SAMPLE_MAX: usize = 512;
 const CKKS_MATRIX_SCORE_PAIR_MAX: usize = CKKS_MATRIX_SAMPLE_MAX * CKKS_MATRIX_SAMPLE_MAX;
 const CKKS_SEARCH_FILL_RETRY_SLACK: usize = 32;
@@ -240,6 +271,67 @@ const CKKS_SEARCH_FILL_RETRY_MULTIPLIER: usize = 4;
 
 static CKKS_SIDECAR_HNSW_GRAPH_CACHE: LazyLock<Mutex<CkksSidecarHnswGraphCache>> =
     LazyLock::new(|| Mutex::new(CkksSidecarHnswGraphCache::default()));
+
+static CKKS_CLIENT_QUERY_NONCE_REPLAY_CACHE: LazyLock<Mutex<CkksClientQueryNonceReplayCache>> =
+    LazyLock::new(|| Mutex::new(CkksClientQueryNonceReplayCache::default()));
+
+#[derive(Default)]
+struct CkksClientQueryNonceReplayCache {
+    entries: HashMap<String, Instant>,
+    order: VecDeque<(String, Instant)>,
+}
+
+impl CkksClientQueryNonceReplayCache {
+    fn record(&mut self, key: String, now: Instant, ttl: Duration, max_entries: usize) -> bool {
+        self.prune(now);
+        if self
+            .entries
+            .get(&key)
+            .is_some_and(|expires_at| *expires_at > now)
+        {
+            return false;
+        }
+
+        let expires_at = now + ttl;
+        self.entries.insert(key.clone(), expires_at);
+        self.order.push_back((key, expires_at));
+        while self.entries.len() > max_entries {
+            let Some((old_key, old_expires_at)) = self.order.pop_front() else {
+                break;
+            };
+            if self
+                .entries
+                .get(&old_key)
+                .is_some_and(|expires_at| *expires_at == old_expires_at)
+            {
+                self.entries.remove(&old_key);
+            }
+        }
+        true
+    }
+
+    fn prune(&mut self, now: Instant) {
+        while let Some((key, expires_at)) = self.order.front().cloned() {
+            if expires_at > now {
+                break;
+            }
+            self.order.pop_front();
+            if self
+                .entries
+                .get(&key)
+                .is_some_and(|current| *current == expires_at)
+            {
+                self.entries.remove(&key);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+fn clear_ckks_client_query_nonce_replay_cache_for_tests() {
+    *CKKS_CLIENT_QUERY_NONCE_REPLAY_CACHE.lock().unwrap() =
+        CkksClientQueryNonceReplayCache::default();
+}
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct CkksSidecarHnswGraphCacheKey {
@@ -1064,9 +1156,10 @@ async fn ckks_vector_search_points_with_scoring(
         }
     };
     let source_batches = ckks_sidecar_scoring_source_batches(&scoring);
-    if source_batches > CKKS_SCORING_SOURCE_BATCH_MAX {
+    let source_batch_max = plan.ckks_scoring_source_batch_max();
+    if source_batches > source_batch_max {
         return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' CKKS query uses {source_batches} scoring source batches; maximum is {CKKS_SCORING_SOURCE_BATCH_MAX}",
+            "encrypted vector '{vector_name}' CKKS query uses {source_batches} scoring source batches; maximum is {source_batch_max}",
         )));
     }
     if let CkksSidecarScoring::NearestResolved {
@@ -1108,6 +1201,16 @@ async fn ckks_vector_search_points_with_scoring(
                 "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
             ))
         })?;
+        record_ckks_client_query_nonce(
+            collection_id,
+            envelope_vector_name,
+            key_id,
+            rk_id,
+            *rk_epoch,
+            query_nonce,
+            signature_key_id,
+            plan,
+        )?;
     }
     let with_vector = with_vector.unwrap_or_default();
     if with_vector.is_enabled() {
@@ -3831,6 +3934,7 @@ fn group_ckks_search_points(
 fn ckks_grouped_candidate_limit(
     group_limit: usize,
     group_size: usize,
+    max_candidates: usize,
 ) -> Result<usize, StorageError> {
     let requested_hits = group_limit.checked_mul(group_size).ok_or_else(|| {
         StorageError::bad_input("encrypted vector grouped search request is too large")
@@ -3838,15 +3942,15 @@ fn ckks_grouped_candidate_limit(
     if requested_hits == 0 {
         return Ok(0);
     }
-    if requested_hits > CKKS_GROUPED_SEARCH_MAX_CANDIDATES {
+    if requested_hits > max_candidates {
         return Err(StorageError::bad_input(format!(
-            "encrypted vector grouped search may request at most {CKKS_GROUPED_SEARCH_MAX_CANDIDATES} grouped hits",
+            "encrypted vector grouped search may request at most {max_candidates} grouped hits",
         )));
     }
 
     Ok(requested_hits
         .saturating_mul(CKKS_GROUPED_SEARCH_CANDIDATE_OVERSAMPLING)
-        .min(CKKS_GROUPED_SEARCH_MAX_CANDIDATES)
+        .min(max_candidates)
         .max(requested_hits))
 }
 
@@ -3895,7 +3999,8 @@ async fn ckks_vector_group_points(
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
 ) -> Result<GroupsResult, StorageError> {
-    let candidate_limit = ckks_grouped_candidate_limit(group_limit, group_size)?;
+    let candidate_limit =
+        ckks_grouped_candidate_limit(group_limit, group_size, plan.ckks_grouped_max_candidates())?;
     let mut bounded_search_request = search_request.clone();
     bounded_search_request.offset = 0;
     bounded_search_request.limit = candidate_limit;
@@ -3948,7 +4053,8 @@ async fn ckks_vector_group_points_with_scoring(
     timeout: Option<Duration>,
     hw_measurement_acc: HwMeasurementAcc,
 ) -> Result<GroupsResult, StorageError> {
-    let candidate_limit = ckks_grouped_candidate_limit(group_limit, group_size)?;
+    let candidate_limit =
+        ckks_grouped_candidate_limit(group_limit, group_size, plan.ckks_grouped_max_candidates())?;
     let scored = ckks_vector_search_points_with_scoring(
         collection,
         collection_name,
@@ -10012,18 +10118,29 @@ mod tests {
 
     #[test]
     fn ckks_sidecar_grouped_candidate_limit_is_bounded() {
-        assert_eq!(ckks_grouped_candidate_limit(1, 1).unwrap(), 32);
-        assert_eq!(ckks_grouped_candidate_limit(64, 2).unwrap(), 4096);
-        assert_eq!(ckks_grouped_candidate_limit(0, 10).unwrap(), 0);
+        let max_candidates = crate::settings::default_ckks_grouped_max_candidates();
+        assert_eq!(
+            ckks_grouped_candidate_limit(1, 1, max_candidates).unwrap(),
+            32
+        );
+        assert_eq!(
+            ckks_grouped_candidate_limit(64, 2, max_candidates).unwrap(),
+            4096
+        );
+        assert_eq!(
+            ckks_grouped_candidate_limit(0, 10, max_candidates).unwrap(),
+            0
+        );
+        assert_eq!(ckks_grouped_candidate_limit(5, 2, 16).unwrap(), 16);
 
-        let err = ckks_grouped_candidate_limit(CKKS_GROUPED_SEARCH_MAX_CANDIDATES + 1, 1)
+        let err = ckks_grouped_candidate_limit(max_candidates + 1, 1, max_candidates)
             .expect_err("grouped requests larger than the CKKS candidate budget must fail");
         assert!(
             format!("{err}").contains("at most"),
             "unexpected error: {err}",
         );
 
-        let err = ckks_grouped_candidate_limit(usize::MAX, 2)
+        let err = ckks_grouped_candidate_limit(usize::MAX, 2, max_candidates)
             .expect_err("overflowing grouped requests must fail");
         assert!(
             format!("{err}").contains("too large"),
@@ -10042,7 +10159,7 @@ mod tests {
         };
         assert_eq!(
             ckks_sidecar_scoring_source_batches(&scoring),
-            CKKS_SCORING_SOURCE_BATCH_MAX + 1,
+            crate::settings::default_ckks_scoring_source_batch_max() + 1,
         );
 
         let pairs = (0..16)
@@ -10054,13 +10171,59 @@ mod tests {
         };
         assert_eq!(
             ckks_sidecar_scoring_source_batches(&scoring),
-            CKKS_SCORING_SOURCE_BATCH_MAX + 1,
+            crate::settings::default_ckks_scoring_source_batch_max() + 1,
         );
 
         let scoring = CkksSidecarScoring::Nearest {
             query_values: source.as_slice(),
         };
         assert_eq!(ckks_sidecar_scoring_source_batches(&scoring), 1);
+    }
+
+    #[test]
+    fn ckks_client_query_nonce_replay_cache_rejects_recent_reuse() {
+        clear_ckks_client_query_nonce_replay_cache_for_tests();
+        let plan = crate::common::crypto::VectorWritePlan::empty_for_test();
+
+        record_ckks_client_query_nonce(
+            "collection-uuid",
+            "embedding",
+            "tenant-a:key",
+            "tenant-a/rk",
+            3,
+            "AAAAAAAAAAAAAAAA",
+            "tenant-a/signing",
+            &plan,
+        )
+        .unwrap();
+
+        let err = record_ckks_client_query_nonce(
+            "collection-uuid",
+            "embedding",
+            "tenant-a:key",
+            "tenant-a/rk",
+            3,
+            "AAAAAAAAAAAAAAAA",
+            "tenant-a/signing",
+            &plan,
+        )
+        .expect_err("same signed query nonce must not be accepted twice");
+        assert!(
+            format!("{err}").contains("already used recently"),
+            "unexpected error: {err}",
+        );
+
+        record_ckks_client_query_nonce(
+            "collection-uuid",
+            "embedding",
+            "tenant-a:key",
+            "tenant-a/rk",
+            3,
+            "AAAAAAAAAAAAAAAB",
+            "tenant-a/signing",
+            &plan,
+        )
+        .unwrap();
     }
 
     #[test]
