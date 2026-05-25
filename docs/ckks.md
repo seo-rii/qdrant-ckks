@@ -1160,6 +1160,8 @@ base64url-no-padding SHA-256 digest of the decoded ciphertext bytes and is
 signed before the ciphertext bytes themselves are appended. Any field ordering
 change, missing field, stale `query_nonce`, wrong `rk_epoch`, or changed
 ciphertext bytes invalidates the Ed25519 signature.
+`docs/ckks-client-query-signature-test-vector.json` contains a known-answer
+fixture for SDKs and is checked by the server unit tests.
 
 Result ordering and
 `score_threshold` follow the configured Qdrant distance metric:

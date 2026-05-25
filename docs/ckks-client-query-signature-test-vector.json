@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "scheme": "openfhe-ckks",
+  "security_profile": "ckks-128-n16384-d4-scale50",
+  "collection_id": "collection-uuid",
+  "vector_name": "embedding",
+  "key_id": "tenant-a:vector",
+  "rk_id": "tenant-a/vector-rk",
+  "rk_epoch": 3,
+  "query_nonce": "nonce-96-bit-b64",
+  "context_digest": "context-digest-b64",
+  "slots": 1536,
+  "ciphertext_b64": "Y2lwaGVydGV4dC1ieXRlcw",
+  "ciphertext_sha256_b64": "YVKVYK03sS5n33-bCnG9Bz0zht5UR2avZyx1f-lQxOo",
+  "signature_alg": "ed25519",
+  "signature_key_id": "tenant-a/query-signing-v1",
+  "signature_message_domain": "qdrant-sec/client-ckks-query-signature/v1\\0",
+  "signature_message_b64": "cWRyYW50LXNlYy9jbGllbnQtY2trcy1xdWVyeS1zaWduYXR1cmUvdjEAAAAAAAAAAAExAAAAAAAAAAxvcGVuZmhlLWNra3MAAAAAAAAAGmNra3MtMTI4LW4xNjM4NC1kNC1zY2FsZTUwAAAAAAAAAA9jb2xsZWN0aW9uLXV1aWQAAAAAAAAACWVtYmVkZGluZwAAAAAAAAAPdGVuYW50LWE6dmVjdG9yAAAAAAAAABJ0ZW5hbnQtYS92ZWN0b3ItcmsAAAAAAAAAATMAAAAAAAAAEG5vbmNlLTk2LWJpdC1iNjQAAAAAAAAAEmNvbnRleHQtZGlnZXN0LWI2NAAAAAAAAAAEMTUzNgAAAAAAAAArWVZLVllLMDNzUzVuMzMtYkNuRzlCejB6aHQ1VVIyYXZaeXgxZi1sUXhPbwAAAAAAAAAHZWQyNTUxOQAAAAAAAAAZdGVuYW50LWEvcXVlcnktc2lnbmluZy12MQAAAAAAAAAQY2lwaGVydGV4dC1ieXRlcw"
+}

@@ -8496,6 +8496,63 @@ mod tests {
     }
 
     #[test]
+    fn ckks_client_query_signature_message_matches_sdk_test_vector() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../docs/ckks-client-query-signature-test-vector.json"
+        ))
+        .expect("client CKKS query signature test vector must be valid JSON");
+        let ciphertext = BASE64URL_NOPAD
+            .decode(
+                fixture["ciphertext_b64"]
+                    .as_str()
+                    .expect("fixture ciphertext_b64 must be a string")
+                    .as_bytes(),
+            )
+            .expect("fixture ciphertext_b64 must be base64url");
+        let message = ckks_client_query_signature_message(
+            fixture["collection_id"]
+                .as_str()
+                .expect("fixture collection_id must be a string"),
+            fixture["vector_name"]
+                .as_str()
+                .expect("fixture vector_name must be a string"),
+            fixture["key_id"]
+                .as_str()
+                .expect("fixture key_id must be a string"),
+            fixture["rk_id"]
+                .as_str()
+                .expect("fixture rk_id must be a string"),
+            fixture["rk_epoch"]
+                .as_u64()
+                .expect("fixture rk_epoch must be an integer"),
+            fixture["query_nonce"]
+                .as_str()
+                .expect("fixture query_nonce must be a string"),
+            fixture["context_digest"]
+                .as_str()
+                .expect("fixture context_digest must be a string"),
+            fixture["slots"]
+                .as_u64()
+                .and_then(|slots| usize::try_from(slots).ok())
+                .expect("fixture slots must fit usize"),
+            &ciphertext,
+            fixture["signature_alg"]
+                .as_str()
+                .expect("fixture signature_alg must be a string"),
+            fixture["signature_key_id"]
+                .as_str()
+                .expect("fixture signature_key_id must be a string"),
+        );
+
+        assert_eq!(
+            BASE64URL_NOPAD.encode(&message),
+            fixture["signature_message_b64"]
+                .as_str()
+                .expect("fixture signature_message_b64 must be a string")
+        );
+    }
+
+    #[test]
     fn validate_crypto_settings_rejects_unsupported_provider_options() {
         let payload_with_client_option = CryptoSettings {
             zero_trust_profile: None,
