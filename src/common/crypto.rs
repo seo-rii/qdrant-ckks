@@ -1315,6 +1315,14 @@ fn generic_vector_write_plan(
                     rule.instance
                 ))
             })?;
+        if instance.provider == VECTOR_CLIENT_CKKS_PROVIDER {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} rule {} uses {VECTOR_CLIENT_CKKS_PROVIDER}, \
+                 but server-blind vector envelopes are not implemented; \
+                 use {VECTOR_OPENFHE_CKKS_PROVIDER} only for trusted-bridge CKKS sidecar vectors",
+                rule.id,
+            )));
+        }
         if instance.provider != VECTOR_OPENFHE_CKKS_PROVIDER {
             return Err(StorageError::bad_input(format!(
                 "collection {collection_name} rule {} must use provider {VECTOR_OPENFHE_CKKS_PROVIDER}, found {}",
@@ -5184,6 +5192,14 @@ fn validate_generic_collection_crypto_runtime(
                 rule.instance
             )));
         };
+        if instance.provider == VECTOR_CLIENT_CKKS_PROVIDER {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} rule {} uses {VECTOR_CLIENT_CKKS_PROVIDER}, \
+                 but server-blind vector envelopes are not implemented; \
+                 use {VECTOR_OPENFHE_CKKS_PROVIDER} only for trusted-bridge CKKS sidecar vectors",
+                rule.id,
+            )));
+        }
         if instance.provider != VECTOR_OPENFHE_CKKS_PROVIDER {
             return Err(StorageError::bad_input(format!(
                 "collection {collection_name} rule {} must use provider {VECTOR_OPENFHE_CKKS_PROVIDER}, found {}",
@@ -17439,6 +17455,65 @@ mod tests {
         let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
         assert!(
             matches!(err, StorageError::BadInput { description } if description.contains(VECTOR_OPENFHE_CKKS_PROVIDER))
+        );
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_rejects_reserved_client_vector_provider() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: None,
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
+                instances: HashMap::from([(
+                    "docs_client_vector_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: VECTOR_CLIENT_CKKS_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a:docs",
+                            "expected_rk_id": "tenant-a/vector-rk",
+                            "min_rk_epoch": 3,
+                            "max_rk_epoch": 3,
+                        }),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "embedding_conf".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["embedding".to_string()],
+                    },
+                    instance: "docs_client_vector_v1".to_string(),
+                    binding: Some(VECTOR_ENVELOPE_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains(VECTOR_CLIENT_CKKS_PROVIDER)
+                    && description.contains("server-blind vector")
+                    && description.contains("not implemented")),
+            "unexpected error: {err:?}",
         );
     }
 
