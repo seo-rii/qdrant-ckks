@@ -1973,6 +1973,7 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
                 "has_value_b64": material.value_b64.is_some(),
                 "vault_field": material.vault_field,
                 "expected_host": material.expected_host,
+                "timeout_ms": material.timeout_ms,
                 "wrapped_by": material.wrapped_by,
                 "wrap_algorithm": material.wrap_algorithm,
                 "has_nonce": material.nonce.is_some(),
@@ -10132,6 +10133,20 @@ mod tests {
             fingerprint,
             crypto_runtime_capability_fingerprint(&peer_with_different_host),
             "external provider host policy drift must change the non-secret runtime parity fingerprint",
+        );
+
+        let mut peer_with_different_timeout = settings.clone();
+        peer_with_different_timeout
+            .crypto
+            .materials
+            .get_mut("tenant-a/mk")
+            .unwrap()
+            .timeout_ms = Some(3_000);
+
+        assert_ne!(
+            fingerprint,
+            crypto_runtime_capability_fingerprint(&peer_with_different_timeout),
+            "external provider timeout policy drift must change the non-secret runtime parity fingerprint",
         );
     }
 
