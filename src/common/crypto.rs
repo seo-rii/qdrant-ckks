@@ -44,6 +44,7 @@ use zeroize::Zeroizing;
 
 use crate::settings::{
     CryptoBackendConfig, CryptoInstanceConfig, CryptoMaterialConfig, CryptoSettings, Settings,
+    ZERO_TRUST_PROFILE_STRICT,
 };
 
 #[derive(Error, Debug, PartialEq, Eq)]
@@ -1993,6 +1994,7 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
         "version": 1,
         "crypto": {
             "allow_inline_key_material": settings.crypto.allow_inline_key_material,
+            "zero_trust_profile": settings.crypto.zero_trust_profile,
             "has_cluster_key_attestation": cluster_key_attestation.is_some(),
             "instances": instances,
             "materials": materials,
@@ -2289,6 +2291,8 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
             });
         }
     }
+
+    validate_zero_trust_profile(settings)?;
 
     for (material_name, material) in &settings.materials {
         validate_material(material_name, material, settings.allow_inline_key_material)?;
@@ -2947,6 +2951,71 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                     instance.provider
                 ),
             });
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_zero_trust_profile(settings: &CryptoSettings) -> Result<(), CryptoSetupError> {
+    let Some(profile) = settings.zero_trust_profile.as_deref() else {
+        return Ok(());
+    };
+    if profile != ZERO_TRUST_PROFILE_STRICT {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: "crypto".to_string(),
+            option: "zero_trust_profile".to_string(),
+            reason: format!("expected {ZERO_TRUST_PROFILE_STRICT}"),
+        });
+    }
+
+    if !settings.materials.is_empty() {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: "crypto".to_string(),
+            option: "zero_trust_profile".to_string(),
+            reason: "strict zero-trust profile must not configure server materials".to_string(),
+        });
+    }
+    if !settings.backends.is_empty() {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: "crypto".to_string(),
+            option: "zero_trust_profile".to_string(),
+            reason: "strict zero-trust profile must not configure server backends".to_string(),
+        });
+    }
+
+    for (instance_name, instance) in &settings.instances {
+        match instance.provider.as_str() {
+            PAYLOAD_CLIENT_AEAD_PROVIDER | METADATA_BLIND_INDEX_PROVIDER => {}
+            PAYLOAD_AES_GCM_PROVIDER | METADATA_AES_GCM_PROVIDER => {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: "zero_trust_profile".to_string(),
+                    reason: format!(
+                        "server-side AEAD provider is not allowed in strict zero-trust profile: {}",
+                        instance.provider
+                    ),
+                });
+            }
+            VECTOR_OPENFHE_CKKS_PROVIDER => {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: "zero_trust_profile".to_string(),
+                    reason:
+                        "trusted-bridge vector provider is not allowed in strict zero-trust profile"
+                            .to_string(),
+                });
+            }
+            VECTOR_CLIENT_CKKS_PROVIDER => {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: "zero_trust_profile".to_string(),
+                    reason:
+                        "vector/client-ckks@v1 is required for strict vector zero-trust but is not implemented"
+                            .to_string(),
+                });
+            }
+            _ => {}
         }
     }
 
@@ -7393,6 +7462,7 @@ mod tests {
     #[test]
     fn validate_crypto_settings_rejects_missing_material_and_backend_refs() {
         let mut settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -7457,6 +7527,7 @@ mod tests {
     fn validate_crypto_settings_requires_vector_score_output_tcb_ack() {
         let (_bridge_dir, bridge_program, bridge_sha256_b64) = test_bridge_program();
         let mut settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -7553,6 +7624,7 @@ mod tests {
     #[test]
     fn validate_crypto_settings_rejects_reserved_client_ckks_vector_provider() {
         let settings = CryptoSettings {
+            zero_trust_profile: None,
             instances: HashMap::from([(
                 "docs_vector_client_v1".to_string(),
                 CryptoInstanceConfig {
@@ -7581,6 +7653,7 @@ mod tests {
     #[test]
     fn validate_crypto_settings_rejects_invalid_registry_names() {
         let invalid_material_settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -7608,6 +7681,7 @@ mod tests {
         );
 
         let invalid_backend_settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -7638,6 +7712,7 @@ mod tests {
         );
 
         let invalid_instance_settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -7665,6 +7740,7 @@ mod tests {
         );
 
         let invalid_provider_settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -7690,6 +7766,7 @@ mod tests {
         ));
 
         let unsupported_provider_settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -7715,6 +7792,7 @@ mod tests {
         ));
 
         let client_provider_with_server_material_settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -7751,6 +7829,7 @@ mod tests {
         ));
 
         let payload_provider_with_backend_settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -7787,6 +7866,7 @@ mod tests {
         ));
 
         let invalid_role_settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -7826,6 +7906,7 @@ mod tests {
     #[test]
     fn validate_crypto_settings_requires_provider_bindings() {
         let payload_without_sym_key = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -7851,6 +7932,7 @@ mod tests {
         ));
 
         let payload_without_fingerprint = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -7887,6 +7969,7 @@ mod tests {
         ));
 
         let metadata_without_fingerprint = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -7924,6 +8007,7 @@ mod tests {
         ));
 
         let metadata_with_invalid_retired_material = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -7976,6 +8060,7 @@ mod tests {
         ));
 
         let payload_with_retired_active_key = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -8030,6 +8115,7 @@ mod tests {
         ));
 
         let vector_without_backend = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -8079,6 +8165,7 @@ mod tests {
             },
         });
         let valid_client_settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -8243,8 +8330,174 @@ mod tests {
     }
 
     #[test]
+    fn validate_crypto_settings_enforces_strict_zero_trust_profile() {
+        let strict_client_settings = CryptoSettings {
+            zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+            allow_inline_key_material: true,
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
+            instances: HashMap::from([
+                (
+                    "docs_payload_client_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a/client-rk-v1",
+                            "key_id_required": true,
+                            "expected_rk_id": "tenant-a/client-rk-v1",
+                            "min_rk_epoch": 3,
+                            "max_rk_epoch": 3,
+                            "signature_public_keys": {
+                                "tenant-a/client-signing-v1": BASE64URL_NOPAD.encode(&[7_u8; 32]),
+                            },
+                        }),
+                    },
+                ),
+                (
+                    "docs_metadata_blind_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: METADATA_BLIND_INDEX_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a/client-rk-v1",
+                            "expected_rk_id": "tenant-a/client-rk-v1",
+                            "min_rk_epoch": 3,
+                            "max_rk_epoch": 3,
+                        }),
+                    },
+                ),
+            ]),
+            materials: HashMap::new(),
+            backends: HashMap::new(),
+        };
+        validate_crypto_settings(&strict_client_settings)
+            .expect("strict zero-trust profile should accept only server-blind providers");
+
+        let mut invalid_profile = strict_client_settings.clone();
+        invalid_profile.zero_trust_profile = Some("marketing-zero-trust".to_string());
+        assert!(matches!(
+            validate_crypto_settings(&invalid_profile),
+            Err(CryptoSetupError::InvalidInstanceOption { option, reason, .. })
+                if option == "zero_trust_profile" && reason.contains("strict")
+        ));
+
+        let mut with_server_material = strict_client_settings.clone();
+        with_server_material.materials.insert(
+            "tenant-a/server-rk".to_string(),
+            CryptoMaterialConfig::default(),
+        );
+        assert!(matches!(
+            validate_crypto_settings(&with_server_material),
+            Err(CryptoSetupError::InvalidInstanceOption { option, reason, .. })
+                if option == "zero_trust_profile" && reason.contains("must not configure server materials")
+        ));
+
+        let mut with_backend = strict_client_settings.clone();
+        with_backend.backends.insert(
+            "openfhe_local".to_string(),
+            CryptoBackendConfig {
+                kind: OPENFHE_BACKEND_KIND_PROCESS.to_string(),
+                program: None,
+                sha256_b64: None,
+                signature_public_key_b64: None,
+                signature_b64: None,
+                size: None,
+                timeout_ms: None,
+            },
+        );
+        assert!(matches!(
+            validate_crypto_settings(&with_backend),
+            Err(CryptoSetupError::InvalidInstanceOption { option, reason, .. })
+                if option == "zero_trust_profile" && reason.contains("must not configure server backends")
+        ));
+
+        for (provider, expected_reason) in [
+            (
+                PAYLOAD_AES_GCM_PROVIDER,
+                "server-side AEAD provider is not allowed",
+            ),
+            (
+                METADATA_AES_GCM_PROVIDER,
+                "server-side AEAD provider is not allowed",
+            ),
+            (
+                VECTOR_OPENFHE_CKKS_PROVIDER,
+                "trusted-bridge vector provider is not allowed",
+            ),
+        ] {
+            let mut with_server_provider = strict_client_settings.clone();
+            with_server_provider.instances.insert(
+                "server_provider".to_string(),
+                CryptoInstanceConfig {
+                    provider: provider.to_string(),
+                    materials: HashMap::new(),
+                    backend_ref: None,
+                    options: json!({}),
+                },
+            );
+            assert!(matches!(
+                validate_crypto_settings(&with_server_provider),
+                Err(CryptoSetupError::InvalidInstanceOption { option, reason, .. })
+                    if option == "zero_trust_profile" && reason.contains(expected_reason)
+            ));
+        }
+    }
+
+    #[test]
+    fn ckks_client_query_signature_message_is_canonical_length_prefixed_tuple() {
+        let encrypted_query = b"ciphertext-bytes";
+        let message = ckks_client_query_signature_message(
+            "collection-uuid",
+            "embedding",
+            "tenant-a:vector",
+            "tenant-a/vector-rk",
+            3,
+            "nonce-96-bit-b64",
+            "context-digest-b64",
+            1536,
+            encrypted_query,
+            "ed25519",
+            "tenant-a/query-signing-v1",
+        );
+
+        let ciphertext_sha256 = BASE64URL_NOPAD.encode(&Sha256::digest(encrypted_query));
+        let mut expected = b"qdrant-sec/client-ckks-query-signature/v1\0".to_vec();
+        for value in [
+            "1",
+            CKKS_SCHEME,
+            CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+            "collection-uuid",
+            "embedding",
+            "tenant-a:vector",
+            "tenant-a/vector-rk",
+            "3",
+            "nonce-96-bit-b64",
+            "context-digest-b64",
+            "1536",
+            &ciphertext_sha256,
+            "ed25519",
+            "tenant-a/query-signing-v1",
+        ] {
+            expected.extend_from_slice(&(value.len() as u64).to_be_bytes());
+            expected.extend_from_slice(value.as_bytes());
+        }
+        expected.extend_from_slice(&(encrypted_query.len() as u64).to_be_bytes());
+        expected.extend_from_slice(encrypted_query);
+
+        assert_eq!(message, expected);
+    }
+
+    #[test]
     fn validate_crypto_settings_rejects_unsupported_provider_options() {
         let payload_with_client_option = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -8306,6 +8559,7 @@ mod tests {
         ));
 
         let metadata_with_client_option = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -8387,6 +8641,7 @@ mod tests {
         let bridge_program = bridge_path.display().to_string();
         let bridge_sha256_b64 = BASE64URL_NOPAD.encode(&Sha256::digest(b"#!/bin/sh\nexit 0\n"));
         let vector_with_payload_option = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -8472,6 +8727,7 @@ mod tests {
     #[test]
     fn validate_crypto_settings_rejects_invalid_server_provider_key_id_options() {
         let payload_with_invalid_key_id = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -8525,8 +8781,9 @@ mod tests {
                 if option == "key_id"
         ));
 
-        let bridge_program = std::env::current_exe().unwrap().display().to_string();
+        let (_bridge_dir, bridge_program, bridge_sha256_b64) = test_bridge_program();
         let vector_with_invalid_key_id = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -8568,7 +8825,7 @@ mod tests {
                 CryptoBackendConfig {
                     kind: "process".to_string(),
                     program: Some(bridge_program),
-                    sha256_b64: Some(current_exe_sha256_b64()),
+                    sha256_b64: Some(bridge_sha256_b64),
                     signature_public_key_b64: None,
                     signature_b64: None,
                     size: None,
@@ -8600,6 +8857,7 @@ mod tests {
     #[test]
     fn validate_crypto_settings_rejects_invalid_retired_payload_materials() {
         let mut settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -8860,6 +9118,7 @@ mod tests {
     fn crypto_runtime_capability_fingerprint_redacts_key_material() {
         let mut settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -9034,6 +9293,7 @@ mod tests {
     fn validate_runtime_config_accepts_metadata_blind_index_provider() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -9082,6 +9342,7 @@ mod tests {
     fn crypto_runtime_capability_parity_rejects_peer_mismatch() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -9235,6 +9496,7 @@ mod tests {
         };
         let settings_for_rk = |rk_secret: [u8; 32]| Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -9300,6 +9562,7 @@ mod tests {
     fn crypto_runtime_capability_fingerprint_tracks_client_verifier_policy() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -9493,6 +9756,7 @@ mod tests {
     fn crypto_runtime_capability_fingerprint_tracks_backend_policy() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -9640,6 +9904,7 @@ mod tests {
     fn crypto_runtime_capability_fingerprint_tracks_vector_public_material() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -9808,6 +10073,7 @@ mod tests {
     fn crypto_runtime_capability_fingerprint_tracks_vault_material_field() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -9963,6 +10229,7 @@ mod tests {
     #[test]
     fn validate_crypto_settings_can_reject_inline_key_material() {
         let settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -11031,6 +11298,7 @@ mod tests {
             ..CryptoMaterialConfig::default()
         };
         let settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -11416,6 +11684,7 @@ mod tests {
             ..CryptoMaterialConfig::default()
         };
         let settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -11647,6 +11916,7 @@ mod tests {
     #[test]
     fn validate_crypto_settings_rejects_wrapped_resource_key_without_mk() {
         let settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -11698,6 +11968,7 @@ mod tests {
         };
 
         let missing_epoch = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -11720,6 +11991,7 @@ mod tests {
         );
 
         let missing_scope = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -11761,6 +12033,7 @@ mod tests {
             ..CryptoMaterialConfig::default()
         };
         let settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -11809,6 +12082,7 @@ mod tests {
     #[test]
     fn validate_crypto_settings_enforces_destroyed_resource_key_shredding() {
         let destroyed = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -11830,6 +12104,7 @@ mod tests {
         validate_crypto_settings(&destroyed).unwrap();
 
         let retained_key_material = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -11872,6 +12147,7 @@ mod tests {
             ..CryptoMaterialConfig::default()
         };
         let settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -11966,11 +12242,6 @@ mod tests {
                 kind: "shell".to_string(),
             }),
         );
-    }
-
-    fn current_exe_sha256_b64() -> String {
-        let program = std::env::current_exe().unwrap();
-        BASE64URL_NOPAD.encode(&Sha256::digest(std::fs::read(program).unwrap()))
     }
 
     fn test_bridge_program() -> (tempfile::TempDir, String, String) {
@@ -12295,6 +12566,7 @@ mod tests {
     fn openfhe_backend_factory_tracks_crypto_material_env_names() {
         let (_dir, program, sha256_b64) = test_bridge_program();
         let settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -12528,6 +12800,7 @@ mod tests {
     fn payload_write_plan_encrypts_generic_payload_fields() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -12681,6 +12954,7 @@ mod tests {
     fn payload_write_plan_rejects_collection_name_scoped_resource_key_for_stable_crypto_id() {
         let mut settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -12775,6 +13049,7 @@ mod tests {
     fn payload_write_plan_reencrypts_stale_envelopes_only_in_migration_mode() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -12952,6 +13227,7 @@ mod tests {
     fn payload_write_plan_requires_explicit_material_fingerprint_id() {
         let mut settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -13045,6 +13321,7 @@ mod tests {
             signed_client_envelope("docs", "point-1", "body", "tenant-a/client-signing-v1");
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -13113,6 +13390,7 @@ mod tests {
             signed_client_envelope("docs", "point-1", "body", "tenant-a/client-signing-v1");
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -13192,6 +13470,7 @@ mod tests {
             signed_client_envelope("docs", "point-1", "body", "tenant-a/client-signing-v1");
         let mut settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -13253,6 +13532,7 @@ mod tests {
     fn validate_collection_crypto_runtime_requires_attestation_for_server_keys_in_clustered_mode() {
         let mut settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -13329,6 +13609,7 @@ mod tests {
     fn payload_write_plan_rejects_non_client_values_for_client_provider() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -13415,6 +13696,7 @@ mod tests {
         );
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -13484,6 +13766,7 @@ mod tests {
             signed_client_envelope("docs", "point-2", "body", "tenant-a/client-signing-v1");
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -13552,6 +13835,7 @@ mod tests {
             signed_client_envelope("docs", "point-1", "body", "tenant-a/client-signing-v1");
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -13653,6 +13937,7 @@ mod tests {
             signed_client_envelope("docs", "point-2", "body", "tenant-a/client-signing-v2");
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -13742,6 +14027,7 @@ mod tests {
     fn payload_write_plan_requires_client_envelope_binding_for_client_provider() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -13797,6 +14083,7 @@ mod tests {
     fn payload_write_plan_rejects_client_binding_for_server_provider() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -13870,6 +14157,7 @@ mod tests {
         };
         let raw_settings_with_options = |options: serde_json::Value| Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -14272,6 +14560,7 @@ mod tests {
 
         let settings_with_instance = |instance: CryptoInstanceConfig| Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -14389,6 +14678,7 @@ mod tests {
 
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -14520,6 +14810,7 @@ mod tests {
 
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -14629,6 +14920,7 @@ mod tests {
 
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -14796,6 +15088,7 @@ mod tests {
         wrapped_rk_config.wrapped_key_b64 = Some(wrapped.wrapped_key);
 
         let runtime_settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -14936,6 +15229,7 @@ mod tests {
     fn runtime_resource_key_generation_creates_new_wrapped_active_key() {
         let mk_material = "tenant-a/mk-v1";
         let runtime_settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -15096,6 +15390,7 @@ mod tests {
             ..CryptoMaterialConfig::default()
         };
         let runtime_settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -15344,6 +15639,7 @@ mod tests {
             );
         }
         let runtime_settings = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -15435,6 +15731,7 @@ mod tests {
         let bridge_sha256_b64 = BASE64URL_NOPAD.encode(&Sha256::digest(bridge_bytes));
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -15884,6 +16181,7 @@ mod tests {
         let (_bridge_dir, bridge_program, bridge_sha256_b64) = test_bridge_program();
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -15995,6 +16293,7 @@ mod tests {
     fn validate_collection_crypto_runtime_accepts_metadata_blind_index_selectors() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -16067,6 +16366,7 @@ mod tests {
     fn metadata_value_aead_rule_encrypts_selected_metadata_field() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -16372,6 +16672,7 @@ mod tests {
 
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -16447,6 +16748,7 @@ mod tests {
     fn validate_recovered_collection_crypto_config_rejects_payload_key_id_mismatch() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -16520,6 +16822,7 @@ mod tests {
     fn validate_recovered_collection_crypto_config_rejects_missing_payload_material() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -16585,6 +16888,7 @@ mod tests {
     fn validate_recovered_collection_crypto_config_rejects_missing_vector_metadata_material() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -16750,6 +17054,7 @@ mod tests {
 
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -16835,6 +17140,7 @@ mod tests {
     fn validate_collection_crypto_runtime_rejects_invalid_vector_backend_metadata() {
         let mut settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -16984,6 +17290,7 @@ mod tests {
     fn validate_collection_crypto_runtime_rejects_vector_provider_mismatch() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -17048,6 +17355,7 @@ mod tests {
     fn validate_collection_crypto_runtime_rejects_unallowlisted_vector_profile() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -17128,6 +17436,7 @@ mod tests {
     fn validate_collection_crypto_runtime_requires_vector_profile() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -17207,6 +17516,7 @@ mod tests {
     fn validate_collection_crypto_runtime_requires_vector_material_fingerprint_id() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -17289,6 +17599,7 @@ mod tests {
     fn validate_collection_crypto_runtime_requires_vector_resource_key_epoch() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -17371,6 +17682,7 @@ mod tests {
     fn validate_collection_crypto_runtime_rejects_vector_missing_metadata_key_material() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),

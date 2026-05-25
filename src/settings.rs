@@ -454,10 +454,14 @@ pub(crate) const fn default_ckks_query_nonce_replay_cache_max_entries() -> usize
     100_000
 }
 
+pub const ZERO_TRUST_PROFILE_STRICT: &str = "strict";
+
 #[derive(Debug, Deserialize, Clone, Validate)]
 pub struct CryptoSettings {
     #[serde(default = "default_allow_inline_key_material")]
     pub allow_inline_key_material: bool,
+    #[serde(default)]
+    pub zero_trust_profile: Option<String>,
     #[serde(default = "default_ckks_grouped_max_candidates")]
     #[validate(range(min = 1))]
     pub ckks_grouped_max_candidates: usize,
@@ -485,6 +489,7 @@ impl Default for CryptoSettings {
     fn default() -> Self {
         Self {
             allow_inline_key_material: default_allow_inline_key_material(),
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs: default_ckks_query_nonce_replay_ttl_secs(),
@@ -930,6 +935,7 @@ mod tests {
             config.crypto.ckks_query_nonce_replay_cache_max_entries,
             default_ckks_query_nonce_replay_cache_max_entries()
         );
+        assert_eq!(config.crypto.zero_trust_profile, None);
     }
 
     #[expect(clippy::disallowed_types, reason = "#[sealed_test] uses std::fs::File")]

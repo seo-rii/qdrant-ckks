@@ -242,6 +242,7 @@ mod tests {
     fn cli_snapshot_crypto_preflight_rejects_missing_runtime_material() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -319,6 +320,7 @@ mod tests {
 
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -423,6 +425,7 @@ mod tests {
 
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -505,6 +508,7 @@ mod tests {
     fn cli_snapshot_crypto_preflight_rejects_missing_vector_backend() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),

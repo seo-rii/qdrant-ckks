@@ -483,6 +483,18 @@ client-side AEAD and blind-index token providers must not configure any server
 material or backend. Unexpected material roles fail validation instead of being
 silently ignored.
 
+Set `crypto.zero_trust_profile: strict` when the deployment goal is complete
+zero trust rather than server-managed encryption. Strict mode is a fail-closed
+profile: it rejects server-held crypto materials, OpenFHE bridge backends,
+server-side payload/metadata AEAD providers, and the trusted-bridge
+`vector/openfhe-ckks@v1` provider. The currently accepted providers in strict
+mode are server-blind `payload/client-aead@v1` and
+`metadata/blind-index-hmac@v1`; vector storage/search remains incomplete for
+strict zero trust until `vector/client-ckks@v1` or an equivalent server-blind
+vector provider is implemented. Use the non-strict trusted-bridge profile only
+when operators explicitly accept that Qdrant/bridge may observe embeddings,
+scores, access patterns, and ranking order.
+
 `vector/client-ckks@v1` is reserved for a future server-blind vector envelope
 provider and is currently rejected at startup/runtime validation. Today,
 `vector/openfhe-ckks@v1` is a trusted-bridge model: Qdrant/bridge may see
@@ -1109,8 +1121,14 @@ The `collection_id`, `vector_name`, `key_id`, `rk_id`, and `rk_epoch` fields mus
 match the active encrypted vector rule's stable collection crypto identity and
 resource-key lineage. `query_nonce` is mandatory 96-bit base64url-no-padding
 client randomness and is cryptographically bound into the query signature; SDKs
-must regenerate it when retrying a request body. The `context_digest` must match
-the active OpenFHE public material and CKKS parameter profile for that rule,
+must regenerate it when retrying a request body. Qdrant also records
+`collection_id`, `vector_name`, `key_id`, `rk_id`, `rk_epoch`, `query_nonce`,
+and `signature.key_id` in a bounded process-local TTL replay cache before bridge
+scoring, rejecting recent replays with an error that instructs clients to create
+a fresh envelope. This is a replay guard, not a cluster-wide ledger; clustered
+strict zero-trust query deployments need a consensus-backed nonce ledger before
+local replay caches can be treated as a distributed freshness guarantee. The
+`context_digest` must match the active OpenFHE public material and CKKS parameter profile for that rule,
 `slots` must match each stored sidecar envelope being scored,
 `ciphertext_sha256` must match the decoded ciphertext bytes, and `ciphertext` is
 base64url without padding. The `signature` object is mandatory for
@@ -1122,6 +1140,27 @@ domain-separated query metadata, query nonce, and ciphertext under
 `query_nonce`, `signature_alg`, `signature_key_id`, and `signature_b64`.
 Qdrant does not decrypt or validate the CKKS ciphertext itself; it treats the
 validated bytes as the encrypted query input to the OpenFHE bridge scoring API.
+
+The client CKKS query signature message is canonical and length-prefixed so SDKs
+can produce interoperable envelopes. The byte string is:
+
+1. ASCII domain `qdrant-sec/client-ckks-query-signature/v1\0`.
+2. For each UTF-8 field below, an 8-byte big-endian length followed by the field
+   bytes: `version`, `scheme`, `security_profile`, `collection_id`,
+   `vector_name`, `key_id`, `rk_id`, `rk_epoch`, `query_nonce`,
+   `context_digest`, `slots`, `ciphertext_sha256`, `signature.alg`,
+   `signature.key_id`.
+3. An 8-byte big-endian length followed by the decoded CKKS query ciphertext
+   bytes.
+
+For the current profile the first fields are `version=1`,
+`scheme=openfhe-ckks`, and
+`security_profile=ckks-128-n16384-d4-scale50`. `ciphertext_sha256` is the
+base64url-no-padding SHA-256 digest of the decoded ciphertext bytes and is
+signed before the ciphertext bytes themselves are appended. Any field ordering
+change, missing field, stale `query_nonce`, wrong `rk_epoch`, or changed
+ciphertext bytes invalidates the Ed25519 signature.
+
 Result ordering and
 `score_threshold` follow the configured Qdrant distance metric:
 `dot`/`cosine` are larger-is-better, while `euclid`/`manhattan` are

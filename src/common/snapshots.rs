@@ -806,6 +806,7 @@ mod tests {
     fn shard_snapshot_recovery_validates_ckks_vector_public_material() {
         let settings = Settings {
             crypto: crate::settings::CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -915,6 +916,7 @@ mod tests {
     fn shard_snapshot_recovery_rejects_missing_ckks_vector_metadata_material() {
         let settings = Settings {
             crypto: crate::settings::CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),

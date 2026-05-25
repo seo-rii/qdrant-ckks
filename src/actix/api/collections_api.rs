@@ -1502,6 +1502,7 @@ mod tests {
     fn crypto_settings_for_manifest() -> Settings {
         Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),

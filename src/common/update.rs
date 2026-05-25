@@ -3144,6 +3144,7 @@ esac
         let signing_key = fake_ckks_query_signing_key_pair();
         let mut settings = Settings::new(None).unwrap();
         settings.crypto = CryptoSettings {
+            zero_trust_profile: None,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:

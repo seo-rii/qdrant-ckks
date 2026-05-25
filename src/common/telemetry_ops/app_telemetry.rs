@@ -229,6 +229,7 @@ mod tests {
     fn app_telemetry_includes_crypto_runtime_capability_fingerprint() {
         let settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),
@@ -285,6 +286,7 @@ mod tests {
         let signature_public_key = "qdrant-sec-telemetry-signature-public-key-sentinel";
         let mut settings = Settings {
             crypto: CryptoSettings {
+                zero_trust_profile: None,
                 ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
                 ckks_scoring_source_batch_max:
                     crate::settings::default_ckks_scoring_source_batch_max(),

@@ -320,6 +320,12 @@ crypto:
   # Keep false in production/security mode to reject `source: inline` key material.
   # Set true only for local development fixtures.
   allow_inline_key_material: false
+  # Set to `strict` for a complete zero-trust profile. Strict mode rejects
+  # server-held crypto materials/backends, server-side AEAD providers,
+  # trusted-bridge vector scoring, and decrypted server read/export paths.
+  # It currently permits only server-blind providers such as
+  # payload/client-aead@v1 and metadata/blind-index-hmac@v1.
+  # zero_trust_profile: strict
   # Maximum number of candidate points CKKS grouped search/query may score
   # before grouping. This bounds OpenFHE bridge work for small grouped results.
   ckks_grouped_max_candidates: 4096
