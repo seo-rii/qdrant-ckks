@@ -9230,6 +9230,23 @@ mod tests {
     }
 
     #[test]
+    fn ckks_sidecar_hnsw_records_fingerprint_tracks_resource_key_identity_changes() {
+        let first =
+            ckks_sidecar_hnsw_records_fingerprint(&[ckks_sidecar_test_record(1, "ciphertext-a")]);
+
+        let mut changed_rk_id = ckks_sidecar_test_record(1, "ciphertext-a");
+        changed_rk_id.encrypted.envelope.rk_id = "test-rk-v2".to_string();
+        let changed_rk_id = ckks_sidecar_hnsw_records_fingerprint(&[changed_rk_id]);
+
+        let mut changed_rk_epoch = ckks_sidecar_test_record(1, "ciphertext-a");
+        changed_rk_epoch.encrypted.envelope.rk_epoch = Some(2);
+        let changed_rk_epoch = ckks_sidecar_hnsw_records_fingerprint(&[changed_rk_epoch]);
+
+        assert_ne!(first, changed_rk_id);
+        assert_ne!(first, changed_rk_epoch);
+    }
+
+    #[test]
     fn ckks_sidecar_hnsw_records_fingerprint_tracks_point_identity_changes() {
         let first = ckks_sidecar_hnsw_records_fingerprint(&[
             ckks_sidecar_test_record(1, "ciphertext-a"),
