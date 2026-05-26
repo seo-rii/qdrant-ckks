@@ -106,6 +106,15 @@ jobs:
           cargo test --locked -p qdrant aws_kms
           cargo test --locked -p qdrant vault_transit
 
+      - name: Run strict zero-trust release gate
+        run: |
+          cargo test --locked -p qdrant validate_crypto_settings_enforces_strict_zero_trust_profile
+          cargo test --locked -p qdrant validate_crypto_settings_requires_client_ckks_vector_search_mode
+          cargo test --locked -p qdrant server_side_encrypted_payload_read_mode_decrypts_get_and_scroll
+          cargo test --locked -p qdrant client_nonce_replay_error_tells_clients_to_regenerate_envelope
+          cargo test --locked -p qdrant vector_write_plan_rejects_server_blind_client_vector_scoring
+          cargo test --locked -p qdrant snapshot_export_encrypted_payload_mode_is_raw_only
+
       - name: Run runtime crypto parity tests
         run: |
           cargo test --locked -p qdrant crypto_runtime_capability
