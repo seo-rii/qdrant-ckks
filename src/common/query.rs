@@ -5776,6 +5776,14 @@ async fn payload_decrypt_plan_for_read(
              runtime crypto settings; use 'raw' for SDK/client decryption or 'redacted'",
         )));
     };
+    if settings.crypto.zero_trust_profile.as_deref()
+        == Some(crate::settings::ZERO_TRUST_PROFILE_STRICT)
+    {
+        return Err(StorageError::bad_input(format!(
+            "encrypted payload read mode 'decrypted' for collection {collection_name} is disabled \
+             by strict zero-trust profile; use raw client envelopes and decrypt in the SDK",
+        )));
+    }
     let collection_crypto_id = collection_config
         .stable_crypto_id(collection_name)
         .map_err(StorageError::from)?;

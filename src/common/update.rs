@@ -7244,6 +7244,37 @@ esac
                         payload: None,
                     },
                 ])));
+            let mut strict_settings = settings.clone();
+            strict_settings.crypto.zero_trust_profile =
+                Some(crate::settings::ZERO_TRUST_PROFILE_STRICT.to_string());
+            strict_settings.crypto.allow_inline_key_material = false;
+            let err = crate::common::query::do_get_points(
+                &toc,
+                "docs",
+                PointRequestInternal {
+                    ids: vec![1.into()],
+                    with_payload: Some(WithPayloadInterface::Encrypted(
+                        PayloadEncryptedReadPolicy {
+                            encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                        },
+                    )),
+                    with_vector: WithVector::Bool(false),
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                payload_decrypt_auth.clone(),
+                HwMeasurementAcc::disposable(),
+                Some(&strict_settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains("strict zero-trust profile")
+            ));
+
             let decrypted_records = crate::common::query::do_get_points(
                 &toc,
                 "docs",

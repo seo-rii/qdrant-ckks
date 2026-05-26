@@ -999,6 +999,9 @@ decrypts only server-side payload text and metadata value AEAD fields in the API
 runtime layer, leaves client-side `$qdrant_client_aead` envelopes opaque, and
 fails closed if runtime settings are unavailable or invalid. Group lookup
 payloads are not decrypted because lookups may target another collection.
+When `crypto.zero_trust_profile: strict` is enabled, `decrypted` read mode is
+disabled entirely; strict zero-trust deployments must return raw/redacted
+envelopes and decrypt in the client SDK.
 JWT RBAC claims must grant the decrypt capability explicitly:
 
 ```json
