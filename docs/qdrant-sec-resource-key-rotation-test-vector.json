@@ -1,0 +1,22 @@
+{
+  "resource_key_rotation_domain": "qdrant-sec/resource-key-wrap/v1",
+  "version": 1,
+  "wrap_algorithm": "AES-256-GCM",
+  "material_name": "tenant-a/payload-rk-v3",
+  "rk_id": "tenant-a/payload-rk-v3",
+  "rk_epoch": 3,
+  "scope": "collection:docs/payload:body",
+  "old_mk_id": "tenant-a/mk@v1",
+  "new_mk_id": "tenant-a/mk@v2",
+  "old_mk_b64": "Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc",
+  "new_mk_b64": "ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg",
+  "resource_key_b64": "TU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU0",
+  "old_wrapped_nonce": "AQEBAQEBAQEBAQEB",
+  "new_wrapped_nonce": "AgICAgICAgICAgIC",
+  "old_aad_len": 137,
+  "new_aad_len": 137,
+  "old_aad_b64": "AAAACnFkcmFudC1zZWMAAAACdjEAAAARcmVzb3VyY2Uta2V5LXdyYXAAAAAWdGVuYW50LWEvcGF5bG9hZC1yay12MwAAAAEzAAAAHGNvbGxlY3Rpb246ZG9jcy9wYXlsb2FkOmJvZHkAAAAOdGVuYW50LWEvbWtAdjEAAAALQUVTLTI1Ni1HQ00",
+  "new_aad_b64": "AAAACnFkcmFudC1zZWMAAAACdjEAAAARcmVzb3VyY2Uta2V5LXdyYXAAAAAWdGVuYW50LWEvcGF5bG9hZC1yay12MwAAAAEzAAAAHGNvbGxlY3Rpb246ZG9jcy9wYXlsb2FkOmJvZHkAAAAOdGVuYW50LWEvbWtAdjIAAAALQUVTLTI1Ni1HQ00",
+  "old_wrapped_key_b64": "drAaRo-WGv3TzJplI5gwRHVGHuUGtmgMMq893cSe9Nn2kXD6ScR-QQflqM5tu13q",
+  "new_wrapped_key_b64": "YgHJQBoNpdzu0kSgpXERnWM47pnp0pi5a6shZDhyPUzOHFSU95fXTosnK4eWWKF5"
+}

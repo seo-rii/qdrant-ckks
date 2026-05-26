@@ -5,6 +5,8 @@ use qdrant_sec::{
     LocalMasterKeyProvider, MasterKeyProvider, PAYLOAD_TEXT_KEY_DOMAIN,
     RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, WrappedKeyBlob, rewrap_resource_key,
 };
+use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
+use serde_json::Value;
 
 fn fixed_cipher() -> AeadCipher {
     test_cipher("tenant-a:primary", 7, "tenant-a/primary@v1")
@@ -266,6 +268,112 @@ fn rewrap_resource_key_rotates_master_key_without_reencrypting_data() {
             .unwrap()
             .as_slice(),
         b"data does not need re-encryption for MK rotation",
+    );
+}
+
+#[test]
+fn resource_key_rotation_matches_sdk_test_vector() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../docs/qdrant-sec-resource-key-rotation-test-vector.json"
+    ))
+    .expect("resource key rotation test vector must be valid JSON");
+    let get = |key: &str| {
+        fixture
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("test vector must define string field {key}"))
+    };
+
+    assert_eq!(get("wrap_algorithm"), RESOURCE_KEY_WRAP_ALGORITHM);
+
+    let old_mk = BASE64URL_NOPAD
+        .decode(get("old_mk_b64").as_bytes())
+        .unwrap();
+    let new_mk = BASE64URL_NOPAD
+        .decode(get("new_mk_b64").as_bytes())
+        .unwrap();
+    let rk = BASE64URL_NOPAD
+        .decode(get("resource_key_b64").as_bytes())
+        .unwrap();
+    let old_nonce = BASE64URL_NOPAD
+        .decode(get("old_wrapped_nonce").as_bytes())
+        .unwrap();
+    let new_nonce = BASE64URL_NOPAD
+        .decode(get("new_wrapped_nonce").as_bytes())
+        .unwrap();
+    let old_aad = BASE64URL_NOPAD
+        .decode(get("old_aad_b64").as_bytes())
+        .unwrap();
+    let new_aad = BASE64URL_NOPAD
+        .decode(get("new_aad_b64").as_bytes())
+        .unwrap();
+
+    let deterministic_wrap =
+        |mk: &[u8], nonce_bytes: &[u8], aad: &[u8]| -> Result<String, ring::error::Unspecified> {
+            let key = LessSafeKey::new(UnboundKey::new(&AES_256_GCM, mk)?);
+            let mut in_out = rk.clone();
+            let tag = key.seal_in_place_separate_tag(
+                Nonce::try_assume_unique_for_key(nonce_bytes)?,
+                Aad::from(aad),
+                &mut in_out,
+            )?;
+            in_out.extend_from_slice(tag.as_ref());
+            Ok(BASE64URL_NOPAD.encode(&in_out))
+        };
+
+    assert_eq!(
+        deterministic_wrap(&old_mk, &old_nonce, &old_aad).unwrap(),
+        get("old_wrapped_key_b64"),
+    );
+    assert_eq!(
+        deterministic_wrap(&new_mk, &new_nonce, &new_aad).unwrap(),
+        get("new_wrapped_key_b64"),
+    );
+
+    let old_provider = LocalMasterKeyProvider::new(
+        get("old_mk_id"),
+        SecretKey::try_from_slice(&old_mk).unwrap(),
+    )
+    .unwrap();
+    let new_provider = LocalMasterKeyProvider::new(
+        get("new_mk_id"),
+        SecretKey::try_from_slice(&new_mk).unwrap(),
+    )
+    .unwrap();
+    let old_wrapped = WrappedKeyBlob {
+        version: fixture["version"].as_u64().unwrap() as u8,
+        algorithm: get("wrap_algorithm").to_string(),
+        mk_id: get("old_mk_id").to_string(),
+        nonce: get("old_wrapped_nonce").to_string(),
+        wrapped_key: get("old_wrapped_key_b64").to_string(),
+    };
+    let new_wrapped = WrappedKeyBlob {
+        version: fixture["version"].as_u64().unwrap() as u8,
+        algorithm: get("wrap_algorithm").to_string(),
+        mk_id: get("new_mk_id").to_string(),
+        nonce: get("new_wrapped_nonce").to_string(),
+        wrapped_key: get("new_wrapped_key_b64").to_string(),
+    };
+
+    assert_eq!(
+        old_provider
+            .unwrap_resource_key(&old_wrapped, &old_aad)
+            .unwrap()
+            .as_bytes(),
+        rk.as_slice(),
+    );
+    assert_eq!(
+        new_provider
+            .unwrap_resource_key(&new_wrapped, &new_aad)
+            .unwrap()
+            .as_bytes(),
+        rk.as_slice(),
+    );
+    assert_eq!(
+        new_provider
+            .unwrap_resource_key(&new_wrapped, &old_aad)
+            .err(),
+        Some(EncryptionError::OpenFailed),
     );
 }
 

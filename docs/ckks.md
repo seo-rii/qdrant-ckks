@@ -209,6 +209,11 @@ Client envelopes must carry `rk_id`, `rk_epoch`, and
 `expected_rk_id`, `min_rk_epoch`, and `max_rk_epoch` to a single active epoch
 so stale, retired, or wrong client resource-key epochs fail closed during
 rotation.
+The language-neutral fixture
+`docs/qdrant-sec-resource-key-rotation-test-vector.json` fixes the
+length-prefixed RK-wrap AAD, old/new local MKs, deterministic test nonces, and
+wrapped RK ciphertexts so SDKs can verify MK rewrap compatibility without
+learning any production key material.
 Envelope `key_id`, `rk_id`, and `signature.key_id` values, plus matching
 provider options such as `key_id`, `expected_rk_id`, and signature registry
 keys, must use the bounded qdrant-sec crypto identifier syntax
