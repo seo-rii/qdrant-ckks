@@ -415,6 +415,9 @@ also limited to exact-match string tokens, including `match.value`,
 wrong-length token filters fail closed. Blind-index token fields are not
 orderable, groupable, facetable, or usable in score formulas; they are intended
 only for exact-match equality filtering over opaque HMAC tokens.
+`docs/qdrant-sec-client-blind-index-test-vector.json` freezes one
+length-prefixed token-message and HMAC output so external SDKs can verify their
+normalization and token generation.
 
 ```json
 {

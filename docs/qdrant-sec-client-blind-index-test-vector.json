@@ -1,0 +1,17 @@
+{
+  "blind_index_domain": "qdrant-sec/client-payload-blind-index/v1",
+  "version": 1,
+  "tenant_id": "tenant-a",
+  "collection_id": "32345678-90ab-cdef-1234-567890abcdef",
+  "field_path": "body",
+  "key_id": "tenant-a:payload",
+  "rk_id": "tenant-a/client-payload-rk",
+  "rk_epoch": 3,
+  "normalization": "unicode-nfc-trim-lowercase-v1",
+  "plaintext": " Hello World ",
+  "normalized_plaintext": "hello world",
+  "blind_index_key_b64": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI",
+  "token_message_len": 179,
+  "token_message_b64": "AAAAKHFkcmFudC1zZWMvY2xpZW50LXBheWxvYWQtYmxpbmQtaW5kZXgvdjEAAAABMQAAAAh0ZW5hbnQtYQAAACQzMjM0NTY3OC05MGFiLWNkZWYtMTIzNC01Njc4OTBhYmNkZWYAAAAEYm9keQAAABB0ZW5hbnQtYTpwYXlsb2FkAAAAGnRlbmFudC1hL2NsaWVudC1wYXlsb2FkLXJrAAAAATMAAAALaGVsbG8gd29ybGQ",
+  "token_b64": "-ewLmF0rnBZKVt4daERUSmzt75bdNKqavhHLn0ohOvQ"
+}

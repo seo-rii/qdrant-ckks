@@ -12,6 +12,7 @@ use qdrant_sec::{
     validate_client_payload_value_for_runtime,
     validate_server_payload_value_after_runtime_encryption, validate_server_payload_value_metadata,
 };
+use ring::hmac;
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::{Map, Value, json};
@@ -256,6 +257,59 @@ fn client_payload_signature_message_matches_sdk_test_vector() {
         .insert("field_path".to_string(), Value::String("other".to_string()));
     let changed_message = client_payload_signature_message(&envelope, "other").unwrap();
     assert_ne!(message, changed_message);
+}
+
+#[test]
+fn client_blind_index_token_matches_sdk_test_vector() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../docs/qdrant-sec-client-blind-index-test-vector.json"
+    ))
+    .expect("client blind-index test vector must be valid JSON");
+    let get = |key: &str| {
+        fixture
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("test vector must define string field {key}"))
+    };
+    let normalized = get("plaintext").trim().to_lowercase();
+    assert_eq!(normalized, get("normalized_plaintext"));
+
+    let version = fixture["version"].as_u64().unwrap().to_string();
+    let rk_epoch = fixture["rk_epoch"].as_u64().unwrap().to_string();
+    let mut message = Vec::new();
+    for field in [
+        get("blind_index_domain").as_bytes(),
+        version.as_bytes(),
+        get("tenant_id").as_bytes(),
+        get("collection_id").as_bytes(),
+        get("field_path").as_bytes(),
+        get("key_id").as_bytes(),
+        get("rk_id").as_bytes(),
+        rk_epoch.as_bytes(),
+        normalized.as_bytes(),
+    ] {
+        message.extend_from_slice(&(field.len() as u32).to_be_bytes());
+        message.extend_from_slice(field);
+    }
+    assert_eq!(
+        message.len() as u64,
+        fixture["token_message_len"].as_u64().unwrap()
+    );
+    assert_eq!(BASE64URL_NOPAD.encode(&message), get("token_message_b64"));
+
+    let key_bytes = BASE64URL_NOPAD
+        .decode(get("blind_index_key_b64").as_bytes())
+        .unwrap();
+    let key = hmac::Key::new(hmac::HMAC_SHA256, &key_bytes);
+    let token = hmac::sign(&key, &message);
+    assert_eq!(BASE64URL_NOPAD.encode(token.as_ref()), get("token_b64"));
+
+    let mut changed = message.clone();
+    changed.extend_from_slice(b"!");
+    assert_ne!(
+        BASE64URL_NOPAD.encode(hmac::sign(&key, &changed).as_ref()),
+        get("token_b64"),
+    );
 }
 
 #[test]
