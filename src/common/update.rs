@@ -4114,6 +4114,57 @@ esac
         );
     }
 
+    #[test]
+    fn vector_write_plan_rejects_server_blind_client_vector_scoring() {
+        let signing_key = fake_ckks_query_signing_key_pair();
+        let settings = client_vector_runtime_settings(&signing_key);
+        let params = encrypted_vector_params();
+        let plan = vector_write_plan_for_collection_with_crypto_id(
+            &settings,
+            "docs",
+            TEST_VECTOR_COLLECTION_CRYPTO_ID,
+            &params,
+        )
+        .unwrap()
+        .unwrap();
+
+        let plaintext_score_err = plan
+            .score_encrypted_query_batch("docs", "embedding", &[], &[0.1, 0.2])
+            .unwrap_err();
+        assert!(matches!(
+            plaintext_score_err,
+            StorageError::BadInput { description }
+                if description.contains("server-blind client CKKS envelopes")
+                    && description.contains("cannot score opaque client vector ciphertexts")
+        ));
+
+        let encrypted_query_err = plan
+            .score_client_encrypted_query_batch(
+                "docs",
+                "embedding",
+                &[],
+                TEST_VECTOR_COLLECTION_CRYPTO_ID,
+                "embedding",
+                "tenant-a:vector",
+                "tenant-a/client-vector-rk",
+                3,
+                "AAAAAAAAAAAAAAAA",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                2,
+                b"encrypted-query",
+                "ed25519",
+                "tenant-a:vector-signing-v1",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            )
+            .unwrap_err();
+        assert!(matches!(
+            encrypted_query_err,
+            StorageError::BadInput { description }
+                if description.contains("server-blind client CKKS envelopes")
+                    && description.contains("client query scoring is not available")
+        ));
+    }
+
     #[cfg(unix)]
     #[test]
     fn vector_write_plan_moves_batch_vectors_into_encrypted_sidecars() {
