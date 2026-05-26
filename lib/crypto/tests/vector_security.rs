@@ -22,7 +22,7 @@ use qdrant_sec::{
     client_ckks_vector_signature_message, validate_client_ckks_vector_payload_value_for_runtime,
 };
 use ring::signature::{Ed25519KeyPair, KeyPair};
-use serde_json::json;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 #[derive(Clone, Copy, Debug)]
@@ -309,6 +309,55 @@ fn client_ckks_vector_payload_validation_binds_signature_and_aad() {
     )
     .unwrap_err();
     assert!(matches!(err, CkksError::MalformedEnvelope(message) if message.contains("point_id")));
+}
+
+#[test]
+fn client_ckks_vector_signature_message_matches_sdk_test_vector() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../docs/qdrant-sec-client-ckks-vector-signature-test-vector.json"
+    ))
+    .unwrap();
+    let get = |key: &str| fixture.get(key).and_then(Value::as_str).unwrap();
+    let value = json!({
+        "$qdrant_sec_client_ckks_vector": {
+            "version": fixture["version"].as_u64().unwrap(),
+            "scheme": get("scheme"),
+            "security_profile": get("security_profile"),
+            "collection_id": get("collection_id"),
+            "point_id": get("point_id"),
+            "vector_name": get("vector_name"),
+            "key_id": get("key_id"),
+            "rk_id": get("rk_id"),
+            "rk_epoch": fixture["rk_epoch"].as_u64().unwrap(),
+            "context_digest": get("context_digest"),
+            "slots": fixture["slots"].as_u64().unwrap(),
+            "ciphertext_sha256": get("ciphertext_sha256"),
+            "ciphertext": get("ciphertext"),
+            "signature": {
+                "alg": get("signature_alg"),
+                "key_id": get("signature_key_id"),
+                "sig": BASE64URL_NOPAD.encode(&[0_u8; 64]),
+            },
+        },
+    });
+
+    let message = client_ckks_vector_signature_message(&value).unwrap();
+
+    assert_eq!(
+        message.len() as u64,
+        fixture["signature_message_len"].as_u64().unwrap()
+    );
+    assert_eq!(
+        BASE64URL_NOPAD.encode(&message),
+        get("signature_message_b64")
+    );
+
+    let mut changed = value.clone();
+    changed["$qdrant_sec_client_ckks_vector"]["vector_name"] = json!("other");
+    assert_ne!(
+        message,
+        client_ckks_vector_signature_message(&changed).unwrap()
+    );
 }
 
 #[test]

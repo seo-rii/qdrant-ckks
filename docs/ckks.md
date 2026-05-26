@@ -529,6 +529,9 @@ length-prefixed for SDK interop. The byte string is:
 The `sig` bytes themselves are not included in the signed message. Any change
 to the sidecar routing metadata, key lineage, public context digest, slot count,
 ciphertext hash, or ciphertext bytes invalidates the Ed25519 signature.
+`docs/qdrant-sec-client-ckks-vector-signature-test-vector.json` freezes the
+canonical signing bytes for SDK interop, and the server test suite verifies the
+helper against that fixture.
 
 For tests and future vector-envelope work, a generic OpenFHE backend is
 configured under `crypto.backends` and referenced from a

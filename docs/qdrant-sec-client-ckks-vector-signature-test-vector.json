@@ -1,0 +1,20 @@
+{
+  "vector_signature_domain": "qdrant-sec/client-ckks-vector-signature/v1",
+  "version": 1,
+  "scheme": "openfhe-ckks",
+  "security_profile": "ckks-128-n16384-d4-scale50",
+  "collection_id": "32345678-90ab-cdef-1234-567890abcdef",
+  "point_id": "point-1",
+  "vector_name": "embedding",
+  "key_id": "tenant-a:vector",
+  "rk_id": "tenant-a/client-vector-rk",
+  "rk_epoch": 3,
+  "context_digest": "xLRqjIr_QNRwTXfHZnMY285NOezTbGGARvFNwr32vv0",
+  "slots": 2,
+  "ciphertext_sha256": "X1rkdW11CQqwCJB_0Pv4nrVN_XaML31weCRPOXBI2mU",
+  "ciphertext": "Y2xpZW50LWNra3Mtc3RvcmVkLWNpcGhlcnRleHQ",
+  "signature_alg": "ed25519",
+  "signature_key_id": "tenant-a:vector-signing-v1",
+  "signature_message_len": 399,
+  "signature_message_b64": "AAAAKnFkcmFudC1zZWMvY2xpZW50LWNra3MtdmVjdG9yLXNpZ25hdHVyZS92MQEAAAAMb3BlbmZoZS1ja2tzAAAAGmNra3MtMTI4LW4xNjM4NC1kNC1zY2FsZTUwAAAAJDMyMzQ1Njc4LTkwYWItY2RlZi0xMjM0LTU2Nzg5MGFiY2RlZgAAAAdwb2ludC0xAAAACWVtYmVkZGluZwAAAA90ZW5hbnQtYTp2ZWN0b3IAAAAZdGVuYW50LWEvY2xpZW50LXZlY3Rvci1yawAAAAAAAAADAAAAK3hMUnFqSXJfUU5Sd1RYZkhabk1ZMjg1Tk9lelRiR0dBUnZGTndyMzJ2djAAAAAAAAAAAgAAACtYMXJrZFcxMUNRcXdDSkJfMFB2NG5yVk5fWGFNTDMxd2VDUlBPWEJJMm1VAAAAJ1kyeHBaVzUwTFdOcmEzTXRjM1J2Y21Wa0xXTnBjR2hsY25SbGVIUQAAAAdlZDI1NTE5AAAAGnRlbmFudC1hOnZlY3Rvci1zaWduaW5nLXYx"
+}
