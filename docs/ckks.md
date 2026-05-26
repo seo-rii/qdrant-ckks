@@ -513,8 +513,10 @@ configure server materials or an OpenFHE backend. Clients submit a signed
 identity, point id, vector name, `key_id`, `rk_id`, pinned `rk_epoch`,
 `context_digest`, ciphertext hash, and Ed25519 signature before storing the
 opaque CKKS ciphertext. Plaintext dense vector writes to that vector name are
-rejected. Search over these opaque client vector envelopes is not implemented
-yet and fails closed; do not confuse this ingest contract with the
+rejected. The provider must set `search_mode: opaque_storage_only`, which is an
+explicit API contract that Qdrant stores the signed opaque vector envelope but
+does not score, rank, or index it server-side. Search over these opaque client
+vector envelopes fails closed; do not confuse this ingest contract with the
 trusted-bridge `vector/openfhe-ckks@v1` search provider.
 
 `vector/openfhe-ckks@v1` remains a trusted-bridge model: Qdrant/bridge may see

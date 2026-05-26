@@ -203,11 +203,14 @@ const VECTOR_CLIENT_CKKS_ALLOWED_OPTIONS: &[&str] = &[
     EXPECTED_RK_ID_OPTION,
     MIN_RK_EPOCH_OPTION,
     MAX_RK_EPOCH_OPTION,
+    CLIENT_CKKS_VECTOR_SEARCH_MODE_OPTION,
     CKKS_PROFILE_OPTION,
     CKKS_CRYPTO_CONTEXT_B64_OPTION,
     CKKS_PUBLIC_KEY_B64_OPTION,
     SIGNATURE_PUBLIC_KEYS_OPTION,
 ];
+const CLIENT_CKKS_VECTOR_SEARCH_MODE_OPTION: &str = "search_mode";
+const CLIENT_CKKS_VECTOR_SEARCH_MODE_OPAQUE_STORAGE_ONLY: &str = "opaque_storage_only";
 const VECTOR_OPENFHE_CKKS_ALLOWED_MATERIAL_ROLES: &[&str] = &[PAYLOAD_SYM_KEY_ROLE];
 const OPENFHE_BACKEND_KIND_PROCESS: &str = "process";
 const OPENFHE_BACKEND_KIND_PROCESS_POOL: &str = "process_pool";
@@ -3095,6 +3098,19 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                     option,
                     reason: "unsupported option for vector/client-ckks@v1".to_string(),
                 });
+            }
+            match instance.options.get(CLIENT_CKKS_VECTOR_SEARCH_MODE_OPTION) {
+                Some(Value::String(mode))
+                    if mode == CLIENT_CKKS_VECTOR_SEARCH_MODE_OPAQUE_STORAGE_ONLY => {}
+                Some(Value::String(_)) | Some(_) | None => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: CLIENT_CKKS_VECTOR_SEARCH_MODE_OPTION.to_string(),
+                        reason: format!(
+                            "vector/client-ckks@v1 must set search_mode to {CLIENT_CKKS_VECTOR_SEARCH_MODE_OPAQUE_STORAGE_ONLY}"
+                        ),
+                    });
+                }
             }
             let configured_key_id = match instance.options.get("key_id") {
                 Some(Value::String(key_id)) if is_crypto_identifier(key_id) => key_id.as_str(),
@@ -8195,6 +8211,7 @@ mod tests {
                         "expected_rk_id": "tenant-a/vector-rk",
                         "min_rk_epoch": 3,
                         "max_rk_epoch": 3,
+                        "search_mode": CLIENT_CKKS_VECTOR_SEARCH_MODE_OPAQUE_STORAGE_ONLY,
                         "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
                         "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
                         "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
@@ -8210,6 +8227,57 @@ mod tests {
 
         validate_crypto_settings(&settings)
             .expect("client-side vector provider should validate with pinned lineage and verifier");
+    }
+
+    #[test]
+    fn validate_crypto_settings_requires_client_ckks_vector_search_mode() {
+        let mut settings = CryptoSettings {
+            zero_trust_profile: None,
+            instances: HashMap::from([(
+                "docs_vector_client_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: VECTOR_CLIENT_CKKS_PROVIDER.to_string(),
+                    options: json!({
+                        "key_id": "tenant-a:docs",
+                        "expected_rk_id": "tenant-a/vector-rk",
+                        "min_rk_epoch": 3,
+                        "max_rk_epoch": 3,
+                        "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                        "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                        "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                        "signature_public_keys": {
+                            "tenant-a/client-vector-signing-v1": BASE64URL_NOPAD.encode(&[9_u8; 32]),
+                        },
+                    }),
+                    ..CryptoInstanceConfig::default()
+                },
+            )]),
+            ..CryptoSettings::default()
+        };
+
+        let err = validate_crypto_settings(&settings)
+            .expect_err("client-side vector provider must declare search_mode");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "search_mode" && reason.contains("opaque_storage_only")),
+            "unexpected error: {err:?}",
+        );
+
+        settings
+            .instances
+            .get_mut("docs_vector_client_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert("search_mode".to_string(), json!("server_scored"));
+        let err = validate_crypto_settings(&settings)
+            .expect_err("client-side vector provider must reject searchable modes");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "search_mode" && reason.contains("opaque_storage_only")),
+            "unexpected error: {err:?}",
+        );
     }
 
     #[test]
@@ -8946,6 +9014,7 @@ mod tests {
                             "expected_rk_id": "tenant-a/client-vector-rk-v1",
                             "min_rk_epoch": 3,
                             "max_rk_epoch": 3,
+                            "search_mode": CLIENT_CKKS_VECTOR_SEARCH_MODE_OPAQUE_STORAGE_ONLY,
                             "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
                             "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
                             "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
@@ -18279,6 +18348,7 @@ mod tests {
                             "expected_rk_id": "tenant-a/vector-rk",
                             "min_rk_epoch": 3,
                             "max_rk_epoch": 3,
+                            "search_mode": CLIENT_CKKS_VECTOR_SEARCH_MODE_OPAQUE_STORAGE_ONLY,
                             "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
                             "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
                             "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),

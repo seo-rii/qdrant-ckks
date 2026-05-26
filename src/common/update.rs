@@ -3288,6 +3288,7 @@ esac
                         "expected_rk_id": "tenant-a/client-vector-rk",
                         "min_rk_epoch": 3,
                         "max_rk_epoch": 3,
+                        "search_mode": "opaque_storage_only",
                         "profile": qdrant_sec::CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
                         "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
                         "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
