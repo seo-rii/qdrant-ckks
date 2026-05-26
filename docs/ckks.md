@@ -1125,12 +1125,15 @@ match the active encrypted vector rule's stable collection crypto identity and
 resource-key lineage. `query_nonce` is mandatory 96-bit base64url-no-padding
 client randomness and is cryptographically bound into the query signature; SDKs
 must regenerate it when retrying a request body. Qdrant also records
-`collection_id`, `vector_name`, `key_id`, `rk_id`, `rk_epoch`, `query_nonce`,
-and `signature.key_id` in a bounded process-local TTL replay cache before bridge
-scoring, rejecting recent replays with an error that instructs clients to create
-a fresh envelope. This is a replay guard, not a cluster-wide ledger; clustered
-strict zero-trust query deployments need a consensus-backed nonce ledger before
-local replay caches can be treated as a distributed freshness guarantee. The
+`collection_id`, `vector_name`, `key_id`, `rk_id`, `rk_epoch`, and
+`query_nonce` in a bounded process-local TTL replay cache before bridge scoring,
+rejecting recent replays with an error that instructs clients to create a fresh
+envelope. The signer key is still validated and included in non-secret warning
+metadata, but it is not part of the freshness key; the same CKKS resource-key
+lineage cannot reuse a query nonce by switching signers. This is a replay guard,
+not a cluster-wide ledger; clustered strict zero-trust query deployments need a
+consensus-backed nonce ledger before local replay caches can be treated as a
+distributed freshness guarantee. The
 `context_digest` must match the active OpenFHE public material and CKKS parameter profile for that rule,
 `slots` must match each stored sidecar envelope being scored,
 `ciphertext_sha256` must match the decoded ciphertext bytes, and `ciphertext` is
