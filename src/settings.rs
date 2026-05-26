@@ -342,6 +342,12 @@ pub struct CryptoMaterialConfig {
     pub timeout_ms: Option<u64>,
     #[serde(default)]
     #[validate(custom(function = "validate_crypto_runtime_identifier"))]
+    pub provider_key_version: Option<String>,
+    #[serde(default)]
+    #[validate(custom(function = "validate_crypto_runtime_identifier"))]
+    pub provider_attestation_id: Option<String>,
+    #[serde(default)]
+    #[validate(custom(function = "validate_crypto_runtime_identifier"))]
     pub wrapped_by: Option<String>,
     #[serde(default)]
     pub wrap_algorithm: Option<String>,
@@ -369,6 +375,8 @@ impl fmt::Debug for CryptoMaterialConfig {
             .field("vault_field", &self.vault_field)
             .field("expected_host", &self.expected_host)
             .field("timeout_ms", &self.timeout_ms)
+            .field("provider_key_version", &self.provider_key_version)
+            .field("provider_attestation_id", &self.provider_attestation_id)
             .field("wrapped_by", &self.wrapped_by)
             .field("wrap_algorithm", &self.wrap_algorithm)
             .field("nonce", &self.nonce.as_ref().map(|_| "[redacted]"))

@@ -615,6 +615,12 @@ Vault KV v2, AWS KMS, and Vault Transit materials may set `timeout_ms` between
 `1` and `30000`; when omitted, Qdrant uses a 5000 ms HTTP timeout and never
 follows redirects. This keeps resource-key lifecycle endpoints bounded even
 when an external key provider is slow.
+External key-provider materials may also set non-secret
+`provider_key_version` and `provider_attestation_id` identifiers. These values
+are not key material and are safe to expose in sanitized config views, but they
+are included in the crypto runtime capability fingerprint so mixed KMS/Vault
+key versions, attestation policies, or rollout cohorts fail closed before
+encrypted writes, shard transfer, or restore use the wrong provider state.
 When a wrapping material uses `source: aws_kms`, it must be
 `kind: wrapping_key_32`, `path` must be the AWS KMS key id, alias, or ARN, and
 `env` must be an environment-variable prefix. Qdrant reads

@@ -2252,6 +2252,8 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
                 "vault_field": material.vault_field,
                 "expected_host": material.expected_host,
                 "timeout_ms": material.timeout_ms,
+                "provider_key_version": material.provider_key_version,
+                "provider_attestation_id": material.provider_attestation_id,
                 "wrapped_by": material.wrapped_by,
                 "wrap_algorithm": material.wrap_algorithm,
                 "has_nonce": material.nonce.is_some(),
@@ -3478,6 +3480,35 @@ fn validate_material(
     material: &CryptoMaterialConfig,
     allow_inline_key_material: bool,
 ) -> Result<(), CryptoSetupError> {
+    if material
+        .provider_key_version
+        .as_deref()
+        .is_some_and(|value| !is_crypto_identifier(value))
+    {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: material
+                .source
+                .clone()
+                .unwrap_or_else(|| "material".to_string()),
+            reason: "provider_key_version must be a crypto runtime identifier".to_string(),
+        });
+    }
+    if material
+        .provider_attestation_id
+        .as_deref()
+        .is_some_and(|value| !is_crypto_identifier(value))
+    {
+        return Err(CryptoSetupError::InvalidMaterialFileSource {
+            material: material_name.to_string(),
+            path: material
+                .source
+                .clone()
+                .unwrap_or_else(|| "material".to_string()),
+            reason: "provider_attestation_id must be a crypto runtime identifier".to_string(),
+        });
+    }
+
     validate_material_timeout_policy(material_name, material)?;
 
     if material.kind == WRAPPED_SYMMETRIC_KEY_32_KIND {
@@ -9786,6 +9817,8 @@ mod tests {
                             vault_field: None,
                             expected_host: None,
                             timeout_ms: None,
+                            provider_key_version: None,
+                            provider_attestation_id: None,
                             wrapped_by: None,
                             wrap_algorithm: None,
                             nonce: None,
@@ -9807,6 +9840,8 @@ mod tests {
                             vault_field: None,
                             expected_host: None,
                             timeout_ms: None,
+                            provider_key_version: None,
+                            provider_attestation_id: None,
                             wrapped_by: Some("tenant-a/mk".to_string()),
                             wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
                             nonce: Some(BASE64URL_NOPAD.encode(&[2_u8; 12])),
@@ -9888,6 +9923,8 @@ mod tests {
                 vault_field: None,
                 expected_host: None,
                 timeout_ms: None,
+                provider_key_version: None,
+                provider_attestation_id: None,
                 wrapped_by: Some("tenant-a/mk".to_string()),
                 wrap_algorithm: Some(RESOURCE_KEY_WRAP_ALGORITHM.to_string()),
                 nonce: Some(BASE64URL_NOPAD.encode(&[4_u8; 12])),
@@ -10904,6 +10941,71 @@ mod tests {
             .unwrap()
             .path = Some("/run/qdrant-sec/other-mk.sock".to_string());
         assert_drift_rejected("peer-socket-path", peer_with_different_socket);
+    }
+
+    #[test]
+    fn crypto_runtime_capability_fingerprint_tracks_external_key_version_metadata() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: None,
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
+                materials: HashMap::from([(
+                    "tenant-a/mk-aws".to_string(),
+                    CryptoMaterialConfig {
+                        kind: WRAPPING_KEY_32_KIND.to_string(),
+                        source: Some(AWS_KMS_SOURCE.to_string()),
+                        env: Some("QDRANT_AWS_KMS_TOKEN".to_string()),
+                        path: Some("https://kms.us-east-1.amazonaws.com/".to_string()),
+                        expected_host: Some("kms.us-east-1.amazonaws.com".to_string()),
+                        timeout_ms: Some(2_000),
+                        provider_key_version: Some("aws:kms:key-version:v1".to_string()),
+                        provider_attestation_id: Some("aws:kms:attestation:v1".to_string()),
+                        ..CryptoMaterialConfig::default()
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let fingerprint = crypto_runtime_capability_fingerprint(&settings);
+
+        let assert_drift_rejected = |peer_id: &str, peer: Settings| {
+            let peer_fingerprint = crypto_runtime_capability_fingerprint(&peer);
+            assert_ne!(
+                fingerprint, peer_fingerprint,
+                "{peer_id} metadata drift must change the runtime parity fingerprint",
+            );
+            let err = validate_crypto_runtime_capability_parity(
+                &settings,
+                [(peer_id, peer_fingerprint.as_str())],
+            )
+            .expect_err("external provider metadata drift must fail runtime parity validation");
+            assert!(err.to_string().contains(peer_id), "{err:?}");
+        };
+
+        let mut peer_with_different_key_version = settings.clone();
+        peer_with_different_key_version
+            .crypto
+            .materials
+            .get_mut("tenant-a/mk-aws")
+            .unwrap()
+            .provider_key_version = Some("aws:kms:key-version:v2".to_string());
+        assert_drift_rejected("peer-key-version", peer_with_different_key_version);
+
+        let mut peer_with_different_attestation = settings.clone();
+        peer_with_different_attestation
+            .crypto
+            .materials
+            .get_mut("tenant-a/mk-aws")
+            .unwrap()
+            .provider_attestation_id = Some("aws:kms:attestation:v2".to_string());
+        assert_drift_rejected("peer-attestation", peer_with_different_attestation);
     }
 
     #[test]
@@ -12212,6 +12314,38 @@ mod tests {
             validate_material("tenant-a/payload-rk", &inline_with_timeout, true),
             Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
                 if reason.contains("only supported")
+        ));
+    }
+
+    #[test]
+    fn validate_material_rejects_invalid_external_provider_metadata() {
+        let mut aws_wrapping_material = CryptoMaterialConfig {
+            kind: WRAPPING_KEY_32_KIND.to_string(),
+            source: Some(AWS_KMS_SOURCE.to_string()),
+            env: Some("QDRANT_TEST_AWS_KMS_WRAP".to_string()),
+            path: Some("alias/qdrant-sec-docs".to_string()),
+            provider_key_version: Some("aws:kms:key-version:v1".to_string()),
+            provider_attestation_id: Some("aws:kms:attestation:v1".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+        assert_eq!(
+            validate_material("tenant-a/mk-aws", &aws_wrapping_material, false),
+            Ok(())
+        );
+
+        aws_wrapping_material.provider_key_version = Some("bad key version".to_string());
+        assert!(matches!(
+            validate_material("tenant-a/mk-aws", &aws_wrapping_material, false),
+            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("provider_key_version")
+        ));
+
+        aws_wrapping_material.provider_key_version = Some("aws:kms:key-version:v1".to_string());
+        aws_wrapping_material.provider_attestation_id = Some("bad attestation".to_string());
+        assert!(matches!(
+            validate_material("tenant-a/mk-aws", &aws_wrapping_material, false),
+            Err(CryptoSetupError::InvalidMaterialFileSource { reason, .. })
+                if reason.contains("provider_attestation_id")
         ));
     }
 
