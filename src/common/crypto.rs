@@ -7862,9 +7862,10 @@ mod tests {
     use collection::optimizers_builder::OptimizersConfig;
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_sec::{
-        CLIENT_ENCRYPTED_PAYLOAD_MARKER, CLIENT_PAYLOAD_ENVELOPE_BINDING, LocalMasterKeyProvider,
-        MasterKeyProvider, RESOURCE_KEY_WRAP_ALGORITHM, client_payload_signature_message,
-        is_client_encrypted_payload_value, is_encrypted_payload_value,
+        CLIENT_ENCRYPTED_PAYLOAD_MARKER, CLIENT_PAYLOAD_ENVELOPE_BINDING, EncryptionError,
+        LocalMasterKeyProvider, MasterKeyProvider, RESOURCE_KEY_WRAP_ALGORITHM,
+        client_payload_signature_message, is_client_encrypted_payload_value,
+        is_encrypted_payload_value,
     };
     use ring::rand::SystemRandom;
     use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -12582,6 +12583,53 @@ mod tests {
                 .decode(material.wrapped_key_b64.unwrap().as_bytes())
                 .unwrap(),
             b"aws-kms-ciphertext-blob"
+        );
+    }
+
+    #[test]
+    fn generate_wrapped_resource_key_rejects_aws_kms_5xx_without_material() {
+        let mut server = mockito::Server::new();
+        let _mock = server
+            .mock("POST", "/")
+            .match_header("x-amz-target", "TrentService.Encrypt")
+            .match_header("content-type", "application/x-amz-json-1.1")
+            .with_status(503)
+            .with_header("content-type", "application/json")
+            .with_body(json!({ "message": "kms unavailable" }).to_string())
+            .create();
+        set_aws_kms_test_env("QDRANT_TEST_AWS_KMS_WRAP_5XX", &server.url());
+
+        let mut settings = Settings::new(None).unwrap();
+        settings.crypto.materials.insert(
+            "tenant-a/mk-aws".to_string(),
+            CryptoMaterialConfig {
+                kind: "wrapping_key_32".to_string(),
+                source: Some(AWS_KMS_SOURCE.to_string()),
+                env: Some("QDRANT_TEST_AWS_KMS_WRAP_5XX".to_string()),
+                path: Some("alias/qdrant-sec-docs".to_string()),
+                timeout_ms: Some(1_000),
+                ..CryptoMaterialConfig::default()
+            },
+        );
+
+        let err = generate_wrapped_runtime_resource_key_material(
+            &settings.crypto,
+            "tenant-a/payload-rk-v6",
+            "tenant-a/mk-aws",
+            6,
+            "collection:docs/payload:body",
+        )
+        .expect_err("KMS 5xx must fail before returning wrapped material");
+        clear_aws_kms_test_env("QDRANT_TEST_AWS_KMS_WRAP_5XX");
+
+        assert!(
+            matches!(
+                err,
+                PayloadWriteSetupError::Payload(PayloadEncryptionError::Crypto(
+                    EncryptionError::SealFailed
+                ))
+            ),
+            "unexpected error: {err:?}",
         );
     }
 
