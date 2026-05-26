@@ -493,9 +493,29 @@ pub(crate) fn invalidate_ckks_sidecar_hnsw_graph_cache_for_collection_path(
         if limited_file.read_to_string(&mut content).is_err()
             || content.len() as u64 > CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES
         {
+            fs::remove_file(&path).map_err(|err| {
+                StorageError::service_error(format!(
+                    "failed to prune unreadable CKKS sidecar HNSW graph cache {path:?}: {err}",
+                ))
+            })?;
+            ckks_sidecar_hnsw_sync_parent(&path).map_err(|err| {
+                StorageError::service_error(format!(
+                    "failed to sync CKKS sidecar HNSW graph cache directory after pruning unreadable cache {path:?}: {err}",
+                ))
+            })?;
             continue;
         }
         let Ok(disk) = serde_json::from_str::<CkksSidecarHnswGraphDisk>(&content) else {
+            fs::remove_file(&path).map_err(|err| {
+                StorageError::service_error(format!(
+                    "failed to prune malformed CKKS sidecar HNSW graph cache {path:?}: {err}",
+                ))
+            })?;
+            ckks_sidecar_hnsw_sync_parent(&path).map_err(|err| {
+                StorageError::service_error(format!(
+                    "failed to sync CKKS sidecar HNSW graph cache directory after pruning malformed cache {path:?}: {err}",
+                ))
+            })?;
             continue;
         };
         if disk.collection_identity == collection_identity
@@ -9486,6 +9506,35 @@ mod tests {
         assert!(!target_path.exists());
         assert!(same_collection_other_vector_path.exists());
         assert!(other_collection_path.exists());
+    }
+
+    #[test]
+    fn ckks_sidecar_hnsw_graph_cache_invalidates_malformed_persisted_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let target_key = ckks_sidecar_test_graph_cache_key("malformed-target");
+        let target_path = ckks_sidecar_hnsw_graph_cache_path(dir.path(), &target_key);
+        let directory = target_path.parent().unwrap();
+        std::fs::create_dir_all(directory).unwrap();
+        set_ckks_sidecar_test_private_directory_permissions(directory);
+        std::fs::write(&target_path, b"not-json").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            std::fs::set_permissions(&target_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+
+        invalidate_ckks_sidecar_hnsw_graph_cache_for_collection_path(
+            dir.path(),
+            "collection-uuid",
+            &["vector".to_string()],
+        )
+        .unwrap();
+
+        assert!(
+            !target_path.exists(),
+            "malformed persisted sidecar graph cache should not survive mutation invalidation",
+        );
     }
 
     #[test]
