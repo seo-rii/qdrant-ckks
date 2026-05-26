@@ -22,6 +22,7 @@ const CLIENT_PAYLOAD_KDF_DOMAIN: &str = "qdrant-sec/client-payload-text/v1";
 const CLIENT_PAYLOAD_SIGNATURE_DOMAIN: &str = "qdrant-sec/client-payload-signature/v1";
 const CLIENT_PAYLOAD_SIGNATURE_ALGORITHM: &str = "ed25519";
 const BASE64URL_NOPAD_12_BYTE_LEN: usize = 16;
+const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
 const BASE64URL_NOPAD_64_BYTE_LEN: usize = 86;
 const CLIENT_PAYLOAD_CIPHERTEXT_MAX_BYTES: usize = 1024 * 1024;
 const CLIENT_PAYLOAD_CIPHERTEXT_MAX_B64_LEN: usize =
@@ -243,11 +244,18 @@ pub struct ServerPayloadEnvelopeKey {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ClientPayloadVerifiedEnvelopeKey {
     envelope_key: ClientPayloadEnvelopeKey,
+    blind_indexes: Vec<ClientPayloadBlindIndexTokenKey>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ServerPayloadVerifiedEnvelopeKey {
     envelope_key: ServerPayloadEnvelopeKey,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct ClientPayloadBlindIndexTokenKey {
+    field_path: String,
+    token: String,
 }
 
 impl ClientPayloadNonceReplayKey {
@@ -318,6 +326,21 @@ impl ClientPayloadNonceReplayKey {
 impl ClientPayloadVerifiedEnvelopeKey {
     pub fn envelope_key(&self) -> &ClientPayloadEnvelopeKey {
         &self.envelope_key
+    }
+
+    pub fn binds_blind_index(
+        &self,
+        collection_id: &str,
+        point_id: &str,
+        field_path: &str,
+        token: &str,
+    ) -> bool {
+        self.envelope_key.collection_id == collection_id
+            && self.envelope_key.point_id == point_id
+            && self
+                .blind_indexes
+                .iter()
+                .any(|binding| binding.field_path == field_path && binding.token == token)
     }
 }
 
@@ -934,6 +957,10 @@ pub fn validate_client_payload_value_after_runtime_verification(
     if verified_envelope_key.envelope_key() != &envelope_key {
         return Err(PayloadEncryptionError::RuntimeEnvelopeProofMismatch);
     }
+    let blind_indexes = client_payload_blind_index_token_keys(value, context.field_path)?;
+    if verified_envelope_key.blind_indexes != blind_indexes {
+        return Err(PayloadEncryptionError::RuntimeEnvelopeProofMismatch);
+    }
     Ok(())
 }
 
@@ -1062,6 +1089,7 @@ fn validate_client_payload_value_inner(
     }
     let ciphertext_sha256_b64 =
         client_payload_ciphertext_digest_b64(context.field_path, &envelope.ciphertext)?;
+    validate_client_payload_blind_indexes(&envelope)?;
     let signature_sha256_b64 = validate_client_payload_signature(
         &envelope,
         context.signature_required,
@@ -1089,8 +1117,12 @@ pub fn validate_client_payload_value_for_runtime(
             found: json_type_name(value),
         }
     })?;
+    let blind_indexes = client_payload_blind_index_token_keys(value, context.field_path)?;
 
-    Ok(ClientPayloadVerifiedEnvelopeKey { envelope_key })
+    Ok(ClientPayloadVerifiedEnvelopeKey {
+        envelope_key,
+        blind_indexes,
+    })
 }
 
 /// Validate a server-side encrypted payload marker replayed by a peer.
@@ -1183,6 +1215,53 @@ fn client_payload_envelope_key_from_validated(
         signature_key_id: signature.key_id,
         signature_sha256_b64,
     })
+}
+
+fn client_payload_blind_index_token_keys(
+    value: &Value,
+    field_path: &str,
+) -> Result<Vec<ClientPayloadBlindIndexTokenKey>, PayloadEncryptionError> {
+    let Some(envelope) = extract_client_envelope(value, field_path)? else {
+        return Ok(Vec::new());
+    };
+    validate_client_payload_blind_indexes(&envelope)?;
+    Ok(envelope
+        .blind_indexes
+        .into_iter()
+        .map(|binding| ClientPayloadBlindIndexTokenKey {
+            field_path: binding.field_path,
+            token: binding.token,
+        })
+        .collect())
+}
+
+fn validate_client_payload_blind_indexes(
+    envelope: &ClientPayloadEnvelope,
+) -> Result<(), PayloadEncryptionError> {
+    let mut seen = std::collections::HashSet::new();
+    for binding in &envelope.blind_indexes {
+        if binding.field_path.is_empty() || !seen.insert(binding.field_path.clone()) {
+            return Err(PayloadEncryptionError::MalformedEnvelope(
+                envelope.aad.field_path.clone(),
+            ));
+        }
+        validate_base64url_nopad_encoded_len(
+            &binding.token,
+            BASE64URL_NOPAD_32_BYTE_LEN,
+            PayloadEncryptionError::MalformedEnvelope(envelope.aad.field_path.clone()),
+        )?;
+        let token = BASE64URL_NOPAD
+            .decode(binding.token.as_bytes())
+            .map_err(|_| {
+                PayloadEncryptionError::MalformedEnvelope(envelope.aad.field_path.clone())
+            })?;
+        if token.len() != 32 {
+            return Err(PayloadEncryptionError::MalformedEnvelope(
+                envelope.aad.field_path.clone(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn client_payload_ciphertext_digest_b64(
@@ -1383,6 +1462,8 @@ struct ClientPayloadEnvelope {
     aad: ClientPayloadAad,
     nonce: String,
     ciphertext: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    blind_indexes: Vec<ClientPayloadBlindIndexBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     signature: Option<ClientPayloadSignature>,
 }
@@ -1400,6 +1481,7 @@ impl Debug for ClientPayloadEnvelope {
             .field("aad", &self.aad)
             .field("nonce", &"[redacted]")
             .field("ciphertext_len", &self.ciphertext.len())
+            .field("blind_index_count", &self.blind_indexes.len())
             .field("signature_present", &self.signature.is_some())
             .finish()
     }
@@ -1419,6 +1501,13 @@ struct ClientPayloadAad {
     field_path: String,
     #[serde(default = "default_crypto_schema_version")]
     schema_version: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClientPayloadBlindIndexBinding {
+    field_path: String,
+    token: String,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1505,6 +1594,17 @@ fn client_payload_signature_message_for_envelope(envelope: &ClientPayloadEnvelop
     push_len_prefixed(&mut message, envelope.aad.point_id.as_bytes());
     push_len_prefixed(&mut message, envelope.aad.field_path.as_bytes());
     push_u16(&mut message, envelope.aad.schema_version);
+    let mut blind_indexes = envelope.blind_indexes.iter().collect::<Vec<_>>();
+    blind_indexes.sort_by(|left, right| {
+        left.field_path
+            .cmp(&right.field_path)
+            .then_with(|| left.token.cmp(&right.token))
+    });
+    message.extend_from_slice(&(blind_indexes.len() as u32).to_be_bytes());
+    for binding in blind_indexes {
+        push_len_prefixed(&mut message, binding.field_path.as_bytes());
+        push_len_prefixed(&mut message, binding.token.as_bytes());
+    }
     push_len_prefixed(&mut message, envelope.nonce.as_bytes());
     push_len_prefixed(&mut message, envelope.ciphertext.as_bytes());
     if let Some(signature) = &envelope.signature {

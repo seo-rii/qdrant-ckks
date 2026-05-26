@@ -259,6 +259,181 @@ fn client_payload_signature_message_matches_sdk_test_vector() {
 }
 
 #[test]
+fn client_payload_signature_message_binds_blind_index_manifest() {
+    let token = BASE64URL_NOPAD.encode(&[13_u8; 32]);
+    let mut envelope = client_envelope("point-1", "body");
+    envelope
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert(
+            "blind_indexes".to_string(),
+            json!([
+                {
+                    "field_path": "body__blind_eq",
+                    "token": token,
+                }
+            ]),
+        );
+    envelope
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert(
+            "signature".to_string(),
+            json!({
+                "alg": "ed25519",
+                "key_id": "tenant-a/client-signing-v1",
+                "sig": BASE64URL_NOPAD.encode(&[0_u8; 64]),
+            }),
+        );
+
+    let message = client_payload_signature_message(&envelope, "body").unwrap();
+    let context = ClientPayloadValidationContext {
+        collection_id: "docs",
+        point_id: "point-1",
+        field_path: "body",
+        expected_key_id: Some("tenant-a/client-rk-2026-04"),
+        expected_rk_id: Some("tenant-a/client-rk-2026-04"),
+        min_rk_epoch: Some(3),
+        max_rk_epoch: Some(3),
+        key_id_required: true,
+        signature_required: false,
+        signature_verification: None,
+    };
+    validate_client_payload_value(&envelope, context).unwrap();
+
+    let mut changed = envelope.clone();
+    changed
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut("blind_indexes")
+        .unwrap()
+        .as_array_mut()
+        .unwrap()[0]
+        .as_object_mut()
+        .unwrap()
+        .insert(
+            "token".to_string(),
+            Value::String(BASE64URL_NOPAD.encode(&[14_u8; 32])),
+        );
+    let changed_message = client_payload_signature_message(&changed, "body").unwrap();
+
+    assert_ne!(message, changed_message);
+}
+
+#[test]
+fn client_payload_runtime_verification_rejects_tampered_blind_index_manifest() {
+    let token = BASE64URL_NOPAD.encode(&[13_u8; 32]);
+    let mut envelope = client_envelope("point-1", "body");
+    envelope
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert(
+            "blind_indexes".to_string(),
+            json!([
+                {
+                    "field_path": "body__blind_eq",
+                    "token": token,
+                }
+            ]),
+        );
+    envelope
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert(
+            "signature".to_string(),
+            json!({
+                "alg": "ed25519",
+                "key_id": "tenant-a/client-signing-v1",
+                "sig": "",
+            }),
+        );
+    let rng = SystemRandom::new();
+    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+    let message = client_payload_signature_message(&envelope, "body").unwrap();
+    let signature = key_pair.sign(&message);
+    envelope
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut("signature")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert(
+            "sig".to_string(),
+            Value::String(BASE64URL_NOPAD.encode(signature.as_ref())),
+        );
+
+    let verified = validate_client_payload_value_for_runtime(
+        &envelope,
+        ClientPayloadValidationContext {
+            collection_id: "docs",
+            point_id: "point-1",
+            field_path: "body",
+            expected_key_id: Some("tenant-a/client-rk-2026-04"),
+            expected_rk_id: Some("tenant-a/client-rk-2026-04"),
+            min_rk_epoch: Some(3),
+            max_rk_epoch: Some(3),
+            key_id_required: true,
+            signature_required: true,
+            signature_verification: Some(ClientPayloadSignatureVerification {
+                expected_key_id: "tenant-a/client-signing-v1",
+                public_key: key_pair.public_key().as_ref(),
+            }),
+        },
+    )
+    .unwrap();
+    let mut tampered = envelope.clone();
+    tampered
+        .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut("blind_indexes")
+        .unwrap()
+        .as_array_mut()
+        .unwrap()[0]
+        .as_object_mut()
+        .unwrap()
+        .insert(
+            "token".to_string(),
+            Value::String(BASE64URL_NOPAD.encode(&[14_u8; 32])),
+        );
+
+    assert_eq!(
+        validate_client_payload_value_after_runtime_verification(
+            &tampered,
+            ClientPayloadValidationContext {
+                collection_id: "docs",
+                point_id: "point-1",
+                field_path: "body",
+                expected_key_id: Some("tenant-a/client-rk-2026-04"),
+                expected_rk_id: Some("tenant-a/client-rk-2026-04"),
+                min_rk_epoch: Some(3),
+                max_rk_epoch: Some(3),
+                key_id_required: true,
+                signature_required: true,
+                signature_verification: None,
+            },
+            &verified,
+        ),
+        Err(PayloadEncryptionError::RuntimeEnvelopeProofMismatch),
+    );
+}
+
+#[test]
 fn payload_envelopes_reject_unknown_metadata_fields() {
     let context = ClientPayloadValidationContext {
         collection_id: "docs",

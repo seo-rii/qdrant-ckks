@@ -275,9 +275,11 @@ Qdrant does not have the client data key in this mode, it cannot verify the
 AES-GCM tag or decrypt responses; clients or SDKs must decrypt returned
 envelopes. Client envelopes must include `rk_id`, `rk_epoch`, and
 `kdf_domain: qdrant-sec/client-payload-text/v1` so resource-key identity is explicit
-even though Qdrant cannot unwrap the client key. The Ed25519 signature covers the
-client envelope header, AAD, nonce, ciphertext, signature algorithm, and
-signature key id.
+even though Qdrant cannot unwrap the client key. If the payload also writes
+blind-index token fields, the client envelope should include a `blind_indexes`
+array of `{ "field_path": "...", "token": "..." }` objects. The Ed25519
+signature covers the client envelope header, AAD, sorted blind-index token
+manifest, nonce, ciphertext, signature algorithm, and signature key id.
 `docs/qdrant-sec-client-payload-signature-test-vector.json` freezes the
 canonical length-prefixed signing bytes so external SDKs can verify
 interoperability against the server implementation.

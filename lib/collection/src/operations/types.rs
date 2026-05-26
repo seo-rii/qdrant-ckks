@@ -387,6 +387,22 @@ impl CollectionUpdateProvenance {
             .as_ref()
             .and_then(|verified| verified.proof_for(envelope_key))
     }
+
+    pub fn has_verified_client_blind_index_binding(
+        &self,
+        collection_id: &str,
+        point_id: &str,
+        field_path: &str,
+        token: &str,
+    ) -> bool {
+        self.verified_client_envelopes
+            .as_ref()
+            .is_some_and(|verified| {
+                verified.verified_envelope_keys.iter().any(|proof| {
+                    proof.binds_blind_index(collection_id, point_id, field_path, token)
+                })
+            })
+    }
 }
 
 pub fn ckks_vector_sidecar_delete_target(

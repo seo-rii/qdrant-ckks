@@ -1688,6 +1688,7 @@ impl Collection {
             let payload_write_touches_metadata_blind_index =
                 |payload: &Payload,
                  key: Option<&JsonPath>,
+                 point_id: Option<&str>,
                  metadata_path: &JsonPath,
                  metadata_key: &str|
                  -> CollectionResult<bool> {
@@ -1703,12 +1704,29 @@ impl Collection {
                     let mut touches = false;
                     for value in metadata_path.value_get(&payload.0) {
                         validate_metadata_blind_index_json_value(value, metadata_key)?;
+                        if client_payload_envelope_rules_present {
+                            let Some(point_id) = point_id else {
+                                return Err(CollectionError::bad_input(format!(
+                                    "metadata blind-index field '{metadata_key}' cannot be written for client-side encrypted payload collections without point-specific runtime envelope verification",
+                                )));
+                            };
+                            let Some(token) = value.as_str() else {
+                                return Err(CollectionError::bad_input(format!(
+                                    "metadata blind-index field '{metadata_key}' must contain a base64url-no-padding HMAC-SHA256 token string",
+                                )));
+                            };
+                            if !update_provenance.has_verified_client_blind_index_binding(
+                                &collection_crypto_id,
+                                point_id,
+                                metadata_key,
+                                token,
+                            ) {
+                                return Err(CollectionError::bad_input(format!(
+                                    "metadata blind-index field '{metadata_key}' cannot be written for client-side encrypted payload collections until the client envelope signature binds the token manifest",
+                                )));
+                            }
+                        }
                         touches = true;
-                    }
-                    if touches && client_payload_envelope_rules_present {
-                        return Err(CollectionError::bad_input(format!(
-                            "metadata blind-index field '{metadata_key}' cannot be written for client-side encrypted payload collections until the client envelope signature binds the token manifest",
-                        )));
                     }
                     Ok(touches)
                 };
@@ -2290,10 +2308,20 @@ impl Collection {
                                         ) => match insert_operation {
                                             PointInsertOperationsInternal::PointsBatch(batch) => {
                                                 if let Some(payloads) = batch.payloads.as_ref() {
-                                                    for payload in payloads.iter().flatten() {
+                                                    for (id, payload) in
+                                                        batch.ids.iter().zip(payloads).filter_map(
+                                                            |(id, payload)| {
+                                                                payload
+                                                                    .as_ref()
+                                                                    .map(|payload| (id, payload))
+                                                            },
+                                                        )
+                                                    {
+                                                        let point_id = id.to_string();
                                                         payload_write_touches_metadata_blind_index(
                                                             payload,
                                                             None,
+                                                            Some(point_id.as_str()),
                                                             &metadata_path,
                                                             metadata_key,
                                                         )?;
@@ -2301,14 +2329,20 @@ impl Collection {
                                                 }
                                             }
                                             PointInsertOperationsInternal::PointsList(points) => {
-                                                for payload in
-                                                    points.iter().filter_map(|point| {
-                                                        point.payload.as_ref()
+                                                for (id, payload) in points
+                                                    .iter()
+                                                    .filter_map(|point| {
+                                                        point
+                                                            .payload
+                                                            .as_ref()
+                                                            .map(|payload| (&point.id, payload))
                                                     })
                                                 {
+                                                    let point_id = id.to_string();
                                                     payload_write_touches_metadata_blind_index(
                                                         payload,
                                                         None,
+                                                        Some(point_id.as_str()),
                                                         &metadata_path,
                                                         metadata_key,
                                                     )?;
@@ -2316,14 +2350,21 @@ impl Collection {
                                             }
                                         },
                                         PointOperations::SyncPoints(sync_operation) => {
-                                            for payload in sync_operation
+                                            for (id, payload) in sync_operation
                                                 .points
                                                 .iter()
-                                                .filter_map(|point| point.payload.as_ref())
+                                                .filter_map(|point| {
+                                                    point
+                                                        .payload
+                                                        .as_ref()
+                                                        .map(|payload| (&point.id, payload))
+                                                })
                                             {
+                                                let point_id = id.to_string();
                                                 payload_write_touches_metadata_blind_index(
                                                     payload,
                                                     None,
+                                                    Some(point_id.as_str()),
                                                     &metadata_path,
                                                     metadata_key,
                                                 )?;
@@ -2337,9 +2378,14 @@ impl Collection {
                                     PayloadOps::SetPayload(operation)
                                     | PayloadOps::OverwritePayload(operation),
                                 ) => {
+                                    let single_point_id =
+                                        operation.points.as_ref().and_then(|points| {
+                                            (points.len() == 1).then(|| points[0].to_string())
+                                        });
                                     payload_write_touches_metadata_blind_index(
                                         &operation.payload,
                                         operation.key.as_ref(),
+                                        single_point_id.as_deref(),
                                         &metadata_path,
                                         metadata_key,
                                     )?;
