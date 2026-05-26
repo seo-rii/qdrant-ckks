@@ -8445,15 +8445,26 @@ async fn ckks_vector_search_points_matrix(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, HashMap};
+
     use collection::collection::ckks_search::{
         CkksCiphertextSegmentIndexSnapshot, CkksCiphertextSegmentSearchRecord,
     };
-    use collection::config::{CryptoMigrationState, EncryptionRuleRef};
+    use collection::config::{
+        CollectionEncryptionConfig, CollectionParams, CryptoMigrationState, EncryptionRuleRef,
+        EncryptionSelector,
+    };
+    use collection::operations::vector_params_builder::VectorParamsBuilder;
     use common::types::PointOffsetType;
+    use ring::rand::SystemRandom;
+    use ring::signature::{Ed25519KeyPair, KeyPair};
     use segment::types::Distance;
     use serde_json::json;
 
     use super::*;
+    use crate::settings::{
+        CryptoBackendConfig, CryptoInstanceConfig, CryptoMaterialConfig, CryptoSettings,
+    };
 
     fn scored_point(id: u64, score: f32) -> ScoredPoint {
         ScoredPoint {
@@ -8481,6 +8492,153 @@ mod tests {
 
     fn valid_query_nonce_b64() -> String {
         BASE64URL_NOPAD.encode(&[7_u8; 12])
+    }
+
+    #[test]
+    fn ckks_score_query_source_batch_forwards_query_rk_id_not_key_id() {
+        let bridge_dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-query-rk-bridge-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let bridge_path = bridge_dir.path().join("openfhe-bridge");
+        let bridge_bytes = b"#!/bin/sh\nexit 0\n";
+        std::fs::write(&bridge_path, bridge_bytes).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut dir_permissions = std::fs::metadata(bridge_dir.path()).unwrap().permissions();
+            dir_permissions.set_mode(0o700);
+            std::fs::set_permissions(bridge_dir.path(), dir_permissions).unwrap();
+
+            let mut permissions = std::fs::metadata(&bridge_path).unwrap().permissions();
+            permissions.set_mode(0o700);
+            std::fs::set_permissions(&bridge_path, permissions).unwrap();
+        }
+        let rng = SystemRandom::new();
+        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+        let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+        let signature_key_id = "tenant-a:query-signing-v1";
+        let query_key_id = "tenant-a:vector";
+        let query_rk_id = "tenant-a/vector-v1";
+        let query_rk_epoch = 1;
+        let query_nonce = valid_query_nonce_b64();
+        let encrypted_query = b"client-query-ciphertext".to_vec();
+        let public_material =
+            qdrant_sec::CkksPublicMaterial::new(b"openfhe context", b"openfhe public key").unwrap();
+        let context_digest =
+            public_material.digest_for(&qdrant_sec::CkksParameters::openfhe_default_128_bit());
+        let signature_message = crate::common::crypto::ckks_client_query_signature_message(
+            "docs-crypto-id",
+            "embedding",
+            query_key_id,
+            query_rk_id,
+            query_rk_epoch,
+            &query_nonce,
+            &context_digest,
+            2,
+            &encrypted_query,
+            "ed25519",
+            signature_key_id,
+        );
+        let signature_b64 = BASE64URL_NOPAD.encode(key_pair.sign(&signature_message).as_ref());
+        let settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_vector_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: qdrant_sec::VECTOR_OPENFHE_CKKS_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            "sym_key".to_string(),
+                            query_rk_id.to_string(),
+                        )]),
+                        backend_ref: Some("openfhe_local".to_string()),
+                        options: json!({
+                            "key_id": query_key_id,
+                            "material_fingerprint_id": "tenant-a/vector@v1",
+                            "profile": qdrant_sec::CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                            "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                            "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                            "score_plaintext_output_tcb_ack": "qdrant-sec-ckks-score-output-tcb-v1",
+                            "signature_public_keys": {
+                                signature_key_id: BASE64URL_NOPAD.encode(key_pair.public_key().as_ref()),
+                            },
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([(
+                    query_rk_id.to_string(),
+                    CryptoMaterialConfig {
+                        kind: "symmetric_key_32".to_string(),
+                        source: Some("inline".to_string()),
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[8_u8; 32])),
+                        rk_epoch: Some(query_rk_epoch),
+                        ..CryptoMaterialConfig::default()
+                    },
+                )]),
+                backends: HashMap::from([(
+                    "openfhe_local".to_string(),
+                    CryptoBackendConfig {
+                        kind: "process".to_string(),
+                        program: Some(bridge_path.to_string_lossy().to_string()),
+                        sha256_b64: Some(BASE64URL_NOPAD.encode(&Sha256::digest(bridge_bytes))),
+                        ..CryptoBackendConfig::default()
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            vectors: collection::operations::types::VectorsConfig::Multi(BTreeMap::from([(
+                "embedding".to_string(),
+                VectorParamsBuilder::new(2, Distance::Dot).build(),
+            )])),
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some(query_key_id.to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "embedding_conf".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["embedding".to_string()],
+                    },
+                    instance: "docs_vector_v1".to_string(),
+                    binding: Some(qdrant_sec::VECTOR_ENVELOPE_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let plan = vector_write_plan_for_collection_with_crypto_id(
+            &settings,
+            "docs",
+            "docs-crypto-id",
+            &params,
+        )
+        .unwrap()
+        .unwrap();
+        let source = CkksSidecarQuerySource::ClientEncrypted {
+            collection_id: "docs-crypto-id",
+            vector_name: "embedding",
+            key_id: query_key_id,
+            rk_id: query_rk_id,
+            rk_epoch: query_rk_epoch,
+            query_nonce: &query_nonce,
+            context_digest: &context_digest,
+            slots: 2,
+            ciphertext: encrypted_query,
+            signature_alg: "ed25519",
+            signature_key_id,
+            signature_b64: &signature_b64,
+        };
+
+        let scores =
+            ckks_score_query_source_batch("docs", "embedding", &plan, &source, &[]).unwrap();
+
+        assert!(scores.is_empty());
     }
 
     #[test]
