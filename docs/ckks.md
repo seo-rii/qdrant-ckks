@@ -492,19 +492,43 @@ Set `crypto.zero_trust_profile: strict` when the deployment goal is complete
 zero trust rather than server-managed encryption. Strict mode is a fail-closed
 profile: it rejects server-held crypto materials, OpenFHE bridge backends,
 server-side payload/metadata AEAD providers, and the trusted-bridge
-`vector/openfhe-ckks@v1` provider. The currently accepted providers in strict
-mode are server-blind `payload/client-aead@v1` and
-`metadata/blind-index-hmac@v1`; vector storage/search remains incomplete for
-strict zero trust until `vector/client-ckks@v1` or an equivalent server-blind
-vector provider is implemented. Use the non-strict trusted-bridge profile only
-when operators explicitly accept that Qdrant/bridge may observe embeddings,
-scores, access patterns, and ranking order.
+`vector/openfhe-ckks@v1` provider. The accepted providers in strict mode are
+server-blind `payload/client-aead@v1`, `metadata/blind-index-hmac@v1`, and
+`vector/client-ckks@v1`. Use the non-strict trusted-bridge profile only when
+operators explicitly accept that Qdrant/bridge may observe embeddings, scores,
+access patterns, and ranking order.
 
-`vector/client-ckks@v1` is reserved for a future server-blind vector envelope
-provider and is currently rejected at startup/runtime validation. Today,
-`vector/openfhe-ckks@v1` is a trusted-bridge model: Qdrant/bridge may see
+`vector/client-ckks@v1` is a server-blind vector ingest provider. It must not
+configure server materials or an OpenFHE backend. Clients submit a signed
+`$qdrant_sec_client_ckks_vector` sidecar envelope under
+`$qdrant_sec_vectors.<vector_name>`; Qdrant validates schema, stable collection
+identity, point id, vector name, `key_id`, `rk_id`, pinned `rk_epoch`,
+`context_digest`, ciphertext hash, and Ed25519 signature before storing the
+opaque CKKS ciphertext. Plaintext dense vector writes to that vector name are
+rejected. Search over these opaque client vector envelopes is not implemented
+yet and fails closed; do not confuse this ingest contract with the
+trusted-bridge `vector/openfhe-ckks@v1` search provider.
+
+`vector/openfhe-ckks@v1` remains a trusted-bridge model: Qdrant/bridge may see
 plaintext embeddings at ingest and plaintext scores at search. Do not use the
 server-side OpenFHE provider as a zero-trust vector insert contract.
+
+The client CKKS vector sidecar signature message is canonical and
+length-prefixed for SDK interop. The byte string is:
+
+1. 4-byte big-endian length + ASCII domain
+   `qdrant-sec/client-ckks-vector-signature/v1`.
+2. 1-byte `version`.
+3. For each UTF-8 field below, a 4-byte big-endian length followed by field
+   bytes: `scheme`, `security_profile`, `collection_id`, `point_id`,
+   `vector_name`, `key_id`, `rk_id`, `context_digest`, `ciphertext_sha256`,
+   `ciphertext`, `signature.alg`, `signature.key_id`.
+4. 8-byte big-endian `rk_epoch` immediately after `rk_id`.
+5. 8-byte big-endian `slots` immediately after `context_digest`.
+
+The `sig` bytes themselves are not included in the signed message. Any change
+to the sidecar routing metadata, key lineage, public context digest, slot count,
+ciphertext hash, or ciphertext bytes invalidates the Ed25519 signature.
 
 For tests and future vector-envelope work, a generic OpenFHE backend is
 configured under `crypto.backends` and referenced from a

@@ -21,7 +21,8 @@ use collection::operations::verification::*;
 use collection::shards::shard::ShardId;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use qdrant_sec::{
-    CkksVectorSidecarDeleteTarget, CkksVectorVerifiedSidecarKey, ClientPayloadNonceReplayKey,
+    CLIENT_CKKS_VECTOR_MARKER, CkksVectorSidecarDeleteTarget, CkksVectorVerifiedSidecarKey,
+    ClientCkksVectorVerifiedSidecarKey, ClientPayloadNonceReplayKey,
     ClientPayloadVerifiedEnvelopeKey, ENCRYPTED_VECTOR_SIDECAR_FIELD, METADATA_VALUE_BINDING,
     PayloadEncryptionError, ServerPayloadVerifiedEnvelopeKey,
 };
@@ -1890,6 +1891,7 @@ async fn maybe_encrypt_upsert_vectors(
     };
 
     let mut verified_sidecar_keys = Vec::new();
+    let mut verified_client_sidecar_keys = Vec::new();
     match operation {
         PointInsertOperationsInternal::PointsList(points) => {
             for point in points {
@@ -1899,6 +1901,12 @@ async fn maybe_encrypt_upsert_vectors(
                     &point.id.to_string(),
                     &mut point.vector,
                     &mut point.payload,
+                )?);
+                verified_client_sidecar_keys.extend(verify_client_vector_sidecars_for_point(
+                    &plan,
+                    collection_name,
+                    &point.id.to_string(),
+                    point.payload.as_ref(),
                 )?);
             }
         }
@@ -1910,12 +1918,27 @@ async fn maybe_encrypt_upsert_vectors(
                 &mut batch.vectors,
                 &mut batch.payloads,
             )?);
+            if let Some(payloads) = batch.payloads.as_ref() {
+                for (point_id, payload) in batch.ids.iter().zip(payloads) {
+                    verified_client_sidecar_keys.extend(verify_client_vector_sidecars_for_point(
+                        &plan,
+                        collection_name,
+                        &point_id.to_string(),
+                        payload.as_ref(),
+                    )?);
+                }
+            }
         }
     }
 
-    Ok(CollectionUpdateProvenance::runtime_encrypted_vectors(
-        verified_sidecar_keys,
-    ))
+    Ok(
+        CollectionUpdateProvenance::runtime_encrypted_vectors(verified_sidecar_keys)
+            .with_runtime_encrypted_vector_provenance(
+                CollectionUpdateProvenance::runtime_verified_client_vectors(
+                    verified_client_sidecar_keys,
+                ),
+            ),
+    )
 }
 
 async fn maybe_encrypt_update_vectors(
@@ -2400,6 +2423,44 @@ fn encrypt_vectors_for_batch(
             Ok(verified_sidecar_keys)
         }
     }
+}
+
+fn verify_client_vector_sidecars_for_point(
+    plan: &crate::common::crypto::VectorWritePlan,
+    collection_name: &str,
+    point_id: &str,
+    payload: Option<&Payload>,
+) -> Result<Vec<ClientCkksVectorVerifiedSidecarKey>, StorageError> {
+    let Some(sidecar) = payload
+        .and_then(|payload| payload.0.get(ENCRYPTED_VECTOR_SIDECAR_FIELD))
+        .and_then(Value::as_object)
+    else {
+        return Ok(Vec::new());
+    };
+
+    let mut verified = Vec::new();
+    for (vector_name, value) in sidecar {
+        if !value
+            .as_object()
+            .is_some_and(|object| object.contains_key(CLIENT_CKKS_VECTOR_MARKER))
+        {
+            continue;
+        }
+        let Some(verified_key) = plan.verify_client_vector_sidecar_payload_value(
+            collection_name,
+            point_id,
+            vector_name,
+            value,
+        )?
+        else {
+            return Err(StorageError::bad_input(format!(
+                "client CKKS vector sidecar entry '{vector_name}' in collection {collection_name} is not configured as a server-blind encrypted vector",
+            )));
+        };
+        verified.push(verified_key);
+    }
+
+    Ok(verified)
 }
 
 fn ensure_batch_payloads(
@@ -2924,9 +2985,10 @@ mod tests {
     use common::mmap;
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_sec::{
-        CLIENT_ENCRYPTED_PAYLOAD_MARKER, ENCRYPTED_CKKS_VECTOR_MARKER,
-        ENCRYPTED_VECTOR_SIDECAR_FIELD, METADATA_AES_GCM_PROVIDER, VECTOR_ENVELOPE_BINDING,
-        ckks_vector_sidecar_envelope_key, client_payload_signature_message,
+        CLIENT_CKKS_VECTOR_MARKER, CLIENT_ENCRYPTED_PAYLOAD_MARKER, ENCRYPTED_CKKS_VECTOR_MARKER,
+        ENCRYPTED_VECTOR_SIDECAR_FIELD, METADATA_AES_GCM_PROVIDER, VECTOR_CLIENT_CKKS_PROVIDER,
+        VECTOR_ENVELOPE_BINDING, ckks_vector_sidecar_envelope_key,
+        client_ckks_vector_signature_message, client_payload_signature_message,
         is_client_encrypted_payload_value, is_encrypted_ckks_vector_payload_value,
         is_encrypted_payload_value, server_payload_envelope_key,
     };
@@ -3202,6 +3264,75 @@ esac
             )]),
         };
         settings
+    }
+
+    fn client_vector_runtime_settings(signing_key: &Ed25519KeyPair) -> Settings {
+        let mut settings = Settings::new(None).unwrap();
+        settings.crypto = CryptoSettings {
+            zero_trust_profile: Some(crate::settings::ZERO_TRUST_PROFILE_STRICT.to_string()),
+            ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+            ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
+            ckks_query_nonce_replay_ttl_secs:
+                crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+            ckks_query_nonce_replay_cache_max_entries:
+                crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
+            allow_inline_key_material: false,
+            instances: HashMap::from([(
+                "docs_vector_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: VECTOR_CLIENT_CKKS_PROVIDER.to_string(),
+                    materials: HashMap::new(),
+                    backend_ref: None,
+                    options: json!({
+                        "key_id": "tenant-a:vector",
+                        "expected_rk_id": "tenant-a/client-vector-rk",
+                        "min_rk_epoch": 3,
+                        "max_rk_epoch": 3,
+                        "profile": qdrant_sec::CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                        "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                        "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                        "signature_public_keys": {
+                            "tenant-a:vector-signing-v1": BASE64URL_NOPAD.encode(signing_key.public_key().as_ref()),
+                        },
+                    }),
+                },
+            )]),
+            materials: HashMap::new(),
+            backends: HashMap::new(),
+        };
+        settings
+    }
+
+    fn signed_client_ckks_vector_sidecar(signing_key: &Ed25519KeyPair) -> Value {
+        let public_material =
+            qdrant_sec::CkksPublicMaterial::new(b"openfhe context", b"openfhe public key").unwrap();
+        let ciphertext = b"client-ckks-stored-ciphertext";
+        let mut value = json!({
+            CLIENT_CKKS_VECTOR_MARKER: {
+                "version": 1,
+                "scheme": qdrant_sec::CKKS_SCHEME,
+                "security_profile": qdrant_sec::CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                "collection_id": TEST_VECTOR_COLLECTION_CRYPTO_ID,
+                "point_id": "point-1",
+                "vector_name": "embedding",
+                "key_id": "tenant-a:vector",
+                "rk_id": "tenant-a/client-vector-rk",
+                "rk_epoch": 3,
+                "context_digest": public_material.digest_for(&qdrant_sec::CkksParameters::openfhe_default_128_bit()),
+                "slots": 2,
+                "ciphertext_sha256": BASE64URL_NOPAD.encode(Sha256::digest(ciphertext).as_ref()),
+                "ciphertext": BASE64URL_NOPAD.encode(ciphertext),
+                "signature": {
+                    "alg": "ed25519",
+                    "key_id": "tenant-a:vector-signing-v1",
+                    "sig": "",
+                },
+            },
+        });
+        let signature_message = client_ckks_vector_signature_message(&value).unwrap();
+        value[CLIENT_CKKS_VECTOR_MARKER]["signature"]["sig"] =
+            json!(BASE64URL_NOPAD.encode(signing_key.sign(&signature_message).as_ref()));
+        value
     }
 
     fn fake_ckks_client_query(ciphertext: &[u8], slots: usize) -> CkksEncryptedQueryInput {
@@ -3930,6 +4061,57 @@ esac
                 if description.contains("reserved encrypted vector sidecar field")
                     && description.contains("already set to a non-object value")
         ));
+    }
+
+    #[test]
+    fn vector_write_plan_verifies_client_ckks_vector_sidecar() {
+        let signing_key = fake_ckks_query_signing_key_pair();
+        let settings = client_vector_runtime_settings(&signing_key);
+        let params = encrypted_vector_params();
+        let plan = vector_write_plan_for_collection_with_crypto_id(
+            &settings,
+            "docs",
+            TEST_VECTOR_COLLECTION_CRYPTO_ID,
+            &params,
+        )
+        .unwrap()
+        .unwrap();
+        let payload = segment::types::Payload(
+            json!({
+                ENCRYPTED_VECTOR_SIDECAR_FIELD: {
+                    "embedding": signed_client_ckks_vector_sidecar(&signing_key),
+                }
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+
+        let verified =
+            verify_client_vector_sidecars_for_point(&plan, "docs", "point-1", Some(&payload))
+                .unwrap();
+
+        assert_eq!(verified.len(), 1);
+        let provenance = CollectionUpdateProvenance::runtime_verified_client_vectors(verified);
+        let sidecar_value = payload.0[ENCRYPTED_VECTOR_SIDECAR_FIELD]
+            .as_object()
+            .unwrap()
+            .get("embedding")
+            .unwrap();
+        let sidecar_key =
+            qdrant_sec::client_ckks_vector_sidecar_envelope_key(sidecar_value, "embedding")
+                .unwrap()
+                .unwrap();
+        assert!(
+            provenance
+                .verified_client_vector_sidecar_key_for_binding(
+                    &sidecar_key,
+                    TEST_VECTOR_COLLECTION_CRYPTO_ID,
+                    "point-1",
+                    "embedding",
+                )
+                .is_some()
+        );
     }
 
     #[cfg(unix)]

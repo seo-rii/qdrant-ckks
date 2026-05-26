@@ -1,6 +1,7 @@
 use std::fmt::{self, Debug, Formatter};
 
 use data_encoding::BASE64URL_NOPAD;
+use ring::signature::{ED25519, UnparsedPublicKey};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -9,6 +10,7 @@ use thiserror::Error;
 use crate::aead::{
     AeadCipher, AeadKeyring, CKKS_VECTOR_KEY_DOMAIN, EncryptedEnvelope, EncryptionContext,
     EncryptionError, SecretKey, validate_encrypted_envelope_metadata, validate_key_id,
+    validate_resource_key_id,
 };
 
 pub const CKKS_SCHEME: &str = "openfhe-ckks";
@@ -17,6 +19,7 @@ pub const CKKS_PUBLIC_MATERIAL_MAX_CRYPTO_CONTEXT_BYTES: usize = 4 * 1024 * 1024
 pub const CKKS_PUBLIC_MATERIAL_MAX_PUBLIC_KEY_BYTES: usize = 4 * 1024 * 1024;
 pub const ENCRYPTED_VECTOR_SIDECAR_FIELD: &str = "$qdrant_sec_vectors";
 pub const ENCRYPTED_CKKS_VECTOR_MARKER: &str = "$qdrant_sec_ckks_vector";
+pub const CLIENT_CKKS_VECTOR_MARKER: &str = "$qdrant_sec_client_ckks_vector";
 const VERSION: u8 = 1;
 const CRYPTO_SCHEMA_VERSION: u16 = 1;
 const DEFAULT_ENCRYPTION_EPOCH: u64 = 0;
@@ -24,6 +27,8 @@ const MAX_VECTOR_NAME_LEN: usize = 255;
 const SHA256_B64_LEN: usize = 43;
 const CKKS_VECTOR_CIPHERTEXT_MAX_BYTES: usize = 16 * 1024 * 1024;
 const CKKS_VECTOR_CIPHERTEXT_MAX_B64_LEN: usize = (CKKS_VECTOR_CIPHERTEXT_MAX_BYTES + 2) / 3 * 4;
+const CLIENT_CKKS_VECTOR_SIGNATURE_DOMAIN: &str = "qdrant-sec/client-ckks-vector-signature/v1";
+const CLIENT_CKKS_VECTOR_SIGNATURE_ALGORITHM: &str = "ed25519";
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum CkksError {
@@ -536,6 +541,26 @@ pub struct CkksVectorVerifiedSidecarKey {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ClientCkksVectorSidecarEnvelopeKey {
+    collection_id: String,
+    point_id: String,
+    vector_name: String,
+    key_id: String,
+    rk_id: String,
+    rk_epoch: u64,
+    context_digest: String,
+    slots: usize,
+    ciphertext_sha256_b64: String,
+    signature_key_id: String,
+    signature_sha256_b64: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ClientCkksVectorVerifiedSidecarKey {
+    envelope_key: ClientCkksVectorSidecarEnvelopeKey,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CkksVectorVerifiedSidecarDeleteKey {
     collection_id: String,
     vector_name: String,
@@ -551,6 +576,24 @@ pub enum CkksVectorSidecarDeleteTarget {
 impl CkksVectorVerifiedSidecarKey {
     pub fn envelope_key(&self) -> &CkksVectorSidecarEnvelopeKey {
         &self.envelope_key
+    }
+}
+
+impl ClientCkksVectorVerifiedSidecarKey {
+    pub fn envelope_key(&self) -> &ClientCkksVectorSidecarEnvelopeKey {
+        &self.envelope_key
+    }
+}
+
+impl ClientCkksVectorSidecarEnvelopeKey {
+    pub fn matches_binding(&self, collection_id: &str, point_id: &str, vector_name: &str) -> bool {
+        self.collection_id == collection_id
+            && self.point_id == point_id
+            && self.vector_name == vector_name
+    }
+
+    pub fn signature_key_id(&self) -> &str {
+        &self.signature_key_id
     }
 }
 
@@ -658,6 +701,12 @@ pub fn is_encrypted_ckks_vector_payload_value(value: &Value) -> bool {
     })
 }
 
+pub fn is_client_ckks_vector_payload_value(value: &Value) -> bool {
+    value
+        .as_object()
+        .is_some_and(|object| object.len() == 1 && object.contains_key(CLIENT_CKKS_VECTOR_MARKER))
+}
+
 pub fn ckks_vector_sidecar_envelope_key(
     value: &Value,
     collection_id: &str,
@@ -710,12 +759,364 @@ fn ckks_vector_verified_sidecar_key(
     Ok(CkksVectorVerifiedSidecarKey { envelope_key })
 }
 
+#[derive(Clone, Copy)]
+pub struct ClientCkksVectorSignatureVerification<'a> {
+    pub expected_key_id: &'a str,
+    pub public_key: &'a [u8],
+}
+
+#[derive(Clone, Copy)]
+pub struct ClientCkksVectorValidationContext<'a> {
+    pub collection_id: &'a str,
+    pub point_id: &'a str,
+    pub vector_name: &'a str,
+    pub expected_key_id: &'a str,
+    pub expected_rk_id: &'a str,
+    pub min_rk_epoch: u64,
+    pub max_rk_epoch: u64,
+    pub expected_context_digest: &'a str,
+    pub max_slots: usize,
+    pub signature_verification: ClientCkksVectorSignatureVerification<'a>,
+}
+
+pub fn client_ckks_vector_signature_message(value: &Value) -> Result<Vec<u8>, CkksError> {
+    let envelope = client_ckks_vector_envelope(value)?;
+    Ok(client_ckks_vector_signature_message_for_envelope(&envelope))
+}
+
+pub fn client_ckks_vector_sidecar_envelope_key(
+    value: &Value,
+    vector_name: &str,
+) -> Result<Option<ClientCkksVectorSidecarEnvelopeKey>, CkksError> {
+    let Some(envelope) = optional_client_ckks_vector_envelope(value)? else {
+        return Ok(None);
+    };
+    let signature = envelope.signature.as_ref().ok_or_else(|| {
+        CkksError::MalformedEnvelope("client CKKS vector signature is missing".to_string())
+    })?;
+    validate_client_ckks_vector_common(&envelope, vector_name)?;
+    let ciphertext = decode_stored_ciphertext(&envelope.ciphertext)?;
+    let ciphertext_sha256_b64 = BASE64URL_NOPAD.encode(Sha256::digest(&ciphertext).as_ref());
+    if ciphertext_sha256_b64 != envelope.ciphertext_sha256 {
+        return Err(CkksError::MalformedEnvelope(
+            "client CKKS vector ciphertext hash does not match ciphertext".to_string(),
+        ));
+    }
+    let signature_bytes = decode_client_ckks_vector_signature(&envelope, signature)?;
+    let signature_sha256_b64 = BASE64URL_NOPAD.encode(Sha256::digest(&signature_bytes).as_ref());
+
+    Ok(Some(ClientCkksVectorSidecarEnvelopeKey {
+        collection_id: envelope.collection_id,
+        point_id: envelope.point_id,
+        vector_name: envelope.vector_name,
+        key_id: envelope.key_id,
+        rk_id: envelope.rk_id,
+        rk_epoch: envelope.rk_epoch,
+        context_digest: envelope.context_digest,
+        slots: envelope.slots,
+        ciphertext_sha256_b64,
+        signature_key_id: signature.key_id.clone(),
+        signature_sha256_b64,
+    }))
+}
+
+pub fn validate_client_ckks_vector_payload_value_for_runtime(
+    value: &Value,
+    context: ClientCkksVectorValidationContext<'_>,
+) -> Result<ClientCkksVectorVerifiedSidecarKey, CkksError> {
+    let envelope = client_ckks_vector_envelope(value)?;
+    validate_client_ckks_vector_common(&envelope, context.vector_name)?;
+    if envelope.collection_id != context.collection_id {
+        return Err(CkksError::MalformedEnvelope(
+            "client CKKS vector collection_id does not match collection".to_string(),
+        ));
+    }
+    if envelope.point_id != context.point_id {
+        return Err(CkksError::MalformedEnvelope(
+            "client CKKS vector point_id does not match point".to_string(),
+        ));
+    }
+    if envelope.vector_name != context.vector_name {
+        return Err(CkksError::MalformedEnvelope(
+            "client CKKS vector vector_name does not match sidecar path".to_string(),
+        ));
+    }
+    if envelope.key_id != context.expected_key_id {
+        return Err(CkksError::MalformedEnvelope(
+            "client CKKS vector key_id does not match active vector rule".to_string(),
+        ));
+    }
+    if envelope.rk_id != context.expected_rk_id {
+        return Err(CkksError::MalformedEnvelope(
+            "client CKKS vector rk_id does not match active vector rule".to_string(),
+        ));
+    }
+    if envelope.rk_epoch < context.min_rk_epoch || envelope.rk_epoch > context.max_rk_epoch {
+        return Err(CkksError::MalformedEnvelope(
+            "client CKKS vector rk_epoch is outside active policy".to_string(),
+        ));
+    }
+    if envelope.context_digest != context.expected_context_digest {
+        return Err(CkksError::MalformedEnvelope(
+            "client CKKS vector context_digest does not match active public material".to_string(),
+        ));
+    }
+    if envelope.slots == 0 || envelope.slots > context.max_slots {
+        return Err(CkksError::MalformedEnvelope(
+            "client CKKS vector slots are outside active CKKS profile".to_string(),
+        ));
+    }
+    let signature = envelope.signature.as_ref().ok_or_else(|| {
+        CkksError::MalformedEnvelope("client CKKS vector signature is missing".to_string())
+    })?;
+    if signature.key_id != context.signature_verification.expected_key_id {
+        return Err(CkksError::MalformedEnvelope(
+            "client CKKS vector signature key_id does not match verifier".to_string(),
+        ));
+    }
+    if context.signature_verification.public_key.len() != 32 {
+        return Err(CkksError::MalformedEnvelope(
+            "client CKKS vector signature public key must be 32 bytes".to_string(),
+        ));
+    }
+    let signature_bytes = decode_client_ckks_vector_signature(&envelope, signature)?;
+    let message = client_ckks_vector_signature_message_for_envelope(&envelope);
+    UnparsedPublicKey::new(&ED25519, context.signature_verification.public_key)
+        .verify(&message, &signature_bytes)
+        .map_err(|_| {
+            CkksError::MalformedEnvelope("client CKKS vector signature is invalid".to_string())
+        })?;
+
+    let Some(envelope_key) = client_ckks_vector_sidecar_envelope_key(value, context.vector_name)?
+    else {
+        return Err(CkksError::MalformedEnvelope(
+            "client CKKS vector marker is missing".to_string(),
+        ));
+    };
+    Ok(ClientCkksVectorVerifiedSidecarKey { envelope_key })
+}
+
+fn optional_client_ckks_vector_envelope(
+    value: &Value,
+) -> Result<Option<ClientCkksVectorEnvelope>, CkksError> {
+    let Some(marker) = value
+        .as_object()
+        .and_then(|object| object.get(CLIENT_CKKS_VECTOR_MARKER))
+    else {
+        return Ok(None);
+    };
+    serde_json::from_value(marker.clone())
+        .map(Some)
+        .map_err(|err| CkksError::MalformedEnvelope(err.to_string()))
+}
+
+fn client_ckks_vector_envelope(value: &Value) -> Result<ClientCkksVectorEnvelope, CkksError> {
+    optional_client_ckks_vector_envelope(value)?.ok_or_else(|| {
+        CkksError::MalformedEnvelope("client CKKS vector marker is missing".to_string())
+    })
+}
+
+fn validate_client_ckks_vector_common(
+    envelope: &ClientCkksVectorEnvelope,
+    vector_name: &str,
+) -> Result<(), CkksError> {
+    if envelope.version != VERSION {
+        return Err(CkksError::UnsupportedEnvelopeVersion(envelope.version));
+    }
+    if envelope.scheme != CKKS_SCHEME {
+        return Err(CkksError::UnsupportedScheme(envelope.scheme.clone()));
+    }
+    if envelope.security_profile != CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50 {
+        return Err(CkksError::MalformedEnvelope(
+            "client CKKS vector security_profile is not allowlisted".to_string(),
+        ));
+    }
+    validate_vector_name(&envelope.vector_name)?;
+    if envelope.vector_name != vector_name {
+        return Err(CkksError::MalformedEnvelope(
+            "client CKKS vector vector_name does not match sidecar key".to_string(),
+        ));
+    }
+    if envelope.collection_id.is_empty()
+        || envelope.point_id.is_empty()
+        || envelope.collection_id.contains('\0')
+        || envelope.point_id.contains('\0')
+    {
+        return Err(CkksError::MalformedEnvelope(
+            "client CKKS vector AAD identifiers are invalid".to_string(),
+        ));
+    }
+    validate_resource_key_id(&envelope.collection_id).map_err(|_| {
+        CkksError::MalformedEnvelope("client CKKS vector collection_id is invalid".to_string())
+    })?;
+    validate_key_id(&envelope.key_id).map_err(|_| {
+        CkksError::MalformedEnvelope("client CKKS vector key_id is invalid".to_string())
+    })?;
+    validate_resource_key_id(&envelope.rk_id).map_err(|_| {
+        CkksError::MalformedEnvelope("client CKKS vector rk_id is invalid".to_string())
+    })?;
+    let digest = BASE64URL_NOPAD
+        .decode(envelope.context_digest.as_bytes())
+        .map_err(|_| {
+            CkksError::MalformedEnvelope("client CKKS vector context_digest is invalid".to_string())
+        })?;
+    if digest.len() != 32 {
+        return Err(CkksError::MalformedEnvelope(
+            "client CKKS vector context_digest must decode to 32 bytes".to_string(),
+        ));
+    }
+    if envelope.ciphertext_sha256.len() != SHA256_B64_LEN {
+        return Err(CkksError::MalformedEnvelope(
+            "client CKKS vector ciphertext_sha256 has invalid length".to_string(),
+        ));
+    }
+    let digest = BASE64URL_NOPAD
+        .decode(envelope.ciphertext_sha256.as_bytes())
+        .map_err(|_| {
+            CkksError::MalformedEnvelope(
+                "client CKKS vector ciphertext_sha256 is invalid".to_string(),
+            )
+        })?;
+    if digest.len() != 32 {
+        return Err(CkksError::MalformedEnvelope(
+            "client CKKS vector ciphertext_sha256 must decode to 32 bytes".to_string(),
+        ));
+    }
+    decode_stored_ciphertext(&envelope.ciphertext)?;
+    Ok(())
+}
+
+fn decode_client_ckks_vector_signature(
+    envelope: &ClientCkksVectorEnvelope,
+    signature: &ClientCkksVectorSignature,
+) -> Result<Vec<u8>, CkksError> {
+    if signature.alg != CLIENT_CKKS_VECTOR_SIGNATURE_ALGORITHM {
+        return Err(CkksError::MalformedEnvelope(
+            "client CKKS vector signature algorithm is unsupported".to_string(),
+        ));
+    }
+    validate_resource_key_id(&signature.key_id).map_err(|_| {
+        CkksError::MalformedEnvelope("client CKKS vector signature key_id is invalid".to_string())
+    })?;
+    let signature_bytes = BASE64URL_NOPAD
+        .decode(signature.sig.as_bytes())
+        .map_err(|_| {
+            CkksError::MalformedEnvelope(
+                "client CKKS vector signature is invalid base64url".to_string(),
+            )
+        })?;
+    if signature_bytes.len() != 64 {
+        return Err(CkksError::MalformedEnvelope(
+            "client CKKS vector signature must decode to 64 bytes".to_string(),
+        ));
+    }
+    if envelope.signature.is_none() {
+        return Err(CkksError::MalformedEnvelope(
+            "client CKKS vector signature is missing".to_string(),
+        ));
+    }
+    Ok(signature_bytes)
+}
+
+fn client_ckks_vector_signature_message_for_envelope(
+    envelope: &ClientCkksVectorEnvelope,
+) -> Vec<u8> {
+    let mut message = Vec::new();
+    let push_len_prefixed = |message: &mut Vec<u8>, value: &[u8]| {
+        message.extend_from_slice(&(value.len() as u32).to_be_bytes());
+        message.extend_from_slice(value);
+    };
+    push_len_prefixed(&mut message, CLIENT_CKKS_VECTOR_SIGNATURE_DOMAIN.as_bytes());
+    message.push(envelope.version);
+    push_len_prefixed(&mut message, envelope.scheme.as_bytes());
+    push_len_prefixed(&mut message, envelope.security_profile.as_bytes());
+    push_len_prefixed(&mut message, envelope.collection_id.as_bytes());
+    push_len_prefixed(&mut message, envelope.point_id.as_bytes());
+    push_len_prefixed(&mut message, envelope.vector_name.as_bytes());
+    push_len_prefixed(&mut message, envelope.key_id.as_bytes());
+    push_len_prefixed(&mut message, envelope.rk_id.as_bytes());
+    message.extend_from_slice(&envelope.rk_epoch.to_be_bytes());
+    push_len_prefixed(&mut message, envelope.context_digest.as_bytes());
+    message.extend_from_slice(&(envelope.slots as u64).to_be_bytes());
+    push_len_prefixed(&mut message, envelope.ciphertext_sha256.as_bytes());
+    push_len_prefixed(&mut message, envelope.ciphertext.as_bytes());
+    if let Some(signature) = &envelope.signature {
+        push_len_prefixed(&mut message, signature.alg.as_bytes());
+        push_len_prefixed(&mut message, signature.key_id.as_bytes());
+    } else {
+        push_len_prefixed(&mut message, &[]);
+        push_len_prefixed(&mut message, &[]);
+    }
+    message
+}
+
 impl Debug for EncryptedCkksVector {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("EncryptedCkksVector")
             .field("version", &self.version)
             .field("scheme", &self.scheme)
             .field("envelope", &self.envelope)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
+struct ClientCkksVectorEnvelope {
+    version: u8,
+    scheme: String,
+    security_profile: String,
+    collection_id: String,
+    point_id: String,
+    vector_name: String,
+    key_id: String,
+    rk_id: String,
+    rk_epoch: u64,
+    context_digest: String,
+    slots: usize,
+    ciphertext_sha256: String,
+    ciphertext: String,
+    signature: Option<ClientCkksVectorSignature>,
+}
+
+impl Debug for ClientCkksVectorEnvelope {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClientCkksVectorEnvelope")
+            .field("version", &self.version)
+            .field("scheme", &self.scheme)
+            .field("security_profile", &self.security_profile)
+            .field("collection_id", &self.collection_id)
+            .field("point_id", &self.point_id)
+            .field("vector_name", &self.vector_name)
+            .field("key_id", &self.key_id)
+            .field("rk_id", &self.rk_id)
+            .field("rk_epoch", &self.rk_epoch)
+            .field("context_digest", &self.context_digest)
+            .field("slots", &self.slots)
+            .field("ciphertext_sha256", &self.ciphertext_sha256)
+            .field("ciphertext_len", &self.ciphertext.len())
+            .field("signature", &self.signature)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
+struct ClientCkksVectorSignature {
+    alg: String,
+    key_id: String,
+    sig: String,
+}
+
+impl Debug for ClientCkksVectorSignature {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClientCkksVectorSignature")
+            .field("alg", &self.alg)
+            .field("key_id", &self.key_id)
+            .field("sig", &"[redacted]")
+            .field("sig_len", &self.sig.len())
             .finish()
     }
 }

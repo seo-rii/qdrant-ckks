@@ -9,12 +9,13 @@ use futures::stream::FuturesUnordered;
 use futures::{StreamExt as _, TryFutureExt, TryStreamExt as _, future};
 use itertools::Itertools;
 use qdrant_sec::{
-    CKKS_SCHEME, CLIENT_PAYLOAD_ENVELOPE_BINDING, ClientPayloadNonceReplayKey,
-    ClientPayloadValidationContext, ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_VECTOR_SIDECAR_FIELD,
-    EncryptedCkksVector, METADATA_EXACT_MATCH_TOKEN_BINDING, METADATA_VALUE_BINDING,
-    METADATA_VALUE_ENVELOPE_KIND, PAYLOAD_FIELD_BINDING, PAYLOAD_TEXT_ENVELOPE_KIND,
-    ServerPayloadValidationContext, ServerPayloadVerifiedEnvelopeKey,
-    ckks_vector_sidecar_envelope_key, client_payload_envelope_key, client_payload_nonce_replay_key,
+    CKKS_SCHEME, CLIENT_CKKS_VECTOR_MARKER, CLIENT_PAYLOAD_ENVELOPE_BINDING,
+    ClientPayloadNonceReplayKey, ClientPayloadValidationContext, ENCRYPTED_CKKS_VECTOR_MARKER,
+    ENCRYPTED_VECTOR_SIDECAR_FIELD, EncryptedCkksVector, METADATA_EXACT_MATCH_TOKEN_BINDING,
+    METADATA_VALUE_BINDING, METADATA_VALUE_ENVELOPE_KIND, PAYLOAD_FIELD_BINDING,
+    PAYLOAD_TEXT_ENVELOPE_KIND, ServerPayloadValidationContext, ServerPayloadVerifiedEnvelopeKey,
+    ckks_vector_sidecar_envelope_key, client_ckks_vector_sidecar_envelope_key,
+    client_payload_envelope_key, client_payload_nonce_replay_key,
     is_client_encrypted_payload_value, is_encrypted_payload_value, server_payload_envelope_key,
     validate_client_payload_value_after_runtime_verification,
     validate_server_payload_value_after_runtime_encryption,
@@ -1415,126 +1416,155 @@ impl Collection {
                             "encrypted vector sidecar entry '{vector_name}' is not configured as an encrypted vector",
                         )));
                     }
-                    let Some(marker) = encrypted
-                        .as_object()
-                        .and_then(|object| object.get(ENCRYPTED_CKKS_VECTOR_MARKER))
-                    else {
-                        return Err(CollectionError::bad_input(format!(
-                            "encrypted vector sidecar entry '{vector_name}' is malformed",
-                        )));
-                    };
-                    let encrypted_vector: EncryptedCkksVector = serde_json::from_value(
-                        marker.clone(),
-                    )
-                    .map_err(|err| {
-                        CollectionError::bad_input(format!(
-                            "encrypted vector sidecar entry '{vector_name}' is malformed: {err}",
-                        ))
-                    })?;
-                    if encrypted_vector.version != 1 {
-                        return Err(CollectionError::bad_input(format!(
-                            "encrypted vector sidecar entry '{vector_name}' has unsupported version {}",
-                            encrypted_vector.version,
-                        )));
-                    }
-                    if encrypted_vector.scheme != CKKS_SCHEME {
-                        return Err(CollectionError::bad_input(format!(
-                            "encrypted vector sidecar entry '{vector_name}' has unsupported scheme '{}'",
-                            encrypted_vector.scheme,
-                        )));
-                    }
-                    if let Some(key_id) = encrypted_vector_key_id.as_deref()
-                        && encrypted_vector.envelope.key_id != key_id
-                    {
-                        return Err(CollectionError::bad_input(format!(
-                            "encrypted vector sidecar entry '{vector_name}' key id does not match this collection",
-                        )));
-                    }
-                    if encrypted_vector.envelope.algorithm != "AES-256-GCM" {
-                        return Err(CollectionError::bad_input(format!(
-                            "encrypted vector sidecar entry '{vector_name}' has unsupported envelope algorithm '{}'",
-                            encrypted_vector.envelope.algorithm,
-                        )));
-                    }
-                    if encrypted_vector.envelope.material_fingerprint.is_empty() {
-                        return Err(CollectionError::bad_input(format!(
-                            "encrypted vector sidecar entry '{vector_name}' is missing material fingerprint",
-                        )));
-                    }
-                    if encrypted_vector.envelope.nonce.len() != CKKS_VECTOR_SIDECAR_NONCE_B64_LEN {
-                        return Err(CollectionError::bad_input(format!(
-                            "encrypted vector sidecar entry '{vector_name}' nonce must be 12 bytes",
-                        )));
-                    }
-                    let nonce = BASE64URL_NOPAD
-                        .decode(encrypted_vector.envelope.nonce.as_bytes())
-                        .map_err(|_| {
-                            CollectionError::bad_input(format!(
-                                "encrypted vector sidecar entry '{vector_name}' nonce is not base64url",
-                            ))
-                        })?;
-                    if nonce.len() != 12 {
-                        return Err(CollectionError::bad_input(format!(
-                            "encrypted vector sidecar entry '{vector_name}' nonce must be 12 bytes",
-                        )));
-                    }
-                    if encrypted_vector.envelope.ciphertext.len()
-                        > CKKS_VECTOR_SIDECAR_CIPHERTEXT_MAX_B64_LEN
-                    {
-                        return Err(CollectionError::bad_input(format!(
-                            "encrypted vector sidecar entry '{vector_name}' ciphertext exceeds maximum size",
-                        )));
-                    }
-                    let ciphertext = BASE64URL_NOPAD
-                        .decode(encrypted_vector.envelope.ciphertext.as_bytes())
-                        .map_err(|_| {
-                            CollectionError::bad_input(format!(
-                                "encrypted vector sidecar entry '{vector_name}' ciphertext is not base64url",
-                            ))
-                        })?;
-                    if ciphertext.len() < 16 {
-                        return Err(CollectionError::bad_input(format!(
-                            "encrypted vector sidecar entry '{vector_name}' ciphertext is too short",
-                        )));
-                    }
-                    if ciphertext.len() > CKKS_VECTOR_SIDECAR_CIPHERTEXT_MAX_BYTES {
-                        return Err(CollectionError::bad_input(format!(
-                            "encrypted vector sidecar entry '{vector_name}' ciphertext exceeds maximum size",
-                        )));
-                    }
                     let Some(point_id) = point_id else {
                         return Err(CollectionError::bad_input(format!(
                             "encrypted vector sidecar entry '{vector_name}' requires point-specific runtime vector encryption before collection write",
                         )));
                     };
-                    let Some(sidecar_key) = ckks_vector_sidecar_envelope_key(
-                        encrypted,
-                        &collection_crypto_id,
-                        point_id,
-                        vector_name,
-                    )
-                    .map_err(|err| {
-                        CollectionError::bad_input(format!(
-                            "encrypted vector sidecar entry '{vector_name}' is invalid for this collection: {err}",
-                        ))
-                    })?
-                    else {
+                    let Some(marker_object) = encrypted.as_object() else {
                         return Err(CollectionError::bad_input(format!(
-                            "encrypted vector sidecar entry '{vector_name}' requires runtime vector encryption before collection write",
+                            "encrypted vector sidecar entry '{vector_name}' is malformed",
                         )));
                     };
-                    let Some(_verified_sidecar_key) = update_provenance
-                        .verified_vector_sidecar_key_for_binding(
-                            &sidecar_key,
+                    if marker_object.contains_key(ENCRYPTED_CKKS_VECTOR_MARKER) {
+                        let marker = marker_object.get(ENCRYPTED_CKKS_VECTOR_MARKER).unwrap();
+                        let encrypted_vector: EncryptedCkksVector =
+                            serde_json::from_value(marker.clone()).map_err(|err| {
+                                CollectionError::bad_input(format!(
+                                    "encrypted vector sidecar entry '{vector_name}' is malformed: {err}",
+                                ))
+                            })?;
+                        if encrypted_vector.version != 1 {
+                            return Err(CollectionError::bad_input(format!(
+                                "encrypted vector sidecar entry '{vector_name}' has unsupported version {}",
+                                encrypted_vector.version,
+                            )));
+                        }
+                        if encrypted_vector.scheme != CKKS_SCHEME {
+                            return Err(CollectionError::bad_input(format!(
+                                "encrypted vector sidecar entry '{vector_name}' has unsupported scheme '{}'",
+                                encrypted_vector.scheme,
+                            )));
+                        }
+                        if let Some(key_id) = encrypted_vector_key_id.as_deref()
+                            && encrypted_vector.envelope.key_id != key_id
+                        {
+                            return Err(CollectionError::bad_input(format!(
+                                "encrypted vector sidecar entry '{vector_name}' key id does not match this collection",
+                            )));
+                        }
+                        if encrypted_vector.envelope.algorithm != "AES-256-GCM" {
+                            return Err(CollectionError::bad_input(format!(
+                                "encrypted vector sidecar entry '{vector_name}' has unsupported envelope algorithm '{}'",
+                                encrypted_vector.envelope.algorithm,
+                            )));
+                        }
+                        if encrypted_vector.envelope.material_fingerprint.is_empty() {
+                            return Err(CollectionError::bad_input(format!(
+                                "encrypted vector sidecar entry '{vector_name}' is missing material fingerprint",
+                            )));
+                        }
+                        if encrypted_vector.envelope.nonce.len()
+                            != CKKS_VECTOR_SIDECAR_NONCE_B64_LEN
+                        {
+                            return Err(CollectionError::bad_input(format!(
+                                "encrypted vector sidecar entry '{vector_name}' nonce must be 12 bytes",
+                            )));
+                        }
+                        let nonce = BASE64URL_NOPAD
+                            .decode(encrypted_vector.envelope.nonce.as_bytes())
+                            .map_err(|_| {
+                                CollectionError::bad_input(format!(
+                                    "encrypted vector sidecar entry '{vector_name}' nonce is not base64url",
+                                ))
+                            })?;
+                        if nonce.len() != 12 {
+                            return Err(CollectionError::bad_input(format!(
+                                "encrypted vector sidecar entry '{vector_name}' nonce must be 12 bytes",
+                            )));
+                        }
+                        if encrypted_vector.envelope.ciphertext.len()
+                            > CKKS_VECTOR_SIDECAR_CIPHERTEXT_MAX_B64_LEN
+                        {
+                            return Err(CollectionError::bad_input(format!(
+                                "encrypted vector sidecar entry '{vector_name}' ciphertext exceeds maximum size",
+                            )));
+                        }
+                        let ciphertext = BASE64URL_NOPAD
+                            .decode(encrypted_vector.envelope.ciphertext.as_bytes())
+                            .map_err(|_| {
+                                CollectionError::bad_input(format!(
+                                    "encrypted vector sidecar entry '{vector_name}' ciphertext is not base64url",
+                                ))
+                            })?;
+                        if ciphertext.len() < 16 {
+                            return Err(CollectionError::bad_input(format!(
+                                "encrypted vector sidecar entry '{vector_name}' ciphertext is too short",
+                            )));
+                        }
+                        if ciphertext.len() > CKKS_VECTOR_SIDECAR_CIPHERTEXT_MAX_BYTES {
+                            return Err(CollectionError::bad_input(format!(
+                                "encrypted vector sidecar entry '{vector_name}' ciphertext exceeds maximum size",
+                            )));
+                        }
+                        let Some(sidecar_key) = ckks_vector_sidecar_envelope_key(
+                            encrypted,
                             &collection_crypto_id,
                             point_id,
                             vector_name,
                         )
-                    else {
+                        .map_err(|err| {
+                            CollectionError::bad_input(format!(
+                                "encrypted vector sidecar entry '{vector_name}' is invalid for this collection: {err}",
+                            ))
+                        })?
+                        else {
+                            return Err(CollectionError::bad_input(format!(
+                                "encrypted vector sidecar entry '{vector_name}' requires runtime vector encryption before collection write",
+                            )));
+                        };
+                        let Some(_verified_sidecar_key) = update_provenance
+                            .verified_vector_sidecar_key_for_binding(
+                                &sidecar_key,
+                                &collection_crypto_id,
+                                point_id,
+                                vector_name,
+                            )
+                        else {
+                            return Err(CollectionError::bad_input(format!(
+                                "encrypted vector sidecar entry '{vector_name}' requires runtime vector encryption before collection write",
+                            )));
+                        };
+                    } else if marker_object.contains_key(CLIENT_CKKS_VECTOR_MARKER) {
+                        let Some(sidecar_key) =
+                            client_ckks_vector_sidecar_envelope_key(encrypted, vector_name)
+                                .map_err(|err| {
+                                    CollectionError::bad_input(format!(
+                                        "client encrypted vector sidecar entry '{vector_name}' is invalid for this collection: {err}",
+                                    ))
+                                })?
+                        else {
+                            return Err(CollectionError::bad_input(format!(
+                                "client encrypted vector sidecar entry '{vector_name}' requires runtime client vector verification before collection write",
+                            )));
+                        };
+                        let Some(_verified_sidecar_key) = update_provenance
+                            .verified_client_vector_sidecar_key_for_binding(
+                                &sidecar_key,
+                                &collection_crypto_id,
+                                point_id,
+                                vector_name,
+                            )
+                        else {
+                            return Err(CollectionError::bad_input(format!(
+                                "client encrypted vector sidecar entry '{vector_name}' requires runtime client vector verification before collection write",
+                            )));
+                        };
+                    } else {
                         return Err(CollectionError::bad_input(format!(
-                            "encrypted vector sidecar entry '{vector_name}' requires runtime vector encryption before collection write",
+                            "encrypted vector sidecar entry '{vector_name}' is malformed",
                         )));
-                    };
+                    }
                 }
             }
             Ok(touches)

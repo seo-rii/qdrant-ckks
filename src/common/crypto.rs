@@ -17,17 +17,21 @@ use qdrant_sec::{
     CKKS_PUBLIC_MATERIAL_MAX_CRYPTO_CONTEXT_BYTES, CKKS_PUBLIC_MATERIAL_MAX_PUBLIC_KEY_BYTES,
     CKKS_SCHEME, CKKS_VECTOR_KEY_DOMAIN, CLIENT_PAYLOAD_ENVELOPE_BINDING, CkksParameters,
     CkksPublicMaterial, CkksVectorEncryptor, CkksVectorVerifiedSidecarKey,
-    ClientPayloadNonceReplayKey, ClientPayloadSignatureVerification,
-    ClientPayloadValidationContext, ClientPayloadVerifiedEnvelopeKey, CommandOpenFheBackend,
-    EncryptedCkksVector, ExistingPayloadMode, LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_B64_LEN,
+    ClientCkksVectorSignatureVerification, ClientCkksVectorValidationContext,
+    ClientCkksVectorVerifiedSidecarKey, ClientPayloadNonceReplayKey,
+    ClientPayloadSignatureVerification, ClientPayloadValidationContext,
+    ClientPayloadVerifiedEnvelopeKey, CommandOpenFheBackend, EncryptedCkksVector,
+    ExistingPayloadMode, LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_B64_LEN,
     LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_LEN, LocalMasterKeyProvider, METADATA_AES_GCM_PROVIDER,
     METADATA_BLIND_INDEX_PROVIDER, METADATA_EXACT_MATCH_TOKEN_BINDING, METADATA_VALUE_BINDING,
     MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER,
     PAYLOAD_FIELD_BINDING, PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
     RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, ServerPayloadVerifiedEnvelopeKey,
     VECTOR_CLIENT_CKKS_PROVIDER, VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER,
-    WrappedKeyBlob, client_payload_nonce_replay_key, client_payload_signature_key_id,
-    rewrap_resource_key, validate_client_payload_value_for_runtime,
+    WrappedKeyBlob, client_ckks_vector_sidecar_envelope_key, client_payload_nonce_replay_key,
+    client_payload_signature_key_id, rewrap_resource_key,
+    validate_client_ckks_vector_payload_value_for_runtime,
+    validate_client_payload_value_for_runtime,
 };
 use ring::hmac;
 use ring::signature::{ED25519, UnparsedPublicKey};
@@ -192,6 +196,16 @@ const VECTOR_OPENFHE_CKKS_ALLOWED_OPTIONS: &[&str] = &[
     ALLOW_PLAINTEXT_QUERIES_OPTION,
     PLAINTEXT_QUERIES_TCB_ACK_OPTION,
     SCORE_OUTPUT_TCB_ACK_OPTION,
+    SIGNATURE_PUBLIC_KEYS_OPTION,
+];
+const VECTOR_CLIENT_CKKS_ALLOWED_OPTIONS: &[&str] = &[
+    "key_id",
+    EXPECTED_RK_ID_OPTION,
+    MIN_RK_EPOCH_OPTION,
+    MAX_RK_EPOCH_OPTION,
+    CKKS_PROFILE_OPTION,
+    CKKS_CRYPTO_CONTEXT_B64_OPTION,
+    CKKS_PUBLIC_KEY_B64_OPTION,
     SIGNATURE_PUBLIC_KEYS_OPTION,
 ];
 const VECTOR_OPENFHE_CKKS_ALLOWED_MATERIAL_ROLES: &[&str] = &[PAYLOAD_SYM_KEY_ROLE];
@@ -858,17 +872,49 @@ pub(crate) fn payload_write_plan_for_collection_with_crypto_id(
     Ok(None)
 }
 
-struct VectorWriteRule {
-    vector_name: String,
-    collection_id: String,
-    key_id: String,
-    rk_id: String,
-    rk_epoch: u64,
-    distance: Distance,
-    encryptor: CkksVectorEncryptor<CommandOpenFheBackend>,
-    public_material: CkksPublicMaterial,
-    allow_plaintext_queries: bool,
-    query_signature_verifier: ClientPayloadSignatureVerifier,
+enum VectorWriteRule {
+    TrustedBridge {
+        vector_name: String,
+        collection_id: String,
+        key_id: String,
+        rk_id: String,
+        rk_epoch: u64,
+        distance: Distance,
+        encryptor: CkksVectorEncryptor<CommandOpenFheBackend>,
+        public_material: CkksPublicMaterial,
+        allow_plaintext_queries: bool,
+        query_signature_verifier: ClientPayloadSignatureVerifier,
+    },
+    ClientEnvelope {
+        vector_name: String,
+        collection_id: String,
+        key_id: String,
+        rk_id: String,
+        min_rk_epoch: u64,
+        max_rk_epoch: u64,
+        distance: Distance,
+        context_digest: String,
+        max_slots: usize,
+        signature_verifier: ClientPayloadSignatureVerifier,
+    },
+}
+
+impl VectorWriteRule {
+    fn vector_name(&self) -> &str {
+        match self {
+            Self::TrustedBridge { vector_name, .. } | Self::ClientEnvelope { vector_name, .. } => {
+                vector_name
+            }
+        }
+    }
+
+    fn distance(&self) -> Distance {
+        match self {
+            Self::TrustedBridge { distance, .. } | Self::ClientEnvelope { distance, .. } => {
+                *distance
+            }
+        }
+    }
 }
 
 pub(crate) struct VectorWritePlan {
@@ -897,14 +943,14 @@ impl VectorWritePlan {
     pub(crate) fn contains_vector_name(&self, vector_name: &str) -> bool {
         self.rules
             .iter()
-            .any(|rule| rule.vector_name == vector_name)
+            .any(|rule| rule.vector_name() == vector_name)
     }
 
     pub(crate) fn distance_for_vector(&self, vector_name: &str) -> Option<Distance> {
         self.rules
             .iter()
-            .find(|rule| rule.vector_name == vector_name)
-            .map(|rule| rule.distance)
+            .find(|rule| rule.vector_name() == vector_name)
+            .map(VectorWriteRule::distance)
     }
 
     pub(crate) fn ckks_grouped_max_candidates(&self) -> usize {
@@ -933,17 +979,26 @@ impl VectorWritePlan {
         let Some(rule) = self
             .rules
             .iter()
-            .find(|rule| rule.vector_name == vector_name)
+            .find(|rule| rule.vector_name() == vector_name)
         else {
             return Ok(None);
         };
+        let VectorWriteRule::TrustedBridge {
+            encryptor,
+            public_material,
+            ..
+        } = rule
+        else {
+            return Err(StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' in collection {collection_name} uses server-blind client CKKS envelopes; plaintext dense vector writes are not allowed",
+            )));
+        };
         let values: Vec<f64> = values.iter().map(|value| *value as f64).collect();
-        let encrypted = rule
-            .encryptor
+        let encrypted = encryptor
             .encrypt_sidecar_payload_value(
                 collection_name,
                 point_id,
-                &rule.public_material,
+                public_material,
                 values.as_slice(),
             )
             .map_err(|err| {
@@ -952,6 +1007,76 @@ impl VectorWritePlan {
                 ))
             })?;
         Ok(Some(encrypted))
+    }
+
+    pub(crate) fn verify_client_vector_sidecar_payload_value(
+        &self,
+        collection_name: &str,
+        point_id: &str,
+        vector_name: &str,
+        value: &Value,
+    ) -> Result<Option<ClientCkksVectorVerifiedSidecarKey>, StorageError> {
+        let Some(rule) = self
+            .rules
+            .iter()
+            .find(|rule| rule.vector_name() == vector_name)
+        else {
+            return Ok(None);
+        };
+        let VectorWriteRule::ClientEnvelope {
+            collection_id,
+            key_id,
+            rk_id,
+            min_rk_epoch,
+            max_rk_epoch,
+            context_digest,
+            max_slots,
+            signature_verifier,
+            ..
+        } = rule
+        else {
+            return Ok(None);
+        };
+        let Some(envelope_key) = client_ckks_vector_sidecar_envelope_key(value, vector_name)
+            .map_err(|err| {
+                StorageError::bad_input(format!(
+                    "client CKKS vector sidecar entry '{vector_name}' is invalid for collection {collection_name}: {err}",
+                ))
+            })?
+        else {
+            return Ok(None);
+        };
+        let Some(public_key) =
+            signature_verifier.public_key_for_key_id(envelope_key.signature_key_id())
+        else {
+            return Err(StorageError::bad_input(format!(
+                "client CKKS vector sidecar entry '{vector_name}' signature key_id is not trusted for collection {collection_name}",
+            )));
+        };
+        let verified = validate_client_ckks_vector_payload_value_for_runtime(
+            value,
+            ClientCkksVectorValidationContext {
+                collection_id,
+                point_id,
+                vector_name,
+                expected_key_id: key_id,
+                expected_rk_id: rk_id,
+                min_rk_epoch: *min_rk_epoch,
+                max_rk_epoch: *max_rk_epoch,
+                expected_context_digest: context_digest,
+                max_slots: *max_slots,
+                signature_verification: ClientCkksVectorSignatureVerification {
+                    expected_key_id: envelope_key.signature_key_id(),
+                    public_key,
+                },
+            },
+        )
+        .map_err(|err| {
+            StorageError::bad_input(format!(
+                "client CKKS vector sidecar entry '{vector_name}' failed runtime verification for collection {collection_name}: {err}",
+            ))
+        })?;
+        Ok(Some(verified))
     }
 
     pub(crate) fn score_encrypted_query_batch(
@@ -964,11 +1089,23 @@ impl VectorWritePlan {
         let Some(rule) = self
             .rules
             .iter()
-            .find(|rule| rule.vector_name == vector_name)
+            .find(|rule| rule.vector_name() == vector_name)
         else {
             return Ok(None);
         };
-        if !rule.allow_plaintext_queries {
+        let VectorWriteRule::TrustedBridge {
+            encryptor,
+            public_material,
+            allow_plaintext_queries,
+            distance,
+            ..
+        } = rule
+        else {
+            return Err(StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' in collection {collection_name} uses server-blind client CKKS envelopes; Qdrant cannot score opaque client vector ciphertexts",
+            )));
+        };
+        if !allow_plaintext_queries {
             return Err(StorageError::bad_input(format!(
                 "encrypted vector '{vector_name}' does not allow plaintext query vectors; use a client-encrypted CKKS query envelope or stored point-id query",
             )));
@@ -981,13 +1118,12 @@ impl VectorWritePlan {
             .iter()
             .map(|(point_id, encrypted)| (point_id.as_str(), encrypted))
             .collect::<Vec<_>>();
-        let scores = rule
-            .encryptor
+        let scores = encryptor
             .score_encrypted_query_batch(
                 collection_name,
-                &rule.public_material,
+                public_material,
                 &encrypted_items,
-                ckks_score_distance_name(rule.distance),
+                ckks_score_distance_name(*distance),
                 query_values.as_slice(),
             )
             .map_err(|err| {
@@ -1048,23 +1184,33 @@ impl VectorWritePlan {
         let Some(rule) = self
             .rules
             .iter()
-            .find(|rule| rule.vector_name == vector_name)
+            .find(|rule| rule.vector_name() == vector_name)
         else {
             return Ok(None);
+        };
+        let VectorWriteRule::TrustedBridge {
+            encryptor,
+            public_material,
+            distance,
+            ..
+        } = rule
+        else {
+            return Err(StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' in collection {collection_name} uses server-blind client CKKS envelopes; Qdrant cannot score opaque client vector ciphertexts",
+            )));
         };
         let encrypted_items = encrypted_items
             .iter()
             .map(|(point_id, encrypted)| (point_id.as_str(), encrypted))
             .collect::<Vec<_>>();
-        let scores = rule
-            .encryptor
+        let scores = encryptor
             .score_pre_encrypted_query_batch(
                 collection_name,
-                &rule.public_material,
+                public_material,
                 encrypted_query,
                 slots,
                 &encrypted_items,
-                ckks_score_distance_name(rule.distance),
+                ckks_score_distance_name(*distance),
             )
             .map_err(|err| {
                 StorageError::service_error(format!(
@@ -1107,42 +1253,57 @@ impl VectorWritePlan {
         let Some(rule) = self
             .rules
             .iter()
-            .find(|rule| rule.vector_name == vector_name)
+            .find(|rule| rule.vector_name() == vector_name)
         else {
             return Ok(None);
         };
-        if query_collection_id != rule.collection_id {
+        let VectorWriteRule::TrustedBridge {
+            collection_id,
+            key_id,
+            rk_id,
+            rk_epoch,
+            encryptor,
+            public_material,
+            query_signature_verifier,
+            ..
+        } = rule
+        else {
+            return Err(StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' in collection {collection_name} uses server-blind client CKKS envelopes; client query scoring is not available without a trusted scoring bridge",
+            )));
+        };
+        if query_collection_id != collection_id {
             return Err(StorageError::bad_input(format!(
                 "encrypted query collection_id does not match active CKKS collection identity for vector '{vector_name}' in collection {collection_name}",
             )));
         }
-        if query_vector_name != rule.vector_name {
+        if query_vector_name != vector_name {
             return Err(StorageError::bad_input(format!(
                 "encrypted query vector_name does not match encrypted vector '{vector_name}' in collection {collection_name}",
             )));
         }
-        if query_key_id != rule.key_id {
+        if query_key_id != key_id {
             return Err(StorageError::bad_input(format!(
                 "encrypted query key_id does not match active CKKS key for vector '{vector_name}' in collection {collection_name}",
             )));
         }
-        if query_rk_id != rule.rk_id {
+        if query_rk_id != rk_id {
             return Err(StorageError::bad_input(format!(
                 "encrypted query rk_id does not match active CKKS resource key for vector '{vector_name}' in collection {collection_name}",
             )));
         }
-        if query_rk_epoch != rule.rk_epoch {
+        if query_rk_epoch != *rk_epoch {
             return Err(StorageError::bad_input(format!(
                 "encrypted query rk_epoch does not match active CKKS resource key epoch for vector '{vector_name}' in collection {collection_name}",
             )));
         }
-        let expected_digest = rule.encryptor.context_digest_for(&rule.public_material);
+        let expected_digest = encryptor.context_digest_for(public_material);
         if context_digest != expected_digest {
             return Err(StorageError::bad_input(format!(
                 "encrypted query context digest does not match active CKKS public material for vector '{vector_name}' in collection {collection_name}",
             )));
         }
-        rule.encryptor
+        encryptor
             .validate_pre_encrypted_query_input(encrypted_query, slots)
             .map_err(|err| {
                 StorageError::bad_input(format!(
@@ -1169,9 +1330,7 @@ impl VectorWritePlan {
                 "encrypted query signature algorithm is not supported for vector '{vector_name}' in collection {collection_name}",
             )));
         }
-        let Some(public_key) = rule
-            .query_signature_verifier
-            .public_key_for_key_id(signature_key_id)
+        let Some(public_key) = query_signature_verifier.public_key_for_key_id(signature_key_id)
         else {
             return Err(StorageError::bad_input(format!(
                 "encrypted query signature key_id is not trusted for vector '{vector_name}' in collection {collection_name}",
@@ -1224,23 +1383,33 @@ impl VectorWritePlan {
         let Some(rule) = self
             .rules
             .iter()
-            .find(|rule| rule.vector_name == vector_name)
+            .find(|rule| rule.vector_name() == vector_name)
         else {
             return Ok(None);
+        };
+        let VectorWriteRule::TrustedBridge {
+            encryptor,
+            public_material,
+            distance,
+            ..
+        } = rule
+        else {
+            return Err(StorageError::bad_input(format!(
+                "encrypted vector '{vector_name}' in collection {collection_name} uses server-blind client CKKS envelopes; stored-query scoring is not available without a trusted scoring bridge",
+            )));
         };
         let encrypted_items = encrypted_items
             .iter()
             .map(|(point_id, encrypted)| (point_id.as_str(), encrypted))
             .collect::<Vec<_>>();
-        let scores = rule
-            .encryptor
+        let scores = encryptor
             .score_stored_query_batch(
                 collection_name,
-                &rule.public_material,
+                public_material,
                 query_point_id,
                 query_encrypted,
                 &encrypted_items,
-                ckks_score_distance_name(rule.distance),
+                ckks_score_distance_name(*distance),
             )
             .map_err(|err| {
                 StorageError::service_error(format!(
@@ -1316,12 +1485,112 @@ fn generic_vector_write_plan(
                 ))
             })?;
         if instance.provider == VECTOR_CLIENT_CKKS_PROVIDER {
-            return Err(StorageError::bad_input(format!(
-                "collection {collection_name} rule {} uses {VECTOR_CLIENT_CKKS_PROVIDER}, \
-                 but server-blind vector envelopes are not implemented; \
-                 use {VECTOR_OPENFHE_CKKS_PROVIDER} only for trusted-bridge CKKS sidecar vectors",
-                rule.id,
-            )));
+            if !instance.materials.is_empty() || instance.backend_ref.is_some() {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {} uses {VECTOR_CLIENT_CKKS_PROVIDER}, which must not configure server materials or backend",
+                    rule.instance
+                )));
+            }
+            let key_id = required_string_option(instance, &rule.instance, "key_id")?;
+            if !is_crypto_identifier(key_id) {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {} key_id is invalid",
+                    rule.instance
+                )));
+            }
+            let expected_rk_id =
+                required_string_option(instance, &rule.instance, EXPECTED_RK_ID_OPTION)?;
+            if !is_crypto_identifier(expected_rk_id) {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {} expected_rk_id is invalid",
+                    rule.instance
+                )));
+            }
+            let profile = required_string_option(instance, &rule.instance, CKKS_PROFILE_OPTION)?;
+            if profile != CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50 {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {} profile {profile} is not allowlisted; expected {CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50}",
+                    rule.instance
+                )));
+            }
+            let crypto_context = required_ckks_public_material_option(
+                instance,
+                &rule.instance,
+                CKKS_CRYPTO_CONTEXT_B64_OPTION,
+            )?;
+            let public_key = required_ckks_public_material_option(
+                instance,
+                &rule.instance,
+                CKKS_PUBLIC_KEY_B64_OPTION,
+            )?;
+            let public_material = CkksPublicMaterial::new(crypto_context, public_key).map_err(|err| {
+                StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {} public material is invalid: {err}",
+                    rule.instance
+                ))
+            })?;
+            let signature_verifier = client_payload_signature_verifier(instance, &rule.instance).map_err(|err| {
+                StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {} client vector signature verifier is invalid: {err}",
+                    rule.instance
+                ))
+            })?;
+            let min_rk_epoch =
+                instance
+                    .options
+                    .get(MIN_RK_EPOCH_OPTION)
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| {
+                        StorageError::bad_input(format!(
+                            "collection {collection_name} vector crypto instance {} option {MIN_RK_EPOCH_OPTION} must be an unsigned integer",
+                            rule.instance
+                        ))
+                    })?;
+            let max_rk_epoch =
+                instance
+                    .options
+                    .get(MAX_RK_EPOCH_OPTION)
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| {
+                        StorageError::bad_input(format!(
+                            "collection {collection_name} vector crypto instance {} option {MAX_RK_EPOCH_OPTION} must be an unsigned integer",
+                            rule.instance
+                        ))
+                    })?;
+            if min_rk_epoch != max_rk_epoch {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {} must pin one active rk_epoch",
+                    rule.instance
+                )));
+            }
+            let parameters = CkksParameters::openfhe_default_128_bit();
+            let context_digest = public_material.digest_for(&parameters);
+            let signature_verifier =
+                ClientPayloadSignatureVerifier::Registry(match &signature_verifier {
+                    ClientPayloadSignatureVerifier::Registry(public_keys) => public_keys.clone(),
+                });
+            for vector_name in names {
+                let distance = ckks_vector_distance(params, collection_name, vector_name)?;
+                rules.push(VectorWriteRule::ClientEnvelope {
+                    vector_name: vector_name.clone(),
+                    collection_id: collection_crypto_id.to_string(),
+                    key_id: key_id.to_string(),
+                    rk_id: expected_rk_id.to_string(),
+                    min_rk_epoch,
+                    max_rk_epoch,
+                    distance,
+                    context_digest: context_digest.clone(),
+                    max_slots: parameters.batch_size as usize,
+                    signature_verifier: ClientPayloadSignatureVerifier::Registry(
+                        match &signature_verifier {
+                            ClientPayloadSignatureVerifier::Registry(public_keys) => {
+                                public_keys.clone()
+                            }
+                        },
+                    ),
+                });
+            }
+            continue;
         }
         if instance.provider != VECTOR_OPENFHE_CKKS_PROVIDER {
             return Err(StorageError::bad_input(format!(
@@ -1442,7 +1711,7 @@ fn generic_vector_write_plan(
                     rule.instance
                 ))
             })?;
-            rules.push(VectorWriteRule {
+            rules.push(VectorWriteRule::TrustedBridge {
                 vector_name: vector_name.clone(),
                 collection_id: collection_crypto_id.to_string(),
                 key_id: key_id.to_string(),
@@ -2364,11 +2633,13 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                 reason: format!("unsupported provider {}", instance.provider),
             });
         }
-        if instance.provider == VECTOR_CLIENT_CKKS_PROVIDER {
+        if instance.provider == VECTOR_CLIENT_CKKS_PROVIDER
+            && (!instance.materials.is_empty() || instance.backend_ref.is_some())
+        {
             return Err(CryptoSetupError::InvalidInstanceOption {
                 instance: instance_name.clone(),
                 option: "provider".to_string(),
-                reason: "vector/client-ckks@v1 is reserved for future server-blind vector envelopes and is not implemented; use vector/openfhe-ckks@v1 for trusted-bridge CKKS sidecar vectors"
+                reason: "vector/client-ckks@v1 must not configure server materials or backend"
                     .to_string(),
             });
         }
@@ -2813,6 +3084,175 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                 });
             }
         }
+        if instance.provider == VECTOR_CLIENT_CKKS_PROVIDER {
+            if let Some(option) =
+                unsupported_instance_option(&instance.options, VECTOR_CLIENT_CKKS_ALLOWED_OPTIONS)
+            {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option,
+                    reason: "unsupported option for vector/client-ckks@v1".to_string(),
+                });
+            }
+            let configured_key_id = match instance.options.get("key_id") {
+                Some(Value::String(key_id)) if is_crypto_identifier(key_id) => key_id.as_str(),
+                Some(Value::String(_)) | Some(_) => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: "key_id".to_string(),
+                        reason: "expected a crypto identifier string".to_string(),
+                    });
+                }
+                None => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: "key_id".to_string(),
+                        reason: "missing key_id".to_string(),
+                    });
+                }
+            };
+            let expected_rk_id = match instance.options.get(EXPECTED_RK_ID_OPTION) {
+                Some(Value::String(expected_rk_id)) if is_crypto_identifier(expected_rk_id) => {
+                    expected_rk_id.as_str()
+                }
+                Some(Value::String(_)) | Some(_) => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: EXPECTED_RK_ID_OPTION.to_string(),
+                        reason: "expected a crypto identifier string".to_string(),
+                    });
+                }
+                None => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: EXPECTED_RK_ID_OPTION.to_string(),
+                        reason: "missing expected_rk_id".to_string(),
+                    });
+                }
+            };
+            let _configured_key_id = configured_key_id;
+            let _expected_rk_id = expected_rk_id;
+            let min_rk_epoch = match instance.options.get(MIN_RK_EPOCH_OPTION) {
+                Some(Value::Number(min_rk_epoch)) => min_rk_epoch.as_u64(),
+                Some(_) => None,
+                None => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: MIN_RK_EPOCH_OPTION.to_string(),
+                        reason: "missing min_rk_epoch".to_string(),
+                    });
+                }
+            };
+            let Some(min_rk_epoch) = min_rk_epoch else {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: MIN_RK_EPOCH_OPTION.to_string(),
+                    reason: "expected an unsigned integer".to_string(),
+                });
+            };
+            let max_rk_epoch = match instance.options.get(MAX_RK_EPOCH_OPTION) {
+                Some(Value::Number(max_rk_epoch)) => max_rk_epoch.as_u64(),
+                Some(_) => None,
+                None => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: MAX_RK_EPOCH_OPTION.to_string(),
+                        reason: "missing max_rk_epoch".to_string(),
+                    });
+                }
+            };
+            let Some(max_rk_epoch) = max_rk_epoch else {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: MAX_RK_EPOCH_OPTION.to_string(),
+                    reason: "expected an unsigned integer".to_string(),
+                });
+            };
+            if min_rk_epoch != max_rk_epoch {
+                return Err(CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: MAX_RK_EPOCH_OPTION.to_string(),
+                    reason: "client vector provider must pin one active rk_epoch".to_string(),
+                });
+            }
+            match instance.options.get(CKKS_PROFILE_OPTION) {
+                Some(Value::String(profile))
+                    if profile == CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50 => {}
+                Some(Value::String(_)) => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: CKKS_PROFILE_OPTION.to_string(),
+                        reason: format!(
+                            "expected allowlisted profile {CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50}"
+                        ),
+                    });
+                }
+                Some(_) => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: CKKS_PROFILE_OPTION.to_string(),
+                        reason: "expected a string".to_string(),
+                    });
+                }
+                None => {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: CKKS_PROFILE_OPTION.to_string(),
+                        reason: "missing profile".to_string(),
+                    });
+                }
+            }
+            for option in [CKKS_CRYPTO_CONTEXT_B64_OPTION, CKKS_PUBLIC_KEY_B64_OPTION] {
+                let Some(Value::String(encoded)) = instance.options.get(option) else {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: option.to_string(),
+                        reason: "expected a base64url string".to_string(),
+                    });
+                };
+                let max_decoded_len = match option {
+                    CKKS_CRYPTO_CONTEXT_B64_OPTION => CKKS_PUBLIC_MATERIAL_MAX_CRYPTO_CONTEXT_BYTES,
+                    CKKS_PUBLIC_KEY_B64_OPTION => CKKS_PUBLIC_MATERIAL_MAX_PUBLIC_KEY_BYTES,
+                    _ => unreachable!("unsupported CKKS public material option"),
+                };
+                let max_encoded_len = base64url_nopad_encoded_len(max_decoded_len);
+                if encoded.len() > max_encoded_len {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: option.to_string(),
+                        reason: format!("decoded value must be at most {max_decoded_len} bytes"),
+                    });
+                }
+                let decoded = BASE64URL_NOPAD.decode(encoded.as_bytes()).map_err(|_| {
+                    CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: option.to_string(),
+                        reason: "expected base64url without padding".to_string(),
+                    }
+                })?;
+                if decoded.is_empty() {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: option.to_string(),
+                        reason: "decoded value must not be empty".to_string(),
+                    });
+                }
+                if decoded.len() > max_decoded_len {
+                    return Err(CryptoSetupError::InvalidInstanceOption {
+                        instance: instance_name.clone(),
+                        option: option.to_string(),
+                        reason: format!("decoded value must be at most {max_decoded_len} bytes"),
+                    });
+                }
+            }
+            client_payload_signature_verifier(instance, instance_name).map_err(|err| {
+                CryptoSetupError::InvalidInstanceOption {
+                    instance: instance_name.clone(),
+                    option: "signature".to_string(),
+                    reason: err.to_string(),
+                }
+            })?;
+        }
 
         if let Some(backend_ref) = &instance.backend_ref
             && !settings.backends.contains_key(backend_ref)
@@ -3004,7 +3444,9 @@ fn validate_zero_trust_profile(settings: &CryptoSettings) -> Result<(), CryptoSe
 
     for (instance_name, instance) in &settings.instances {
         match instance.provider.as_str() {
-            PAYLOAD_CLIENT_AEAD_PROVIDER | METADATA_BLIND_INDEX_PROVIDER => {}
+            PAYLOAD_CLIENT_AEAD_PROVIDER
+            | METADATA_BLIND_INDEX_PROVIDER
+            | VECTOR_CLIENT_CKKS_PROVIDER => {}
             PAYLOAD_AES_GCM_PROVIDER | METADATA_AES_GCM_PROVIDER => {
                 return Err(CryptoSetupError::InvalidInstanceOption {
                     instance: instance_name.clone(),
@@ -3021,15 +3463,6 @@ fn validate_zero_trust_profile(settings: &CryptoSettings) -> Result<(), CryptoSe
                     option: "zero_trust_profile".to_string(),
                     reason:
                         "trusted-bridge vector provider is not allowed in strict zero-trust profile"
-                            .to_string(),
-                });
-            }
-            VECTOR_CLIENT_CKKS_PROVIDER => {
-                return Err(CryptoSetupError::InvalidInstanceOption {
-                    instance: instance_name.clone(),
-                    option: "zero_trust_profile".to_string(),
-                    reason:
-                        "vector/client-ckks@v1 is required for strict vector zero-trust but is not implemented"
                             .to_string(),
                 });
             }
@@ -5202,12 +5635,83 @@ fn validate_generic_collection_crypto_runtime(
             )));
         };
         if instance.provider == VECTOR_CLIENT_CKKS_PROVIDER {
-            return Err(StorageError::bad_input(format!(
-                "collection {collection_name} rule {} uses {VECTOR_CLIENT_CKKS_PROVIDER}, \
-                 but server-blind vector envelopes are not implemented; \
-                 use {VECTOR_OPENFHE_CKKS_PROVIDER} only for trusted-bridge CKKS sidecar vectors",
-                rule.id,
-            )));
+            if !instance.materials.is_empty() || instance.backend_ref.is_some() {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {} uses {VECTOR_CLIENT_CKKS_PROVIDER}, which must not configure server materials or backend",
+                    rule.instance
+                )));
+            }
+            let key_id = required_string_option(instance, &rule.instance, "key_id")?;
+            if !is_crypto_identifier(key_id) {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {} key_id is invalid",
+                    rule.instance
+                )));
+            }
+            let expected_rk_id =
+                required_string_option(instance, &rule.instance, EXPECTED_RK_ID_OPTION)?;
+            if !is_crypto_identifier(expected_rk_id) {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {} expected_rk_id is invalid",
+                    rule.instance
+                )));
+            }
+            let profile = required_string_option(instance, &rule.instance, CKKS_PROFILE_OPTION)?;
+            if profile != CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50 {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {} profile {profile} is not allowlisted; expected {CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50}",
+                    rule.instance
+                )));
+            }
+            let crypto_context = required_ckks_public_material_option(
+                instance,
+                &rule.instance,
+                CKKS_CRYPTO_CONTEXT_B64_OPTION,
+            )?;
+            let public_key = required_ckks_public_material_option(
+                instance,
+                &rule.instance,
+                CKKS_PUBLIC_KEY_B64_OPTION,
+            )?;
+            CkksPublicMaterial::new(crypto_context, public_key).map_err(|err| {
+                StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {} public material is invalid: {err}",
+                    rule.instance
+                ))
+            })?;
+            client_payload_signature_verifier(instance, &rule.instance).map_err(|err| {
+                StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {} client vector signature verifier is invalid: {err}",
+                    rule.instance
+                ))
+            })?;
+            let min_rk_epoch = instance
+                .options
+                .get(MIN_RK_EPOCH_OPTION)
+                .and_then(Value::as_u64)
+                .ok_or_else(|| {
+                    StorageError::bad_input(format!(
+                        "collection {collection_name} vector crypto instance {} option {MIN_RK_EPOCH_OPTION} must be an unsigned integer",
+                        rule.instance
+                    ))
+                })?;
+            let max_rk_epoch = instance
+                .options
+                .get(MAX_RK_EPOCH_OPTION)
+                .and_then(Value::as_u64)
+                .ok_or_else(|| {
+                    StorageError::bad_input(format!(
+                        "collection {collection_name} vector crypto instance {} option {MAX_RK_EPOCH_OPTION} must be an unsigned integer",
+                        rule.instance
+                    ))
+                })?;
+            if min_rk_epoch != max_rk_epoch {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} vector crypto instance {} must pin one active rk_epoch",
+                    rule.instance
+                )));
+            }
+            continue;
         }
         if instance.provider != VECTOR_OPENFHE_CKKS_PROVIDER {
             return Err(StorageError::bad_input(format!(
@@ -7648,7 +8152,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_crypto_settings_rejects_reserved_client_ckks_vector_provider() {
+    fn validate_crypto_settings_accepts_client_ckks_vector_provider() {
         let settings = CryptoSettings {
             zero_trust_profile: None,
             instances: HashMap::from([(
@@ -7657,6 +8161,15 @@ mod tests {
                     provider: VECTOR_CLIENT_CKKS_PROVIDER.to_string(),
                     options: json!({
                         "key_id": "tenant-a:docs",
+                        "expected_rk_id": "tenant-a/vector-rk",
+                        "min_rk_epoch": 3,
+                        "max_rk_epoch": 3,
+                        "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                        "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                        "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                        "signature_public_keys": {
+                            "tenant-a/client-vector-signing-v1": BASE64URL_NOPAD.encode(&[9_u8; 32]),
+                        },
                     }),
                     ..CryptoInstanceConfig::default()
                 },
@@ -7664,16 +8177,8 @@ mod tests {
             ..CryptoSettings::default()
         };
 
-        let err = validate_crypto_settings(&settings)
-            .expect_err("reserved client-side vector provider must be fail-closed");
-        assert!(
-            matches!(err, CryptoSetupError::InvalidInstanceOption { ref instance, ref option, ref reason }
-                if instance == "docs_vector_client_v1"
-                    && option == "provider"
-                    && reason.contains("reserved")
-                    && reason.contains("not implemented")),
-            "unexpected error: {err:?}",
-        );
+        validate_crypto_settings(&settings)
+            .expect("client-side vector provider should validate with pinned lineage and verifier");
     }
 
     #[test]
@@ -8399,6 +8904,26 @@ mod tests {
                         }),
                     },
                 ),
+                (
+                    "docs_vector_client_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: VECTOR_CLIENT_CKKS_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a/client-vector-rk-v1",
+                            "expected_rk_id": "tenant-a/client-vector-rk-v1",
+                            "min_rk_epoch": 3,
+                            "max_rk_epoch": 3,
+                            "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                            "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                            "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                            "signature_public_keys": {
+                                "tenant-a/client-vector-signing-v1": BASE64URL_NOPAD.encode(&[9_u8; 32]),
+                            },
+                        }),
+                    },
+                ),
             ]),
             materials: HashMap::new(),
             backends: HashMap::new(),
@@ -8479,10 +9004,6 @@ mod tests {
             (
                 VECTOR_OPENFHE_CKKS_PROVIDER,
                 "trusted-bridge vector provider is not allowed",
-            ),
-            (
-                VECTOR_CLIENT_CKKS_PROVIDER,
-                "vector/client-ckks@v1 is required for strict vector zero-trust but is not implemented",
             ),
         ] {
             let mut with_server_provider = strict_client_settings.clone();
@@ -17518,7 +18039,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_collection_crypto_runtime_rejects_reserved_client_vector_provider() {
+    fn validate_collection_crypto_runtime_accepts_client_vector_provider() {
         let settings = Settings {
             crypto: CryptoSettings {
                 zero_trust_profile: None,
@@ -17540,6 +18061,12 @@ mod tests {
                             "expected_rk_id": "tenant-a/vector-rk",
                             "min_rk_epoch": 3,
                             "max_rk_epoch": 3,
+                            "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                            "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                            "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                            "signature_public_keys": {
+                                "tenant-a/client-vector-signing-v1": BASE64URL_NOPAD.encode(&[9_u8; 32]),
+                            },
                         }),
                     },
                 )]),
@@ -17566,14 +18093,8 @@ mod tests {
             ..CollectionParams::empty()
         };
 
-        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
-        assert!(
-            matches!(err, StorageError::BadInput { ref description }
-                if description.contains(VECTOR_CLIENT_CKKS_PROVIDER)
-                    && description.contains("server-blind vector")
-                    && description.contains("not implemented")),
-            "unexpected error: {err:?}",
-        );
+        validate_collection_crypto_runtime_inner(&settings, "docs", &params)
+            .expect("client-side vector provider should pass collection runtime validation");
     }
 
     #[test]

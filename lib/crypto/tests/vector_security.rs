@@ -15,10 +15,13 @@ use qdrant_sec::{
     CkksEncryptedQueryScoreInput, CkksEncryptionInput, CkksError, CkksParameters,
     CkksPlaintextQueryScoreBatchInput, CkksPlaintextQueryScoreInput, CkksPublicMaterial,
     CkksQueryEncryptionInput, CkksVectorBackend, CkksVectorBatchItem, CkksVectorEncryptor,
-    CkksVectorSidecarDeleteTarget, CommandOpenFheBackend, ENCRYPTED_CKKS_VECTOR_MARKER,
+    CkksVectorSidecarDeleteTarget, ClientCkksVectorSignatureVerification,
+    ClientCkksVectorValidationContext, CommandOpenFheBackend, ENCRYPTED_CKKS_VECTOR_MARKER,
     EncryptedCkksVector, EncryptionContext, EncryptionError, SecretKey, VerifiedCkksVector,
     ckks_vector_sidecar_envelope_key, ckks_vector_verified_sidecar_delete_key,
+    client_ckks_vector_signature_message, validate_client_ckks_vector_payload_value_for_runtime,
 };
+use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
@@ -213,6 +216,99 @@ fn public_material() -> CkksPublicMaterial {
         b"openfhe public key".to_vec(),
     )
     .unwrap()
+}
+
+fn signed_client_ckks_vector_payload(
+    key_pair: &Ed25519KeyPair,
+    signature_key_id: &str,
+) -> serde_json::Value {
+    let ciphertext = b"client-side-ckks-ciphertext";
+    let ciphertext_sha256 = BASE64URL_NOPAD.encode(Sha256::digest(ciphertext).as_ref());
+    let context_digest = public_material().digest_for(&CkksParameters::openfhe_default_128_bit());
+    let mut value = json!({
+        "$qdrant_sec_client_ckks_vector": {
+            "version": 1,
+            "scheme": "openfhe-ckks",
+            "security_profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+            "collection_id": "collection-uuid",
+            "point_id": "point-1",
+            "vector_name": "embedding",
+            "key_id": "tenant-a:docs",
+            "rk_id": "tenant-a/vector-rk",
+            "rk_epoch": 3,
+            "context_digest": context_digest,
+            "slots": 2,
+            "ciphertext_sha256": ciphertext_sha256,
+            "ciphertext": BASE64URL_NOPAD.encode(ciphertext),
+            "signature": {
+                "alg": "ed25519",
+                "key_id": signature_key_id,
+                "sig": ""
+            }
+        }
+    });
+    let message = client_ckks_vector_signature_message(&value).unwrap();
+    let signature = key_pair.sign(&message);
+    value["$qdrant_sec_client_ckks_vector"]["signature"]["sig"] =
+        json!(BASE64URL_NOPAD.encode(signature.as_ref()));
+    value
+}
+
+#[test]
+fn client_ckks_vector_payload_validation_binds_signature_and_aad() {
+    let rng = ring::rand::SystemRandom::new();
+    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+    let public_key = key_pair.public_key().as_ref().to_vec();
+    let value = signed_client_ckks_vector_payload(&key_pair, "tenant-a/signing-v1");
+
+    let verified = validate_client_ckks_vector_payload_value_for_runtime(
+        &value,
+        ClientCkksVectorValidationContext {
+            collection_id: "collection-uuid",
+            point_id: "point-1",
+            vector_name: "embedding",
+            expected_key_id: "tenant-a:docs",
+            expected_rk_id: "tenant-a/vector-rk",
+            min_rk_epoch: 3,
+            max_rk_epoch: 3,
+            expected_context_digest: &public_material()
+                .digest_for(&CkksParameters::openfhe_default_128_bit()),
+            max_slots: CkksParameters::openfhe_default_128_bit().batch_size as usize,
+            signature_verification: ClientCkksVectorSignatureVerification {
+                expected_key_id: "tenant-a/signing-v1",
+                public_key: &public_key,
+            },
+        },
+    )
+    .unwrap();
+    assert!(
+        verified
+            .envelope_key()
+            .matches_binding("collection-uuid", "point-1", "embedding")
+    );
+
+    let err = validate_client_ckks_vector_payload_value_for_runtime(
+        &value,
+        ClientCkksVectorValidationContext {
+            collection_id: "collection-uuid",
+            point_id: "point-2",
+            vector_name: "embedding",
+            expected_key_id: "tenant-a:docs",
+            expected_rk_id: "tenant-a/vector-rk",
+            min_rk_epoch: 3,
+            max_rk_epoch: 3,
+            expected_context_digest: &public_material()
+                .digest_for(&CkksParameters::openfhe_default_128_bit()),
+            max_slots: CkksParameters::openfhe_default_128_bit().batch_size as usize,
+            signature_verification: ClientCkksVectorSignatureVerification {
+                expected_key_id: "tenant-a/signing-v1",
+                public_key: &public_key,
+            },
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(err, CkksError::MalformedEnvelope(message) if message.contains("point_id")));
 }
 
 #[test]
