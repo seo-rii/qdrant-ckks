@@ -323,6 +323,62 @@ fn ckks_ciphertext_index_refreshes_when_sidecar_payload_changes() {
         2,
         "adding an encrypted vector sidecar must refresh the segment-native CKKS index"
     );
+
+    segment
+        .delete_payload(
+            7,
+            1.into(),
+            &JsonPath {
+                first_key: CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD.to_string(),
+                rest: Vec::new(),
+            },
+            &hw_counter,
+        )
+        .unwrap();
+    assert_eq!(
+        indexed_vector_count(&segment),
+        1,
+        "deleting the sidecar payload key must refresh the segment-native CKKS index"
+    );
+    let reopened_records = ckks_ciphertext_records_from_payload_index(
+        &*segment.id_tracker.borrow(),
+        &segment.payload_index.borrow(),
+        DEFAULT_VECTOR_NAME,
+        &hw_counter,
+    )
+    .unwrap();
+    let reopened = CkksCiphertextVectorIndex::open_graph_file(reopened_records, &graph_file)
+        .unwrap()
+        .expect("refreshed CKKS ciphertext graph file must reopen after sidecar delete");
+    assert_eq!(reopened.indexed_vector_count(), 1);
+
+    segment
+        .set_full_payload(
+            8,
+            1.into(),
+            &sidecar_payload("AwMDAwMDAwMDAwMDAwMDAw"),
+            &hw_counter,
+        )
+        .unwrap();
+    assert_eq!(indexed_vector_count(&segment), 2);
+
+    segment.clear_payload(9, 2.into(), &hw_counter).unwrap();
+    assert_eq!(
+        indexed_vector_count(&segment),
+        1,
+        "clearing a payload that had a sidecar must refresh the segment-native CKKS index"
+    );
+    let reopened_records = ckks_ciphertext_records_from_payload_index(
+        &*segment.id_tracker.borrow(),
+        &segment.payload_index.borrow(),
+        DEFAULT_VECTOR_NAME,
+        &hw_counter,
+    )
+    .unwrap();
+    let reopened = CkksCiphertextVectorIndex::open_graph_file(reopened_records, &graph_file)
+        .unwrap()
+        .expect("refreshed CKKS ciphertext graph file must reopen after payload clear");
+    assert_eq!(reopened.indexed_vector_count(), 1);
 }
 
 #[rstest]
