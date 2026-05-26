@@ -2979,6 +2979,14 @@ fn validate_zero_trust_profile(settings: &CryptoSettings) -> Result<(), CryptoSe
         });
     }
 
+    if settings.allow_inline_key_material {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: "crypto".to_string(),
+            option: "zero_trust_profile".to_string(),
+            reason: "strict zero-trust profile must not allow inline key material".to_string(),
+        });
+    }
+
     if !settings.materials.is_empty() {
         return Err(CryptoSetupError::InvalidInstanceOption {
             instance: "crypto".to_string(),
@@ -8351,7 +8359,7 @@ mod tests {
     fn validate_crypto_settings_enforces_strict_zero_trust_profile() {
         let strict_client_settings = CryptoSettings {
             zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
-            allow_inline_key_material: true,
+            allow_inline_key_material: false,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl_secs:
@@ -8419,6 +8427,14 @@ mod tests {
             validate_crypto_settings(&invalid_profile),
             Err(CryptoSetupError::InvalidInstanceOption { option, reason, .. })
                 if option == "zero_trust_profile" && reason.contains("strict")
+        ));
+
+        let mut with_inline_material_enabled = strict_client_settings.clone();
+        with_inline_material_enabled.allow_inline_key_material = true;
+        assert!(matches!(
+            validate_crypto_settings(&with_inline_material_enabled),
+            Err(CryptoSetupError::InvalidInstanceOption { option, reason, .. })
+                if option == "zero_trust_profile" && reason.contains("must not allow inline key material")
         ));
 
         let mut with_server_material = strict_client_settings.clone();
