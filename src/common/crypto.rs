@@ -10823,6 +10823,90 @@ mod tests {
     }
 
     #[test]
+    fn crypto_runtime_capability_fingerprint_tracks_external_key_source_policy() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: None,
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
+                materials: HashMap::from([
+                    (
+                        "tenant-a/mk-aws".to_string(),
+                        CryptoMaterialConfig {
+                            kind: WRAPPING_KEY_32_KIND.to_string(),
+                            source: Some(AWS_KMS_SOURCE.to_string()),
+                            env: Some("QDRANT_AWS_KMS_TOKEN".to_string()),
+                            path: Some("https://kms.us-east-1.amazonaws.com/".to_string()),
+                            expected_host: Some("kms.us-east-1.amazonaws.com".to_string()),
+                            timeout_ms: Some(2_000),
+                            ..CryptoMaterialConfig::default()
+                        },
+                    ),
+                    (
+                        "tenant-a/mk-socket".to_string(),
+                        CryptoMaterialConfig {
+                            kind: WRAPPING_KEY_32_KIND.to_string(),
+                            source: Some("unix_socket".to_string()),
+                            path: Some("/run/qdrant-sec/mk.sock".to_string()),
+                            timeout_ms: Some(1_000),
+                            ..CryptoMaterialConfig::default()
+                        },
+                    ),
+                ]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let fingerprint = crypto_runtime_capability_fingerprint(&settings);
+
+        let assert_drift_rejected = |peer_id: &str, peer: Settings| {
+            let peer_fingerprint = crypto_runtime_capability_fingerprint(&peer);
+            assert_ne!(
+                fingerprint, peer_fingerprint,
+                "{peer_id} policy drift must change the runtime parity fingerprint",
+            );
+            let err = validate_crypto_runtime_capability_parity(
+                &settings,
+                [(peer_id, peer_fingerprint.as_str())],
+            )
+            .expect_err("external key-source policy drift must fail runtime parity validation");
+            assert!(err.to_string().contains(peer_id), "{err:?}");
+        };
+
+        let mut peer_with_different_kms_host = settings.clone();
+        peer_with_different_kms_host
+            .crypto
+            .materials
+            .get_mut("tenant-a/mk-aws")
+            .unwrap()
+            .expected_host = Some("kms.us-west-2.amazonaws.com".to_string());
+        assert_drift_rejected("peer-aws-host", peer_with_different_kms_host);
+
+        let mut peer_with_different_kms_timeout = settings.clone();
+        peer_with_different_kms_timeout
+            .crypto
+            .materials
+            .get_mut("tenant-a/mk-aws")
+            .unwrap()
+            .timeout_ms = Some(5_000);
+        assert_drift_rejected("peer-aws-timeout", peer_with_different_kms_timeout);
+
+        let mut peer_with_different_socket = settings.clone();
+        peer_with_different_socket
+            .crypto
+            .materials
+            .get_mut("tenant-a/mk-socket")
+            .unwrap()
+            .path = Some("/run/qdrant-sec/other-mk.sock".to_string());
+        assert_drift_rejected("peer-socket-path", peer_with_different_socket);
+    }
+
+    #[test]
     fn validate_crypto_settings_rejects_invalid_material_source_shapes() {
         assert_eq!(
             validate_material(
