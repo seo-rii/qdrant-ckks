@@ -229,7 +229,7 @@ fn record_ckks_client_query_nonce(
     plan: &crate::common::crypto::VectorWritePlan,
 ) -> Result<(), StorageError> {
     let key = format!(
-        "{collection_id}\x1f{vector_name}\x1f{key_id}\x1f{rk_id}\x1f{rk_epoch}\x1f{query_nonce}\x1f{signature_key_id}",
+        "{collection_id}\x1f{vector_name}\x1f{key_id}\x1f{rk_id}\x1f{rk_epoch}\x1f{query_nonce}"
     );
     let mut cache = CKKS_CLIENT_QUERY_NONCE_REPLAY_CACHE.lock().unwrap();
     if cache.record(
@@ -10317,6 +10317,41 @@ mod tests {
             &plan,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn ckks_client_query_nonce_replay_cache_rejects_same_nonce_across_signers() {
+        clear_ckks_client_query_nonce_replay_cache_for_tests();
+        let plan = crate::common::crypto::VectorWritePlan::empty_for_test();
+
+        record_ckks_client_query_nonce(
+            "collection-uuid",
+            "embedding",
+            "tenant-a:key",
+            "tenant-a/rk",
+            3,
+            "BBBBBBBBBBBBBBBB",
+            "tenant-a/signing-a",
+            &plan,
+        )
+        .unwrap();
+
+        let err = record_ckks_client_query_nonce(
+            "collection-uuid",
+            "embedding",
+            "tenant-a:key",
+            "tenant-a/rk",
+            3,
+            "BBBBBBBBBBBBBBBB",
+            "tenant-a/signing-b",
+            &plan,
+        )
+        .expect_err("same query nonce under the same CKKS key lineage must be single-use");
+
+        assert!(
+            format!("{err}").contains("already used recently"),
+            "unexpected error: {err}",
+        );
     }
 
     #[test]
