@@ -8,6 +8,8 @@ pub mod aead;
 pub mod control_plane;
 pub mod openfhe;
 pub mod payload;
+pub mod private_hnsw_client;
+pub mod private_hnsw_oram;
 pub mod vector;
 
 pub use aead::{
@@ -23,9 +25,9 @@ pub use control_plane::{
     CryptoCapability, CryptoRegistry, CryptoSuite, GENERIC_CIPHERTEXT_MARKER,
     METADATA_AES_GCM_PROVIDER, METADATA_BLIND_INDEX_PROVIDER, METADATA_EXACT_MATCH_TOKEN_BINDING,
     METADATA_VALUE_BINDING, MetadataProviderFactory, PAYLOAD_AES_GCM_PROVIDER,
-    PAYLOAD_CLIENT_AEAD_PROVIDER, PAYLOAD_FIELD_BINDING, PayloadProviderFactory,
-    VECTOR_CLIENT_CKKS_PROVIDER, VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER,
-    VectorProviderFactory,
+    PAYLOAD_CLIENT_AEAD_PROVIDER, PAYLOAD_FIELD_BINDING, PRIVATE_HNSW_ORAM_BINDING,
+    PayloadProviderFactory, VECTOR_CLIENT_CKKS_PROVIDER, VECTOR_ENVELOPE_BINDING,
+    VECTOR_OPENFHE_CKKS_PROVIDER, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, VectorProviderFactory,
 };
 pub use openfhe::CommandOpenFheBackend;
 #[cfg(target_os = "linux")]
@@ -45,6 +47,39 @@ pub use payload::{
     validate_client_payload_value_for_peer_replay, validate_client_payload_value_for_runtime,
     validate_server_payload_value_after_runtime_encryption,
     validate_server_payload_value_for_peer_replay, validate_server_payload_value_metadata,
+};
+pub use private_hnsw_client::{
+    PRIVATE_HNSW_BLIND_RESULT_DOMAIN, PRIVATE_HNSW_BUCKET_AEAD_DOMAIN,
+    PRIVATE_HNSW_NODE_AEAD_DOMAIN, PRIVATE_HNSW_PAYLOAD_TOKEN_DOMAIN,
+    PRIVATE_HNSW_POSITION_MAP_DOMAIN, PrivateHnswBucketAeadBaseContext,
+    PrivateHnswBucketAeadContext, PrivateHnswClientCommitBucketRef, PrivateHnswClientCommitPlan,
+    PrivateHnswClientError, PrivateHnswClientKeys, PrivateHnswCommitSignatureContext,
+    PrivateHnswNodeBlockPlaintext, PrivateHnswOramAccessResult, PrivateHnswOramClientConfig,
+    PrivateHnswOramClientState, PrivateHnswOramPlaintextBucket, PrivateHnswSearchHit,
+    PrivateHnswSearchParams, PrivateHnswSearchResult, PrivateHnswVectorEncoding,
+    access_private_hnsw_oram_path, decode_private_hnsw_node_block,
+    decode_private_hnsw_oram_bucket_plaintext, decode_private_hnsw_oram_leaf_label,
+    empty_private_hnsw_oram_plaintext_bucket, encode_private_hnsw_node_block,
+    encode_private_hnsw_oram_bucket_plaintext, encode_private_hnsw_oram_leaf_label,
+    open_private_hnsw_oram_bucket, open_private_hnsw_oram_plaintext_bucket,
+    plan_private_hnsw_oram_commit, private_hnsw_bucket_commitment, private_hnsw_oram_bucket_count,
+    private_hnsw_oram_bucket_ids_for_leaf, private_hnsw_oram_bucket_ids_for_leaf_labels,
+    private_hnsw_oram_leaf_count, private_hnsw_oram_merkle_root_for_commitments,
+    seal_private_hnsw_oram_bucket, seal_private_hnsw_oram_plaintext_bucket,
+    search_private_hnsw_oram_encrypted, search_private_hnsw_oram_plaintext,
+    sign_private_hnsw_oram_commit, sign_private_hnsw_oram_manifest,
+};
+pub use private_hnsw_oram::{
+    DistanceKind, FixedBudgetParams, OramKind, OramParams,
+    PRIVATE_HNSW_ORAM_COMMIT_SIGNATURE_DOMAIN, PRIVATE_HNSW_ORAM_MANIFEST_SIGNATURE_DOMAIN,
+    PrivateHnswEpoch, PrivateHnswManifestValidationContext, PrivateHnswOramBucket,
+    PrivateHnswOramCommitBucketRef, PrivateHnswOramCommitSignatureInput, PrivateHnswOramError,
+    PrivateHnswOramManifest, PrivateHnswOramSignature, PrivateHnswParams,
+    PrivateHnswSignatureVerification, ResultPrivacyMode,
+    private_hnsw_oram_commit_signature_message, private_hnsw_oram_manifest_signature_message,
+    validate_private_hnsw_oram_commit_signature, validate_private_hnsw_oram_manifest,
+    validate_private_hnsw_oram_manifest_shape, validate_private_hnsw_oram_manifest_signature,
+    validate_private_hnsw_oram_manifest_signature_shape,
 };
 pub use vector::{
     CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_PUBLIC_MATERIAL_MAX_CRYPTO_CONTEXT_BYTES,

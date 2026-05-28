@@ -13,6 +13,7 @@ use crate::config::{CollectionConfigInternal, CollectionParams, WalConfig};
 use crate::operations::shared_storage_config::SharedStorageConfig;
 use crate::operations::types::{NodeType, VectorsConfig};
 use crate::operations::vector_params_builder::VectorParamsBuilder;
+use crate::private_hnsw_oram_store::PRIVATE_HNSW_ORAM_DIR;
 use crate::shards::channel_service::ChannelService;
 use crate::shards::collection_shard_distribution::CollectionShardDistribution;
 use crate::shards::replica_set::{AbortShardTransfer, ChangePeerFromState};
@@ -97,6 +98,19 @@ async fn _test_snapshot_collection(node_type: NodeType) {
     .await
     .unwrap();
 
+    let private_hnsw_bucket = collection_dir
+        .path()
+        .join(PRIVATE_HNSW_ORAM_DIR)
+        .join("text")
+        .join("buckets")
+        .join("00000000.bucket");
+    std::fs::create_dir_all(private_hnsw_bucket.parent().unwrap()).unwrap();
+    std::fs::write(
+        &private_hnsw_bucket,
+        br#"{"ciphertext":"encrypted-private-hnsw"}"#,
+    )
+    .unwrap();
+
     let snapshots_temp_dir = Builder::new().prefix("temp_dir").tempdir().unwrap();
     let snapshot_description = collection
         .create_snapshot(snapshots_temp_dir.path(), 0)
@@ -129,6 +143,18 @@ async fn _test_snapshot_collection(node_type: NodeType) {
     if let Err(err) = Collection::restore_snapshot(snapshot_data, recover_dir.path(), 0, true) {
         panic!("Failed to restore snapshot: {err}")
     }
+    assert_eq!(
+        std::fs::read_to_string(
+            recover_dir
+                .path()
+                .join(PRIVATE_HNSW_ORAM_DIR)
+                .join("text")
+                .join("buckets")
+                .join("00000000.bucket"),
+        )
+        .unwrap(),
+        r#"{"ciphertext":"encrypted-private-hnsw"}"#,
+    );
 
     let recovered_collection = Collection::load(
         collection_name_rec,

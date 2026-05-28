@@ -25,10 +25,11 @@ use qdrant_sec::{
     LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_LEN, LocalMasterKeyProvider, METADATA_AES_GCM_PROVIDER,
     METADATA_BLIND_INDEX_PROVIDER, METADATA_EXACT_MATCH_TOKEN_BINDING, METADATA_VALUE_BINDING,
     MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER,
-    PAYLOAD_FIELD_BINDING, PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
-    RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, ServerPayloadVerifiedEnvelopeKey,
-    VECTOR_CLIENT_CKKS_PROVIDER, VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER,
-    WrappedKeyBlob, client_ckks_vector_sidecar_envelope_key, client_payload_nonce_replay_key,
+    PAYLOAD_FIELD_BINDING, PRIVATE_HNSW_ORAM_BINDING, PayloadEncryptionError,
+    PayloadEncryptionPolicy, PayloadTextEncryptor, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey,
+    ServerPayloadVerifiedEnvelopeKey, VECTOR_CLIENT_CKKS_PROVIDER, VECTOR_ENVELOPE_BINDING,
+    VECTOR_OPENFHE_CKKS_PROVIDER, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, WrappedKeyBlob,
+    client_ckks_vector_sidecar_envelope_key, client_payload_nonce_replay_key,
     client_payload_signature_key_id, rewrap_resource_key,
     validate_client_ckks_vector_payload_value_for_runtime,
     validate_client_payload_value_for_runtime,
@@ -209,8 +210,35 @@ const VECTOR_CLIENT_CKKS_ALLOWED_OPTIONS: &[&str] = &[
     CKKS_PUBLIC_KEY_B64_OPTION,
     SIGNATURE_PUBLIC_KEYS_OPTION,
 ];
+const VECTOR_PRIVATE_HNSW_ORAM_ALLOWED_OPTIONS: &[&str] = &[
+    "key_id",
+    EXPECTED_RK_ID_OPTION,
+    MIN_RK_EPOCH_OPTION,
+    MAX_RK_EPOCH_OPTION,
+    PRIVATE_HNSW_SEARCH_EXECUTION_OPTION,
+    PRIVATE_HNSW_SEARCH_MODE_OPTION,
+    PRIVATE_HNSW_RESULT_PRIVACY_OPTION,
+    PRIVATE_HNSW_DISTANCE_OPTION,
+    PRIVATE_HNSW_DIM_OPTION,
+    PRIVATE_HNSW_HNSW_OPTION,
+    PRIVATE_HNSW_ORAM_OPTION,
+    PRIVATE_HNSW_FIXED_BUDGET_OPTION,
+    PRIVATE_HNSW_INTEGRITY_OPTION,
+    SIGNATURE_PUBLIC_KEYS_OPTION,
+];
 const CLIENT_CKKS_VECTOR_SEARCH_MODE_OPTION: &str = "search_mode";
 const CLIENT_CKKS_VECTOR_SEARCH_MODE_OPAQUE_STORAGE_ONLY: &str = "opaque_storage_only";
+const PRIVATE_HNSW_SEARCH_EXECUTION_OPTION: &str = "search_execution";
+const PRIVATE_HNSW_SEARCH_EXECUTION_CLIENT_LED: &str = "client_led";
+const PRIVATE_HNSW_SEARCH_MODE_OPTION: &str = "search_mode";
+const PRIVATE_HNSW_SEARCH_MODE_PRIVATE_HNSW_ORAM: &str = "private_hnsw_oram";
+const PRIVATE_HNSW_RESULT_PRIVACY_OPTION: &str = "result_privacy";
+const PRIVATE_HNSW_DISTANCE_OPTION: &str = "distance";
+const PRIVATE_HNSW_DIM_OPTION: &str = "dim";
+const PRIVATE_HNSW_HNSW_OPTION: &str = "hnsw";
+const PRIVATE_HNSW_ORAM_OPTION: &str = "oram";
+const PRIVATE_HNSW_FIXED_BUDGET_OPTION: &str = "fixed_budget";
+const PRIVATE_HNSW_INTEGRITY_OPTION: &str = "integrity";
 const VECTOR_OPENFHE_CKKS_ALLOWED_MATERIAL_ROLES: &[&str] = &[PAYLOAD_SYM_KEY_ROLE];
 const OPENFHE_BACKEND_KIND_PROCESS: &str = "process";
 const OPENFHE_BACKEND_KIND_PROCESS_POOL: &str = "process_pool";
@@ -900,23 +928,31 @@ enum VectorWriteRule {
         max_slots: usize,
         signature_verifier: ClientPayloadSignatureVerifier,
     },
+    PrivateHnswOram {
+        vector_name: String,
+        distance: Distance,
+    },
 }
 
 impl VectorWriteRule {
     fn vector_name(&self) -> &str {
         match self {
-            Self::TrustedBridge { vector_name, .. } | Self::ClientEnvelope { vector_name, .. } => {
-                vector_name
-            }
+            Self::TrustedBridge { vector_name, .. }
+            | Self::ClientEnvelope { vector_name, .. }
+            | Self::PrivateHnswOram { vector_name, .. } => vector_name,
         }
     }
 
     fn distance(&self) -> Distance {
         match self {
-            Self::TrustedBridge { distance, .. } | Self::ClientEnvelope { distance, .. } => {
-                *distance
-            }
+            Self::TrustedBridge { distance, .. }
+            | Self::ClientEnvelope { distance, .. }
+            | Self::PrivateHnswOram { distance, .. } => *distance,
         }
+    }
+
+    fn is_private_hnsw_oram(&self) -> bool {
+        matches!(self, Self::PrivateHnswOram { .. })
     }
 }
 
@@ -956,6 +992,20 @@ impl VectorWritePlan {
             .map(VectorWriteRule::distance)
     }
 
+    pub(crate) fn is_private_hnsw_oram_vector(&self, vector_name: &str) -> bool {
+        self.rules
+            .iter()
+            .any(|rule| rule.vector_name() == vector_name && rule.is_private_hnsw_oram())
+    }
+
+    pub(crate) fn private_hnsw_oram_api_required_error(
+        &self,
+        vector_name: &str,
+    ) -> Option<StorageError> {
+        self.is_private_hnsw_oram_vector(vector_name)
+            .then(|| StorageError::bad_input(private_hnsw_oram_api_required_message(vector_name)))
+    }
+
     pub(crate) fn ckks_grouped_max_candidates(&self) -> usize {
         self.ckks_grouped_max_candidates
     }
@@ -986,15 +1036,22 @@ impl VectorWritePlan {
         else {
             return Ok(None);
         };
-        let VectorWriteRule::TrustedBridge {
-            encryptor,
-            public_material,
-            ..
-        } = rule
-        else {
-            return Err(StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' in collection {collection_name} uses server-blind client CKKS envelopes; plaintext dense vector writes are not allowed",
-            )));
+        let (encryptor, public_material) = match rule {
+            VectorWriteRule::TrustedBridge {
+                encryptor,
+                public_material,
+                ..
+            } => (encryptor, public_material),
+            VectorWriteRule::ClientEnvelope { .. } => {
+                return Err(StorageError::bad_input(format!(
+                    "encrypted vector '{vector_name}' in collection {collection_name} uses server-blind client CKKS envelopes; plaintext dense vector writes are not allowed",
+                )));
+            }
+            VectorWriteRule::PrivateHnswOram { .. } => {
+                return Err(StorageError::bad_input(
+                    private_hnsw_oram_api_required_message(vector_name),
+                ));
+            }
         };
         let values: Vec<f64> = values.iter().map(|value| *value as f64).collect();
         let encrypted = encryptor
@@ -1096,19 +1153,31 @@ impl VectorWritePlan {
         else {
             return Ok(None);
         };
-        let VectorWriteRule::TrustedBridge {
-            encryptor,
-            public_material,
-            allow_plaintext_queries,
-            distance,
-            ..
-        } = rule
-        else {
-            return Err(StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' in collection {collection_name} uses server-blind client CKKS envelopes; Qdrant cannot score opaque client vector ciphertexts",
-            )));
+        let (encryptor, public_material, allow_plaintext_queries, distance) = match rule {
+            VectorWriteRule::TrustedBridge {
+                encryptor,
+                public_material,
+                allow_plaintext_queries,
+                distance,
+                ..
+            } => (
+                encryptor,
+                public_material,
+                allow_plaintext_queries,
+                distance,
+            ),
+            VectorWriteRule::ClientEnvelope { .. } => {
+                return Err(StorageError::bad_input(format!(
+                    "encrypted vector '{vector_name}' in collection {collection_name} uses server-blind client CKKS envelopes; Qdrant cannot score opaque client vector ciphertexts",
+                )));
+            }
+            VectorWriteRule::PrivateHnswOram { .. } => {
+                return Err(StorageError::bad_input(
+                    private_hnsw_oram_api_required_message(vector_name),
+                ));
+            }
         };
-        if !allow_plaintext_queries {
+        if !*allow_plaintext_queries {
             return Err(StorageError::bad_input(format!(
                 "encrypted vector '{vector_name}' does not allow plaintext query vectors; use a client-encrypted CKKS query envelope or stored point-id query",
             )));
@@ -1191,16 +1260,23 @@ impl VectorWritePlan {
         else {
             return Ok(None);
         };
-        let VectorWriteRule::TrustedBridge {
-            encryptor,
-            public_material,
-            distance,
-            ..
-        } = rule
-        else {
-            return Err(StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' in collection {collection_name} uses server-blind client CKKS envelopes; Qdrant cannot score opaque client vector ciphertexts",
-            )));
+        let (encryptor, public_material, distance) = match rule {
+            VectorWriteRule::TrustedBridge {
+                encryptor,
+                public_material,
+                distance,
+                ..
+            } => (encryptor, public_material, distance),
+            VectorWriteRule::ClientEnvelope { .. } => {
+                return Err(StorageError::bad_input(format!(
+                    "encrypted vector '{vector_name}' in collection {collection_name} uses server-blind client CKKS envelopes; Qdrant cannot score opaque client vector ciphertexts",
+                )));
+            }
+            VectorWriteRule::PrivateHnswOram { .. } => {
+                return Err(StorageError::bad_input(
+                    private_hnsw_oram_api_required_message(vector_name),
+                ));
+            }
         };
         let encrypted_items = encrypted_items
             .iter()
@@ -1260,7 +1336,7 @@ impl VectorWritePlan {
         else {
             return Ok(None);
         };
-        let VectorWriteRule::TrustedBridge {
+        let (
             collection_id,
             key_id,
             rk_id,
@@ -1268,12 +1344,35 @@ impl VectorWritePlan {
             encryptor,
             public_material,
             query_signature_verifier,
-            ..
-        } = rule
-        else {
-            return Err(StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' in collection {collection_name} uses server-blind client CKKS envelopes; client query scoring is not available without a trusted scoring bridge",
-            )));
+        ) = match rule {
+            VectorWriteRule::TrustedBridge {
+                collection_id,
+                key_id,
+                rk_id,
+                rk_epoch,
+                encryptor,
+                public_material,
+                query_signature_verifier,
+                ..
+            } => (
+                collection_id,
+                key_id,
+                rk_id,
+                rk_epoch,
+                encryptor,
+                public_material,
+                query_signature_verifier,
+            ),
+            VectorWriteRule::ClientEnvelope { .. } => {
+                return Err(StorageError::bad_input(format!(
+                    "encrypted vector '{vector_name}' in collection {collection_name} uses server-blind client CKKS envelopes; client query scoring is not available without a trusted scoring bridge",
+                )));
+            }
+            VectorWriteRule::PrivateHnswOram { .. } => {
+                return Err(StorageError::bad_input(
+                    private_hnsw_oram_api_required_message(vector_name),
+                ));
+            }
         };
         if query_collection_id != collection_id {
             return Err(StorageError::bad_input(format!(
@@ -1390,16 +1489,23 @@ impl VectorWritePlan {
         else {
             return Ok(None);
         };
-        let VectorWriteRule::TrustedBridge {
-            encryptor,
-            public_material,
-            distance,
-            ..
-        } = rule
-        else {
-            return Err(StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' in collection {collection_name} uses server-blind client CKKS envelopes; stored-query scoring is not available without a trusted scoring bridge",
-            )));
+        let (encryptor, public_material, distance) = match rule {
+            VectorWriteRule::TrustedBridge {
+                encryptor,
+                public_material,
+                distance,
+                ..
+            } => (encryptor, public_material, distance),
+            VectorWriteRule::ClientEnvelope { .. } => {
+                return Err(StorageError::bad_input(format!(
+                    "encrypted vector '{vector_name}' in collection {collection_name} uses server-blind client CKKS envelopes; stored-query scoring is not available without a trusted scoring bridge",
+                )));
+            }
+            VectorWriteRule::PrivateHnswOram { .. } => {
+                return Err(StorageError::bad_input(
+                    private_hnsw_oram_api_required_message(vector_name),
+                ));
+            }
         };
         let encrypted_items = encrypted_items
             .iter()
@@ -1436,6 +1542,12 @@ impl VectorWritePlan {
     }
 }
 
+fn private_hnsw_oram_api_required_message(vector_name: &str) -> String {
+    format!(
+        "{VECTOR_PRIVATE_HNSW_ORAM_PROVIDER} requires client-led private ORAM sessions for vector '{vector_name}'. Use /private-hnsw/{vector_name}/session and compatible SDK traversal APIs."
+    )
+}
+
 pub(crate) fn vector_write_plan_for_collection_with_crypto_id(
     settings: &Settings,
     collection_name: &str,
@@ -1468,13 +1580,12 @@ fn generic_vector_write_plan(
         let EncryptionSelector::VectorNames { names } = &rule.selector else {
             continue;
         };
-        if rule
-            .binding
-            .as_deref()
-            .is_some_and(|binding| binding != VECTOR_ENVELOPE_BINDING)
-        {
+        let binding = rule.binding.as_deref();
+        if binding.is_some_and(|binding| {
+            binding != VECTOR_ENVELOPE_BINDING && binding != PRIVATE_HNSW_ORAM_BINDING
+        }) {
             return Err(StorageError::bad_input(format!(
-                "collection {collection_name} vector rule {} must use binding {VECTOR_ENVELOPE_BINDING}",
+                "collection {collection_name} vector rule {} must use binding {VECTOR_ENVELOPE_BINDING} or {PRIVATE_HNSW_ORAM_BINDING}",
                 rule.id
             )));
         }
@@ -1487,6 +1598,80 @@ fn generic_vector_write_plan(
                     rule.instance
                 ))
             })?;
+        if binding == Some(PRIVATE_HNSW_ORAM_BINDING) {
+            if instance.provider != VECTOR_PRIVATE_HNSW_ORAM_PROVIDER {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} rule {} uses binding {PRIVATE_HNSW_ORAM_BINDING}, which requires provider {VECTOR_PRIVATE_HNSW_ORAM_PROVIDER}; found {}",
+                    rule.id, instance.provider
+                )));
+            }
+            if names.len() != 1 {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} rule {} uses {PRIVATE_HNSW_ORAM_BINDING}, which must select exactly one vector in v1",
+                    rule.id
+                )));
+            }
+            validate_private_hnsw_oram_instance(
+                &rule.instance,
+                instance,
+                runtime_settings.zero_trust_profile.as_deref() == Some(ZERO_TRUST_PROFILE_STRICT),
+            )
+            .map_err(|err| {
+                StorageError::bad_input(format!(
+                    "collection {collection_name} private HNSW ORAM instance {} is invalid: {err}",
+                    rule.instance
+                ))
+            })?;
+            let private_distance = private_hnsw_distance(&rule.instance, instance).map_err(|err| {
+                StorageError::bad_input(format!(
+                    "collection {collection_name} private HNSW ORAM instance {} distance option is invalid: {err}",
+                    rule.instance
+                ))
+            })?;
+            let private_dim = private_hnsw_required_u64(
+                &rule.instance,
+                instance,
+                PRIVATE_HNSW_DIM_OPTION,
+                1,
+                65_536,
+            )
+            .map_err(|err| {
+                StorageError::bad_input(format!(
+                    "collection {collection_name} private HNSW ORAM instance {} dim option is invalid: {err}",
+                    rule.instance
+                ))
+            })?;
+            for vector_name in names {
+                let Some(vector_params) = params.vectors.get_params(vector_name) else {
+                    return Err(StorageError::bad_input(format!(
+                        "collection {collection_name} private HNSW ORAM vector '{vector_name}' is not configured as a dense vector",
+                    )));
+                };
+                if vector_params.distance != private_distance {
+                    return Err(StorageError::bad_input(format!(
+                        "collection {collection_name} private HNSW ORAM vector '{vector_name}' distance {:?} does not match runtime distance {:?}",
+                        vector_params.distance, private_distance
+                    )));
+                }
+                if vector_params.size.get() != private_dim {
+                    return Err(StorageError::bad_input(format!(
+                        "collection {collection_name} private HNSW ORAM vector '{vector_name}' dimension {} does not match runtime dim {private_dim}",
+                        vector_params.size
+                    )));
+                }
+                rules.push(VectorWriteRule::PrivateHnswOram {
+                    vector_name: vector_name.clone(),
+                    distance: private_distance,
+                });
+            }
+            continue;
+        }
+        if instance.provider == VECTOR_PRIVATE_HNSW_ORAM_PROVIDER {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} rule {} uses provider {VECTOR_PRIVATE_HNSW_ORAM_PROVIDER}, which must use binding {PRIVATE_HNSW_ORAM_BINDING}",
+                rule.id
+            )));
+        }
         if instance.provider == VECTOR_CLIENT_CKKS_PROVIDER {
             if !instance.materials.is_empty() || instance.backend_ref.is_some() {
                 return Err(StorageError::bad_input(format!(
@@ -2364,7 +2549,9 @@ fn material_key_attestation_commitment(
 fn sanitized_crypto_instance_options(instance: &CryptoInstanceConfig) -> serde_json::Value {
     let mut options = instance.options.clone();
     if (instance.provider == PAYLOAD_CLIENT_AEAD_PROVIDER
-        || instance.provider == VECTOR_OPENFHE_CKKS_PROVIDER)
+        || instance.provider == VECTOR_OPENFHE_CKKS_PROVIDER
+        || instance.provider == VECTOR_CLIENT_CKKS_PROVIDER
+        || instance.provider == VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
         && let Some(signature_public_keys) = options
             .as_object_mut()
             .and_then(|options| options.get_mut(SIGNATURE_PUBLIC_KEYS_OPTION))
@@ -2629,6 +2816,7 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                 | PAYLOAD_CLIENT_AEAD_PROVIDER
                 | VECTOR_OPENFHE_CKKS_PROVIDER
                 | VECTOR_CLIENT_CKKS_PROVIDER
+                | VECTOR_PRIVATE_HNSW_ORAM_PROVIDER
                 | METADATA_AES_GCM_PROVIDER
                 | METADATA_BLIND_INDEX_PROVIDER
         ) {
@@ -2647,6 +2835,13 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                 reason: "vector/client-ckks@v1 must not configure server materials or backend"
                     .to_string(),
             });
+        }
+        if instance.provider == VECTOR_PRIVATE_HNSW_ORAM_PROVIDER {
+            validate_private_hnsw_oram_instance(
+                instance_name,
+                instance,
+                settings.zero_trust_profile.as_deref() == Some(ZERO_TRUST_PROFILE_STRICT),
+            )?;
         }
         if instance.provider == PAYLOAD_CLIENT_AEAD_PROVIDER
             && (!instance.materials.is_empty() || instance.backend_ref.is_some())
@@ -3425,6 +3620,547 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
     Ok(())
 }
 
+fn validate_private_hnsw_oram_instance(
+    instance_name: &str,
+    instance: &CryptoInstanceConfig,
+    strict_profile: bool,
+) -> Result<(), CryptoSetupError> {
+    if !instance.materials.is_empty() || instance.backend_ref.is_some() {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: "provider".to_string(),
+            reason: "vector/private-hnsw-oram@v1 must not configure server materials or backend"
+                .to_string(),
+        });
+    }
+    if let Some(option) =
+        unsupported_instance_option(&instance.options, VECTOR_PRIVATE_HNSW_ORAM_ALLOWED_OPTIONS)
+    {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option,
+            reason: "unsupported option for vector/private-hnsw-oram@v1".to_string(),
+        });
+    }
+
+    let key_id = private_hnsw_required_identifier(instance_name, instance, "key_id")?;
+    let expected_rk_id =
+        private_hnsw_required_identifier(instance_name, instance, EXPECTED_RK_ID_OPTION)?;
+    if key_id != expected_rk_id {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: EXPECTED_RK_ID_OPTION.to_string(),
+            reason: "expected_rk_id must match key_id when both are configured".to_string(),
+        });
+    }
+
+    let min_rk_epoch =
+        private_hnsw_required_u64(instance_name, instance, MIN_RK_EPOCH_OPTION, 0, u64::MAX)?;
+    let max_rk_epoch =
+        private_hnsw_required_u64(instance_name, instance, MAX_RK_EPOCH_OPTION, 0, u64::MAX)?;
+    if min_rk_epoch != max_rk_epoch {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: MAX_RK_EPOCH_OPTION.to_string(),
+            reason: "private HNSW ORAM provider must pin one active rk_epoch".to_string(),
+        });
+    }
+
+    private_hnsw_required_string_value(
+        instance_name,
+        instance,
+        PRIVATE_HNSW_SEARCH_EXECUTION_OPTION,
+        PRIVATE_HNSW_SEARCH_EXECUTION_CLIENT_LED,
+    )?;
+    private_hnsw_required_string_value(
+        instance_name,
+        instance,
+        PRIVATE_HNSW_SEARCH_MODE_OPTION,
+        PRIVATE_HNSW_SEARCH_MODE_PRIVATE_HNSW_ORAM,
+    )?;
+    private_hnsw_required_string_one_of(
+        instance_name,
+        instance,
+        PRIVATE_HNSW_RESULT_PRIVACY_OPTION,
+        &["ids_visible", "private_payload_oram_required"],
+    )?;
+    private_hnsw_distance(instance_name, instance)?;
+    private_hnsw_required_u64(instance_name, instance, PRIVATE_HNSW_DIM_OPTION, 1, 65_536)?;
+
+    validate_private_hnsw_hnsw_options(instance_name, instance)?;
+    validate_private_hnsw_oram_options(instance_name, instance)?;
+    let fixed_budget_enabled = validate_private_hnsw_fixed_budget_options(instance_name, instance)?;
+    validate_private_hnsw_integrity_options(instance_name, instance)?;
+    if strict_profile && !fixed_budget_enabled {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: "fixed_budget.enabled".to_string(),
+            reason: "strict zero-trust private HNSW ORAM requires fixed_budget.enabled=true"
+                .to_string(),
+        });
+    }
+
+    client_payload_signature_verifier(instance, instance_name).map_err(|err| {
+        CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: SIGNATURE_PUBLIC_KEYS_OPTION.to_string(),
+            reason: err.to_string(),
+        }
+    })?;
+
+    Ok(())
+}
+
+fn private_hnsw_required_identifier<'a>(
+    instance_name: &str,
+    instance: &'a CryptoInstanceConfig,
+    option: &str,
+) -> Result<&'a str, CryptoSetupError> {
+    let value = private_hnsw_required_string(instance_name, instance, option)?;
+    if !is_crypto_identifier(value) {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: option.to_string(),
+            reason: "expected a crypto identifier string".to_string(),
+        });
+    }
+    Ok(value)
+}
+
+fn private_hnsw_required_string<'a>(
+    instance_name: &str,
+    instance: &'a CryptoInstanceConfig,
+    option: &str,
+) -> Result<&'a str, CryptoSetupError> {
+    match instance.options.get(option) {
+        Some(Value::String(value)) => Ok(value.as_str()),
+        Some(_) => Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: option.to_string(),
+            reason: "expected a string".to_string(),
+        }),
+        None => Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: option.to_string(),
+            reason: format!("missing {option}"),
+        }),
+    }
+}
+
+fn private_hnsw_required_string_value(
+    instance_name: &str,
+    instance: &CryptoInstanceConfig,
+    option: &str,
+    expected: &str,
+) -> Result<(), CryptoSetupError> {
+    let value = private_hnsw_required_string(instance_name, instance, option)?;
+    if value != expected {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: option.to_string(),
+            reason: format!("expected {expected}"),
+        });
+    }
+    Ok(())
+}
+
+fn private_hnsw_required_string_one_of(
+    instance_name: &str,
+    instance: &CryptoInstanceConfig,
+    option: &str,
+    expected: &[&str],
+) -> Result<(), CryptoSetupError> {
+    let value = private_hnsw_required_string(instance_name, instance, option)?;
+    if !expected.contains(&value) {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: option.to_string(),
+            reason: format!("expected one of {}", expected.join(", ")),
+        });
+    }
+    Ok(())
+}
+
+fn private_hnsw_required_u64(
+    instance_name: &str,
+    instance: &CryptoInstanceConfig,
+    option: &str,
+    min: u64,
+    max: u64,
+) -> Result<u64, CryptoSetupError> {
+    let value = match instance.options.get(option) {
+        Some(Value::Number(value)) => value.as_u64(),
+        Some(_) => None,
+        None => {
+            return Err(CryptoSetupError::InvalidInstanceOption {
+                instance: instance_name.to_string(),
+                option: option.to_string(),
+                reason: format!("missing {option}"),
+            });
+        }
+    };
+    let Some(value) = value else {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: option.to_string(),
+            reason: "expected an unsigned integer".to_string(),
+        });
+    };
+    if value < min || value > max {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: option.to_string(),
+            reason: format!("expected integer in range {min}..={max}"),
+        });
+    }
+    Ok(value)
+}
+
+fn private_hnsw_object<'a>(
+    instance_name: &str,
+    instance: &'a CryptoInstanceConfig,
+    option: &str,
+) -> Result<&'a serde_json::Map<String, Value>, CryptoSetupError> {
+    match instance.options.get(option) {
+        Some(Value::Object(value)) => Ok(value),
+        Some(_) => Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: option.to_string(),
+            reason: "expected an object".to_string(),
+        }),
+        None => Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: option.to_string(),
+            reason: format!("missing {option}"),
+        }),
+    }
+}
+
+fn private_hnsw_object_u64(
+    instance_name: &str,
+    object: &serde_json::Map<String, Value>,
+    object_name: &str,
+    field: &str,
+    min: u64,
+    max: u64,
+) -> Result<u64, CryptoSetupError> {
+    let option = format!("{object_name}.{field}");
+    let value = match object.get(field) {
+        Some(Value::Number(value)) => value.as_u64(),
+        Some(_) => None,
+        None => {
+            return Err(CryptoSetupError::InvalidInstanceOption {
+                instance: instance_name.to_string(),
+                option,
+                reason: format!("missing {field}"),
+            });
+        }
+    };
+    let Some(value) = value else {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option,
+            reason: "expected an unsigned integer".to_string(),
+        });
+    };
+    if value < min || value > max {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option,
+            reason: format!("expected integer in range {min}..={max}"),
+        });
+    }
+    Ok(value)
+}
+
+fn private_hnsw_object_bool(
+    instance_name: &str,
+    object: &serde_json::Map<String, Value>,
+    object_name: &str,
+    field: &str,
+) -> Result<bool, CryptoSetupError> {
+    let option = format!("{object_name}.{field}");
+    match object.get(field) {
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option,
+            reason: "expected a boolean".to_string(),
+        }),
+        None => Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option,
+            reason: format!("missing {field}"),
+        }),
+    }
+}
+
+fn private_hnsw_object_string<'a>(
+    instance_name: &str,
+    object: &'a serde_json::Map<String, Value>,
+    object_name: &str,
+    field: &str,
+) -> Result<&'a str, CryptoSetupError> {
+    let option = format!("{object_name}.{field}");
+    match object.get(field) {
+        Some(Value::String(value)) => Ok(value.as_str()),
+        Some(_) => Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option,
+            reason: "expected a string".to_string(),
+        }),
+        None => Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option,
+            reason: format!("missing {field}"),
+        }),
+    }
+}
+
+fn private_hnsw_reject_unknown_object_fields(
+    instance_name: &str,
+    object: &serde_json::Map<String, Value>,
+    object_name: &str,
+    allowed: &[&str],
+) -> Result<(), CryptoSetupError> {
+    if let Some(field) = object
+        .keys()
+        .find(|field| !allowed.contains(&field.as_str()))
+    {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: format!("{object_name}.{field}"),
+            reason: "unsupported private HNSW ORAM option".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn private_hnsw_distance(
+    instance_name: &str,
+    instance: &CryptoInstanceConfig,
+) -> Result<Distance, CryptoSetupError> {
+    match private_hnsw_required_string(instance_name, instance, PRIVATE_HNSW_DISTANCE_OPTION)? {
+        "cosine" => Ok(Distance::Cosine),
+        "dot" => Ok(Distance::Dot),
+        "euclid" => Ok(Distance::Euclid),
+        "manhattan" => Ok(Distance::Manhattan),
+        _ => Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: PRIVATE_HNSW_DISTANCE_OPTION.to_string(),
+            reason: "expected one of cosine, dot, euclid, manhattan".to_string(),
+        }),
+    }
+}
+
+fn validate_private_hnsw_hnsw_options(
+    instance_name: &str,
+    instance: &CryptoInstanceConfig,
+) -> Result<(), CryptoSetupError> {
+    let hnsw = private_hnsw_object(instance_name, instance, PRIVATE_HNSW_HNSW_OPTION)?;
+    private_hnsw_reject_unknown_object_fields(
+        instance_name,
+        hnsw,
+        PRIVATE_HNSW_HNSW_OPTION,
+        &["m", "ef_construction", "max_layers", "fixed_neighbor_slots"],
+    )?;
+    let m = private_hnsw_object_u64(instance_name, hnsw, PRIVATE_HNSW_HNSW_OPTION, "m", 2, 128)?;
+    private_hnsw_object_u64(
+        instance_name,
+        hnsw,
+        PRIVATE_HNSW_HNSW_OPTION,
+        "ef_construction",
+        m,
+        4096,
+    )?;
+    private_hnsw_object_u64(
+        instance_name,
+        hnsw,
+        PRIVATE_HNSW_HNSW_OPTION,
+        "max_layers",
+        1,
+        64,
+    )?;
+    private_hnsw_object_u64(
+        instance_name,
+        hnsw,
+        PRIVATE_HNSW_HNSW_OPTION,
+        "fixed_neighbor_slots",
+        m,
+        1024,
+    )?;
+    Ok(())
+}
+
+fn validate_private_hnsw_oram_options(
+    instance_name: &str,
+    instance: &CryptoInstanceConfig,
+) -> Result<(), CryptoSetupError> {
+    let oram = private_hnsw_object(instance_name, instance, PRIVATE_HNSW_ORAM_OPTION)?;
+    private_hnsw_reject_unknown_object_fields(
+        instance_name,
+        oram,
+        PRIVATE_HNSW_ORAM_OPTION,
+        &[
+            "kind",
+            "bucket_size",
+            "block_size_bytes",
+            "tree_height",
+            "path_batch_size",
+        ],
+    )?;
+    let kind = private_hnsw_object_string(instance_name, oram, PRIVATE_HNSW_ORAM_OPTION, "kind")?;
+    if kind != "path_oram" {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: "oram.kind".to_string(),
+            reason: "expected path_oram".to_string(),
+        });
+    }
+    let bucket_size = private_hnsw_object_u64(
+        instance_name,
+        oram,
+        PRIVATE_HNSW_ORAM_OPTION,
+        "bucket_size",
+        2,
+        16,
+    )?;
+    if !matches!(bucket_size, 2 | 4 | 8 | 16) {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: "oram.bucket_size".to_string(),
+            reason: "expected one of 2, 4, 8, 16".to_string(),
+        });
+    }
+    let block_size = private_hnsw_object_u64(
+        instance_name,
+        oram,
+        PRIVATE_HNSW_ORAM_OPTION,
+        "block_size_bytes",
+        4096,
+        65536,
+    )?;
+    if !matches!(block_size, 4096 | 8192 | 16384 | 32768 | 65536) {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: "oram.block_size_bytes".to_string(),
+            reason: "expected one of 4096, 8192, 16384, 32768, 65536".to_string(),
+        });
+    }
+    private_hnsw_object_u64(
+        instance_name,
+        oram,
+        PRIVATE_HNSW_ORAM_OPTION,
+        "tree_height",
+        1,
+        63,
+    )?;
+    private_hnsw_object_u64(
+        instance_name,
+        oram,
+        PRIVATE_HNSW_ORAM_OPTION,
+        "path_batch_size",
+        1,
+        1024,
+    )?;
+    Ok(())
+}
+
+fn validate_private_hnsw_fixed_budget_options(
+    instance_name: &str,
+    instance: &CryptoInstanceConfig,
+) -> Result<bool, CryptoSetupError> {
+    let fixed_budget =
+        private_hnsw_object(instance_name, instance, PRIVATE_HNSW_FIXED_BUDGET_OPTION)?;
+    private_hnsw_reject_unknown_object_fields(
+        instance_name,
+        fixed_budget,
+        PRIVATE_HNSW_FIXED_BUDGET_OPTION,
+        &[
+            "enabled",
+            "upper_layer_steps",
+            "base_layer_steps",
+            "paths_per_round",
+            "fixed_result_k",
+        ],
+    )?;
+    let enabled = private_hnsw_object_bool(
+        instance_name,
+        fixed_budget,
+        PRIVATE_HNSW_FIXED_BUDGET_OPTION,
+        "enabled",
+    )?;
+    private_hnsw_object_u64(
+        instance_name,
+        fixed_budget,
+        PRIVATE_HNSW_FIXED_BUDGET_OPTION,
+        "upper_layer_steps",
+        1,
+        1_000_000,
+    )?;
+    private_hnsw_object_u64(
+        instance_name,
+        fixed_budget,
+        PRIVATE_HNSW_FIXED_BUDGET_OPTION,
+        "base_layer_steps",
+        1,
+        1_000_000,
+    )?;
+    private_hnsw_object_u64(
+        instance_name,
+        fixed_budget,
+        PRIVATE_HNSW_FIXED_BUDGET_OPTION,
+        "paths_per_round",
+        1,
+        1024,
+    )?;
+    private_hnsw_object_u64(
+        instance_name,
+        fixed_budget,
+        PRIVATE_HNSW_FIXED_BUDGET_OPTION,
+        "fixed_result_k",
+        1,
+        10_000,
+    )?;
+    Ok(enabled)
+}
+
+fn validate_private_hnsw_integrity_options(
+    instance_name: &str,
+    instance: &CryptoInstanceConfig,
+) -> Result<(), CryptoSetupError> {
+    let integrity = private_hnsw_object(instance_name, instance, PRIVATE_HNSW_INTEGRITY_OPTION)?;
+    private_hnsw_reject_unknown_object_fields(
+        instance_name,
+        integrity,
+        PRIVATE_HNSW_INTEGRITY_OPTION,
+        &[
+            "manifest_signature_required",
+            "commit_signature_required",
+            "merkle_root_required",
+        ],
+    )?;
+    for field in [
+        "manifest_signature_required",
+        "commit_signature_required",
+        "merkle_root_required",
+    ] {
+        if !private_hnsw_object_bool(
+            instance_name,
+            integrity,
+            PRIVATE_HNSW_INTEGRITY_OPTION,
+            field,
+        )? {
+            return Err(CryptoSetupError::InvalidInstanceOption {
+                instance: instance_name.to_string(),
+                option: format!("{PRIVATE_HNSW_INTEGRITY_OPTION}.{field}"),
+                reason: "private HNSW ORAM integrity checks must be required".to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn validate_zero_trust_profile(settings: &CryptoSettings) -> Result<(), CryptoSetupError> {
     let Some(profile) = settings.zero_trust_profile.as_deref() else {
         return Ok(());
@@ -3464,7 +4200,8 @@ fn validate_zero_trust_profile(settings: &CryptoSettings) -> Result<(), CryptoSe
         match instance.provider.as_str() {
             PAYLOAD_CLIENT_AEAD_PROVIDER
             | METADATA_BLIND_INDEX_PROVIDER
-            | VECTOR_CLIENT_CKKS_PROVIDER => {}
+            | VECTOR_CLIENT_CKKS_PROVIDER
+            | VECTOR_PRIVATE_HNSW_ORAM_PROVIDER => {}
             PAYLOAD_AES_GCM_PROVIDER | METADATA_AES_GCM_PROVIDER => {
                 return Err(CryptoSetupError::InvalidInstanceOption {
                     instance: instance_name.clone(),
@@ -5664,13 +6401,12 @@ fn validate_generic_collection_crypto_runtime(
             continue;
         };
 
-        if rule
-            .binding
-            .as_deref()
-            .is_some_and(|binding| binding != VECTOR_ENVELOPE_BINDING)
-        {
+        let binding = rule.binding.as_deref();
+        if binding.is_some_and(|binding| {
+            binding != VECTOR_ENVELOPE_BINDING && binding != PRIVATE_HNSW_ORAM_BINDING
+        }) {
             return Err(StorageError::bad_input(format!(
-                "collection {collection_name} vector rule {} must use binding {VECTOR_ENVELOPE_BINDING}",
+                "collection {collection_name} vector rule {} must use binding {VECTOR_ENVELOPE_BINDING} or {PRIVATE_HNSW_ORAM_BINDING}",
                 rule.id
             )));
         }
@@ -5681,6 +6417,76 @@ fn validate_generic_collection_crypto_runtime(
                 rule.instance
             )));
         };
+        if binding == Some(PRIVATE_HNSW_ORAM_BINDING) {
+            if instance.provider != VECTOR_PRIVATE_HNSW_ORAM_PROVIDER {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} rule {} uses binding {PRIVATE_HNSW_ORAM_BINDING}, which requires provider {VECTOR_PRIVATE_HNSW_ORAM_PROVIDER}; found {}",
+                    rule.id, instance.provider
+                )));
+            }
+            if names.len() != 1 {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} rule {} uses {PRIVATE_HNSW_ORAM_BINDING}, which must select exactly one vector in v1",
+                    rule.id
+                )));
+            }
+            validate_private_hnsw_oram_instance(
+                &rule.instance,
+                instance,
+                runtime_settings.zero_trust_profile.as_deref() == Some(ZERO_TRUST_PROFILE_STRICT),
+            )
+            .map_err(|err| {
+                StorageError::bad_input(format!(
+                    "collection {collection_name} private HNSW ORAM instance {} is invalid: {err}",
+                    rule.instance
+                ))
+            })?;
+            let private_distance = private_hnsw_distance(&rule.instance, instance).map_err(|err| {
+                StorageError::bad_input(format!(
+                    "collection {collection_name} private HNSW ORAM instance {} distance option is invalid: {err}",
+                    rule.instance
+                ))
+            })?;
+            let private_dim = private_hnsw_required_u64(
+                &rule.instance,
+                instance,
+                PRIVATE_HNSW_DIM_OPTION,
+                1,
+                65_536,
+            )
+            .map_err(|err| {
+                StorageError::bad_input(format!(
+                    "collection {collection_name} private HNSW ORAM instance {} dim option is invalid: {err}",
+                    rule.instance
+                ))
+            })?;
+            for vector_name in names {
+                let Some(vector_params) = params.vectors.get_params(vector_name) else {
+                    return Err(StorageError::bad_input(format!(
+                        "collection {collection_name} private HNSW ORAM vector '{vector_name}' is not configured as a dense vector",
+                    )));
+                };
+                if vector_params.distance != private_distance {
+                    return Err(StorageError::bad_input(format!(
+                        "collection {collection_name} private HNSW ORAM vector '{vector_name}' distance {:?} does not match runtime distance {:?}",
+                        vector_params.distance, private_distance
+                    )));
+                }
+                if vector_params.size.get() != private_dim {
+                    return Err(StorageError::bad_input(format!(
+                        "collection {collection_name} private HNSW ORAM vector '{vector_name}' dimension {} does not match runtime dim {private_dim}",
+                        vector_params.size
+                    )));
+                }
+            }
+            continue;
+        }
+        if instance.provider == VECTOR_PRIVATE_HNSW_ORAM_PROVIDER {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} rule {} uses provider {VECTOR_PRIVATE_HNSW_ORAM_PROVIDER}, which must use binding {PRIVATE_HNSW_ORAM_BINDING}",
+                rule.id
+            )));
+        }
         if instance.provider == VECTOR_CLIENT_CKKS_PROVIDER {
             if !instance.materials.is_empty() || instance.backend_ref.is_some() {
                 return Err(StorageError::bad_input(format!(
@@ -8026,6 +8832,48 @@ mod tests {
         })
     }
 
+    fn private_hnsw_oram_options() -> serde_json::Value {
+        json!({
+            "key_id": "tenant-a:docs-private-rk",
+            "expected_rk_id": "tenant-a:docs-private-rk",
+            "min_rk_epoch": 7,
+            "max_rk_epoch": 7,
+            "search_execution": "client_led",
+            "search_mode": "private_hnsw_oram",
+            "result_privacy": "ids_visible",
+            "distance": "cosine",
+            "dim": 2,
+            "hnsw": {
+                "m": 32,
+                "ef_construction": 128,
+                "max_layers": 16,
+                "fixed_neighbor_slots": 64
+            },
+            "oram": {
+                "kind": "path_oram",
+                "bucket_size": 4,
+                "block_size_bytes": 8192,
+                "tree_height": 24,
+                "path_batch_size": 8
+            },
+            "fixed_budget": {
+                "enabled": true,
+                "upper_layer_steps": 32,
+                "base_layer_steps": 256,
+                "paths_per_round": 8,
+                "fixed_result_k": 10
+            },
+            "integrity": {
+                "manifest_signature_required": true,
+                "commit_signature_required": true,
+                "merkle_root_required": true
+            },
+            "signature_public_keys": {
+                "tenant-a/private-hnsw-signing-v1": BASE64URL_NOPAD.encode(&[11_u8; 32])
+            }
+        })
+    }
+
     fn oversized_client_signature_registry() -> serde_json::Value {
         let mut keys = serde_json::Map::new();
         for key_index in 0..=MAX_CLIENT_SIGNATURE_PUBLIC_KEYS {
@@ -8277,6 +9125,82 @@ mod tests {
         assert!(
             matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
                 if option == "search_mode" && reason.contains("opaque_storage_only")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
+    fn validate_crypto_settings_accepts_private_hnsw_oram_in_strict_profile() {
+        let settings = CryptoSettings {
+            zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+            allow_inline_key_material: false,
+            instances: HashMap::from([(
+                "docs_private_hnsw_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                    materials: HashMap::new(),
+                    backend_ref: None,
+                    options: private_hnsw_oram_options(),
+                },
+            )]),
+            ..CryptoSettings::default()
+        };
+
+        validate_crypto_settings(&settings)
+            .expect("private HNSW ORAM provider should validate in strict zero-trust mode");
+    }
+
+    #[test]
+    fn validate_crypto_settings_rejects_private_hnsw_oram_server_state_and_loose_budget() {
+        let mut settings = CryptoSettings {
+            zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+            allow_inline_key_material: false,
+            instances: HashMap::from([(
+                "docs_private_hnsw_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                    materials: HashMap::new(),
+                    backend_ref: None,
+                    options: private_hnsw_oram_options(),
+                },
+            )]),
+            ..CryptoSettings::default()
+        };
+
+        settings
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["fixed_budget"]["enabled"] = json!(false);
+        let err = validate_crypto_settings(&settings)
+            .expect_err("strict private HNSW ORAM must require fixed budget");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "fixed_budget.enabled" && reason.contains("strict")),
+            "unexpected error: {err:?}",
+        );
+
+        let mut with_server_material = settings.clone();
+        with_server_material.zero_trust_profile = None;
+        with_server_material
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["fixed_budget"]["enabled"] = json!(true);
+        with_server_material
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .materials
+            .insert(
+                PAYLOAD_SYM_KEY_ROLE.to_string(),
+                "tenant-a/server-rk".to_string(),
+            );
+        let err = validate_crypto_settings(&with_server_material)
+            .expect_err("private HNSW ORAM must not accept server materials outside strict mode");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref reason, .. }
+                if reason.contains("must not configure server materials or backend")),
             "unexpected error: {err:?}",
         );
     }
@@ -18431,6 +19355,123 @@ mod tests {
 
         validate_collection_crypto_runtime_inner(&settings, "docs", &params)
             .expect("client-side vector provider should pass collection runtime validation");
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_accepts_private_hnsw_oram_vector_provider() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+                allow_inline_key_material: false,
+                instances: HashMap::from([(
+                    "docs_private_hnsw_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: private_hnsw_oram_options(),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = with_embedding_vector(
+            CollectionParams {
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 7,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "embedding_private_hnsw".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec!["embedding".to_string()],
+                        },
+                        instance: "docs_private_hnsw_v1".to_string(),
+                        binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            },
+            Distance::Cosine,
+        );
+
+        validate_collection_crypto_runtime_inner(&settings, "docs", &params)
+            .expect("private HNSW ORAM vector provider should pass collection runtime validation");
+    }
+
+    #[test]
+    fn private_hnsw_oram_vector_write_plan_rejects_plaintext_write_and_server_scoring() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+                allow_inline_key_material: false,
+                instances: HashMap::from([(
+                    "docs_private_hnsw_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: private_hnsw_oram_options(),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = with_embedding_vector(
+            CollectionParams {
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 7,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "embedding_private_hnsw".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec!["embedding".to_string()],
+                        },
+                        instance: "docs_private_hnsw_v1".to_string(),
+                        binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            },
+            Distance::Cosine,
+        );
+        let plan = vector_write_plan_for_collection_with_crypto_id(
+            &settings,
+            "docs",
+            "collection-uuid",
+            &params,
+        )
+        .unwrap()
+        .expect("private HNSW ORAM vector should produce a fail-closed vector plan");
+
+        assert!(plan.contains_vector_name("embedding"));
+        assert!(plan.is_private_hnsw_oram_vector("embedding"));
+        let err = plan
+            .encrypt_dense_vector_payload_value("docs", "point-1", "embedding", &[0.1, 0.2])
+            .expect_err("private HNSW ORAM rejects plaintext vector writes");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                    && description.contains("/private-hnsw/embedding/session")),
+            "unexpected error: {err:?}",
+        );
+
+        let err = plan
+            .score_encrypted_query_batch("docs", "embedding", &[], &[0.1, 0.2])
+            .expect_err("private HNSW ORAM rejects server-side scoring");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                    && description.contains("client-led private ORAM sessions")),
+            "unexpected error: {err:?}",
+        );
     }
 
     #[test]

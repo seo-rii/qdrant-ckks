@@ -339,3 +339,30 @@
 
 - 문서만 보고도 현재 지원 범위와 실패 모드를 이해할 수 있다.
 - release gate가 security tests, migration tests, cluster tests, bridge tests를 모두 요구한다.
+
+## Phase 11: Strict Zero-Trust Search with Private HNSW ORAM
+
+목표: `vector/private-hnsw-oram@v1` provider를 추가해 strict zero-trust profile에서 검색 가능한 server-blind ANN path를 제공한다. Qdrant는 encrypted ORAM bucket store와 epoch/root CAS만 수행하고, client SDK가 HNSW traversal, distance 계산, top-k 결정을 수행한다.
+
+작업 순서:
+
+- Phase A: control-plane provider/binding const, runtime allowlist, strict-profile validation, collection binding validation, normal vector write/search fail-closed skeleton을 추가한다.
+- Phase B: `PrivateHnswOramManifest` 타입, manifest signature format, collection-local `private_hnsw_oram/{vector}` store, bucket read/write primitive, epoch `current.json` CAS primitive를 추가한다.
+- Phase C: REST/gRPC manifest, session open/close, ORAM `read_paths`, `commit`, session lease, single-writer lock, fixed request-size validation을 추가한다.
+- Phase D: Rust 또는 Python reference SDK로 read-only bulk build, Path ORAM client, client-led HNSW traversal, known-answer fixtures를 제공한다.
+- Phase E: `ids_visible` result privacy를 문서화하고, `private_payload_oram_required` payload/result fetch 설계를 별도 provider 또는 index-token 확장으로 구체화한다.
+- Phase F: upper-layer client cache, speculative neighbor prefetch, neighbor clustering, graph-tailored ORAM 실험을 benchmark와 함께 추가한다.
+- Phase G: cluster parity fingerprint, active-session transfer reject, shard-local epoch ownership, consensus-backed epoch/root CAS를 설계하고 e2e 테스트한다.
+
+테스트:
+
+- runtime strict mode에서 private provider는 허용되고 server materials/backend, unsupported options, non-client-led search, loose fixed budget은 거부된다.
+- collection config는 `private-hnsw-oram/v1` binding과 rule당 단일 vector name만 허용하고, vector dim/distance와 runtime options mismatch를 거부한다.
+- normal `upsert`/`update_vectors` plaintext write와 server-side search/scoring은 private ORAM session API 안내 메시지로 fail closed 된다.
+- Phase B 이후 manifest signature, bucket hash, stale epoch, invalid commit signature, symlink/permission hardening, snapshot leakage, crash recovery를 추가한다.
+
+완료 조건:
+
+- `vector/client-ckks@v1`는 server-blind opaque storage, `vector/openfhe-ckks@v1`는 trusted-bridge search, `vector/private-hnsw-oram@v1`는 client-led ORAM-HNSW search로 명확히 분리된다.
+- Qdrant는 private provider에서 vector/query plaintext, distance/score, HNSW traversal decision, top-k result 결정을 수행하지 않는다.
+- private provider의 snapshot/restore/shard transfer는 encrypted buckets, manifest, epoch/root metadata만 다루고 fail-closed 검증을 갖춘다.

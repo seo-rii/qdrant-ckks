@@ -1,0 +1,206 @@
+syntax = "proto3";
+
+package qdrant;
+option csharp_namespace = "Qdrant.Client.Grpc";
+
+service PrivateHnswOram {
+  rpc GetPrivateHnswManifest(GetPrivateHnswManifestRequest)
+      returns (GetPrivateHnswManifestResponse) {}
+  rpc UploadPrivateHnswManifest(UploadPrivateHnswManifestRequest)
+      returns (PrivateHnswEpochResponse) {}
+  rpc UploadPrivateHnswBuckets(UploadPrivateHnswBucketsRequest)
+      returns (PrivateHnswEpochResponse) {}
+  rpc OpenPrivateHnswSession(OpenPrivateHnswSessionRequest)
+      returns (OpenPrivateHnswSessionResponse) {}
+  rpc ReadPrivateHnswPaths(OramReadPathsRequest)
+      returns (OramReadPathsResponse) {}
+  rpc CommitPrivateHnswPaths(OramCommitRequest)
+      returns (PrivateHnswEpochResponse) {}
+  rpc ClosePrivateHnswSession(ClosePrivateHnswSessionRequest)
+      returns (ClosePrivateHnswSessionResponse) {}
+}
+
+message GetPrivateHnswManifestRequest {
+  string collection_name = 1;
+  string vector_name = 2;
+}
+
+message GetPrivateHnswManifestResponse {
+  PrivateHnswManifest manifest = 1;
+  PrivateHnswSignature signature = 2;
+  double time = 3;
+}
+
+message UploadPrivateHnswManifestRequest {
+  string collection_name = 1;
+  string vector_name = 2;
+  PrivateHnswManifest manifest = 3;
+  PrivateHnswSignature signature = 4;
+}
+
+message UploadPrivateHnswBucketsRequest {
+  string collection_name = 1;
+  string vector_name = 2;
+  uint64 index_epoch = 3;
+  string root_hash = 4;
+  repeated PrivateHnswBucket buckets = 5;
+}
+
+message OpenPrivateHnswSessionRequest {
+  string collection_name = 1;
+  string vector_name = 2;
+  string client_id = 3;
+  uint64 desired_epoch = 4;
+  bool fixed_budget = 5;
+  PrivateHnswResultPrivacyMode result_privacy = 6;
+}
+
+message OpenPrivateHnswSessionResponse {
+  string session_id = 1;
+  string collection_id = 2;
+  string vector_name = 3;
+  uint64 index_epoch = 4;
+  string root_hash = 5;
+  PrivateHnswManifest manifest = 6;
+  uint64 lease_expires_unix = 7;
+  double time = 8;
+}
+
+message OramReadPathsRequest {
+  string collection_name = 1;
+  string vector_name = 2;
+  string session_id = 3;
+  uint64 index_epoch = 4;
+  string root_hash = 5;
+  repeated string paths = 6;
+  OramReadPadding padding = 7;
+  PrivateHnswSignature client_signature = 8;
+}
+
+message OramReadPadding {
+  uint32 requested_paths = 1;
+  bool dummy_paths_included = 2;
+}
+
+message OramReadPathsResponse {
+  uint64 index_epoch = 1;
+  string root_hash = 2;
+  repeated PrivateHnswBucket buckets = 3;
+  OramReadProof proof = 4;
+  double time = 5;
+}
+
+message OramReadProof {
+  string kind = 1;
+  string value = 2;
+}
+
+message OramCommitRequest {
+  string collection_name = 1;
+  string vector_name = 2;
+  string session_id = 3;
+  uint64 old_epoch = 4;
+  uint64 new_epoch = 5;
+  string old_root_hash = 6;
+  string new_root_hash = 7;
+  repeated PrivateHnswBucket updated_buckets = 8;
+  PrivateHnswSignature commit_signature = 9;
+}
+
+message ClosePrivateHnswSessionRequest {
+  string collection_name = 1;
+  string vector_name = 2;
+  string session_id = 3;
+}
+
+message ClosePrivateHnswSessionResponse {
+  bool closed = 1;
+  double time = 2;
+}
+
+message PrivateHnswEpochResponse {
+  uint64 index_epoch = 1;
+  string root_hash = 2;
+  double time = 3;
+}
+
+message PrivateHnswManifest {
+  uint32 version = 1;
+  string provider = 2;
+  string binding = 3;
+  string collection_id = 4;
+  string vector_name = 5;
+  string key_id = 6;
+  string rk_id = 7;
+  uint64 rk_epoch = 8;
+  uint32 dim = 9;
+  PrivateHnswDistanceKind distance = 10;
+  PrivateHnswParams hnsw = 11;
+  OramParams oram = 12;
+  FixedBudgetParams fixed_budget = 13;
+  uint64 index_epoch = 14;
+  string root_hash = 15;
+  uint64 bucket_count = 16;
+  uint64 logical_node_count = 17;
+  uint64 dummy_node_count = 18;
+  PrivateHnswResultPrivacyMode result_privacy = 19;
+  string owner_signing_key_id = 20;
+  uint64 created_at_unix = 21;
+}
+
+message PrivateHnswParams {
+  uint32 m = 1;
+  uint32 ef_construction = 2;
+  uint32 max_layers = 3;
+  uint32 fixed_neighbor_slots = 4;
+}
+
+message OramParams {
+  OramKind kind = 1;
+  uint32 bucket_size = 2;
+  uint32 block_size_bytes = 3;
+  uint32 tree_height = 4;
+  uint32 path_batch_size = 5;
+}
+
+message FixedBudgetParams {
+  bool enabled = 1;
+  uint32 upper_layer_steps = 2;
+  uint32 base_layer_steps = 3;
+  uint32 paths_per_round = 4;
+  uint32 fixed_result_k = 5;
+}
+
+message PrivateHnswBucket {
+  uint32 version = 1;
+  uint64 bucket_id = 2;
+  uint64 index_epoch = 3;
+  string ciphertext = 4;
+  string ciphertext_sha256 = 5;
+  string bucket_commitment = 6;
+}
+
+message PrivateHnswSignature {
+  string alg = 1;
+  string key_id = 2;
+  string sig = 3;
+}
+
+enum PrivateHnswDistanceKind {
+  PRIVATE_HNSW_DISTANCE_KIND_UNSPECIFIED = 0;
+  PRIVATE_HNSW_DISTANCE_KIND_COSINE = 1;
+  PRIVATE_HNSW_DISTANCE_KIND_DOT = 2;
+  PRIVATE_HNSW_DISTANCE_KIND_EUCLID = 3;
+  PRIVATE_HNSW_DISTANCE_KIND_MANHATTAN = 4;
+}
+
+enum PrivateHnswResultPrivacyMode {
+  PRIVATE_HNSW_RESULT_PRIVACY_MODE_UNSPECIFIED = 0;
+  PRIVATE_HNSW_RESULT_PRIVACY_MODE_IDS_VISIBLE = 1;
+  PRIVATE_HNSW_RESULT_PRIVACY_MODE_PRIVATE_PAYLOAD_ORAM_REQUIRED = 2;
+}
+
+enum OramKind {
+  ORAM_KIND_UNSPECIFIED = 0;
+  ORAM_KIND_PATH_ORAM = 1;
+}

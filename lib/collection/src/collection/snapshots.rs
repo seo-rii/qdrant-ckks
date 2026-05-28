@@ -6,6 +6,10 @@ use common::storage_version::StorageVersion as _;
 use common::tar_ext::BuilderExt;
 use common::tar_unpack::tar_unpack_file;
 use fs_err::File;
+use qdrant_sec::{
+    DistanceKind, PRIVATE_HNSW_ORAM_BINDING, PrivateHnswOramManifest, PrivateHnswOramSignature,
+    validate_private_hnsw_oram_manifest_shape, validate_private_hnsw_oram_manifest_signature_shape,
+};
 use segment::types::SnapshotFormat;
 use segment::utils::fs::move_all;
 use shard::files::PAYLOAD_INDEX_CONFIG_FILE;
@@ -19,10 +23,11 @@ use crate::common::snapshot_stream::SnapshotStream;
 use crate::common::snapshots_manager::SnapshotStorageManager;
 use crate::config::{
     COLLECTION_CONFIG_FILE, CollectionConfigInternal, CollectionParams, CryptoMigrationState,
-    ShardingMethod,
+    EncryptionSelector, ShardingMethod,
 };
 use crate::operations::snapshot_ops::SnapshotDescription;
 use crate::operations::types::{CollectionError, CollectionResult, NodeType};
+use crate::private_hnsw_oram_store::{PRIVATE_HNSW_ORAM_DIR, PrivateHnswOramStore};
 use crate::shards::local_shard::LocalShard;
 use crate::shards::remote_shard::RemoteShard;
 use crate::shards::replica_set::ShardReplicaSet;
@@ -158,6 +163,19 @@ impl Collection {
             .save_to_tar(&tar, Path::new(PAYLOAD_INDEX_CONFIG_FILE))
             .await?;
 
+        let private_hnsw_oram_path = self.path.join(PRIVATE_HNSW_ORAM_DIR);
+        if private_hnsw_oram_path.exists() {
+            let tar = tar.clone();
+            tokio::task::spawn_blocking(move || {
+                tar.blocking_append_dir_all(
+                    &private_hnsw_oram_path,
+                    Path::new(PRIVATE_HNSW_ORAM_DIR),
+                )
+            })
+            .await
+            .map_err(CollectionError::from)??;
+        }
+
         tar.finish().await.map_err(|err| {
             CollectionError::service_error(format!("failed to create snapshot archive: {err}"))
         })?;
@@ -245,6 +263,40 @@ impl Collection {
                     "Can't read shard config at {}",
                     shard_path.display()
                 )));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn validate_private_hnsw_oram_snapshot_restore_layout(
+        collection_name: &str,
+        config: &CollectionConfigInternal,
+        collection_dir: &Path,
+    ) -> CollectionResult<()> {
+        let Some(encryption) = config.params.effective_encryption() else {
+            return Ok(());
+        };
+        let stable_crypto_id = config.stable_crypto_id(collection_name)?;
+
+        for rule in encryption
+            .rules
+            .iter()
+            .filter(|rule| rule.binding.as_deref() == Some(PRIVATE_HNSW_ORAM_BINDING))
+        {
+            let EncryptionSelector::VectorNames { names } = &rule.selector else {
+                return Err(CollectionError::bad_request(format!(
+                    "private HNSW ORAM snapshot rule {} must use vector_names selector",
+                    rule.id,
+                )));
+            };
+            for vector_name in names {
+                validate_private_hnsw_oram_vector_snapshot(
+                    collection_dir,
+                    &stable_crypto_id,
+                    &config.params,
+                    vector_name,
+                )?;
             }
         }
 
@@ -433,10 +485,151 @@ fn ensure_snapshot_crypto_migration_state_allows_snapshot(
     Ok(())
 }
 
+fn validate_private_hnsw_oram_vector_snapshot(
+    collection_dir: &Path,
+    stable_crypto_id: &str,
+    params: &CollectionParams,
+    vector_name: &str,
+) -> CollectionResult<()> {
+    let vector_params = params.vectors.get_params(vector_name).ok_or_else(|| {
+        CollectionError::bad_request(format!(
+            "private HNSW ORAM snapshot vector '{vector_name}' is not configured",
+        ))
+    })?;
+    let expected_dim = u32::try_from(vector_params.size.get()).map_err(|_| {
+        CollectionError::bad_request(format!(
+            "private HNSW ORAM snapshot vector '{vector_name}' dimension exceeds u32",
+        ))
+    })?;
+    let expected_distance = private_hnsw_distance_kind(vector_params.distance);
+
+    let store = PrivateHnswOramStore::new(collection_dir, vector_name)?;
+    let (manifest, signature) = store.read_manifest()?;
+    validate_private_hnsw_oram_restore_manifest(
+        &manifest,
+        &signature,
+        stable_crypto_id,
+        vector_name,
+        expected_dim,
+        expected_distance,
+    )?;
+
+    let current_epoch = store.read_current_epoch()?;
+    if current_epoch.index_epoch != manifest.index_epoch
+        || current_epoch.root_hash != manifest.root_hash
+    {
+        return Err(CollectionError::bad_request(format!(
+            "private HNSW ORAM snapshot vector '{vector_name}' current epoch/root does not match manifest",
+        )));
+    }
+
+    store.read_bucket(
+        0,
+        manifest.index_epoch,
+        manifest.bucket_count,
+        private_hnsw_restore_max_bucket_ciphertext_bytes(&manifest)?,
+    )?;
+    store.read_merkle_path_batch(
+        &[0],
+        manifest.index_epoch,
+        &manifest.root_hash,
+        manifest.bucket_count,
+    )?;
+
+    Ok(())
+}
+
+fn validate_private_hnsw_oram_restore_manifest(
+    manifest: &PrivateHnswOramManifest,
+    signature: &PrivateHnswOramSignature,
+    stable_crypto_id: &str,
+    vector_name: &str,
+    expected_dim: u32,
+    expected_distance: DistanceKind,
+) -> CollectionResult<()> {
+    validate_private_hnsw_oram_manifest_shape(manifest).map_err(private_hnsw_restore_error)?;
+    validate_private_hnsw_oram_manifest_signature_shape(signature)
+        .map_err(private_hnsw_restore_error)?;
+    if signature.key_id != manifest.owner_signing_key_id {
+        return Err(CollectionError::bad_request(format!(
+            "private HNSW ORAM snapshot manifest signature key_id {} does not match owner_signing_key_id {}",
+            signature.key_id, manifest.owner_signing_key_id,
+        )));
+    }
+    if manifest.collection_id != stable_crypto_id {
+        return Err(CollectionError::bad_request(format!(
+            "private HNSW ORAM snapshot manifest collection_id mismatch: expected {stable_crypto_id}, found {}",
+            manifest.collection_id,
+        )));
+    }
+    if manifest.vector_name != vector_name {
+        return Err(CollectionError::bad_request(format!(
+            "private HNSW ORAM snapshot manifest vector_name mismatch: expected {vector_name}, found {}",
+            manifest.vector_name,
+        )));
+    }
+    if manifest.dim != expected_dim {
+        return Err(CollectionError::bad_request(format!(
+            "private HNSW ORAM snapshot manifest dim mismatch for vector '{vector_name}': expected {expected_dim}, found {}",
+            manifest.dim,
+        )));
+    }
+    if manifest.distance != expected_distance {
+        return Err(CollectionError::bad_request(format!(
+            "private HNSW ORAM snapshot manifest distance mismatch for vector '{vector_name}'",
+        )));
+    }
+    Ok(())
+}
+
+fn private_hnsw_restore_max_bucket_ciphertext_bytes(
+    manifest: &PrivateHnswOramManifest,
+) -> CollectionResult<usize> {
+    let block_size = usize::try_from(manifest.oram.block_size_bytes).map_err(|_| {
+        CollectionError::bad_request("private HNSW ORAM block_size_bytes exceeds usize")
+    })?;
+    let bucket_size = usize::try_from(manifest.oram.bucket_size)
+        .map_err(|_| CollectionError::bad_request("private HNSW ORAM bucket_size exceeds usize"))?;
+    block_size
+        .checked_mul(bucket_size)
+        .and_then(|size| size.checked_add(4096))
+        .ok_or_else(|| CollectionError::bad_request("private HNSW ORAM bucket size overflows"))
+}
+
+fn private_hnsw_restore_error(err: qdrant_sec::PrivateHnswOramError) -> CollectionError {
+    CollectionError::bad_request(err.to_string())
+}
+
+fn private_hnsw_distance_kind(distance: segment::types::Distance) -> DistanceKind {
+    match distance {
+        segment::types::Distance::Cosine => DistanceKind::Cosine,
+        segment::types::Distance::Euclid => DistanceKind::Euclid,
+        segment::types::Distance::Dot => DistanceKind::Dot,
+        segment::types::Distance::Manhattan => DistanceKind::Manhattan,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use data_encoding::BASE64URL_NOPAD;
+    use qdrant_sec::{
+        FixedBudgetParams, OramKind, OramParams, PrivateHnswOramBucket, PrivateHnswParams,
+        ResultPrivacyMode, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+    };
+    use segment::types::{Distance, HnswConfig};
+    use sha2::{Digest, Sha256};
+    use uuid::Uuid;
+
     use super::*;
-    use crate::config::{CollectionEncryptionConfig, CollectionParams};
+    use crate::config::{
+        CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams, EncryptionRuleRef,
+        WalConfig,
+    };
+    use crate::operations::types::VectorsConfig;
+    use crate::operations::vector_params_builder::VectorParamsBuilder;
+    use crate::optimizers_builder::OptimizersConfig;
 
     fn params_with_migration_state(migration_state: CryptoMigrationState) -> CollectionParams {
         CollectionParams {
@@ -450,6 +643,128 @@ mod tests {
             }),
             ..CollectionParams::empty()
         }
+    }
+
+    fn private_hnsw_config(uuid: Uuid) -> CollectionConfigInternal {
+        CollectionConfigInternal {
+            params: CollectionParams {
+                vectors: VectorsConfig::Multi(BTreeMap::from([(
+                    "text".into(),
+                    VectorParamsBuilder::new(1536, Distance::Cosine).build(),
+                )])),
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a/vector-private-rk".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 7,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "docs_text_private_hnsw".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec!["text".to_string()],
+                        },
+                        instance: "docs_text_private_hnsw".to_string(),
+                        binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            },
+            hnsw_config: HnswConfig::default(),
+            optimizer_config: OptimizersConfig::fixture(),
+            wal_config: WalConfig::default(),
+            quantization_config: None,
+            strict_mode_config: None,
+            uuid: Some(uuid),
+            metadata: None,
+        }
+    }
+
+    fn private_hnsw_manifest(collection_id: String) -> PrivateHnswOramManifest {
+        PrivateHnswOramManifest {
+            version: 1,
+            provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+            binding: PRIVATE_HNSW_ORAM_BINDING.to_string(),
+            collection_id,
+            vector_name: "text".to_string(),
+            key_id: "tenant-a/vector-private-rk".to_string(),
+            rk_id: "tenant-a/vector-private-rk".to_string(),
+            rk_epoch: 7,
+            dim: 1536,
+            distance: DistanceKind::Cosine,
+            hnsw: PrivateHnswParams {
+                m: 32,
+                ef_construction: 128,
+                max_layers: 16,
+                fixed_neighbor_slots: 64,
+            },
+            oram: OramParams {
+                kind: OramKind::PathOram,
+                bucket_size: 4,
+                block_size_bytes: 8192,
+                tree_height: 3,
+                path_batch_size: 2,
+            },
+            fixed_budget: FixedBudgetParams {
+                enabled: true,
+                upper_layer_steps: 32,
+                base_layer_steps: 256,
+                paths_per_round: 2,
+                fixed_result_k: 10,
+            },
+            index_epoch: 42,
+            root_hash: BASE64URL_NOPAD.encode(&[9; 32]),
+            bucket_count: 1,
+            logical_node_count: 3,
+            dummy_node_count: 1,
+            result_privacy: ResultPrivacyMode::IdsVisible,
+            owner_signing_key_id: "tenant-a/private-hnsw-signing-v1".to_string(),
+            created_at_unix: 1,
+        }
+    }
+
+    fn write_private_hnsw_snapshot_fixture(
+        collection_dir: &Path,
+        manifest: &PrivateHnswOramManifest,
+    ) {
+        let store = PrivateHnswOramStore::new(collection_dir, "text").unwrap();
+        let signature = PrivateHnswOramSignature {
+            alg: "ed25519".to_string(),
+            key_id: manifest.owner_signing_key_id.clone(),
+            sig: BASE64URL_NOPAD.encode(&[7; 64]),
+        };
+        store.write_manifest(manifest, &signature).unwrap();
+        store
+            .write_initial_epoch(&crate::private_hnsw_oram_store::PrivateHnswOramEpochState {
+                index_epoch: manifest.index_epoch,
+                root_hash: manifest.root_hash.clone(),
+            })
+            .unwrap();
+
+        let ciphertext = BASE64URL_NOPAD.encode(b"encrypted bucket 0");
+        let ciphertext_sha256 =
+            BASE64URL_NOPAD.encode(Sha256::digest(b"encrypted bucket 0").as_ref());
+        store
+            .write_bucket(
+                &PrivateHnswOramBucket {
+                    version: 1,
+                    bucket_id: 0,
+                    index_epoch: manifest.index_epoch,
+                    ciphertext,
+                    ciphertext_sha256,
+                    bucket_commitment: BASE64URL_NOPAD.encode(&[9; 32]),
+                },
+                manifest.index_epoch,
+                manifest.bucket_count,
+                private_hnsw_restore_max_bucket_ciphertext_bytes(manifest).unwrap(),
+            )
+            .unwrap();
+        store
+            .write_merkle_tree_from_commitments(
+                manifest.index_epoch,
+                manifest.root_hash.clone(),
+                vec![BASE64URL_NOPAD.encode(&[9; 32])],
+            )
+            .unwrap();
     }
 
     #[test]
@@ -480,5 +795,83 @@ mod tests {
                 "unexpected error for {migration_state:?}: {err}",
             );
         }
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_accepts_manifest_epoch_and_bucket() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-ok")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+
+        Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_context_mismatch() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-bad-context")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(Uuid::from_u128(8).to_string());
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("collection_id mismatch"));
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_missing_bucket_zero() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-missing-bucket")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        let store = PrivateHnswOramStore::new(temp_dir.path(), "text").unwrap();
+        let signature = PrivateHnswOramSignature {
+            alg: "ed25519".to_string(),
+            key_id: manifest.owner_signing_key_id.clone(),
+            sig: BASE64URL_NOPAD.encode(&[7; 64]),
+        };
+        store.write_manifest(&manifest, &signature).unwrap();
+        store
+            .write_initial_epoch(&crate::private_hnsw_oram_store::PrivateHnswOramEpochState {
+                index_epoch: manifest.index_epoch,
+                root_hash: manifest.root_hash.clone(),
+            })
+            .unwrap();
+        store
+            .write_merkle_tree_from_commitments(
+                manifest.index_epoch,
+                manifest.root_hash.clone(),
+                vec![BASE64URL_NOPAD.encode(&[9; 32])],
+            )
+            .unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("00000000.bucket"));
     }
 }

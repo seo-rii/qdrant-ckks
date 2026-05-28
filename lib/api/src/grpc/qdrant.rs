@@ -10375,6 +10375,1234 @@ pub mod points_server {
     }
 }
 #[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetPrivateHnswManifestRequest {
+    #[prost(string, tag = "1")]
+    pub collection_name: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub vector_name: ::prost::alloc::string::String,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetPrivateHnswManifestResponse {
+    #[prost(message, optional, tag = "1")]
+    pub manifest: ::core::option::Option<PrivateHnswManifest>,
+    #[prost(message, optional, tag = "2")]
+    pub signature: ::core::option::Option<PrivateHnswSignature>,
+    #[prost(double, tag = "3")]
+    pub time: f64,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UploadPrivateHnswManifestRequest {
+    #[prost(string, tag = "1")]
+    pub collection_name: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub vector_name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "3")]
+    pub manifest: ::core::option::Option<PrivateHnswManifest>,
+    #[prost(message, optional, tag = "4")]
+    pub signature: ::core::option::Option<PrivateHnswSignature>,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UploadPrivateHnswBucketsRequest {
+    #[prost(string, tag = "1")]
+    pub collection_name: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub vector_name: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "3")]
+    pub index_epoch: u64,
+    #[prost(string, tag = "4")]
+    pub root_hash: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "5")]
+    pub buckets: ::prost::alloc::vec::Vec<PrivateHnswBucket>,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OpenPrivateHnswSessionRequest {
+    #[prost(string, tag = "1")]
+    pub collection_name: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub vector_name: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub client_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "4")]
+    pub desired_epoch: u64,
+    #[prost(bool, tag = "5")]
+    pub fixed_budget: bool,
+    #[prost(enumeration = "PrivateHnswResultPrivacyMode", tag = "6")]
+    pub result_privacy: i32,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OpenPrivateHnswSessionResponse {
+    #[prost(string, tag = "1")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub collection_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub vector_name: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "4")]
+    pub index_epoch: u64,
+    #[prost(string, tag = "5")]
+    pub root_hash: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "6")]
+    pub manifest: ::core::option::Option<PrivateHnswManifest>,
+    #[prost(uint64, tag = "7")]
+    pub lease_expires_unix: u64,
+    #[prost(double, tag = "8")]
+    pub time: f64,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OramReadPathsRequest {
+    #[prost(string, tag = "1")]
+    pub collection_name: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub vector_name: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "4")]
+    pub index_epoch: u64,
+    #[prost(string, tag = "5")]
+    pub root_hash: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "6")]
+    pub paths: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, optional, tag = "7")]
+    pub padding: ::core::option::Option<OramReadPadding>,
+    #[prost(message, optional, tag = "8")]
+    pub client_signature: ::core::option::Option<PrivateHnswSignature>,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OramReadPadding {
+    #[prost(uint32, tag = "1")]
+    pub requested_paths: u32,
+    #[prost(bool, tag = "2")]
+    pub dummy_paths_included: bool,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OramReadPathsResponse {
+    #[prost(uint64, tag = "1")]
+    pub index_epoch: u64,
+    #[prost(string, tag = "2")]
+    pub root_hash: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "3")]
+    pub buckets: ::prost::alloc::vec::Vec<PrivateHnswBucket>,
+    #[prost(message, optional, tag = "4")]
+    pub proof: ::core::option::Option<OramReadProof>,
+    #[prost(double, tag = "5")]
+    pub time: f64,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OramReadProof {
+    #[prost(string, tag = "1")]
+    pub kind: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OramCommitRequest {
+    #[prost(string, tag = "1")]
+    pub collection_name: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub vector_name: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "4")]
+    pub old_epoch: u64,
+    #[prost(uint64, tag = "5")]
+    pub new_epoch: u64,
+    #[prost(string, tag = "6")]
+    pub old_root_hash: ::prost::alloc::string::String,
+    #[prost(string, tag = "7")]
+    pub new_root_hash: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "8")]
+    pub updated_buckets: ::prost::alloc::vec::Vec<PrivateHnswBucket>,
+    #[prost(message, optional, tag = "9")]
+    pub commit_signature: ::core::option::Option<PrivateHnswSignature>,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ClosePrivateHnswSessionRequest {
+    #[prost(string, tag = "1")]
+    pub collection_name: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub vector_name: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub session_id: ::prost::alloc::string::String,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ClosePrivateHnswSessionResponse {
+    #[prost(bool, tag = "1")]
+    pub closed: bool,
+    #[prost(double, tag = "2")]
+    pub time: f64,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrivateHnswEpochResponse {
+    #[prost(uint64, tag = "1")]
+    pub index_epoch: u64,
+    #[prost(string, tag = "2")]
+    pub root_hash: ::prost::alloc::string::String,
+    #[prost(double, tag = "3")]
+    pub time: f64,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrivateHnswManifest {
+    #[prost(uint32, tag = "1")]
+    pub version: u32,
+    #[prost(string, tag = "2")]
+    pub provider: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub binding: ::prost::alloc::string::String,
+    #[prost(string, tag = "4")]
+    pub collection_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "5")]
+    pub vector_name: ::prost::alloc::string::String,
+    #[prost(string, tag = "6")]
+    pub key_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "7")]
+    pub rk_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "8")]
+    pub rk_epoch: u64,
+    #[prost(uint32, tag = "9")]
+    pub dim: u32,
+    #[prost(enumeration = "PrivateHnswDistanceKind", tag = "10")]
+    pub distance: i32,
+    #[prost(message, optional, tag = "11")]
+    pub hnsw: ::core::option::Option<PrivateHnswParams>,
+    #[prost(message, optional, tag = "12")]
+    pub oram: ::core::option::Option<OramParams>,
+    #[prost(message, optional, tag = "13")]
+    pub fixed_budget: ::core::option::Option<FixedBudgetParams>,
+    #[prost(uint64, tag = "14")]
+    pub index_epoch: u64,
+    #[prost(string, tag = "15")]
+    pub root_hash: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "16")]
+    pub bucket_count: u64,
+    #[prost(uint64, tag = "17")]
+    pub logical_node_count: u64,
+    #[prost(uint64, tag = "18")]
+    pub dummy_node_count: u64,
+    #[prost(enumeration = "PrivateHnswResultPrivacyMode", tag = "19")]
+    pub result_privacy: i32,
+    #[prost(string, tag = "20")]
+    pub owner_signing_key_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "21")]
+    pub created_at_unix: u64,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrivateHnswParams {
+    #[prost(uint32, tag = "1")]
+    pub m: u32,
+    #[prost(uint32, tag = "2")]
+    pub ef_construction: u32,
+    #[prost(uint32, tag = "3")]
+    pub max_layers: u32,
+    #[prost(uint32, tag = "4")]
+    pub fixed_neighbor_slots: u32,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OramParams {
+    #[prost(enumeration = "OramKind", tag = "1")]
+    pub kind: i32,
+    #[prost(uint32, tag = "2")]
+    pub bucket_size: u32,
+    #[prost(uint32, tag = "3")]
+    pub block_size_bytes: u32,
+    #[prost(uint32, tag = "4")]
+    pub tree_height: u32,
+    #[prost(uint32, tag = "5")]
+    pub path_batch_size: u32,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FixedBudgetParams {
+    #[prost(bool, tag = "1")]
+    pub enabled: bool,
+    #[prost(uint32, tag = "2")]
+    pub upper_layer_steps: u32,
+    #[prost(uint32, tag = "3")]
+    pub base_layer_steps: u32,
+    #[prost(uint32, tag = "4")]
+    pub paths_per_round: u32,
+    #[prost(uint32, tag = "5")]
+    pub fixed_result_k: u32,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrivateHnswBucket {
+    #[prost(uint32, tag = "1")]
+    pub version: u32,
+    #[prost(uint64, tag = "2")]
+    pub bucket_id: u64,
+    #[prost(uint64, tag = "3")]
+    pub index_epoch: u64,
+    #[prost(string, tag = "4")]
+    pub ciphertext: ::prost::alloc::string::String,
+    #[prost(string, tag = "5")]
+    pub ciphertext_sha256: ::prost::alloc::string::String,
+    #[prost(string, tag = "6")]
+    pub bucket_commitment: ::prost::alloc::string::String,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrivateHnswSignature {
+    #[prost(string, tag = "1")]
+    pub alg: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub key_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub sig: ::prost::alloc::string::String,
+}
+#[derive(serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum PrivateHnswDistanceKind {
+    Unspecified = 0,
+    Cosine = 1,
+    Dot = 2,
+    Euclid = 3,
+    Manhattan = 4,
+}
+impl PrivateHnswDistanceKind {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            PrivateHnswDistanceKind::Unspecified => {
+                "PRIVATE_HNSW_DISTANCE_KIND_UNSPECIFIED"
+            }
+            PrivateHnswDistanceKind::Cosine => "PRIVATE_HNSW_DISTANCE_KIND_COSINE",
+            PrivateHnswDistanceKind::Dot => "PRIVATE_HNSW_DISTANCE_KIND_DOT",
+            PrivateHnswDistanceKind::Euclid => "PRIVATE_HNSW_DISTANCE_KIND_EUCLID",
+            PrivateHnswDistanceKind::Manhattan => "PRIVATE_HNSW_DISTANCE_KIND_MANHATTAN",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "PRIVATE_HNSW_DISTANCE_KIND_UNSPECIFIED" => Some(Self::Unspecified),
+            "PRIVATE_HNSW_DISTANCE_KIND_COSINE" => Some(Self::Cosine),
+            "PRIVATE_HNSW_DISTANCE_KIND_DOT" => Some(Self::Dot),
+            "PRIVATE_HNSW_DISTANCE_KIND_EUCLID" => Some(Self::Euclid),
+            "PRIVATE_HNSW_DISTANCE_KIND_MANHATTAN" => Some(Self::Manhattan),
+            _ => None,
+        }
+    }
+}
+#[derive(serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum PrivateHnswResultPrivacyMode {
+    Unspecified = 0,
+    IdsVisible = 1,
+    PrivatePayloadOramRequired = 2,
+}
+impl PrivateHnswResultPrivacyMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            PrivateHnswResultPrivacyMode::Unspecified => {
+                "PRIVATE_HNSW_RESULT_PRIVACY_MODE_UNSPECIFIED"
+            }
+            PrivateHnswResultPrivacyMode::IdsVisible => {
+                "PRIVATE_HNSW_RESULT_PRIVACY_MODE_IDS_VISIBLE"
+            }
+            PrivateHnswResultPrivacyMode::PrivatePayloadOramRequired => {
+                "PRIVATE_HNSW_RESULT_PRIVACY_MODE_PRIVATE_PAYLOAD_ORAM_REQUIRED"
+            }
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "PRIVATE_HNSW_RESULT_PRIVACY_MODE_UNSPECIFIED" => Some(Self::Unspecified),
+            "PRIVATE_HNSW_RESULT_PRIVACY_MODE_IDS_VISIBLE" => Some(Self::IdsVisible),
+            "PRIVATE_HNSW_RESULT_PRIVACY_MODE_PRIVATE_PAYLOAD_ORAM_REQUIRED" => {
+                Some(Self::PrivatePayloadOramRequired)
+            }
+            _ => None,
+        }
+    }
+}
+#[derive(serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum OramKind {
+    Unspecified = 0,
+    PathOram = 1,
+}
+impl OramKind {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            OramKind::Unspecified => "ORAM_KIND_UNSPECIFIED",
+            OramKind::PathOram => "ORAM_KIND_PATH_ORAM",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "ORAM_KIND_UNSPECIFIED" => Some(Self::Unspecified),
+            "ORAM_KIND_PATH_ORAM" => Some(Self::PathOram),
+            _ => None,
+        }
+    }
+}
+/// Generated client implementations.
+pub mod private_hnsw_oram_client {
+    #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
+    use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
+    #[derive(Debug, Clone)]
+    pub struct PrivateHnswOramClient<T> {
+        inner: tonic::client::Grpc<T>,
+    }
+    impl PrivateHnswOramClient<tonic::transport::Channel> {
+        /// Attempt to create a new client by connecting to a given endpoint.
+        pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
+        where
+            D: TryInto<tonic::transport::Endpoint>,
+            D::Error: Into<StdError>,
+        {
+            let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
+            Ok(Self::new(conn))
+        }
+    }
+    impl<T> PrivateHnswOramClient<T>
+    where
+        T: tonic::client::GrpcService<tonic::body::BoxBody>,
+        T::Error: Into<StdError>,
+        T::ResponseBody: Body<Data = Bytes> + Send + 'static,
+        <T::ResponseBody as Body>::Error: Into<StdError> + Send,
+    {
+        pub fn new(inner: T) -> Self {
+            let inner = tonic::client::Grpc::new(inner);
+            Self { inner }
+        }
+        pub fn with_origin(inner: T, origin: Uri) -> Self {
+            let inner = tonic::client::Grpc::with_origin(inner, origin);
+            Self { inner }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> PrivateHnswOramClient<InterceptedService<T, F>>
+        where
+            F: tonic::service::Interceptor,
+            T::ResponseBody: Default,
+            T: tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+                Response = http::Response<
+                    <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
+                >,
+            >,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+            >>::Error: Into<StdError> + Send + Sync,
+        {
+            PrivateHnswOramClient::new(InterceptedService::new(inner, interceptor))
+        }
+        /// Compress requests with the given encoding.
+        ///
+        /// This requires the server to support it otherwise it might respond with an
+        /// error.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.send_compressed(encoding);
+            self
+        }
+        /// Enable decompressing responses.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.accept_compressed(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_decoding_message_size(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_encoding_message_size(limit);
+            self
+        }
+        pub async fn get_private_hnsw_manifest(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetPrivateHnswManifestRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetPrivateHnswManifestResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/qdrant.PrivateHnswOram/GetPrivateHnswManifest",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("qdrant.PrivateHnswOram", "GetPrivateHnswManifest"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn upload_private_hnsw_manifest(
+            &mut self,
+            request: impl tonic::IntoRequest<super::UploadPrivateHnswManifestRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::PrivateHnswEpochResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/qdrant.PrivateHnswOram/UploadPrivateHnswManifest",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "qdrant.PrivateHnswOram",
+                        "UploadPrivateHnswManifest",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn upload_private_hnsw_buckets(
+            &mut self,
+            request: impl tonic::IntoRequest<super::UploadPrivateHnswBucketsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::PrivateHnswEpochResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/qdrant.PrivateHnswOram/UploadPrivateHnswBuckets",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("qdrant.PrivateHnswOram", "UploadPrivateHnswBuckets"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn open_private_hnsw_session(
+            &mut self,
+            request: impl tonic::IntoRequest<super::OpenPrivateHnswSessionRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::OpenPrivateHnswSessionResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/qdrant.PrivateHnswOram/OpenPrivateHnswSession",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("qdrant.PrivateHnswOram", "OpenPrivateHnswSession"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn read_private_hnsw_paths(
+            &mut self,
+            request: impl tonic::IntoRequest<super::OramReadPathsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::OramReadPathsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/qdrant.PrivateHnswOram/ReadPrivateHnswPaths",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("qdrant.PrivateHnswOram", "ReadPrivateHnswPaths"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn commit_private_hnsw_paths(
+            &mut self,
+            request: impl tonic::IntoRequest<super::OramCommitRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::PrivateHnswEpochResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/qdrant.PrivateHnswOram/CommitPrivateHnswPaths",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("qdrant.PrivateHnswOram", "CommitPrivateHnswPaths"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn close_private_hnsw_session(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ClosePrivateHnswSessionRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ClosePrivateHnswSessionResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/qdrant.PrivateHnswOram/ClosePrivateHnswSession",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("qdrant.PrivateHnswOram", "ClosePrivateHnswSession"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+    }
+}
+/// Generated server implementations.
+pub mod private_hnsw_oram_server {
+    #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
+    use tonic::codegen::*;
+    /// Generated trait containing gRPC methods that should be implemented for use with PrivateHnswOramServer.
+    #[async_trait]
+    pub trait PrivateHnswOram: Send + Sync + 'static {
+        async fn get_private_hnsw_manifest(
+            &self,
+            request: tonic::Request<super::GetPrivateHnswManifestRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetPrivateHnswManifestResponse>,
+            tonic::Status,
+        >;
+        async fn upload_private_hnsw_manifest(
+            &self,
+            request: tonic::Request<super::UploadPrivateHnswManifestRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::PrivateHnswEpochResponse>,
+            tonic::Status,
+        >;
+        async fn upload_private_hnsw_buckets(
+            &self,
+            request: tonic::Request<super::UploadPrivateHnswBucketsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::PrivateHnswEpochResponse>,
+            tonic::Status,
+        >;
+        async fn open_private_hnsw_session(
+            &self,
+            request: tonic::Request<super::OpenPrivateHnswSessionRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::OpenPrivateHnswSessionResponse>,
+            tonic::Status,
+        >;
+        async fn read_private_hnsw_paths(
+            &self,
+            request: tonic::Request<super::OramReadPathsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::OramReadPathsResponse>,
+            tonic::Status,
+        >;
+        async fn commit_private_hnsw_paths(
+            &self,
+            request: tonic::Request<super::OramCommitRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::PrivateHnswEpochResponse>,
+            tonic::Status,
+        >;
+        async fn close_private_hnsw_session(
+            &self,
+            request: tonic::Request<super::ClosePrivateHnswSessionRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ClosePrivateHnswSessionResponse>,
+            tonic::Status,
+        >;
+    }
+    #[derive(Debug)]
+    pub struct PrivateHnswOramServer<T: PrivateHnswOram> {
+        inner: _Inner<T>,
+        accept_compression_encodings: EnabledCompressionEncodings,
+        send_compression_encodings: EnabledCompressionEncodings,
+        max_decoding_message_size: Option<usize>,
+        max_encoding_message_size: Option<usize>,
+    }
+    struct _Inner<T>(Arc<T>);
+    impl<T: PrivateHnswOram> PrivateHnswOramServer<T> {
+        pub fn new(inner: T) -> Self {
+            Self::from_arc(Arc::new(inner))
+        }
+        pub fn from_arc(inner: Arc<T>) -> Self {
+            let inner = _Inner(inner);
+            Self {
+                inner,
+                accept_compression_encodings: Default::default(),
+                send_compression_encodings: Default::default(),
+                max_decoding_message_size: None,
+                max_encoding_message_size: None,
+            }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
+        where
+            F: tonic::service::Interceptor,
+        {
+            InterceptedService::new(Self::new(inner), interceptor)
+        }
+        /// Enable decompressing requests with the given encoding.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.accept_compression_encodings.enable(encoding);
+            self
+        }
+        /// Compress responses with the given encoding, if the client supports it.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.send_compression_encodings.enable(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.max_decoding_message_size = Some(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.max_encoding_message_size = Some(limit);
+            self
+        }
+    }
+    impl<T, B> tonic::codegen::Service<http::Request<B>> for PrivateHnswOramServer<T>
+    where
+        T: PrivateHnswOram,
+        B: Body + Send + 'static,
+        B::Error: Into<StdError> + Send + 'static,
+    {
+        type Response = http::Response<tonic::body::BoxBody>;
+        type Error = std::convert::Infallible;
+        type Future = BoxFuture<Self::Response, Self::Error>;
+        fn poll_ready(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, req: http::Request<B>) -> Self::Future {
+            let inner = self.inner.clone();
+            match req.uri().path() {
+                "/qdrant.PrivateHnswOram/GetPrivateHnswManifest" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetPrivateHnswManifestSvc<T: PrivateHnswOram>(pub Arc<T>);
+                    impl<
+                        T: PrivateHnswOram,
+                    > tonic::server::UnaryService<super::GetPrivateHnswManifestRequest>
+                    for GetPrivateHnswManifestSvc<T> {
+                        type Response = super::GetPrivateHnswManifestResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetPrivateHnswManifestRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PrivateHnswOram>::get_private_hnsw_manifest(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = GetPrivateHnswManifestSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/qdrant.PrivateHnswOram/UploadPrivateHnswManifest" => {
+                    #[allow(non_camel_case_types)]
+                    struct UploadPrivateHnswManifestSvc<T: PrivateHnswOram>(pub Arc<T>);
+                    impl<
+                        T: PrivateHnswOram,
+                    > tonic::server::UnaryService<
+                        super::UploadPrivateHnswManifestRequest,
+                    > for UploadPrivateHnswManifestSvc<T> {
+                        type Response = super::PrivateHnswEpochResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::UploadPrivateHnswManifestRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PrivateHnswOram>::upload_private_hnsw_manifest(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = UploadPrivateHnswManifestSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/qdrant.PrivateHnswOram/UploadPrivateHnswBuckets" => {
+                    #[allow(non_camel_case_types)]
+                    struct UploadPrivateHnswBucketsSvc<T: PrivateHnswOram>(pub Arc<T>);
+                    impl<
+                        T: PrivateHnswOram,
+                    > tonic::server::UnaryService<super::UploadPrivateHnswBucketsRequest>
+                    for UploadPrivateHnswBucketsSvc<T> {
+                        type Response = super::PrivateHnswEpochResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::UploadPrivateHnswBucketsRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PrivateHnswOram>::upload_private_hnsw_buckets(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = UploadPrivateHnswBucketsSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/qdrant.PrivateHnswOram/OpenPrivateHnswSession" => {
+                    #[allow(non_camel_case_types)]
+                    struct OpenPrivateHnswSessionSvc<T: PrivateHnswOram>(pub Arc<T>);
+                    impl<
+                        T: PrivateHnswOram,
+                    > tonic::server::UnaryService<super::OpenPrivateHnswSessionRequest>
+                    for OpenPrivateHnswSessionSvc<T> {
+                        type Response = super::OpenPrivateHnswSessionResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::OpenPrivateHnswSessionRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PrivateHnswOram>::open_private_hnsw_session(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = OpenPrivateHnswSessionSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/qdrant.PrivateHnswOram/ReadPrivateHnswPaths" => {
+                    #[allow(non_camel_case_types)]
+                    struct ReadPrivateHnswPathsSvc<T: PrivateHnswOram>(pub Arc<T>);
+                    impl<
+                        T: PrivateHnswOram,
+                    > tonic::server::UnaryService<super::OramReadPathsRequest>
+                    for ReadPrivateHnswPathsSvc<T> {
+                        type Response = super::OramReadPathsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::OramReadPathsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PrivateHnswOram>::read_private_hnsw_paths(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = ReadPrivateHnswPathsSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/qdrant.PrivateHnswOram/CommitPrivateHnswPaths" => {
+                    #[allow(non_camel_case_types)]
+                    struct CommitPrivateHnswPathsSvc<T: PrivateHnswOram>(pub Arc<T>);
+                    impl<
+                        T: PrivateHnswOram,
+                    > tonic::server::UnaryService<super::OramCommitRequest>
+                    for CommitPrivateHnswPathsSvc<T> {
+                        type Response = super::PrivateHnswEpochResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::OramCommitRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PrivateHnswOram>::commit_private_hnsw_paths(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = CommitPrivateHnswPathsSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/qdrant.PrivateHnswOram/ClosePrivateHnswSession" => {
+                    #[allow(non_camel_case_types)]
+                    struct ClosePrivateHnswSessionSvc<T: PrivateHnswOram>(pub Arc<T>);
+                    impl<
+                        T: PrivateHnswOram,
+                    > tonic::server::UnaryService<super::ClosePrivateHnswSessionRequest>
+                    for ClosePrivateHnswSessionSvc<T> {
+                        type Response = super::ClosePrivateHnswSessionResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::ClosePrivateHnswSessionRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PrivateHnswOram>::close_private_hnsw_session(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = ClosePrivateHnswSessionSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                _ => {
+                    Box::pin(async move {
+                        Ok(
+                            http::Response::builder()
+                                .status(200)
+                                .header("grpc-status", "12")
+                                .header("content-type", "application/grpc")
+                                .body(empty_body())
+                                .unwrap(),
+                        )
+                    })
+                }
+            }
+        }
+    }
+    impl<T: PrivateHnswOram> Clone for PrivateHnswOramServer<T> {
+        fn clone(&self) -> Self {
+            let inner = self.inner.clone();
+            Self {
+                inner,
+                accept_compression_encodings: self.accept_compression_encodings,
+                send_compression_encodings: self.send_compression_encodings,
+                max_decoding_message_size: self.max_decoding_message_size,
+                max_encoding_message_size: self.max_encoding_message_size,
+            }
+        }
+    }
+    impl<T: PrivateHnswOram> Clone for _Inner<T> {
+        fn clone(&self) -> Self {
+            Self(Arc::clone(&self.0))
+        }
+    }
+    impl<T: std::fmt::Debug> std::fmt::Debug for _Inner<T> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{:?}", self.0)
+        }
+    }
+    impl<T: PrivateHnswOram> tonic::server::NamedService for PrivateHnswOramServer<T> {
+        const NAME: &'static str = "qdrant.PrivateHnswOram";
+    }
+}
+#[derive(serde::Serialize)]
 #[derive(validator::Validate)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

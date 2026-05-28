@@ -22,6 +22,7 @@ use ::api::grpc::qdrant::collections_internal_server::CollectionsInternalServer;
 use ::api::grpc::qdrant::collections_server::CollectionsServer;
 use ::api::grpc::qdrant::points_internal_server::PointsInternalServer;
 use ::api::grpc::qdrant::points_server::PointsServer;
+use ::api::grpc::qdrant::private_hnsw_oram_server::PrivateHnswOramServer;
 use ::api::grpc::qdrant::qdrant_internal_server::QdrantInternalServer;
 use ::api::grpc::qdrant::qdrant_server::{Qdrant, QdrantServer};
 use ::api::grpc::qdrant::shard_snapshots_server::ShardSnapshotsServer;
@@ -49,6 +50,7 @@ use crate::tonic::api::collections_api::CollectionsService;
 use crate::tonic::api::collections_internal_api::CollectionsInternalService;
 use crate::tonic::api::points_api::PointsService;
 use crate::tonic::api::points_internal_api::PointsInternalService;
+use crate::tonic::api::private_hnsw_api::PrivateHnswOramService;
 use crate::tonic::api::qdrant_internal_api::QdrantInternalService;
 use crate::tonic::api::snapshots_api::{ShardSnapshotsService, SnapshotsService};
 use crate::tonic::api::telemetry_wrapper::{
@@ -118,6 +120,8 @@ pub fn init(
         let health_service = HealthService::default();
         let collections_service = CollectionsService::new(dispatcher.clone(), settings.clone());
         let points_service = PointsService::new(dispatcher.clone(), settings.clone());
+        let private_hnsw_service =
+            PrivateHnswOramService::new(dispatcher.clone(), settings.clone());
         let snapshot_service = SnapshotsService::new(dispatcher.clone());
 
         // Only advertise the public services. By default, all services in QDRANT_DESCRIPTOR_SET
@@ -126,6 +130,7 @@ pub fn init(
             .register_encoded_file_descriptor_set(QDRANT_DESCRIPTOR_SET)
             .with_service_name("qdrant.Collections")
             .with_service_name("qdrant.Points")
+            .with_service_name("qdrant.PrivateHnswOram")
             .with_service_name("qdrant.Snapshots")
             .with_service_name("qdrant.Qdrant")
             .with_service_name("grpc.health.v1.Health")
@@ -184,6 +189,12 @@ pub fn init(
             )
             .add_service(
                 PointsServer::new(PointsTelemetryWrapper::new(points_service))
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip)
+                    .max_decoding_message_size(usize::MAX),
+            )
+            .add_service(
+                PrivateHnswOramServer::new(private_hnsw_service)
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
                     .max_decoding_message_size(usize::MAX),

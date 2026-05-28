@@ -187,6 +187,11 @@ async fn _do_recover_from_snapshot(
     if let Some(validate_snapshot_config) = &snapshot_config_validator {
         validate_snapshot_config(collection_pass.name(), &snapshot_config)?;
     }
+    Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+        collection_pass.name(),
+        &snapshot_config,
+        tmp_collection_dir.path(),
+    )?;
 
     let payload_index_file = tmp_collection_dir.path().join(PAYLOAD_INDEX_CONFIG_FILE);
 

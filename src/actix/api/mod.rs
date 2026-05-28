@@ -12,6 +12,7 @@ pub mod discover_api;
 pub mod facet_api;
 pub mod issues_api;
 pub mod local_shard_api;
+pub mod private_hnsw_api;
 pub mod profiler_api;
 pub mod query_api;
 pub mod read_params;

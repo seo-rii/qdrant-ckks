@@ -893,7 +893,11 @@ async fn try_ckks_vector_search_batch_points(
 
     let mut results = Vec::with_capacity(request.searches.len());
     for search in &request.searches {
-        if plan.contains_vector_name(search.query.get_vector_name()) {
+        let vector_name = search.query.get_vector_name();
+        if let Some(err) = plan.private_hnsw_oram_api_required_error(vector_name) {
+            return Err(err);
+        }
+        if plan.contains_vector_name(vector_name) {
             results.push(
                 ckks_vector_search_points(
                     &collection,
@@ -3773,6 +3777,9 @@ async fn try_ckks_vector_search_groups(
     if !plan.contains_vector_name(vector_name) {
         return Ok(None);
     }
+    if let Some(err) = plan.private_hnsw_oram_api_required_error(vector_name) {
+        return Err(err);
+    }
     if request.with_vector.clone().unwrap_or_default().is_enabled() {
         return Err(StorageError::bad_input(format!(
             "cannot return encrypted vector '{vector_name}'; CKKS vector ciphertext read path returns payload sidecar only",
@@ -4432,6 +4439,9 @@ async fn try_ckks_vector_recommend_batch_points(
             continue;
         }
 
+        if let Some(err) = plan.private_hnsw_oram_api_required_error(&vector_name) {
+            return Err(err);
+        }
         has_encrypted_recommend = true;
         if let Some(point_id) = recommend_request_single_positive_point_id(request) {
             let query_encrypted = ckks_vector_sidecar_for_point_id(
@@ -4958,6 +4968,9 @@ async fn try_ckks_vector_recommend_groups(
     if !plan.contains_vector_name(&vector_name) {
         return Ok(None);
     }
+    if let Some(err) = plan.private_hnsw_oram_api_required_error(&vector_name) {
+        return Err(err);
+    }
 
     let recommend_request = RecommendRequestInternal {
         positive: request.positive.clone(),
@@ -5296,6 +5309,9 @@ async fn try_ckks_vector_discover_batch_points(
             continue;
         }
 
+        if let Some(err) = plan.private_hnsw_oram_api_required_error(&vector_name) {
+            return Err(err);
+        }
         has_encrypted_discover = true;
         if discover_request_needs_sidecar_resolution(request) {
             if request.lookup_from.is_some() {
@@ -6622,9 +6638,15 @@ pub async fn do_query_batch_points(
 
             for (request, shard_selection) in &requests {
                 let root_uses_encrypted_vector = plan.contains_vector_name(&request.using);
+                if let Some(err) = plan.private_hnsw_oram_api_required_error(&request.using) {
+                    return Err(err);
+                }
                 let mut prefetches = request.prefetch.iter().collect::<Vec<_>>();
                 let mut has_encrypted_prefetch = false;
                 while let Some(prefetch) = prefetches.pop() {
+                    if let Some(err) = plan.private_hnsw_oram_api_required_error(&prefetch.using) {
+                        return Err(err);
+                    }
                     if plan.contains_vector_name(&prefetch.using) {
                         has_encrypted_prefetch = true;
                     }
@@ -7327,12 +7349,18 @@ async fn try_ckks_vector_query_groups(
     let mut prefetches = request.prefetch.iter().collect::<Vec<_>>();
     let mut has_encrypted_prefetch = false;
     while let Some(prefetch) = prefetches.pop() {
+        if let Some(err) = plan.private_hnsw_oram_api_required_error(&prefetch.using) {
+            return Err(err);
+        }
         if plan.contains_vector_name(&prefetch.using) {
             has_encrypted_prefetch = true;
         }
         prefetches.extend(prefetch.prefetch.iter());
     }
     let root_uses_encrypted_vector = plan.contains_vector_name(&request.using);
+    if let Some(err) = plan.private_hnsw_oram_api_required_error(&request.using) {
+        return Err(err);
+    }
     if has_encrypted_prefetch {
         if let Some(Query::Fusion(fusion)) = &request.query {
             if request.with_vector.is_enabled() {
@@ -8272,6 +8300,9 @@ pub async fn do_search_points_matrix(
             &config.params,
         )? && plan.contains_vector_name(&request.using)
         {
+            if let Some(err) = plan.private_hnsw_oram_api_required_error(&request.using) {
+                return Err(err);
+            }
             return ckks_vector_search_points_matrix(
                 &collection,
                 collection_name,

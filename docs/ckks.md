@@ -501,8 +501,8 @@ zero trust rather than server-managed encryption. Strict mode is a fail-closed
 profile: it rejects server-held crypto materials, OpenFHE bridge backends,
 server-side payload/metadata AEAD providers, and the trusted-bridge
 `vector/openfhe-ckks@v1` provider. The accepted providers in strict mode are
-server-blind `payload/client-aead@v1`, `metadata/blind-index-hmac@v1`, and
-`vector/client-ckks@v1`. Use the non-strict trusted-bridge profile only when
+server-blind `payload/client-aead@v1`, `metadata/blind-index-hmac@v1`,
+`vector/client-ckks@v1`, and `vector/private-hnsw-oram@v1`. Use the non-strict trusted-bridge profile only when
 operators explicitly accept that Qdrant/bridge may observe embeddings, scores,
 access patterns, and ranking order.
 
@@ -522,6 +522,17 @@ trusted-bridge `vector/openfhe-ckks@v1` search provider.
 `vector/openfhe-ckks@v1` remains a trusted-bridge model: Qdrant/bridge may see
 plaintext embeddings at ingest and plaintext scores at search. Do not use the
 server-side OpenFHE provider as a zero-trust vector insert contract.
+
+`vector/private-hnsw-oram@v1` is the strict zero-trust searchable ANN provider
+contract. It uses binding `private-hnsw-oram/v1`, forbids server materials and
+OpenFHE backends even outside strict mode, requires pinned RK id/epoch,
+configured Ed25519 signing public keys, `search_execution: client_led`,
+`search_mode: private_hnsw_oram`, explicit `result_privacy`, and fixed-budget
+search in strict mode. Qdrant does not store point-level dense vectors for this
+provider and does not score or traverse HNSW server-side; normal vector writes
+and server scoring fail closed and direct clients to the private HNSW ORAM
+session APIs. Phase 11 implements the encrypted bucket store and session
+read/commit APIs behind this validated control-plane contract.
 
 The client CKKS vector sidecar signature message is canonical and
 length-prefixed for SDK interop. The byte string is:

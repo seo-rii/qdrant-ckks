@@ -33,6 +33,7 @@ pub const COLLECTION_CONFIG_FILE: &str = "config.json";
 const PAYLOAD_FIELD_BINDING: &str = "payload-field/v1";
 const CLIENT_PAYLOAD_ENVELOPE_BINDING: &str = "client-payload-envelope/v1";
 const VECTOR_ENVELOPE_BINDING: &str = "vector-envelope/v1";
+const PRIVATE_HNSW_ORAM_BINDING: &str = "private-hnsw-oram/v1";
 const METADATA_VALUE_BINDING: &str = "metadata-value/v1";
 const METADATA_EXACT_MATCH_TOKEN_BINDING: &str = "metadata-exact-match-token/v1";
 
@@ -1557,6 +1558,73 @@ mod ckks_tests {
                 .contains("unsupported_vector_encryption_binding")
         );
     }
+
+    #[test]
+    fn encryption_config_accepts_private_hnsw_oram_vector_binding() {
+        let params = CollectionParams {
+            vectors: VectorsConfig::Multi(BTreeMap::from([(
+                "embedding".into(),
+                VectorParams {
+                    size: std::num::NonZeroU64::new(2).unwrap(),
+                    distance: Distance::Cosine,
+                    hnsw_config: None,
+                    quantization_config: None,
+                    on_disk: None,
+                    datatype: None,
+                    multivector_config: None,
+                },
+            )])),
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "embedding_private_hnsw".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["embedding".into()],
+                    },
+                    instance: "docs_private_hnsw_v1".to_string(),
+                    binding: Some("private-hnsw-oram/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        params
+            .validate()
+            .expect("private HNSW ORAM vector binding should be accepted");
+    }
+
+    #[test]
+    fn encryption_config_rejects_multi_vector_private_hnsw_oram_rule() {
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "embedding_private_hnsw".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["title".into(), "body".into()],
+                    },
+                    instance: "docs_private_hnsw_v1".to_string(),
+                    binding: Some("private-hnsw-oram/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let err = params
+            .validate()
+            .expect_err("private HNSW ORAM v1 must bind exactly one vector");
+        assert!(
+            err.to_string()
+                .contains("private_hnsw_oram_single_vector_selector")
+        );
+    }
 }
 
 impl Default for WalConfig {
@@ -2288,13 +2356,17 @@ fn validate_encryption_rules(
                 }
             }
             EncryptionSelector::VectorNames { names } => {
-                if rule
-                    .binding
-                    .as_deref()
-                    .is_some_and(|binding| binding != VECTOR_ENVELOPE_BINDING)
-                {
+                let binding = rule.binding.as_deref();
+                if binding.is_some_and(|binding| {
+                    binding != VECTOR_ENVELOPE_BINDING && binding != PRIVATE_HNSW_ORAM_BINDING
+                }) {
                     return Err(validator::ValidationError::new(
                         "unsupported_vector_encryption_binding",
+                    ));
+                }
+                if binding == Some(PRIVATE_HNSW_ORAM_BINDING) && names.len() != 1 {
+                    return Err(validator::ValidationError::new(
+                        "private_hnsw_oram_single_vector_selector",
                     ));
                 }
                 for name in names {

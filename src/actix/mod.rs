@@ -33,6 +33,7 @@ use crate::actix::api::debug_api::config_debugger_api;
 use crate::actix::api::discover_api::config_discover_api;
 use crate::actix::api::issues_api::config_issues_api;
 use crate::actix::api::local_shard_api::config_local_shard_api;
+use crate::actix::api::private_hnsw_api::config_private_hnsw_api;
 use crate::actix::api::profiler_api::config_profiler_api;
 use crate::actix::api::query_api::config_query_api;
 use crate::actix::api::recommend_api::config_recommend_api;
@@ -172,6 +173,7 @@ pub fn init(
                 .configure(config_discover_api)
                 .configure(config_query_api)
                 .configure(config_facet_api)
+                .configure(config_private_hnsw_api)
                 .configure(config_shards_api)
                 .configure(config_issues_api)
                 .configure(config_debugger_api)
