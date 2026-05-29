@@ -96,6 +96,10 @@ pub enum PrivateHnswClientError {
     MissingBlock,
     #[error("private HNSW ORAM path contains duplicate node blocks")]
     DuplicateBlock,
+    #[error("private HNSW ORAM build config field {0} is invalid")]
+    InvalidBuildConfig(&'static str),
+    #[error("private HNSW ORAM initial placement overflowed path for leaf {leaf}")]
+    OramInitialPlacementOverflow { leaf: u64 },
     #[error("private HNSW search config field {0} is invalid")]
     InvalidSearchConfig(&'static str),
     #[error("private HNSW search currently requires f32_le node vectors")]
@@ -366,6 +370,15 @@ pub struct PrivateHnswSearchResult {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateHnswPlaintextIndexBuild {
+    pub entry_node_id: [u8; 32],
+    pub state: PrivateHnswOramClientState,
+    pub buckets: Vec<PrivateHnswOramPlaintextBucket>,
+    pub logical_node_count: u64,
+    pub dummy_node_count: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrivateHnswClientCommitBucketRef {
     pub bucket_id: u64,
     pub ciphertext_sha256: String,
@@ -529,6 +542,84 @@ pub fn empty_private_hnsw_oram_plaintext_bucket(
     Ok(PrivateHnswOramPlaintextBucket {
         bucket_id,
         blocks: vec![None; config.bucket_size],
+    })
+}
+
+pub fn build_private_hnsw_oram_plaintext_index_from_blocks(
+    config: PrivateHnswOramClientConfig,
+    blocks: &[PrivateHnswNodeBlockPlaintext],
+    leaves: &[u64],
+) -> Result<PrivateHnswPlaintextIndexBuild, PrivateHnswClientError> {
+    validate_oram_client_config(config)?;
+    if blocks.is_empty() {
+        return Err(PrivateHnswClientError::InvalidBuildConfig("blocks"));
+    }
+    if blocks.len() != leaves.len() {
+        return Err(PrivateHnswClientError::InvalidBuildConfig("leaves"));
+    }
+
+    let bucket_count = private_hnsw_oram_bucket_count(config.tree_height)?;
+    let bucket_count_usize: usize = bucket_count
+        .try_into()
+        .map_err(|_| PrivateHnswClientError::BucketCountMismatch)?;
+    let mut buckets = Vec::with_capacity(bucket_count_usize);
+    for bucket_id in 0..bucket_count {
+        buckets.push(empty_private_hnsw_oram_plaintext_bucket(bucket_id, config)?);
+    }
+
+    let mut state = PrivateHnswOramClientState::new();
+    let mut seen_nodes = BTreeSet::new();
+    for (block, leaf) in blocks.iter().zip(leaves) {
+        if !seen_nodes.insert(block.node_id) {
+            return Err(PrivateHnswClientError::DuplicateBlock);
+        }
+        validate_private_hnsw_oram_leaf(*leaf, config.tree_height)?;
+        encode_private_hnsw_node_block(
+            block,
+            config.block_size_bytes,
+            config.fixed_neighbor_slots,
+        )?;
+        state.insert_position(block.node_id, *leaf, config.tree_height)?;
+
+        let mut placed = false;
+        for bucket_id in private_hnsw_oram_bucket_ids_for_leaf(*leaf, config.tree_height)?
+            .into_iter()
+            .rev()
+        {
+            let bucket = buckets.get_mut(bucket_id as usize).ok_or(
+                PrivateHnswClientError::BucketOutOfRange {
+                    bucket_id,
+                    bucket_count,
+                },
+            )?;
+            if let Some(slot) = bucket.blocks.iter_mut().find(|slot| slot.is_none()) {
+                *slot = Some(block.clone());
+                placed = true;
+                break;
+            }
+        }
+        if !placed {
+            return Err(PrivateHnswClientError::OramInitialPlacementOverflow { leaf: *leaf });
+        }
+    }
+
+    let logical_node_count: u64 = blocks
+        .len()
+        .try_into()
+        .map_err(|_| PrivateHnswClientError::InvalidBuildConfig("blocks"))?;
+    let capacity = bucket_count
+        .checked_mul(config.bucket_size as u64)
+        .ok_or(PrivateHnswClientError::BucketCountMismatch)?;
+    let dummy_node_count = capacity
+        .checked_sub(logical_node_count)
+        .ok_or(PrivateHnswClientError::BucketCountMismatch)?;
+
+    Ok(PrivateHnswPlaintextIndexBuild {
+        entry_node_id: blocks[0].node_id,
+        state,
+        buckets,
+        logical_node_count,
+        dummy_node_count,
     })
 }
 
@@ -2603,6 +2694,81 @@ mod tests {
             verify_private_hnsw_oram_merkle_proof(&tampered, 42, &root, 4, &[bucket]),
             Err(PrivateHnswClientError::MerkleProofMismatch)
         );
+    }
+
+    #[test]
+    fn plaintext_oram_bulk_build_places_blocks_on_paths_and_searches() {
+        use std::cell::RefCell;
+
+        let config = PrivateHnswOramClientConfig {
+            bucket_size: 2,
+            ..oram_config()
+        };
+        let entry = node_block_with_vector(1, &[10.0, 0.0], vec![[2; 32], [3; 32]]);
+        let near = node_block_with_vector(2, &[1.0, 0.0], vec![]);
+        let far = node_block_with_vector(3, &[0.0, 1.0], vec![]);
+        let build = build_private_hnsw_oram_plaintext_index_from_blocks(
+            config,
+            &[entry.clone(), near.clone(), far.clone()],
+            &[0, 1, 2],
+        )
+        .unwrap();
+
+        assert_eq!(build.entry_node_id, entry.node_id);
+        assert_eq!(build.logical_node_count, 3);
+        assert_eq!(
+            build.dummy_node_count,
+            private_hnsw_oram_bucket_count(config.tree_height).unwrap() * config.bucket_size as u64
+                - 3
+        );
+        assert_eq!(build.state.position(&near.node_id), Some(1));
+
+        let store = RefCell::new(
+            build
+                .buckets
+                .into_iter()
+                .map(|bucket| (bucket.bucket_id, bucket))
+                .collect::<BTreeMap<_, _>>(),
+        );
+        let mut state = build.state;
+        let mut remaps = [3, 3, 3].into_iter();
+        let result = search_private_hnsw_oram_plaintext(
+            &mut state,
+            config,
+            &[1.0, 0.0],
+            PrivateHnswSearchParams {
+                entry_node_id: entry.node_id,
+                k: 1,
+                ef: 3,
+                fixed_steps: 3,
+                distance: DistanceKind::Euclid,
+                padding_node_id: None,
+            },
+            |leaf| {
+                private_hnsw_oram_bucket_ids_for_leaf(leaf, config.tree_height)?
+                    .into_iter()
+                    .map(|bucket_id| {
+                        store
+                            .borrow()
+                            .get(&bucket_id)
+                            .cloned()
+                            .ok_or(PrivateHnswClientError::PathBucketMismatch)
+                    })
+                    .collect()
+            },
+            |writeback_buckets| {
+                let mut store_mut = store.borrow_mut();
+                for bucket in writeback_buckets {
+                    store_mut.insert(bucket.bucket_id, bucket.clone());
+                }
+                Ok(())
+            },
+            || remaps.next().ok_or(PrivateHnswClientError::LeafOutOfRange),
+        )
+        .unwrap();
+
+        assert_eq!(result.hits.len(), 1);
+        assert_eq!(result.hits[0].node_id, near.node_id);
     }
 
     #[test]
