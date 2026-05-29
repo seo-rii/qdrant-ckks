@@ -32,6 +32,7 @@ const BUCKET_AEAD_TAG_LEN: usize = 16;
 const PRIVATE_HNSW_BUCKET_AEAD_CONTEXT_DOMAIN: &str = "qdrant-sec/private-hnsw-oram-bucket-aead/v1";
 const PRIVATE_HNSW_BUCKET_COMMITMENT_DOMAIN: &str =
     "qdrant-sec/private-hnsw-oram-bucket-commitment/v1";
+pub const PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND: &str = "merkle_path_batch/v1";
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum PrivateHnswClientError {
@@ -135,6 +136,12 @@ pub enum PrivateHnswClientError {
     InvalidCommitSignatureContext(&'static str),
     #[error("private HNSW ORAM manifest signature context field {0} is invalid")]
     InvalidManifestSignatureContext(&'static str),
+    #[error("private HNSW ORAM Merkle proof is malformed")]
+    InvalidMerkleProof,
+    #[error("private HNSW ORAM Merkle proof JSON is malformed")]
+    InvalidMerkleProofJson,
+    #[error("private HNSW ORAM Merkle proof does not match buckets/root")]
+    MerkleProofMismatch,
 }
 
 pub struct PrivateHnswClientKeys {
@@ -281,6 +288,39 @@ pub struct PrivateHnswOramClientConfig {
 pub struct PrivateHnswOramPlaintextBucket {
     pub bucket_id: u64,
     pub blocks: Vec<Option<PrivateHnswNodeBlockPlaintext>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateHnswOramMerkleProof {
+    pub kind: String,
+    pub index_epoch: u64,
+    pub root_hash: String,
+    pub bucket_count: u64,
+    pub leaves: Vec<PrivateHnswOramMerkleProofLeaf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateHnswOramMerkleProofLeaf {
+    pub bucket_id: u64,
+    pub leaf_hash: String,
+    pub siblings: Vec<PrivateHnswOramMerkleSibling>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateHnswOramMerkleSibling {
+    pub level: u32,
+    pub position: PrivateHnswMerkleSiblingPosition,
+    pub hash: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrivateHnswMerkleSiblingPosition {
+    Left,
+    Right,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -603,6 +643,29 @@ pub fn open_private_hnsw_oram_plaintext_bucket(
     decode_private_hnsw_oram_bucket_plaintext(bucket.bucket_id, &plaintext, config)
 }
 
+pub fn open_private_hnsw_oram_verified_path_batch(
+    keys: &PrivateHnswClientKeys,
+    base_context: PrivateHnswBucketAeadBaseContext<'_>,
+    config: PrivateHnswOramClientConfig,
+    expected_epoch: u64,
+    expected_root_hash: &str,
+    expected_bucket_count: u64,
+    proof_value: &str,
+    buckets: &[PrivateHnswOramBucket],
+) -> Result<Vec<PrivateHnswOramPlaintextBucket>, PrivateHnswClientError> {
+    verify_private_hnsw_oram_merkle_proof_json(
+        proof_value,
+        expected_epoch,
+        expected_root_hash,
+        expected_bucket_count,
+        buckets,
+    )?;
+    buckets
+        .iter()
+        .map(|bucket| open_private_hnsw_oram_plaintext_bucket(keys, base_context, bucket, config))
+        .collect()
+}
+
 pub fn seal_private_hnsw_oram_plaintext_bucket(
     keys: &PrivateHnswClientKeys,
     base_context: PrivateHnswBucketAeadBaseContext<'_>,
@@ -856,6 +919,105 @@ pub fn private_hnsw_oram_merkle_root_for_commitments(
         .and_then(|level| level.first())
         .ok_or(PrivateHnswClientError::EmptyMerkleTree)?;
     Ok(BASE64URL_NOPAD.encode(root))
+}
+
+pub fn verify_private_hnsw_oram_merkle_proof_json(
+    proof_value: &str,
+    expected_epoch: u64,
+    expected_root_hash: &str,
+    expected_bucket_count: u64,
+    buckets: &[PrivateHnswOramBucket],
+) -> Result<(), PrivateHnswClientError> {
+    let proof: PrivateHnswOramMerkleProof = serde_json::from_str(proof_value)
+        .map_err(|_| PrivateHnswClientError::InvalidMerkleProofJson)?;
+    verify_private_hnsw_oram_merkle_proof(
+        &proof,
+        expected_epoch,
+        expected_root_hash,
+        expected_bucket_count,
+        buckets,
+    )
+}
+
+pub fn verify_private_hnsw_oram_merkle_proof(
+    proof: &PrivateHnswOramMerkleProof,
+    expected_epoch: u64,
+    expected_root_hash: &str,
+    expected_bucket_count: u64,
+    buckets: &[PrivateHnswOramBucket],
+) -> Result<(), PrivateHnswClientError> {
+    if expected_bucket_count == 0
+        || proof.kind != PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND
+        || proof.index_epoch != expected_epoch
+        || proof.bucket_count != expected_bucket_count
+        || proof.leaves.len() != buckets.len()
+    {
+        return Err(PrivateHnswClientError::InvalidMerkleProof);
+    }
+
+    let expected_root = decode_merkle_root(expected_root_hash)?;
+    let proof_root = decode_merkle_root(&proof.root_hash)?;
+    if proof_root != expected_root {
+        return Err(PrivateHnswClientError::MerkleProofMismatch);
+    }
+
+    let mut buckets_by_id = BTreeMap::new();
+    for bucket in buckets {
+        if bucket.version != 1
+            || bucket.index_epoch != expected_epoch
+            || bucket.bucket_id >= expected_bucket_count
+        {
+            return Err(PrivateHnswClientError::InvalidMerkleProof);
+        }
+        decode_bucket_commitment(&bucket.bucket_commitment)?;
+        if buckets_by_id.insert(bucket.bucket_id, bucket).is_some() {
+            return Err(PrivateHnswClientError::InvalidMerkleProof);
+        }
+    }
+
+    let mut seen_leaves = BTreeSet::new();
+    for leaf in &proof.leaves {
+        if leaf.bucket_id >= expected_bucket_count || !seen_leaves.insert(leaf.bucket_id) {
+            return Err(PrivateHnswClientError::InvalidMerkleProof);
+        }
+        let Some(bucket) = buckets_by_id.get(&leaf.bucket_id) else {
+            return Err(PrivateHnswClientError::MerkleProofMismatch);
+        };
+        if bucket.bucket_commitment != leaf.leaf_hash {
+            return Err(PrivateHnswClientError::MerkleProofMismatch);
+        }
+
+        let mut node_hash = decode_merkle_proof_hash(&leaf.leaf_hash)?;
+        let mut index = leaf.bucket_id;
+        for (expected_level, sibling) in leaf.siblings.iter().enumerate() {
+            if sibling.level != expected_level as u32 {
+                return Err(PrivateHnswClientError::InvalidMerkleProof);
+            }
+            let sibling_hash = decode_merkle_proof_hash(&sibling.hash)?;
+            let expected_position = if index % 2 == 0 {
+                PrivateHnswMerkleSiblingPosition::Right
+            } else {
+                PrivateHnswMerkleSiblingPosition::Left
+            };
+            if sibling.position != expected_position {
+                return Err(PrivateHnswClientError::InvalidMerkleProof);
+            }
+            node_hash = match sibling.position {
+                PrivateHnswMerkleSiblingPosition::Left => {
+                    private_hnsw_oram_merkle_parent_hash(&sibling_hash, &node_hash)
+                }
+                PrivateHnswMerkleSiblingPosition::Right => {
+                    private_hnsw_oram_merkle_parent_hash(&node_hash, &sibling_hash)
+                }
+            };
+            index /= 2;
+        }
+        if node_hash != expected_root {
+            return Err(PrivateHnswClientError::MerkleProofMismatch);
+        }
+    }
+
+    Ok(())
 }
 
 pub fn plan_private_hnsw_oram_commit(
@@ -1446,6 +1608,15 @@ fn decode_merkle_root(value: &str) -> Result<[u8; 32], PrivateHnswClientError> {
         .map_err(|_| PrivateHnswClientError::InvalidMerkleRoot)
 }
 
+fn decode_merkle_proof_hash(value: &str) -> Result<[u8; 32], PrivateHnswClientError> {
+    let bytes = BASE64URL_NOPAD
+        .decode(value.as_bytes())
+        .map_err(|_| PrivateHnswClientError::InvalidMerkleProof)?;
+    bytes
+        .try_into()
+        .map_err(|_| PrivateHnswClientError::InvalidMerkleProof)
+}
+
 fn private_hnsw_oram_merkle_levels(
     commitments: &[String],
 ) -> Result<Vec<Vec<[u8; 32]>>, PrivateHnswClientError> {
@@ -1590,6 +1761,18 @@ mod tests {
             ciphertext: BASE64URL_NOPAD.encode(&[hash_byte; 48]),
             ciphertext_sha256: BASE64URL_NOPAD.encode(&[hash_byte; 32]),
             bucket_commitment: commitment(commitment_byte),
+        }
+    }
+
+    fn proof_sibling(
+        level: u32,
+        position: PrivateHnswMerkleSiblingPosition,
+        hash: String,
+    ) -> PrivateHnswOramMerkleSibling {
+        PrivateHnswOramMerkleSibling {
+            level,
+            position,
+            hash,
         }
     }
 
@@ -1959,6 +2142,67 @@ mod tests {
     }
 
     #[test]
+    fn verified_path_batch_opens_buckets_only_after_merkle_proof_check() {
+        let config = oram_config();
+        let keys = test_keys();
+        let plaintext_bucket = PrivateHnswOramPlaintextBucket {
+            bucket_id: 0,
+            blocks: vec![Some(node_block_with_id(8))],
+        };
+        let bucket = seal_private_hnsw_oram_plaintext_bucket(
+            &keys,
+            bucket_base_context(),
+            42,
+            &plaintext_bucket,
+            config,
+        )
+        .unwrap();
+        let root_hash = bucket.bucket_commitment.clone();
+        let proof = PrivateHnswOramMerkleProof {
+            kind: PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND.to_string(),
+            index_epoch: 42,
+            root_hash: root_hash.clone(),
+            bucket_count: 1,
+            leaves: vec![PrivateHnswOramMerkleProofLeaf {
+                bucket_id: 0,
+                leaf_hash: bucket.bucket_commitment.clone(),
+                siblings: vec![],
+            }],
+        };
+        let proof_json = serde_json::to_string(&proof).unwrap();
+
+        let opened = open_private_hnsw_oram_verified_path_batch(
+            &keys,
+            bucket_base_context(),
+            config,
+            42,
+            &root_hash,
+            1,
+            &proof_json,
+            std::slice::from_ref(&bucket),
+        )
+        .unwrap();
+        assert_eq!(opened, vec![plaintext_bucket]);
+
+        let mut tampered = proof;
+        tampered.root_hash = commitment(9);
+        let tampered_json = serde_json::to_string(&tampered).unwrap();
+        assert_eq!(
+            open_private_hnsw_oram_verified_path_batch(
+                &keys,
+                bucket_base_context(),
+                config,
+                42,
+                &root_hash,
+                1,
+                &tampered_json,
+                &[bucket],
+            ),
+            Err(PrivateHnswClientError::MerkleProofMismatch)
+        );
+    }
+
+    #[test]
     fn commit_plan_updates_merkle_root_and_signature_refs() {
         let leaf_commitments = vec![commitment(1), commitment(2), commitment(3), commitment(4)];
         let old_root = private_hnsw_oram_merkle_root_for_commitments(&leaf_commitments).unwrap();
@@ -2151,6 +2395,94 @@ mod tests {
                 bucket_id: 4,
                 bucket_count: 4,
             })
+        );
+    }
+
+    #[test]
+    fn merkle_proof_verifier_accepts_server_path_batch_proof_json() {
+        let leaf_commitments = vec![commitment(1), commitment(2), commitment(3), commitment(4)];
+        let root = private_hnsw_oram_merkle_root_for_commitments(&leaf_commitments).unwrap();
+        let parent_01 = private_hnsw_oram_merkle_parent_hash(
+            &decode_bucket_commitment(&leaf_commitments[0]).unwrap(),
+            &decode_bucket_commitment(&leaf_commitments[1]).unwrap(),
+        );
+        let bucket = fixture_commit_bucket(2, 42, 3, 10);
+        let proof = PrivateHnswOramMerkleProof {
+            kind: PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND.to_string(),
+            index_epoch: 42,
+            root_hash: root.clone(),
+            bucket_count: 4,
+            leaves: vec![PrivateHnswOramMerkleProofLeaf {
+                bucket_id: 2,
+                leaf_hash: leaf_commitments[2].clone(),
+                siblings: vec![
+                    proof_sibling(0, PrivateHnswMerkleSiblingPosition::Right, commitment(4)),
+                    proof_sibling(
+                        1,
+                        PrivateHnswMerkleSiblingPosition::Left,
+                        BASE64URL_NOPAD.encode(&parent_01),
+                    ),
+                ],
+            }],
+        };
+        let proof_json = serde_json::to_string(&proof).unwrap();
+
+        verify_private_hnsw_oram_merkle_proof_json(
+            &proof_json,
+            42,
+            &root,
+            4,
+            std::slice::from_ref(&bucket),
+        )
+        .unwrap();
+        verify_private_hnsw_oram_merkle_proof(&proof, 42, &root, 4, &[bucket]).unwrap();
+    }
+
+    #[test]
+    fn merkle_proof_verifier_rejects_tampered_leaf_and_sibling() {
+        let leaf_commitments = vec![commitment(1), commitment(2), commitment(3), commitment(4)];
+        let root = private_hnsw_oram_merkle_root_for_commitments(&leaf_commitments).unwrap();
+        let parent_01 = private_hnsw_oram_merkle_parent_hash(
+            &decode_bucket_commitment(&leaf_commitments[0]).unwrap(),
+            &decode_bucket_commitment(&leaf_commitments[1]).unwrap(),
+        );
+        let proof = PrivateHnswOramMerkleProof {
+            kind: PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND.to_string(),
+            index_epoch: 42,
+            root_hash: root.clone(),
+            bucket_count: 4,
+            leaves: vec![PrivateHnswOramMerkleProofLeaf {
+                bucket_id: 2,
+                leaf_hash: leaf_commitments[2].clone(),
+                siblings: vec![
+                    proof_sibling(0, PrivateHnswMerkleSiblingPosition::Right, commitment(4)),
+                    proof_sibling(
+                        1,
+                        PrivateHnswMerkleSiblingPosition::Left,
+                        BASE64URL_NOPAD.encode(&parent_01),
+                    ),
+                ],
+            }],
+        };
+
+        let wrong_bucket = fixture_commit_bucket(2, 42, 9, 10);
+        assert_eq!(
+            verify_private_hnsw_oram_merkle_proof(
+                &proof,
+                42,
+                &root,
+                4,
+                std::slice::from_ref(&wrong_bucket),
+            ),
+            Err(PrivateHnswClientError::MerkleProofMismatch)
+        );
+
+        let mut tampered = proof;
+        tampered.leaves[0].siblings[0].hash = commitment(9);
+        let bucket = fixture_commit_bucket(2, 42, 3, 10);
+        assert_eq!(
+            verify_private_hnsw_oram_merkle_proof(&tampered, 42, &root, 4, &[bucket]),
+            Err(PrivateHnswClientError::MerkleProofMismatch)
         );
     }
 
