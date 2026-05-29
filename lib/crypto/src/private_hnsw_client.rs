@@ -369,6 +369,14 @@ pub struct PrivateHnswSearchResult {
     pub completed_steps: usize,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrivateHnswBuildPoint {
+    pub node_id: [u8; 32],
+    pub point_token: [u8; 32],
+    pub vector: Vec<f32>,
+    pub payload_fetch_token: Option<[u8; 32]>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrivateHnswPlaintextIndexBuild {
     pub entry_node_id: [u8; 32],
@@ -621,6 +629,86 @@ pub fn build_private_hnsw_oram_plaintext_index_from_blocks(
         logical_node_count,
         dummy_node_count,
     })
+}
+
+pub fn build_private_hnsw_oram_plaintext_index_from_f32_points(
+    config: PrivateHnswOramClientConfig,
+    distance: DistanceKind,
+    neighbor_count: usize,
+    points: &[PrivateHnswBuildPoint],
+    leaves: &[u64],
+) -> Result<PrivateHnswPlaintextIndexBuild, PrivateHnswClientError> {
+    validate_oram_client_config(config)?;
+    if points.is_empty() {
+        return Err(PrivateHnswClientError::InvalidBuildConfig("points"));
+    }
+    if points.len() != leaves.len() {
+        return Err(PrivateHnswClientError::InvalidBuildConfig("leaves"));
+    }
+    if neighbor_count > config.fixed_neighbor_slots {
+        return Err(PrivateHnswClientError::TooManyNeighbors {
+            actual: neighbor_count,
+            limit: config.fixed_neighbor_slots,
+        });
+    }
+
+    let dim = points[0].vector.len();
+    if dim == 0 {
+        return Err(PrivateHnswClientError::InvalidBuildConfig("vector"));
+    }
+    let mut seen_nodes = BTreeSet::new();
+    for point in points {
+        if !seen_nodes.insert(point.node_id) {
+            return Err(PrivateHnswClientError::DuplicateBlock);
+        }
+        if point.vector.len() != dim {
+            return Err(PrivateHnswClientError::VectorDimensionMismatch);
+        }
+        if point.vector.iter().any(|value| !value.is_finite()) {
+            return Err(PrivateHnswClientError::NonFiniteDistance);
+        }
+    }
+
+    let mut blocks = Vec::with_capacity(points.len());
+    for (index, point) in points.iter().enumerate() {
+        let mut scored_neighbors = Vec::with_capacity(points.len().saturating_sub(1));
+        for (other_index, other) in points.iter().enumerate() {
+            if index == other_index {
+                continue;
+            }
+            scored_neighbors.push((
+                private_hnsw_distance(&point.vector, &other.vector, distance)?,
+                other.node_id,
+            ));
+        }
+        scored_neighbors
+            .sort_by(|lhs, rhs| lhs.0.total_cmp(&rhs.0).then_with(|| lhs.1.cmp(&rhs.1)));
+        let neighbors = scored_neighbors
+            .into_iter()
+            .take(neighbor_count)
+            .map(|(_, node_id)| node_id)
+            .collect::<Vec<_>>();
+        let vector = point
+            .vector
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect::<Vec<_>>();
+        blocks.push(PrivateHnswNodeBlockPlaintext {
+            version: NODE_BLOCK_VERSION,
+            node_id: point.node_id,
+            point_token: point.point_token,
+            level_mask: 1,
+            vector_encoding: PrivateHnswVectorEncoding::F32Le,
+            vector,
+            neighbor_levels: vec![0; neighbors.len()],
+            neighbors,
+            deleted: false,
+            generation: 1,
+            payload_fetch_token: point.payload_fetch_token,
+        });
+    }
+
+    build_private_hnsw_oram_plaintext_index_from_blocks(config, &blocks, leaves)
 }
 
 pub fn encode_private_hnsw_oram_bucket_plaintext(
@@ -2769,6 +2857,95 @@ mod tests {
 
         assert_eq!(result.hits.len(), 1);
         assert_eq!(result.hits[0].node_id, near.node_id);
+    }
+
+    #[test]
+    fn f32_reference_bulk_build_constructs_searchable_neighbor_graph() {
+        use std::cell::RefCell;
+
+        let config = PrivateHnswOramClientConfig {
+            bucket_size: 2,
+            ..oram_config()
+        };
+        let entry_id = [1; 32];
+        let near_id = [2; 32];
+        let far_id = [3; 32];
+        let points = vec![
+            PrivateHnswBuildPoint {
+                node_id: entry_id,
+                point_token: [11; 32],
+                vector: vec![10.0, 0.0],
+                payload_fetch_token: None,
+            },
+            PrivateHnswBuildPoint {
+                node_id: near_id,
+                point_token: [22; 32],
+                vector: vec![1.0, 0.0],
+                payload_fetch_token: None,
+            },
+            PrivateHnswBuildPoint {
+                node_id: far_id,
+                point_token: [33; 32],
+                vector: vec![0.0, 1.0],
+                payload_fetch_token: None,
+            },
+        ];
+        let build = build_private_hnsw_oram_plaintext_index_from_f32_points(
+            config,
+            DistanceKind::Euclid,
+            2,
+            &points,
+            &[0, 1, 2],
+        )
+        .unwrap();
+
+        let store = RefCell::new(
+            build
+                .buckets
+                .into_iter()
+                .map(|bucket| (bucket.bucket_id, bucket))
+                .collect::<BTreeMap<_, _>>(),
+        );
+        let mut state = build.state;
+        let mut remaps = [3, 3, 3].into_iter();
+        let result = search_private_hnsw_oram_plaintext(
+            &mut state,
+            config,
+            &[1.0, 0.0],
+            PrivateHnswSearchParams {
+                entry_node_id: entry_id,
+                k: 1,
+                ef: 3,
+                fixed_steps: 3,
+                distance: DistanceKind::Euclid,
+                padding_node_id: None,
+            },
+            |leaf| {
+                private_hnsw_oram_bucket_ids_for_leaf(leaf, config.tree_height)?
+                    .into_iter()
+                    .map(|bucket_id| {
+                        store
+                            .borrow()
+                            .get(&bucket_id)
+                            .cloned()
+                            .ok_or(PrivateHnswClientError::PathBucketMismatch)
+                    })
+                    .collect()
+            },
+            |writeback_buckets| {
+                let mut store_mut = store.borrow_mut();
+                for bucket in writeback_buckets {
+                    store_mut.insert(bucket.bucket_id, bucket.clone());
+                }
+                Ok(())
+            },
+            || remaps.next().ok_or(PrivateHnswClientError::LeafOutOfRange),
+        )
+        .unwrap();
+
+        assert_eq!(result.hits.len(), 1);
+        assert_eq!(result.hits[0].node_id, near_id);
+        assert_eq!(result.hits[0].point_token, [22; 32]);
     }
 
     #[test]
