@@ -597,7 +597,10 @@ copy for traversal and distance calculation.
 `plan_private_hnsw_oram_speculative_prefetch` prepares fixed-count padded
 neighbor path labels from the client position map, deduplicating real candidate
 leaves and filling the remaining request slots with dummy leaves before the SDK
-calls `read_paths`.
+calls `read_paths`. `plan_private_hnsw_oram_neighbor_clustered_leaves` provides
+a deterministic graph-order leaf assignment helper for bulk builds, so SDK
+experiments can place entry-near neighbor chains on adjacent ORAM leaves before
+calling `build_private_hnsw_oram_plaintext_index_from_blocks`.
 
 Client state is mandatory backup material for this provider. Qdrant snapshots
 contain encrypted buckets, manifest, and epoch/root metadata, but not the ORAM

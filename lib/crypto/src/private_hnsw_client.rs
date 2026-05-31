@@ -1060,6 +1060,67 @@ pub fn private_hnsw_node_reaches_level(block: &PrivateHnswNodeBlockPlaintext, le
     block.level_mask & (1u64 << level) != 0
 }
 
+pub fn plan_private_hnsw_oram_neighbor_clustered_leaves(
+    config: PrivateHnswOramClientConfig,
+    blocks: &[PrivateHnswNodeBlockPlaintext],
+    entry_node_id: [u8; 32],
+) -> Result<Vec<u64>, PrivateHnswClientError> {
+    validate_oram_client_config(config)?;
+    if blocks.is_empty() {
+        return Err(PrivateHnswClientError::InvalidBuildConfig("blocks"));
+    }
+    let leaf_count = private_hnsw_oram_leaf_count(config.tree_height)?;
+
+    let mut index_by_node = BTreeMap::new();
+    for (index, block) in blocks.iter().enumerate() {
+        if index_by_node.insert(block.node_id, index).is_some() {
+            return Err(PrivateHnswClientError::DuplicateBlock);
+        }
+    }
+
+    let seed_node_id = if index_by_node.contains_key(&entry_node_id) {
+        entry_node_id
+    } else {
+        blocks[0].node_id
+    };
+    let mut queue = vec![seed_node_id];
+    let mut queued = BTreeSet::from([seed_node_id]);
+    let mut visited = BTreeSet::new();
+    let mut clustered_indexes = Vec::with_capacity(blocks.len());
+
+    while let Some(node_id) = queue.first().copied() {
+        queue.remove(0);
+        queued.remove(&node_id);
+        if !visited.insert(node_id) {
+            continue;
+        }
+        let Some(index) = index_by_node.get(&node_id).copied() else {
+            continue;
+        };
+        clustered_indexes.push(index);
+        for neighbor_id in &blocks[index].neighbors {
+            if index_by_node.contains_key(neighbor_id)
+                && !visited.contains(neighbor_id)
+                && queued.insert(*neighbor_id)
+            {
+                queue.push(*neighbor_id);
+            }
+        }
+    }
+
+    for index in 0..blocks.len() {
+        if !clustered_indexes.contains(&index) {
+            clustered_indexes.push(index);
+        }
+    }
+
+    let mut leaves = vec![0; blocks.len()];
+    for (rank, index) in clustered_indexes.into_iter().enumerate() {
+        leaves[index] = (rank as u64) % leaf_count;
+    }
+    Ok(leaves)
+}
+
 pub fn build_private_hnsw_oram_plaintext_index_from_layered_f32_points(
     config: PrivateHnswOramClientConfig,
     distance: DistanceKind,
@@ -3895,6 +3956,37 @@ mod tests {
         assert_eq!(result.hits[0].node_id, near.node_id);
         assert_eq!(result.completed_steps, 2);
         assert_eq!(*read_leaves.borrow(), vec![2, 1]);
+    }
+
+    #[test]
+    fn neighbor_clustered_leaf_plan_follows_graph_order() {
+        let config = PrivateHnswOramClientConfig {
+            tree_height: 3,
+            ..oram_config()
+        };
+        let far = node_block_with_vector(3, &[0.0, 1.0], vec![]);
+        let entry = node_block_with_vector(1, &[10.0, 0.0], vec![[2; 32]]);
+        let near = node_block_with_vector(2, &[1.0, 0.0], vec![[3; 32]]);
+        let leaves = plan_private_hnsw_oram_neighbor_clustered_leaves(
+            config,
+            &[far.clone(), entry.clone(), near.clone()],
+            entry.node_id,
+        )
+        .unwrap();
+
+        assert_eq!(leaves, vec![2, 0, 1]);
+        assert_eq!(
+            plan_private_hnsw_oram_neighbor_clustered_leaves(config, &[], entry.node_id),
+            Err(PrivateHnswClientError::InvalidBuildConfig("blocks"))
+        );
+        assert_eq!(
+            plan_private_hnsw_oram_neighbor_clustered_leaves(
+                config,
+                &[entry.clone(), entry],
+                [1; 32],
+            ),
+            Err(PrivateHnswClientError::DuplicateBlock)
+        );
     }
 
     #[test]
