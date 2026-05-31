@@ -233,6 +233,7 @@ const PRIVATE_HNSW_SEARCH_EXECUTION_CLIENT_LED: &str = "client_led";
 const PRIVATE_HNSW_SEARCH_MODE_OPTION: &str = "search_mode";
 const PRIVATE_HNSW_SEARCH_MODE_PRIVATE_HNSW_ORAM: &str = "private_hnsw_oram";
 const PRIVATE_HNSW_RESULT_PRIVACY_OPTION: &str = "result_privacy";
+const PRIVATE_HNSW_RESULT_PRIVACY_IDS_VISIBLE: &str = "ids_visible";
 const PRIVATE_HNSW_DISTANCE_OPTION: &str = "distance";
 const PRIVATE_HNSW_DIM_OPTION: &str = "dim";
 const PRIVATE_HNSW_HNSW_OPTION: &str = "hnsw";
@@ -3678,11 +3679,11 @@ fn validate_private_hnsw_oram_instance(
         PRIVATE_HNSW_SEARCH_MODE_OPTION,
         PRIVATE_HNSW_SEARCH_MODE_PRIVATE_HNSW_ORAM,
     )?;
-    private_hnsw_required_string_one_of(
+    private_hnsw_required_string_value(
         instance_name,
         instance,
         PRIVATE_HNSW_RESULT_PRIVACY_OPTION,
-        &["ids_visible", "private_payload_oram_required"],
+        PRIVATE_HNSW_RESULT_PRIVACY_IDS_VISIBLE,
     )?;
     private_hnsw_distance(instance_name, instance)?;
     private_hnsw_required_u64(instance_name, instance, PRIVATE_HNSW_DIM_OPTION, 1, 65_536)?;
@@ -3759,23 +3760,6 @@ fn private_hnsw_required_string_value(
             instance: instance_name.to_string(),
             option: option.to_string(),
             reason: format!("expected {expected}"),
-        });
-    }
-    Ok(())
-}
-
-fn private_hnsw_required_string_one_of(
-    instance_name: &str,
-    instance: &CryptoInstanceConfig,
-    option: &str,
-    expected: &[&str],
-) -> Result<(), CryptoSetupError> {
-    let value = private_hnsw_required_string(instance_name, instance, option)?;
-    if !expected.contains(&value) {
-        return Err(CryptoSetupError::InvalidInstanceOption {
-            instance: instance_name.to_string(),
-            option: option.to_string(),
-            reason: format!("expected one of {}", expected.join(", ")),
         });
     }
     Ok(())
@@ -9201,6 +9185,38 @@ mod tests {
         assert!(
             matches!(err, CryptoSetupError::InvalidInstanceOption { ref reason, .. }
                 if reason.contains("must not configure server materials or backend")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
+    fn validate_crypto_settings_rejects_private_hnsw_result_private_mode_until_payload_oram_exists()
+    {
+        let mut settings = CryptoSettings {
+            zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+            allow_inline_key_material: false,
+            instances: HashMap::from([(
+                "docs_private_hnsw_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                    materials: HashMap::new(),
+                    backend_ref: None,
+                    options: private_hnsw_oram_options(),
+                },
+            )]),
+            ..CryptoSettings::default()
+        };
+        settings
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["result_privacy"] = json!("private_payload_oram_required");
+
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private payload ORAM result privacy is not implemented in the MVP");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "result_privacy" && reason.contains("ids_visible")),
             "unexpected error: {err:?}",
         );
     }

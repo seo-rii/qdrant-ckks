@@ -534,6 +534,16 @@ and server scoring fail closed and direct clients to the private HNSW ORAM
 session APIs. Phase 11 implements the encrypted bucket store and session
 read/commit APIs behind this validated control-plane contract.
 
+Current result privacy support is deliberately narrow. `result_privacy:
+ids_visible` is the only accepted runtime mode in the MVP: Qdrant remains blind
+to vectors, query vectors, visited HNSW nodes, distances, and client-side top-k
+during the private session, but a later ordinary retrieve leaks the retrieved
+point ids to Qdrant. The enum and wire schema reserve
+`private_payload_oram_required` for a future payload/result ORAM provider, but
+runtime validation and manifest/session policy reject that mode until the
+payload ORAM layer exists. Do not advertise `private_payload_oram_required` as a
+working result-private fetch mode for this provider version.
+
 The Rust reference SDK helpers in `qdrant-sec` now cover the MVP build/upload
 preparation loop. `build_private_hnsw_oram_plaintext_index_from_f32_points`
 constructs a deterministic one-layer f32 neighbor graph for fixtures and

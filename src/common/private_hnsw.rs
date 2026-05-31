@@ -33,6 +33,7 @@ const KEY_ID_OPTION: &str = "key_id";
 const EXPECTED_RK_ID_OPTION: &str = "expected_rk_id";
 const MIN_RK_EPOCH_OPTION: &str = "min_rk_epoch";
 const MAX_RK_EPOCH_OPTION: &str = "max_rk_epoch";
+const RESULT_PRIVACY_OPTION: &str = "result_privacy";
 const ZERO_TRUST_PROFILE_STRICT: &str = "strict";
 const SESSION_LEASE_SECS: u64 = 300;
 const MAX_SESSION_COUNT: usize = 1024;
@@ -225,6 +226,7 @@ struct ResolvedPrivateHnswContext {
     max_rk_epoch: u64,
     expected_dim: u32,
     expected_distance: DistanceKind,
+    expected_result_privacy: ResultPrivacyMode,
     public_key: Vec<u8>,
 }
 
@@ -253,6 +255,23 @@ impl ResolvedPrivateHnswContext {
             },
         }
     }
+
+    fn validate_manifest_runtime_policy(
+        &self,
+        manifest: &PrivateHnswOramManifest,
+    ) -> StorageResult<()> {
+        if manifest.result_privacy != self.expected_result_privacy {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM manifest result_privacy does not match runtime instance",
+            ));
+        }
+        if manifest.result_privacy != ResultPrivacyMode::IdsVisible {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM result_privacy=private_payload_oram_required requires a private payload ORAM provider and is not implemented in this MVP",
+            ));
+        }
+        Ok(())
+    }
 }
 
 pub async fn do_upload_private_hnsw_manifest(
@@ -280,6 +299,7 @@ pub async fn do_upload_private_hnsw_manifest(
         resolved.manifest_context(&signature.key_id),
     )
     .map_err(private_hnsw_error)?;
+    resolved.validate_manifest_runtime_policy(&manifest)?;
 
     let epoch_state = PrivateHnswOramEpochState {
         index_epoch: epoch.epoch,
@@ -340,6 +360,7 @@ pub async fn do_get_private_hnsw_manifest(
         resolved.manifest_context(&signature.key_id),
     )
     .map_err(private_hnsw_error)?;
+    resolved.validate_manifest_runtime_policy(&manifest)?;
     Ok(PrivateHnswManifestRecord {
         manifest,
         signature,
@@ -398,6 +419,7 @@ pub async fn do_upload_private_hnsw_buckets(
         resolved.manifest_context(&signature.key_id),
     )
     .map_err(private_hnsw_error)?;
+    resolved.validate_manifest_runtime_policy(&manifest)?;
     let current_epoch = store.read_current_epoch()?;
     if current_epoch.index_epoch != index_epoch || current_epoch.root_hash != root_hash {
         return Err(StorageError::bad_request(
@@ -486,6 +508,7 @@ pub async fn do_open_private_hnsw_session(
         resolved.manifest_context(&signature.key_id),
     )
     .map_err(private_hnsw_error)?;
+    resolved.validate_manifest_runtime_policy(&manifest)?;
     let current_epoch = store.read_current_epoch()?;
     if current_epoch.index_epoch != manifest_epoch.epoch
         || current_epoch.root_hash != manifest.root_hash
@@ -860,6 +883,7 @@ fn manifest_context_from_runtime(
     let expected_rk_id = required_option_string(instance, EXPECTED_RK_ID_OPTION)?;
     let min_rk_epoch = required_option_u64(instance, MIN_RK_EPOCH_OPTION)?;
     let max_rk_epoch = required_option_u64(instance, MAX_RK_EPOCH_OPTION)?;
+    let expected_result_privacy = result_privacy_from_runtime(instance)?;
     let expected_distance = distance_kind(vector_params.distance);
     let expected_dim = u32::try_from(vector_params.size.get()).map_err(|_| {
         StorageError::bad_request(format!(
@@ -876,8 +900,23 @@ fn manifest_context_from_runtime(
         max_rk_epoch,
         expected_dim,
         expected_distance,
+        expected_result_privacy,
         public_key: Vec::new(),
     })
+}
+
+fn result_privacy_from_runtime(
+    instance: &CryptoInstanceConfig,
+) -> StorageResult<ResultPrivacyMode> {
+    match required_option_string(instance, RESULT_PRIVACY_OPTION)?.as_str() {
+        "ids_visible" => Ok(ResultPrivacyMode::IdsVisible),
+        "private_payload_oram_required" => Err(StorageError::bad_request(
+            "private HNSW ORAM result_privacy=private_payload_oram_required requires a private payload ORAM provider and is not implemented in this MVP",
+        )),
+        value => Err(StorageError::bad_request(format!(
+            "private HNSW ORAM option {RESULT_PRIVACY_OPTION} has unsupported value {value}",
+        ))),
+    }
 }
 
 fn signature_public_key(
