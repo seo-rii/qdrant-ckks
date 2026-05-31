@@ -1,7 +1,14 @@
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
+use collection::config::{
+    CollectionEncryptionConfig, CryptoMigrationState, EncryptionRuleRef, EncryptionSelector,
+};
+use collection::operations::vector_params_builder::VectorParamsBuilder;
 use collection::private_hnsw_oram_store::{PrivateHnswOramEpochState, PrivateHnswOramStore};
+use collection::shards::channel_service::ChannelService;
+use common::budget::ResourceBudget;
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     DistanceKind, FixedBudgetParams, OramKind, OramParams, PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND,
@@ -19,7 +26,18 @@ use qdrant_sec::{
     sign_private_hnsw_oram_manifest,
 };
 use ring::signature::{Ed25519KeyPair, KeyPair};
+use serde_json::json;
+use storage::content_manager::collection_meta_ops::{
+    CollectionMetaOperations, CreateCollection, CreateCollectionOperation,
+};
+use storage::content_manager::toc::TableOfContent;
+use storage::dispatcher::Dispatcher;
+use storage::rbac::{Access, Auth};
 use tempfile::TempDir;
+use tokio::runtime::Runtime;
+use uuid::Uuid;
+
+use crate::settings::{CryptoInstanceConfig, CryptoSettings, Settings};
 
 pub(crate) const COLLECTION_NAME: &str = "docs";
 pub(crate) const COLLECTION_ID: &str = "12345678-90ab-cdef-1234-567890abcdef";
@@ -233,6 +251,62 @@ impl PrivateHnswRouteWireFixture {
         BASE64URL_NOPAD.encode(self.signing_key.public_key().as_ref())
     }
 
+    pub(crate) fn route_settings(&self) -> Settings {
+        let mut settings = Settings::new(None).unwrap();
+        settings.crypto = CryptoSettings {
+            zero_trust_profile: Some(crate::settings::ZERO_TRUST_PROFILE_STRICT.to_string()),
+            instances: HashMap::from([(
+                "docs_private_hnsw_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                    materials: HashMap::new(),
+                    backend_ref: None,
+                    options: json!({
+                        "key_id": KEY_ID,
+                        "expected_rk_id": KEY_ID,
+                        "min_rk_epoch": RK_EPOCH,
+                        "max_rk_epoch": RK_EPOCH,
+                        "search_execution": "client_led",
+                        "search_mode": "private_hnsw_oram",
+                        "result_privacy": "ids_visible",
+                        "distance": "euclid",
+                        "dim": 2,
+                        "hnsw": {
+                            "m": 2,
+                            "ef_construction": 4,
+                            "max_layers": 3,
+                            "fixed_neighbor_slots": 4
+                        },
+                        "oram": {
+                            "kind": "path_oram",
+                            "bucket_size": 2,
+                            "block_size_bytes": 4096,
+                            "tree_height": 2,
+                            "path_batch_size": 1
+                        },
+                        "fixed_budget": {
+                            "enabled": true,
+                            "upper_layer_steps": 1,
+                            "base_layer_steps": 3,
+                            "paths_per_round": 1,
+                            "fixed_result_k": 1
+                        },
+                        "integrity": {
+                            "manifest_signature_required": true,
+                            "commit_signature_required": true,
+                            "merkle_root_required": true
+                        },
+                        "signature_public_keys": {
+                            SIGNING_KEY_ID: self.signing_public_key_b64()
+                        }
+                    }),
+                },
+            )]),
+            ..CryptoSettings::default()
+        };
+        settings
+    }
+
     pub(crate) fn sign_commit(
         &self,
         plan: &PrivateHnswClientCommitPlan,
@@ -338,4 +412,81 @@ impl PrivateHnswRouteWireFixture {
             },
         ]
     }
+}
+
+pub(crate) fn test_dispatcher() -> (TempDir, Dispatcher) {
+    let temp = TempDir::new().unwrap();
+    let mut storage_config = Settings::new(None).unwrap().storage;
+    storage_config.storage_path = temp.path().join("storage");
+    storage_config.snapshots_path = temp.path().join("snapshots");
+    storage_config.temp_path = Some(temp.path().join("tmp"));
+    let toc = Arc::new(TableOfContent::new(
+        &storage_config,
+        Runtime::new().unwrap(),
+        Runtime::new().unwrap(),
+        Runtime::new().unwrap(),
+        ResourceBudget::default(),
+        ChannelService::new(6333, false, None, None),
+        0,
+        None,
+    ));
+    (temp, Dispatcher::new(toc))
+}
+
+pub(crate) fn route_e2e_guard() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+}
+
+pub(crate) async fn create_private_hnsw_collection(dispatcher: &Dispatcher) {
+    dispatcher
+        .submit_collection_meta_op(
+            CollectionMetaOperations::CreateCollection(
+                CreateCollectionOperation::new(
+                    COLLECTION_NAME.to_string(),
+                    CreateCollection {
+                        vectors: collection::operations::types::VectorsConfig::Multi(
+                            BTreeMap::from([(
+                                VECTOR_NAME.to_string(),
+                                VectorParamsBuilder::new(2, segment::types::Distance::Euclid)
+                                    .build(),
+                            )]),
+                        ),
+                        sparse_vectors: None,
+                        hnsw_config: None,
+                        wal_config: None,
+                        optimizers_config: None,
+                        shard_number: Some(1),
+                        on_disk_payload: None,
+                        replication_factor: None,
+                        write_consistency_factor: None,
+                        quantization_config: None,
+                        sharding_method: None,
+                        encryption: Some(CollectionEncryptionConfig {
+                            version: 1,
+                            key_id: Some(KEY_ID.to_string()),
+                            crypto_schema_version: 1,
+                            encryption_epoch: RK_EPOCH,
+                            migration_state: CryptoMigrationState::Active,
+                            rules: vec![EncryptionRuleRef {
+                                id: "text_private_hnsw".to_string(),
+                                selector: EncryptionSelector::VectorNames {
+                                    names: vec![VECTOR_NAME.to_string()],
+                                },
+                                instance: "docs_private_hnsw_v1".to_string(),
+                                binding: Some(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                            }],
+                        }),
+                        strict_mode_config: None,
+                        uuid: Some(Uuid::parse_str(COLLECTION_ID).unwrap()),
+                        metadata: None,
+                    },
+                )
+                .unwrap(),
+            ),
+            Auth::new_internal(Access::full("private HNSW route test")),
+            None,
+        )
+        .await
+        .unwrap();
 }

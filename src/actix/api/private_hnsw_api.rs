@@ -316,171 +316,24 @@ pub fn config_private_hnsw_api(cfg: &mut web::ServiceConfig) {
 
 #[cfg(test)]
 mod private_hnsw_rest_tests {
-    use std::collections::{BTreeMap, HashMap};
     use std::fmt::Debug;
-    use std::sync::Arc;
 
     use actix_web::http::StatusCode;
     use actix_web::{App, test as actix_test, web};
-    use collection::config::{
-        CollectionEncryptionConfig, CryptoMigrationState, EncryptionRuleRef, EncryptionSelector,
-    };
-    use collection::operations::vector_params_builder::VectorParamsBuilder;
-    use collection::shards::channel_service::ChannelService;
-    use common::budget::ResourceBudget;
     use serde::de::DeserializeOwned;
-    use serde_json::{Value, json};
-    use storage::content_manager::collection_meta_ops::{
-        CollectionMetaOperations, CreateCollection, CreateCollectionOperation,
-    };
-    use storage::content_manager::toc::TableOfContent;
-    use storage::rbac::{Access, Auth};
-    use tempfile::TempDir;
-    use tokio::runtime::Runtime;
-    use uuid::Uuid;
+    use serde_json::Value;
 
     use super::*;
     use crate::common::private_hnsw_wire_fixture::{
-        BASE_EPOCH, COLLECTION_ID, COLLECTION_NAME, KEY_ID, NEXT_EPOCH,
-        PrivateHnswRouteWireFixture, RK_EPOCH, SESSION_ID, SIGNING_KEY_ID, VECTOR_NAME,
+        BASE_EPOCH, COLLECTION_ID, NEXT_EPOCH, PrivateHnswRouteWireFixture, SESSION_ID,
+        SIGNING_KEY_ID, create_private_hnsw_collection, route_e2e_guard, test_dispatcher,
     };
-    use crate::settings::{CryptoInstanceConfig, CryptoSettings};
 
     fn json_roundtrip<T>(value: &T) -> T
     where
         T: Serialize + DeserializeOwned + PartialEq + Debug,
     {
         serde_json::from_value(serde_json::to_value(value).unwrap()).unwrap()
-    }
-
-    fn private_hnsw_settings(fixture: &PrivateHnswRouteWireFixture) -> Settings {
-        let mut settings = Settings::new(None).unwrap();
-        settings.crypto = CryptoSettings {
-            zero_trust_profile: Some(crate::settings::ZERO_TRUST_PROFILE_STRICT.to_string()),
-            instances: HashMap::from([(
-                "docs_private_hnsw_v1".to_string(),
-                CryptoInstanceConfig {
-                    provider: qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
-                    materials: HashMap::new(),
-                    backend_ref: None,
-                    options: json!({
-                        "key_id": KEY_ID,
-                        "expected_rk_id": KEY_ID,
-                        "min_rk_epoch": RK_EPOCH,
-                        "max_rk_epoch": RK_EPOCH,
-                        "search_execution": "client_led",
-                        "search_mode": "private_hnsw_oram",
-                        "result_privacy": "ids_visible",
-                        "distance": "euclid",
-                        "dim": 2,
-                        "hnsw": {
-                            "m": 2,
-                            "ef_construction": 4,
-                            "max_layers": 3,
-                            "fixed_neighbor_slots": 4
-                        },
-                        "oram": {
-                            "kind": "path_oram",
-                            "bucket_size": 2,
-                            "block_size_bytes": 4096,
-                            "tree_height": 2,
-                            "path_batch_size": 1
-                        },
-                        "fixed_budget": {
-                            "enabled": true,
-                            "upper_layer_steps": 1,
-                            "base_layer_steps": 3,
-                            "paths_per_round": 1,
-                            "fixed_result_k": 1
-                        },
-                        "integrity": {
-                            "manifest_signature_required": true,
-                            "commit_signature_required": true,
-                            "merkle_root_required": true
-                        },
-                        "signature_public_keys": {
-                            SIGNING_KEY_ID: fixture.signing_public_key_b64()
-                        }
-                    }),
-                },
-            )]),
-            ..CryptoSettings::default()
-        };
-        settings
-    }
-
-    fn test_dispatcher() -> (TempDir, Dispatcher) {
-        let temp = TempDir::new().unwrap();
-        let mut storage_config = Settings::new(None).unwrap().storage;
-        storage_config.storage_path = temp.path().join("storage");
-        storage_config.snapshots_path = temp.path().join("snapshots");
-        storage_config.temp_path = Some(temp.path().join("tmp"));
-        let toc = Arc::new(TableOfContent::new(
-            &storage_config,
-            Runtime::new().unwrap(),
-            Runtime::new().unwrap(),
-            Runtime::new().unwrap(),
-            ResourceBudget::default(),
-            ChannelService::new(6333, false, None, None),
-            0,
-            None,
-        ));
-        (temp, Dispatcher::new(toc))
-    }
-
-    async fn create_private_hnsw_collection(dispatcher: &Dispatcher) {
-        dispatcher
-            .submit_collection_meta_op(
-                CollectionMetaOperations::CreateCollection(
-                    CreateCollectionOperation::new(
-                        COLLECTION_NAME.to_string(),
-                        CreateCollection {
-                            vectors: collection::operations::types::VectorsConfig::Multi(
-                                BTreeMap::from([(
-                                    VECTOR_NAME.to_string(),
-                                    VectorParamsBuilder::new(2, segment::types::Distance::Euclid)
-                                        .build(),
-                                )]),
-                            ),
-                            sparse_vectors: None,
-                            hnsw_config: None,
-                            wal_config: None,
-                            optimizers_config: None,
-                            shard_number: Some(1),
-                            on_disk_payload: None,
-                            replication_factor: None,
-                            write_consistency_factor: None,
-                            quantization_config: None,
-                            sharding_method: None,
-                            encryption: Some(CollectionEncryptionConfig {
-                                version: 1,
-                                key_id: Some(KEY_ID.to_string()),
-                                crypto_schema_version: 1,
-                                encryption_epoch: RK_EPOCH,
-                                migration_state: CryptoMigrationState::Active,
-                                rules: vec![EncryptionRuleRef {
-                                    id: "text_private_hnsw".to_string(),
-                                    selector: EncryptionSelector::VectorNames {
-                                        names: vec![VECTOR_NAME.to_string()],
-                                    },
-                                    instance: "docs_private_hnsw_v1".to_string(),
-                                    binding: Some(
-                                        qdrant_sec::PRIVATE_HNSW_ORAM_BINDING.to_string(),
-                                    ),
-                                }],
-                            }),
-                            strict_mode_config: None,
-                            uuid: Some(Uuid::parse_str(COLLECTION_ID).unwrap()),
-                            metadata: None,
-                        },
-                    )
-                    .unwrap(),
-                ),
-                Auth::new_internal(Access::full("private HNSW route test")),
-                None,
-            )
-            .await
-            .unwrap();
     }
 
     #[test]
@@ -556,8 +409,9 @@ mod private_hnsw_rest_tests {
 
     #[test]
     fn sdk_fixture_uploads_reads_and_commits_through_rest_routes() {
+        let _guard = route_e2e_guard();
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
-        let settings = private_hnsw_settings(&fixture);
+        let settings = fixture.route_settings();
         let (_temp, dispatcher) = test_dispatcher();
         actix_web::rt::System::new().block_on(async {
             create_private_hnsw_collection(&dispatcher).await;

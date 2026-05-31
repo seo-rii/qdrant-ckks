@@ -505,18 +505,21 @@ fn oram_kind_from_proto(value: i32) -> Result<OramKind, Status> {
 mod private_hnsw_grpc_tests {
     use std::cell::RefCell;
     use std::collections::BTreeMap;
+    use std::sync::Arc;
 
     use qdrant_sec::{
         DistanceKind, PrivateHnswClientError, PrivateHnswEncryptedPathBatch,
         PrivateHnswSearchParams, ResultPrivacyMode, encode_private_hnsw_oram_leaf_label,
-        plan_private_hnsw_oram_commit, search_private_hnsw_oram_encrypted_verified,
+        open_private_hnsw_oram_verified_path_batch, plan_private_hnsw_oram_commit,
+        search_private_hnsw_oram_encrypted_verified,
     };
     use tonic::Code;
 
     use super::*;
     use crate::common::private_hnsw_wire_fixture::{
-        BASE_EPOCH, COLLECTION_NAME, NEXT_EPOCH, PrivateHnswRouteWireFixture, SESSION_ID,
-        SIGNING_KEY_ID, VECTOR_NAME,
+        BASE_EPOCH, COLLECTION_ID, COLLECTION_NAME, NEXT_EPOCH, PrivateHnswRouteWireFixture,
+        SESSION_ID, SIGNING_KEY_ID, VECTOR_NAME, create_private_hnsw_collection, route_e2e_guard,
+        test_dispatcher,
     };
 
     fn sample_manifest() -> PrivateHnswOramManifest {
@@ -783,5 +786,148 @@ mod private_hnsw_grpc_tests {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert!(!restored_commit_buckets.is_empty());
+    }
+
+    #[test]
+    fn sdk_fixture_uploads_reads_and_commits_through_grpc_service() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let (_temp, dispatcher) = test_dispatcher();
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+            let service =
+                PrivateHnswOramService::new(Arc::new(dispatcher.clone()), settings.clone());
+
+            let manifest_epoch = PrivateHnswOram::upload_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                    signature: Some(signature_to_proto(fixture.manifest_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            assert_eq!(manifest_epoch.index_epoch, BASE_EPOCH);
+            assert_eq!(manifest_epoch.root_hash, fixture.encrypted_build.root_hash);
+
+            let bucket_epoch = PrivateHnswOram::upload_private_hnsw_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateHnswBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: fixture
+                        .encrypted_build
+                        .buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            assert_eq!(bucket_epoch.index_epoch, BASE_EPOCH);
+
+            let session = PrivateHnswOram::open_private_hnsw_session(
+                &service,
+                Request::new(grpc::OpenPrivateHnswSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    client_id: "tenant-a/sdk-instance-1".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: result_privacy_to_proto(ResultPrivacyMode::IdsVisible),
+                }),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            assert_eq!(session.collection_id, COLLECTION_ID);
+            assert_eq!(session.index_epoch, BASE_EPOCH);
+
+            let read_response = PrivateHnswOram::read_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramReadPathsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: vec![fixture.entry_leaf_label()],
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    }),
+                    client_signature: Some(signature_to_proto(fixture.client_signature())),
+                }),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            let proof = read_response.proof.unwrap();
+            assert_eq!(proof.kind, fixture.proof_kind());
+            let read_buckets = read_response
+                .buckets
+                .into_iter()
+                .map(bucket_from_proto)
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            let opened_buckets = open_private_hnsw_oram_verified_path_batch(
+                &fixture.keys,
+                fixture.base_context,
+                fixture.config,
+                BASE_EPOCH,
+                &fixture.encrypted_build.root_hash,
+                fixture.encrypted_build.bucket_count,
+                &proof.value,
+                &read_buckets,
+            )
+            .unwrap();
+            assert!(!opened_buckets.is_empty());
+
+            let search_run = fixture.run_single_search_collect_writeback();
+            let commit_epoch = PrivateHnswOram::commit_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramCommitRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash,
+                    new_root_hash: search_run.commit_plan.new_root_hash,
+                    updated_buckets: search_run
+                        .updated_buckets
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                    commit_signature: Some(signature_to_proto(search_run.commit_signature)),
+                }),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            assert_eq!(commit_epoch.index_epoch, NEXT_EPOCH);
+
+            let closed = PrivateHnswOram::close_private_hnsw_session(
+                &service,
+                Request::new(grpc::ClosePrivateHnswSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id,
+                }),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            assert!(closed.closed);
+        });
     }
 }
