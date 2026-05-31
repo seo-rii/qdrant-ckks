@@ -589,7 +589,11 @@ that bucket while rejecting buckets newer than the requested index epoch. Search
 clients should open server `read_paths` responses with
 `search_private_hnsw_oram_encrypted_verified`, which checks the response
 epoch/root/bucket count and Merkle path batch proof before decrypting buckets
-or issuing ORAM writeback.
+or issuing ORAM writeback. SDKs may keep high-level HNSW nodes in a local
+`PrivateHnswClientNodeCache` and call the `*_with_cache` search helpers. A cache
+hit still consumes a padding ORAM access through `padding_node_id`, so fixed-step
+request volume remains constant while the client uses its local upper-layer node
+copy for traversal and distance calculation.
 
 Client state is mandatory backup material for this provider. Qdrant snapshots
 contain encrypted buckets, manifest, and epoch/root metadata, but not the ORAM

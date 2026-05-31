@@ -455,6 +455,69 @@ pub struct PrivateHnswEncryptedIndexBuild {
     pub buckets: Vec<PrivateHnswOramBucket>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PrivateHnswClientNodeCache {
+    nodes: BTreeMap<[u8; 32], PrivateHnswNodeBlockPlaintext>,
+}
+
+impl PrivateHnswClientNodeCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+
+    pub fn contains(&self, node_id: &[u8; 32]) -> bool {
+        self.nodes.contains_key(node_id)
+    }
+
+    pub fn get(&self, node_id: &[u8; 32]) -> Option<&PrivateHnswNodeBlockPlaintext> {
+        self.nodes.get(node_id)
+    }
+
+    pub fn insert(
+        &mut self,
+        block: PrivateHnswNodeBlockPlaintext,
+    ) -> Option<PrivateHnswNodeBlockPlaintext> {
+        self.nodes.insert(block.node_id, block)
+    }
+
+    pub fn insert_if_reaches_level(
+        &mut self,
+        block: PrivateHnswNodeBlockPlaintext,
+        min_level: u8,
+    ) -> bool {
+        if !private_hnsw_node_reaches_level(&block, min_level) {
+            return false;
+        }
+        self.nodes.insert(block.node_id, block).is_none()
+    }
+
+    pub fn extend_upper_layers_from_plaintext_build(
+        &mut self,
+        build: &PrivateHnswPlaintextIndexBuild,
+        min_level: u8,
+    ) -> usize {
+        let mut inserted = 0;
+        for block in build
+            .buckets
+            .iter()
+            .flat_map(|bucket| bucket.blocks.iter().flatten())
+        {
+            if self.insert_if_reaches_level(block.clone(), min_level) {
+                inserted += 1;
+            }
+        }
+        inserted
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateHnswOramUploadBundle {
@@ -984,6 +1047,13 @@ pub fn private_hnsw_level_from_node_id(
     Ok(level)
 }
 
+pub fn private_hnsw_node_reaches_level(block: &PrivateHnswNodeBlockPlaintext, level: u8) -> bool {
+    if level >= 64 {
+        return false;
+    }
+    block.level_mask & (1u64 << level) != 0
+}
+
 pub fn build_private_hnsw_oram_plaintext_index_from_layered_f32_points(
     config: PrivateHnswOramClientConfig,
     distance: DistanceKind,
@@ -1490,6 +1560,60 @@ pub fn search_private_hnsw_oram_plaintext<ReadPath, WriteBack, NextLeaf>(
     config: PrivateHnswOramClientConfig,
     query: &[f32],
     params: PrivateHnswSearchParams,
+    read_path: ReadPath,
+    writeback: WriteBack,
+    next_remap_leaf: NextLeaf,
+) -> Result<PrivateHnswSearchResult, PrivateHnswClientError>
+where
+    ReadPath: FnMut(u64) -> Result<Vec<PrivateHnswOramPlaintextBucket>, PrivateHnswClientError>,
+    WriteBack: FnMut(&[PrivateHnswOramPlaintextBucket]) -> Result<(), PrivateHnswClientError>,
+    NextLeaf: FnMut() -> Result<u64, PrivateHnswClientError>,
+{
+    search_private_hnsw_oram_plaintext_inner(
+        state,
+        config,
+        query,
+        params,
+        None,
+        read_path,
+        writeback,
+        next_remap_leaf,
+    )
+}
+
+pub fn search_private_hnsw_oram_plaintext_with_cache<ReadPath, WriteBack, NextLeaf>(
+    state: &mut PrivateHnswOramClientState,
+    config: PrivateHnswOramClientConfig,
+    query: &[f32],
+    params: PrivateHnswSearchParams,
+    node_cache: &PrivateHnswClientNodeCache,
+    read_path: ReadPath,
+    writeback: WriteBack,
+    next_remap_leaf: NextLeaf,
+) -> Result<PrivateHnswSearchResult, PrivateHnswClientError>
+where
+    ReadPath: FnMut(u64) -> Result<Vec<PrivateHnswOramPlaintextBucket>, PrivateHnswClientError>,
+    WriteBack: FnMut(&[PrivateHnswOramPlaintextBucket]) -> Result<(), PrivateHnswClientError>,
+    NextLeaf: FnMut() -> Result<u64, PrivateHnswClientError>,
+{
+    search_private_hnsw_oram_plaintext_inner(
+        state,
+        config,
+        query,
+        params,
+        Some(node_cache),
+        read_path,
+        writeback,
+        next_remap_leaf,
+    )
+}
+
+fn search_private_hnsw_oram_plaintext_inner<ReadPath, WriteBack, NextLeaf>(
+    state: &mut PrivateHnswOramClientState,
+    config: PrivateHnswOramClientConfig,
+    query: &[f32],
+    params: PrivateHnswSearchParams,
+    node_cache: Option<&PrivateHnswClientNodeCache>,
     mut read_path: ReadPath,
     mut writeback: WriteBack,
     mut next_remap_leaf: NextLeaf,
@@ -1527,37 +1651,55 @@ where
             break (padding_node_id, true);
         };
 
+        let cached_block = if padding_access {
+            None
+        } else {
+            node_cache.and_then(|cache| cache.get(&node_id)).cloned()
+        };
+        let access_node_id = if cached_block.is_some() {
+            params
+                .padding_node_id
+                .ok_or(PrivateHnswClientError::InvalidSearchConfig(
+                    "padding_node_id",
+                ))?
+        } else {
+            node_id
+        };
+
         let old_leaf = state
-            .position(&node_id)
+            .position(&access_node_id)
             .ok_or(PrivateHnswClientError::MissingPosition)?;
         let path_buckets = read_path(old_leaf)?;
         let access = access_private_hnsw_oram_path(
             state,
             config,
-            node_id,
+            access_node_id,
             &path_buckets,
             next_remap_leaf()?,
         )?;
         writeback(&access.writeback_buckets)?;
         accessed_leaf_labels.push(access.old_leaf_label);
+        let block = cached_block.unwrap_or(access.block);
 
-        if padding_access || access.block.deleted {
+        if padding_access || block.deleted {
             continue;
         }
 
-        let vector = decode_f32_le_vector(&access.block)?;
+        let vector = decode_f32_le_vector(&block)?;
         let distance = private_hnsw_distance(query, &vector, params.distance)?;
         hits.push(PrivateHnswSearchHit {
-            node_id: access.block.node_id,
-            point_token: access.block.point_token,
+            node_id: block.node_id,
+            point_token: block.point_token,
             distance,
         });
         sort_hits(&mut hits);
         hits.truncate(params.ef);
 
-        for neighbor_id in &access.block.neighbors {
+        for neighbor_id in &block.neighbors {
             if !visited.contains(neighbor_id) && queued.insert(*neighbor_id) {
-                if state.position(neighbor_id).is_some() {
+                if state.position(neighbor_id).is_some()
+                    || node_cache.is_some_and(|cache| cache.contains(neighbor_id))
+                {
                     pending.push(*neighbor_id);
                 }
             }
@@ -1597,6 +1739,57 @@ where
         config,
         query,
         params,
+        |leaf| {
+            read_path(leaf)?
+                .into_iter()
+                .map(|bucket| {
+                    open_private_hnsw_oram_plaintext_bucket(keys, base_context, &bucket, config)
+                })
+                .collect()
+        },
+        |writeback_buckets| {
+            let encrypted_buckets = writeback_buckets
+                .iter()
+                .map(|bucket| {
+                    seal_private_hnsw_oram_plaintext_bucket(
+                        keys,
+                        base_context,
+                        writeback_epoch,
+                        bucket,
+                        config,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            writeback(&encrypted_buckets)
+        },
+        next_remap_leaf,
+    )
+}
+
+pub fn search_private_hnsw_oram_encrypted_with_cache<ReadPath, WriteBack, NextLeaf>(
+    keys: &PrivateHnswClientKeys,
+    base_context: PrivateHnswBucketAeadBaseContext<'_>,
+    writeback_epoch: u64,
+    state: &mut PrivateHnswOramClientState,
+    config: PrivateHnswOramClientConfig,
+    query: &[f32],
+    params: PrivateHnswSearchParams,
+    node_cache: &PrivateHnswClientNodeCache,
+    mut read_path: ReadPath,
+    mut writeback: WriteBack,
+    next_remap_leaf: NextLeaf,
+) -> Result<PrivateHnswSearchResult, PrivateHnswClientError>
+where
+    ReadPath: FnMut(u64) -> Result<Vec<PrivateHnswOramBucket>, PrivateHnswClientError>,
+    WriteBack: FnMut(&[PrivateHnswOramBucket]) -> Result<(), PrivateHnswClientError>,
+    NextLeaf: FnMut() -> Result<u64, PrivateHnswClientError>,
+{
+    search_private_hnsw_oram_plaintext_with_cache(
+        state,
+        config,
+        query,
+        params,
+        node_cache,
         |leaf| {
             read_path(leaf)?
                 .into_iter()
@@ -1667,6 +1860,75 @@ where
                 &batch.proof_value,
                 &batch.buckets,
             )
+        },
+        |writeback_buckets| {
+            let encrypted_buckets = writeback_buckets
+                .iter()
+                .map(|bucket| {
+                    seal_private_hnsw_oram_plaintext_bucket(
+                        keys,
+                        base_context,
+                        writeback_epoch,
+                        bucket,
+                        config,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            writeback(&encrypted_buckets)
+        },
+        next_remap_leaf,
+    )
+}
+
+pub fn search_private_hnsw_oram_encrypted_verified_with_cache<ReadPath, WriteBack, NextLeaf>(
+    keys: &PrivateHnswClientKeys,
+    base_context: PrivateHnswBucketAeadBaseContext<'_>,
+    expected_epoch: u64,
+    expected_root_hash: &str,
+    expected_bucket_count: u64,
+    writeback_epoch: u64,
+    state: &mut PrivateHnswOramClientState,
+    config: PrivateHnswOramClientConfig,
+    query: &[f32],
+    params: PrivateHnswSearchParams,
+    node_cache: &PrivateHnswClientNodeCache,
+    mut read_path: ReadPath,
+    mut writeback: WriteBack,
+    next_remap_leaf: NextLeaf,
+) -> Result<PrivateHnswSearchResult, PrivateHnswClientError>
+where
+    ReadPath: FnMut(u64) -> Result<PrivateHnswEncryptedPathBatch, PrivateHnswClientError>,
+    WriteBack: FnMut(&[PrivateHnswOramBucket]) -> Result<(), PrivateHnswClientError>,
+    NextLeaf: FnMut() -> Result<u64, PrivateHnswClientError>,
+{
+    search_private_hnsw_oram_plaintext_with_cache(
+        state,
+        config,
+        query,
+        params,
+        node_cache,
+        |leaf| {
+            let batch = read_path(leaf)?;
+            if batch.index_epoch != expected_epoch
+                || batch.root_hash != expected_root_hash
+                || batch.bucket_count != expected_bucket_count
+            {
+                return Err(PrivateHnswClientError::MerkleProofMismatch);
+            }
+            verify_private_hnsw_oram_merkle_proof_json(
+                &batch.proof_value,
+                expected_epoch,
+                expected_root_hash,
+                expected_bucket_count,
+                &batch.buckets,
+            )?;
+            batch
+                .buckets
+                .into_iter()
+                .map(|bucket| {
+                    open_private_hnsw_oram_plaintext_bucket(keys, base_context, &bucket, config)
+                })
+                .collect()
         },
         |writeback_buckets| {
             let encrypted_buckets = writeback_buckets
@@ -3471,6 +3733,86 @@ mod tests {
 
         assert_eq!(result.hits.len(), 1);
         assert_eq!(result.hits[0].node_id, near.node_id);
+    }
+
+    #[test]
+    fn plaintext_search_uses_cached_upper_layer_node_with_padded_oram_access() {
+        use std::cell::RefCell;
+
+        let config = PrivateHnswOramClientConfig {
+            bucket_size: 2,
+            ..oram_config()
+        };
+        let mut entry = node_block_with_vector(1, &[10.0, 0.0], vec![[2; 32]]);
+        entry.level_mask = 0b11;
+        entry.neighbor_levels = vec![1];
+        let near = node_block_with_vector(2, &[1.0, 0.0], vec![]);
+        let padding = node_block_with_vector(3, &[99.0, 0.0], vec![]);
+        let build = build_private_hnsw_oram_plaintext_index_from_blocks(
+            config,
+            &[entry.clone(), near.clone(), padding.clone()],
+            &[0, 1, 2],
+        )
+        .unwrap();
+
+        let mut cache = PrivateHnswClientNodeCache::new();
+        assert_eq!(cache.extend_upper_layers_from_plaintext_build(&build, 1), 1);
+        assert!(cache.contains(&entry.node_id));
+        assert!(!cache.contains(&near.node_id));
+        assert!(private_hnsw_node_reaches_level(&entry, 1));
+        assert!(!private_hnsw_node_reaches_level(&near, 1));
+
+        let store = RefCell::new(
+            build
+                .buckets
+                .into_iter()
+                .map(|bucket| (bucket.bucket_id, bucket))
+                .collect::<BTreeMap<_, _>>(),
+        );
+        let mut state = build.state;
+        let read_leaves = RefCell::new(Vec::new());
+        let mut remaps = [3, 3].into_iter();
+        let result = search_private_hnsw_oram_plaintext_with_cache(
+            &mut state,
+            config,
+            &[1.0, 0.0],
+            PrivateHnswSearchParams {
+                entry_node_id: entry.node_id,
+                k: 1,
+                ef: 2,
+                fixed_steps: 2,
+                distance: DistanceKind::Euclid,
+                padding_node_id: Some(padding.node_id),
+            },
+            &cache,
+            |leaf| {
+                read_leaves.borrow_mut().push(leaf);
+                private_hnsw_oram_bucket_ids_for_leaf(leaf, config.tree_height)?
+                    .into_iter()
+                    .map(|bucket_id| {
+                        store
+                            .borrow()
+                            .get(&bucket_id)
+                            .cloned()
+                            .ok_or(PrivateHnswClientError::PathBucketMismatch)
+                    })
+                    .collect()
+            },
+            |writeback_buckets| {
+                let mut store_mut = store.borrow_mut();
+                for bucket in writeback_buckets {
+                    store_mut.insert(bucket.bucket_id, bucket.clone());
+                }
+                Ok(())
+            },
+            || remaps.next().ok_or(PrivateHnswClientError::LeafOutOfRange),
+        )
+        .unwrap();
+
+        assert_eq!(result.hits.len(), 1);
+        assert_eq!(result.hits[0].node_id, near.node_id);
+        assert_eq!(result.completed_steps, 2);
+        assert_eq!(*read_leaves.borrow(), vec![2, 1]);
     }
 
     #[test]
