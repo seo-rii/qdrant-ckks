@@ -36,6 +36,7 @@ const PRIVATE_HNSW_BUCKET_COMMITMENT_DOMAIN: &str =
     "qdrant-sec/private-hnsw-oram-bucket-commitment/v1";
 const PRIVATE_HNSW_CLIENT_STATE_AEAD_CONTEXT_DOMAIN: &str =
     "qdrant-sec/private-hnsw-client-state-aead/v1";
+const PRIVATE_HNSW_LEVEL_ASSIGNMENT_DOMAIN: &[u8] = b"qdrant-sec/private-hnsw-level-assignment/v1";
 const CLIENT_STATE_SNAPSHOT_VERSION: u16 = 1;
 const CLIENT_STATE_AEAD_VERSION: u16 = 1;
 pub const PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND: &str = "merkle_path_batch/v1";
@@ -899,6 +900,59 @@ pub fn build_private_hnsw_oram_plaintext_index_from_f32_points(
         &levels,
         leaves,
     )
+}
+
+pub fn build_private_hnsw_oram_plaintext_index_from_auto_layered_f32_points(
+    config: PrivateHnswOramClientConfig,
+    distance: DistanceKind,
+    base_neighbor_count: usize,
+    upper_neighbor_count: usize,
+    max_level: u8,
+    points: &[PrivateHnswBuildPoint],
+    leaves: &[u64],
+) -> Result<PrivateHnswPlaintextIndexBuild, PrivateHnswClientError> {
+    if max_level >= 64 {
+        return Err(PrivateHnswClientError::InvalidBuildConfig("max_level"));
+    }
+    let levels = points
+        .iter()
+        .map(|point| private_hnsw_level_from_node_id(point.node_id, max_level))
+        .collect::<Result<Vec<_>, _>>()?;
+    build_private_hnsw_oram_plaintext_index_from_layered_f32_points(
+        config,
+        distance,
+        base_neighbor_count,
+        upper_neighbor_count,
+        points,
+        &levels,
+        leaves,
+    )
+}
+
+pub fn private_hnsw_level_from_node_id(
+    node_id: [u8; 32],
+    max_level: u8,
+) -> Result<u8, PrivateHnswClientError> {
+    if max_level >= 64 {
+        return Err(PrivateHnswClientError::InvalidBuildConfig("max_level"));
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(PRIVATE_HNSW_LEVEL_ASSIGNMENT_DOMAIN);
+    hasher.update(node_id);
+    let digest = hasher.finalize();
+
+    let mut level = 0u8;
+    for byte in digest {
+        let trailing_zeros = byte.trailing_zeros() as u8;
+        level = level.saturating_add(trailing_zeros);
+        if level >= max_level {
+            return Ok(max_level);
+        }
+        if trailing_zeros < 8 {
+            break;
+        }
+    }
+    Ok(level)
 }
 
 pub fn build_private_hnsw_oram_plaintext_index_from_layered_f32_points(
@@ -3570,6 +3624,66 @@ mod tests {
         let entry = blocks.get(&entry_id).unwrap();
         assert_eq!(entry.neighbors, vec![near_id, diverse_id]);
         assert!(!entry.neighbors.contains(&redundant_id));
+    }
+
+    #[test]
+    fn deterministic_level_assignment_drives_auto_layered_builder() {
+        assert_eq!(private_hnsw_level_from_node_id([1; 32], 6).unwrap(), 0);
+        assert_eq!(private_hnsw_level_from_node_id([255; 32], 6).unwrap(), 3);
+        assert_eq!(private_hnsw_level_from_node_id([0; 32], 3).unwrap(), 3);
+        assert_eq!(
+            private_hnsw_level_from_node_id([0; 32], 64).unwrap_err(),
+            PrivateHnswClientError::InvalidBuildConfig("max_level"),
+        );
+
+        let config = PrivateHnswOramClientConfig {
+            bucket_size: 2,
+            fixed_neighbor_slots: 6,
+            ..oram_config()
+        };
+        let low_id = [1; 32];
+        let high_id = [255; 32];
+        let capped_id = [0; 32];
+        let points = vec![
+            PrivateHnswBuildPoint {
+                node_id: low_id,
+                point_token: [11; 32],
+                vector: vec![0.0, 0.0],
+                payload_fetch_token: None,
+            },
+            PrivateHnswBuildPoint {
+                node_id: high_id,
+                point_token: [22; 32],
+                vector: vec![1.0, 0.0],
+                payload_fetch_token: None,
+            },
+            PrivateHnswBuildPoint {
+                node_id: capped_id,
+                point_token: [33; 32],
+                vector: vec![0.0, 1.0],
+                payload_fetch_token: None,
+            },
+        ];
+
+        let build = build_private_hnsw_oram_plaintext_index_from_auto_layered_f32_points(
+            config,
+            DistanceKind::Euclid,
+            1,
+            1,
+            3,
+            &points,
+            &[0, 1, 2],
+        )
+        .unwrap();
+        let blocks = build
+            .buckets
+            .iter()
+            .flat_map(|bucket| bucket.blocks.iter().flatten())
+            .map(|block| (block.node_id, block.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(blocks.get(&low_id).unwrap().level_mask, 0b1);
+        assert_eq!(blocks.get(&high_id).unwrap().level_mask, 0b1111);
+        assert_eq!(blocks.get(&capped_id).unwrap().level_mask, 0b1111);
     }
 
     #[test]

@@ -541,11 +541,15 @@ reference clients, and
 `build_private_hnsw_oram_plaintext_index_from_layered_f32_points` accepts
 explicit per-node HNSW levels to populate canonical level masks and
 per-neighbor levels for layered fixtures; it also applies an HNSW-style
-redundant-neighbor pruning heuristic before sealing the graph. `build_private_hnsw_oram_plaintext_index_from_blocks`
-packs prebuilt private HNSW node blocks into Path ORAM plaintext buckets and
-client position state, and `seal_private_hnsw_oram_plaintext_index` seals
-those buckets into upload-ready encrypted `PrivateHnswOramBucket` records plus
-a Merkle `root_hash`. `build_private_hnsw_oram_manifest_from_encrypted_index`
+redundant-neighbor pruning heuristic before sealing the graph.
+`build_private_hnsw_oram_plaintext_index_from_auto_layered_f32_points` derives
+deterministic geometric levels from random opaque node ids via
+`private_hnsw_level_from_node_id`, then delegates to the layered builder.
+`build_private_hnsw_oram_plaintext_index_from_blocks` packs prebuilt private
+HNSW node blocks into Path ORAM plaintext buckets and client position state,
+and `seal_private_hnsw_oram_plaintext_index` seals those buckets into
+upload-ready encrypted `PrivateHnswOramBucket` records plus a Merkle
+`root_hash`. `build_private_hnsw_oram_manifest_from_encrypted_index`
 copies the encrypted build metadata into a signed manifest-ready
 `PrivateHnswOramManifest`, so clients can build, seal, manifest, sign, and
 upload without recomputing server-visible index metadata. The server-side
