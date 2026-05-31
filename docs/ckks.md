@@ -541,8 +541,12 @@ reference clients, `build_private_hnsw_oram_plaintext_index_from_blocks` packs
 prebuilt private HNSW node blocks into Path ORAM plaintext buckets and client
 position state, and `seal_private_hnsw_oram_plaintext_index` seals those
 buckets into upload-ready encrypted `PrivateHnswOramBucket` records plus a
-Merkle `root_hash`. Search clients should open server `read_paths` responses
-with `search_private_hnsw_oram_encrypted_verified`, which checks the response
+Merkle `root_hash`. `build_private_hnsw_oram_manifest_from_encrypted_index`
+copies the encrypted build metadata into a signed manifest-ready
+`PrivateHnswOramManifest`, so clients can build, seal, manifest, sign, and
+upload without recomputing server-visible index metadata. Search clients should
+open server `read_paths` responses with
+`search_private_hnsw_oram_encrypted_verified`, which checks the response
 epoch/root/bucket count and Merkle path batch proof before decrypting buckets
 or issuing ORAM writeback.
 
