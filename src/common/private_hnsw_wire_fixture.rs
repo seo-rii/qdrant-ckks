@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use collection::private_hnsw_oram_store::{PrivateHnswOramEpochState, PrivateHnswOramStore};
+use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     DistanceKind, FixedBudgetParams, OramKind, OramParams, PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND,
     PrivateHnswBucketAeadBaseContext, PrivateHnswBuildPoint, PrivateHnswClientCommitPlan,
@@ -17,11 +18,11 @@ use qdrant_sec::{
     search_private_hnsw_oram_encrypted_verified, sign_private_hnsw_oram_commit,
     sign_private_hnsw_oram_manifest,
 };
-use ring::signature::Ed25519KeyPair;
+use ring::signature::{Ed25519KeyPair, KeyPair};
 use tempfile::TempDir;
 
 pub(crate) const COLLECTION_NAME: &str = "docs";
-pub(crate) const COLLECTION_ID: &str = "collection-uuid-1";
+pub(crate) const COLLECTION_ID: &str = "12345678-90ab-cdef-1234-567890abcdef";
 pub(crate) const VECTOR_NAME: &str = "text";
 pub(crate) const KEY_ID: &str = "tenant-a/vector-private-rk";
 pub(crate) const RK_EPOCH: u64 = 7;
@@ -29,7 +30,7 @@ pub(crate) const SIGNING_KEY_ID: &str = "tenant-a/private-hnsw-signing-v1";
 pub(crate) const SESSION_ID: &str = "session-1";
 pub(crate) const BASE_EPOCH: u64 = 42;
 pub(crate) const NEXT_EPOCH: u64 = 43;
-pub(crate) const MAX_CIPHERTEXT_BYTES: usize = 4096;
+pub(crate) const MAX_CIPHERTEXT_BYTES: usize = 16 * 1024;
 
 pub(crate) struct PrivateHnswRouteWireFixture {
     _temp: TempDir,
@@ -228,6 +229,10 @@ impl PrivateHnswRouteWireFixture {
         }
     }
 
+    pub(crate) fn signing_public_key_b64(&self) -> String {
+        BASE64URL_NOPAD.encode(self.signing_key.public_key().as_ref())
+    }
+
     pub(crate) fn sign_commit(
         &self,
         plan: &PrivateHnswClientCommitPlan,
@@ -306,7 +311,7 @@ impl PrivateHnswRouteWireFixture {
         PrivateHnswOramClientConfig {
             tree_height: 2,
             bucket_size: 2,
-            block_size_bytes: 512,
+            block_size_bytes: 4096,
             fixed_neighbor_slots: 4,
         }
     }

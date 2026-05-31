@@ -195,6 +195,7 @@ impl PrivateHnswOramStore {
         &self,
         epoch: &PrivateHnswOramEpochState,
     ) -> CollectionResult<()> {
+        self.ensure_layout()?;
         match self.read_current_epoch() {
             Ok(current) if current == *epoch => Ok(()),
             Ok(current) => Err(CollectionError::bad_request(format!(
@@ -1054,6 +1055,22 @@ mod tests {
             assert_eq!(manifest_mode & 0o077, 0);
             assert_eq!(root_mode & 0o077, 0);
         }
+    }
+
+    #[test]
+    fn initial_epoch_if_absent_creates_private_layout() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let epoch = PrivateHnswOramEpochState {
+            index_epoch: 42,
+            root_hash: root_hash(42),
+        };
+
+        store
+            .write_initial_epoch_if_absent_or_matching(&epoch)
+            .unwrap();
+
+        assert_eq!(store.read_current_epoch().unwrap(), epoch);
     }
 
     #[test]

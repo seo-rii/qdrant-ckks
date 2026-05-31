@@ -563,11 +563,17 @@ the REST JSON DTOs and gRPC protobuf messages for manifest upload, bucket
 upload, session open, ORAM `read_paths`, and commit request/response shapes.
 The gRPC fixture also feeds a route-shaped `read_paths` response with encrypted
 buckets and a Merkle path batch proof into the SDK verifier, so proof-bearing
-wire responses are checked before bucket decryption. ORAM commits may carry
-unchanged buckets forward from an older bucket epoch; the current Merkle root
-commits to each bucket commitment, and clients open each bucket with the epoch
-recorded in that bucket while rejecting buckets newer than the requested index
-epoch. Search clients should open server `read_paths` responses with
+wire responses are checked before bucket decryption. A Dispatcher-backed REST
+route test now creates an encrypted collection with a stable UUID, uploads the
+SDK manifest and bucket bundle through the private HNSW routes, opens a
+session, verifies a live `read_paths` response with the SDK Merkle verifier,
+commits writeback buckets, and closes the session. Initial manifest upload
+creates the private epoch layout when no current epoch exists; repeated uploads
+still require the current epoch/root to match. ORAM commits may carry unchanged
+buckets forward from an older bucket epoch; the current Merkle root commits to
+each bucket commitment, and clients open each bucket with the epoch recorded in
+that bucket while rejecting buckets newer than the requested index epoch. Search
+clients should open server `read_paths` responses with
 `search_private_hnsw_oram_encrypted_verified`, which checks the response
 epoch/root/bucket count and Merkle path batch proof before decrypting buckets
 or issuing ORAM writeback.
