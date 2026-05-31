@@ -540,7 +540,8 @@ constructs a deterministic one-layer f32 neighbor graph for fixtures and
 reference clients, and
 `build_private_hnsw_oram_plaintext_index_from_layered_f32_points` accepts
 explicit per-node HNSW levels to populate canonical level masks and
-per-neighbor levels for layered fixtures. `build_private_hnsw_oram_plaintext_index_from_blocks`
+per-neighbor levels for layered fixtures; it also applies an HNSW-style
+redundant-neighbor pruning heuristic before sealing the graph. `build_private_hnsw_oram_plaintext_index_from_blocks`
 packs prebuilt private HNSW node blocks into Path ORAM plaintext buckets and
 client position state, and `seal_private_hnsw_oram_plaintext_index` seals
 those buckets into upload-ready encrypted `PrivateHnswOramBucket` records plus
