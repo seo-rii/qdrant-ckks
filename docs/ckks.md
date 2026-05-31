@@ -534,6 +534,18 @@ and server scoring fail closed and direct clients to the private HNSW ORAM
 session APIs. Phase 11 implements the encrypted bucket store and session
 read/commit APIs behind this validated control-plane contract.
 
+The Rust reference SDK helpers in `qdrant-sec` now cover the MVP build/upload
+preparation loop. `build_private_hnsw_oram_plaintext_index_from_f32_points`
+constructs a deterministic one-layer f32 neighbor graph for fixtures and
+reference clients, `build_private_hnsw_oram_plaintext_index_from_blocks` packs
+prebuilt private HNSW node blocks into Path ORAM plaintext buckets and client
+position state, and `seal_private_hnsw_oram_plaintext_index` seals those
+buckets into upload-ready encrypted `PrivateHnswOramBucket` records plus a
+Merkle `root_hash`. Search clients should open server `read_paths` responses
+with `search_private_hnsw_oram_encrypted_verified`, which checks the response
+epoch/root/bucket count and Merkle path batch proof before decrypting buckets
+or issuing ORAM writeback.
+
 The client CKKS vector sidecar signature message is canonical and
 length-prefixed for SDK interop. The byte string is:
 
