@@ -889,6 +889,27 @@ pub fn build_private_hnsw_oram_plaintext_index_from_f32_points(
     points: &[PrivateHnswBuildPoint],
     leaves: &[u64],
 ) -> Result<PrivateHnswPlaintextIndexBuild, PrivateHnswClientError> {
+    let levels = vec![0; points.len()];
+    build_private_hnsw_oram_plaintext_index_from_layered_f32_points(
+        config,
+        distance,
+        neighbor_count,
+        0,
+        points,
+        &levels,
+        leaves,
+    )
+}
+
+pub fn build_private_hnsw_oram_plaintext_index_from_layered_f32_points(
+    config: PrivateHnswOramClientConfig,
+    distance: DistanceKind,
+    base_neighbor_count: usize,
+    upper_neighbor_count: usize,
+    points: &[PrivateHnswBuildPoint],
+    levels: &[u8],
+    leaves: &[u64],
+) -> Result<PrivateHnswPlaintextIndexBuild, PrivateHnswClientError> {
     validate_oram_client_config(config)?;
     if points.is_empty() {
         return Err(PrivateHnswClientError::InvalidBuildConfig("points"));
@@ -896,9 +917,18 @@ pub fn build_private_hnsw_oram_plaintext_index_from_f32_points(
     if points.len() != leaves.len() {
         return Err(PrivateHnswClientError::InvalidBuildConfig("leaves"));
     }
-    if neighbor_count > config.fixed_neighbor_slots {
+    if points.len() != levels.len() {
+        return Err(PrivateHnswClientError::InvalidBuildConfig("levels"));
+    }
+    if base_neighbor_count > config.fixed_neighbor_slots {
         return Err(PrivateHnswClientError::TooManyNeighbors {
-            actual: neighbor_count,
+            actual: base_neighbor_count,
+            limit: config.fixed_neighbor_slots,
+        });
+    }
+    if upper_neighbor_count > config.fixed_neighbor_slots {
+        return Err(PrivateHnswClientError::TooManyNeighbors {
+            actual: upper_neighbor_count,
             limit: config.fixed_neighbor_slots,
         });
     }
@@ -919,26 +949,47 @@ pub fn build_private_hnsw_oram_plaintext_index_from_f32_points(
             return Err(PrivateHnswClientError::NonFiniteDistance);
         }
     }
+    if levels.iter().any(|level| *level >= 64) {
+        return Err(PrivateHnswClientError::InvalidBuildConfig("levels"));
+    }
 
     let mut blocks = Vec::with_capacity(points.len());
     for (index, point) in points.iter().enumerate() {
-        let mut scored_neighbors = Vec::with_capacity(points.len().saturating_sub(1));
-        for (other_index, other) in points.iter().enumerate() {
-            if index == other_index {
+        let point_level = levels[index];
+        let mut neighbors = Vec::new();
+        let mut neighbor_levels = Vec::new();
+        for level in (0..=point_level).rev() {
+            let neighbor_count = if level == 0 {
+                base_neighbor_count
+            } else {
+                upper_neighbor_count
+            };
+            if neighbor_count == 0 {
                 continue;
             }
-            scored_neighbors.push((
-                private_hnsw_distance(&point.vector, &other.vector, distance)?,
-                other.node_id,
-            ));
+            let mut scored_neighbors = Vec::with_capacity(points.len().saturating_sub(1));
+            for (other_index, other) in points.iter().enumerate() {
+                if index == other_index || levels[other_index] < level {
+                    continue;
+                }
+                scored_neighbors.push((
+                    private_hnsw_distance(&point.vector, &other.vector, distance)?,
+                    other.node_id,
+                ));
+            }
+            scored_neighbors
+                .sort_by(|lhs, rhs| lhs.0.total_cmp(&rhs.0).then_with(|| lhs.1.cmp(&rhs.1)));
+            for (_, node_id) in scored_neighbors.into_iter().take(neighbor_count) {
+                neighbors.push(node_id);
+                neighbor_levels.push(level);
+            }
         }
-        scored_neighbors
-            .sort_by(|lhs, rhs| lhs.0.total_cmp(&rhs.0).then_with(|| lhs.1.cmp(&rhs.1)));
-        let neighbors = scored_neighbors
-            .into_iter()
-            .take(neighbor_count)
-            .map(|(_, node_id)| node_id)
-            .collect::<Vec<_>>();
+        if neighbors.len() > config.fixed_neighbor_slots {
+            return Err(PrivateHnswClientError::TooManyNeighbors {
+                actual: neighbors.len(),
+                limit: config.fixed_neighbor_slots,
+            });
+        }
         let vector = point
             .vector
             .iter()
@@ -948,10 +999,10 @@ pub fn build_private_hnsw_oram_plaintext_index_from_f32_points(
             version: NODE_BLOCK_VERSION,
             node_id: point.node_id,
             point_token: point.point_token,
-            level_mask: 1,
+            level_mask: (1u64 << (u32::from(point_level) + 1)) - 1,
             vector_encoding: PrivateHnswVectorEncoding::F32Le,
             vector,
-            neighbor_levels: vec![0; neighbors.len()],
+            neighbor_levels,
             neighbors,
             deleted: false,
             generation: 1,
@@ -3349,6 +3400,72 @@ mod tests {
         assert_eq!(result.hits.len(), 1);
         assert_eq!(result.hits[0].node_id, near_id);
         assert_eq!(result.hits[0].point_token, [22; 32]);
+    }
+
+    #[test]
+    fn layered_f32_bulk_build_constructs_level_masks_and_neighbor_levels() {
+        let config = PrivateHnswOramClientConfig {
+            bucket_size: 2,
+            fixed_neighbor_slots: 6,
+            ..oram_config()
+        };
+        let entry_id = [1; 32];
+        let upper_id = [2; 32];
+        let middle_id = [3; 32];
+        let base_id = [4; 32];
+        let points = vec![
+            PrivateHnswBuildPoint {
+                node_id: entry_id,
+                point_token: [11; 32],
+                vector: vec![0.0, 0.0],
+                payload_fetch_token: None,
+            },
+            PrivateHnswBuildPoint {
+                node_id: upper_id,
+                point_token: [22; 32],
+                vector: vec![8.0, 8.0],
+                payload_fetch_token: None,
+            },
+            PrivateHnswBuildPoint {
+                node_id: middle_id,
+                point_token: [33; 32],
+                vector: vec![0.0, 1.0],
+                payload_fetch_token: None,
+            },
+            PrivateHnswBuildPoint {
+                node_id: base_id,
+                point_token: [44; 32],
+                vector: vec![1.0, 0.0],
+                payload_fetch_token: None,
+            },
+        ];
+
+        let build = build_private_hnsw_oram_plaintext_index_from_layered_f32_points(
+            config,
+            DistanceKind::Euclid,
+            1,
+            1,
+            &points,
+            &[2, 2, 1, 0],
+            &[0, 1, 2, 3],
+        )
+        .unwrap();
+        let blocks = build
+            .buckets
+            .iter()
+            .flat_map(|bucket| bucket.blocks.iter().flatten())
+            .map(|block| (block.node_id, block.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let entry = blocks.get(&entry_id).unwrap();
+        assert_eq!(entry.level_mask, 0b111);
+        assert_eq!(entry.neighbor_levels, vec![2, 1, 0]);
+        assert_eq!(entry.neighbors[0], upper_id);
+        assert_eq!(entry.neighbors[1], middle_id);
+        assert!(entry.neighbors[2] == middle_id || entry.neighbors[2] == base_id);
+
+        let base = blocks.get(&base_id).unwrap();
+        assert_eq!(base.level_mask, 1);
+        assert!(base.neighbor_levels.iter().all(|level| *level == 0));
     }
 
     #[test]

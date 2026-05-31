@@ -537,11 +537,14 @@ read/commit APIs behind this validated control-plane contract.
 The Rust reference SDK helpers in `qdrant-sec` now cover the MVP build/upload
 preparation loop. `build_private_hnsw_oram_plaintext_index_from_f32_points`
 constructs a deterministic one-layer f32 neighbor graph for fixtures and
-reference clients, `build_private_hnsw_oram_plaintext_index_from_blocks` packs
-prebuilt private HNSW node blocks into Path ORAM plaintext buckets and client
-position state, and `seal_private_hnsw_oram_plaintext_index` seals those
-buckets into upload-ready encrypted `PrivateHnswOramBucket` records plus a
-Merkle `root_hash`. `build_private_hnsw_oram_manifest_from_encrypted_index`
+reference clients, and
+`build_private_hnsw_oram_plaintext_index_from_layered_f32_points` accepts
+explicit per-node HNSW levels to populate canonical level masks and
+per-neighbor levels for layered fixtures. `build_private_hnsw_oram_plaintext_index_from_blocks`
+packs prebuilt private HNSW node blocks into Path ORAM plaintext buckets and
+client position state, and `seal_private_hnsw_oram_plaintext_index` seals
+those buckets into upload-ready encrypted `PrivateHnswOramBucket` records plus
+a Merkle `root_hash`. `build_private_hnsw_oram_manifest_from_encrypted_index`
 copies the encrypted build metadata into a signed manifest-ready
 `PrivateHnswOramManifest`, so clients can build, seal, manifest, sign, and
 upload without recomputing server-visible index metadata. The server-side
