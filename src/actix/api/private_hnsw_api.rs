@@ -313,3 +313,93 @@ pub fn config_private_hnsw_api(cfg: &mut web::ServiceConfig) {
         .service(commit_paths)
         .service(close_session);
 }
+
+#[cfg(test)]
+mod private_hnsw_rest_tests {
+    use std::fmt::Debug;
+
+    use serde::de::DeserializeOwned;
+
+    use super::*;
+    use crate::common::private_hnsw_wire_fixture::{
+        BASE_EPOCH, NEXT_EPOCH, PrivateHnswRouteWireFixture, SESSION_ID, SIGNING_KEY_ID,
+    };
+
+    fn json_roundtrip<T>(value: &T) -> T
+    where
+        T: Serialize + DeserializeOwned + PartialEq + Debug,
+    {
+        serde_json::from_value(serde_json::to_value(value).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn sdk_fixture_roundtrips_through_rest_wire_dtos() {
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let manifest_request = UploadPrivateHnswManifestRequest {
+            manifest: fixture.manifest.clone(),
+            signature: fixture.manifest_signature.clone(),
+        };
+        assert_eq!(json_roundtrip(&manifest_request), manifest_request);
+
+        let buckets_request = UploadPrivateHnswBucketsRequest {
+            index_epoch: fixture.encrypted_build.index_epoch,
+            root_hash: fixture.encrypted_build.root_hash.clone(),
+            buckets: fixture.encrypted_build.buckets.clone(),
+        };
+        assert_eq!(json_roundtrip(&buckets_request), buckets_request);
+
+        let session_request = OpenPrivateHnswSessionRequest {
+            client_id: "tenant-a/sdk-instance-1".to_string(),
+            desired_epoch: BASE_EPOCH,
+            fixed_budget: true,
+            result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
+        };
+        assert_eq!(json_roundtrip(&session_request), session_request);
+
+        let (_bucket_ids, batch) = fixture.read_batch_for_leaf(0);
+        let read_request = OramReadPathsRequest {
+            session_id: SESSION_ID.to_string(),
+            index_epoch: fixture.encrypted_build.index_epoch,
+            root_hash: fixture.encrypted_build.root_hash.clone(),
+            paths: vec![fixture.entry_leaf_label()],
+            padding: OramReadPadding {
+                requested_paths: 1,
+                dummy_paths_included: true,
+            },
+            client_signature: PrivateHnswClientSignature {
+                alg: "ed25519".to_string(),
+                key_id: SIGNING_KEY_ID.to_string(),
+                sig: fixture.client_signature().sig,
+            },
+        };
+        assert_eq!(json_roundtrip(&read_request), read_request);
+
+        let read_response = OramReadPathsResponse {
+            index_epoch: batch.index_epoch,
+            root_hash: batch.root_hash,
+            buckets: batch.buckets,
+            proof: OramReadProof {
+                kind: fixture.proof_kind(),
+                value: batch.proof_value,
+            },
+        };
+        assert_eq!(json_roundtrip(&read_response), read_response);
+
+        let search_run = fixture.run_single_search_collect_writeback();
+        assert_eq!(search_run.result.hits[0].node_id, [1; 32]);
+        let commit_request = OramCommitRequest {
+            session_id: SESSION_ID.to_string(),
+            old_epoch: BASE_EPOCH,
+            new_epoch: NEXT_EPOCH,
+            old_root_hash: search_run.commit_plan.old_root_hash,
+            new_root_hash: search_run.commit_plan.new_root_hash,
+            updated_buckets: search_run.updated_buckets,
+            commit_signature: PrivateHnswClientSignature {
+                alg: search_run.commit_signature.alg,
+                key_id: search_run.commit_signature.key_id,
+                sig: search_run.commit_signature.sig,
+            },
+        };
+        assert_eq!(json_roundtrip(&commit_request), commit_request);
+    }
+}

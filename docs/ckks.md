@@ -558,11 +558,16 @@ manifest, and verify that the initial bucket upload bundle satisfies the same
 manifest epoch/root and Merkle commitment contract used by REST/gRPC bucket
 upload. The collection store tests also exercise a packaged
 upload/read_paths/verified-search/writeback-commit round trip against
-SDK-sealed buckets. ORAM commits may carry unchanged buckets forward from an
-older bucket epoch; the current Merkle root commits to each bucket commitment,
-and clients open each bucket with the epoch recorded in that bucket while
-rejecting buckets newer than the requested index epoch. Search clients should
-open server `read_paths` responses with
+SDK-sealed buckets. The qdrant route-layer tests reuse that SDK package across
+the REST JSON DTOs and gRPC protobuf messages for manifest upload, bucket
+upload, session open, ORAM `read_paths`, and commit request/response shapes.
+The gRPC fixture also feeds a route-shaped `read_paths` response with encrypted
+buckets and a Merkle path batch proof into the SDK verifier, so proof-bearing
+wire responses are checked before bucket decryption. ORAM commits may carry
+unchanged buckets forward from an older bucket epoch; the current Merkle root
+commits to each bucket commitment, and clients open each bucket with the epoch
+recorded in that bucket while rejecting buckets newer than the requested index
+epoch. Search clients should open server `read_paths` responses with
 `search_private_hnsw_oram_encrypted_verified`, which checks the response
 epoch/root/bucket count and Merkle path batch proof before decrypting buckets
 or issuing ORAM writeback.

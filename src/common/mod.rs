@@ -10,6 +10,8 @@ pub mod http_client;
 pub mod inference;
 pub mod metrics;
 pub mod private_hnsw;
+#[cfg(test)]
+pub(crate) mod private_hnsw_wire_fixture;
 pub mod pyroscope_state;
 pub mod query;
 pub mod snapshots;

@@ -503,9 +503,21 @@ fn oram_kind_from_proto(value: i32) -> Result<OramKind, Status> {
 
 #[cfg(test)]
 mod private_hnsw_grpc_tests {
+    use std::cell::RefCell;
+    use std::collections::BTreeMap;
+
+    use qdrant_sec::{
+        DistanceKind, PrivateHnswClientError, PrivateHnswEncryptedPathBatch,
+        PrivateHnswSearchParams, ResultPrivacyMode, encode_private_hnsw_oram_leaf_label,
+        plan_private_hnsw_oram_commit, search_private_hnsw_oram_encrypted_verified,
+    };
     use tonic::Code;
 
     use super::*;
+    use crate::common::private_hnsw_wire_fixture::{
+        BASE_EPOCH, COLLECTION_NAME, NEXT_EPOCH, PrivateHnswRouteWireFixture, SESSION_ID,
+        SIGNING_KEY_ID, VECTOR_NAME,
+    };
 
     fn sample_manifest() -> PrivateHnswOramManifest {
         PrivateHnswOramManifest {
@@ -587,5 +599,189 @@ mod private_hnsw_grpc_tests {
         })
         .unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[test]
+    fn sdk_fixture_roundtrips_through_grpc_wire_requests_and_verified_path_response() {
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let upload_manifest = grpc::UploadPrivateHnswManifestRequest {
+            collection_name: COLLECTION_NAME.to_string(),
+            vector_name: VECTOR_NAME.to_string(),
+            manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+            signature: Some(signature_to_proto(fixture.manifest_signature.clone())),
+        };
+        assert_eq!(upload_manifest.collection_name, COLLECTION_NAME);
+        assert_eq!(
+            manifest_from_proto(required(upload_manifest.manifest, "manifest").unwrap()).unwrap(),
+            fixture.manifest
+        );
+        assert_eq!(
+            signature_from_proto(required(upload_manifest.signature, "signature").unwrap()),
+            fixture.manifest_signature
+        );
+
+        let upload_buckets = grpc::UploadPrivateHnswBucketsRequest {
+            collection_name: COLLECTION_NAME.to_string(),
+            vector_name: VECTOR_NAME.to_string(),
+            index_epoch: fixture.encrypted_build.index_epoch,
+            root_hash: fixture.encrypted_build.root_hash.clone(),
+            buckets: fixture
+                .encrypted_build
+                .buckets
+                .clone()
+                .into_iter()
+                .map(bucket_to_proto)
+                .collect(),
+        };
+        let restored_buckets = upload_buckets
+            .buckets
+            .clone()
+            .into_iter()
+            .map(bucket_from_proto)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(restored_buckets, fixture.encrypted_build.buckets);
+
+        let open_session = grpc::OpenPrivateHnswSessionRequest {
+            collection_name: COLLECTION_NAME.to_string(),
+            vector_name: VECTOR_NAME.to_string(),
+            client_id: "tenant-a/sdk-instance-1".to_string(),
+            desired_epoch: BASE_EPOCH,
+            fixed_budget: true,
+            result_privacy: result_privacy_to_proto(ResultPrivacyMode::IdsVisible),
+        };
+        assert_eq!(
+            result_privacy_from_proto(open_session.result_privacy).unwrap(),
+            ResultPrivacyMode::IdsVisible
+        );
+
+        let updated_by_bucket = RefCell::new(BTreeMap::new());
+        let mut state = fixture.plaintext_build.state.clone();
+        let mut remaps = [3].into_iter();
+        let mut observed_read_paths = Vec::new();
+        let result = search_private_hnsw_oram_encrypted_verified(
+            &fixture.keys,
+            fixture.base_context,
+            fixture.encrypted_build.index_epoch,
+            &fixture.encrypted_build.root_hash,
+            fixture.encrypted_build.bucket_count,
+            NEXT_EPOCH,
+            &mut state,
+            fixture.config,
+            &[1.0, 0.0],
+            PrivateHnswSearchParams {
+                entry_node_id: fixture.encrypted_build.entry_node_id,
+                k: 1,
+                ef: 1,
+                fixed_steps: 1,
+                distance: DistanceKind::Euclid,
+                padding_node_id: None,
+            },
+            |leaf| {
+                let leaf_label =
+                    encode_private_hnsw_oram_leaf_label(leaf, fixture.config.tree_height).unwrap();
+                let read_request = grpc::OramReadPathsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: SESSION_ID.to_string(),
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: vec![leaf_label.clone()],
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    }),
+                    client_signature: Some(signature_to_proto(fixture.client_signature())),
+                };
+                let padding =
+                    padding_from_proto(required(read_request.padding.clone(), "padding").unwrap());
+                assert_eq!(padding.requested_paths, 1);
+                assert!(padding.dummy_paths_included);
+                let client_signature = common_signature_from_proto(
+                    required(read_request.client_signature.clone(), "client_signature").unwrap(),
+                );
+                assert_eq!(client_signature.key_id, SIGNING_KEY_ID);
+                observed_read_paths.push(read_request.paths.clone());
+
+                let (_bucket_ids, batch) = fixture.read_batch_for_leaf(leaf);
+                let read_response = grpc::OramReadPathsResponse {
+                    index_epoch: batch.index_epoch,
+                    root_hash: batch.root_hash.clone(),
+                    buckets: batch.buckets.into_iter().map(bucket_to_proto).collect(),
+                    proof: Some(grpc::OramReadProof {
+                        kind: fixture.proof_kind(),
+                        value: batch.proof_value,
+                    }),
+                    time: 0.0,
+                };
+                let proof = required(read_response.proof, "proof").unwrap();
+                assert_eq!(proof.kind, fixture.proof_kind());
+                let buckets = read_response
+                    .buckets
+                    .into_iter()
+                    .map(bucket_from_proto)
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                Ok(PrivateHnswEncryptedPathBatch {
+                    index_epoch: read_response.index_epoch,
+                    root_hash: read_response.root_hash,
+                    bucket_count: fixture.encrypted_build.bucket_count,
+                    proof_value: proof.value,
+                    buckets,
+                })
+            },
+            |writeback_buckets| {
+                let mut updated = updated_by_bucket.borrow_mut();
+                for bucket in writeback_buckets {
+                    updated.insert(bucket.bucket_id, bucket.clone());
+                }
+                Ok(())
+            },
+            || remaps.next().ok_or(PrivateHnswClientError::LeafOutOfRange),
+        )
+        .unwrap();
+        assert_eq!(result.hits[0].node_id, [1; 32]);
+        assert_eq!(observed_read_paths, vec![vec![fixture.entry_leaf_label()]]);
+
+        let updated_buckets = updated_by_bucket
+            .into_inner()
+            .into_values()
+            .collect::<Vec<_>>();
+        let commit_plan = plan_private_hnsw_oram_commit(
+            BASE_EPOCH,
+            NEXT_EPOCH,
+            &fixture.encrypted_build.root_hash,
+            &fixture.leaf_commitments,
+            &updated_buckets,
+        )
+        .unwrap();
+        let commit_signature = fixture.sign_commit(&commit_plan);
+        let commit_request = grpc::OramCommitRequest {
+            collection_name: COLLECTION_NAME.to_string(),
+            vector_name: VECTOR_NAME.to_string(),
+            session_id: SESSION_ID.to_string(),
+            old_epoch: commit_plan.old_epoch,
+            new_epoch: commit_plan.new_epoch,
+            old_root_hash: commit_plan.old_root_hash.clone(),
+            new_root_hash: commit_plan.new_root_hash.clone(),
+            updated_buckets: updated_buckets.into_iter().map(bucket_to_proto).collect(),
+            commit_signature: Some(signature_to_proto(commit_signature.clone())),
+        };
+        assert_eq!(commit_request.old_epoch, BASE_EPOCH);
+        assert_eq!(commit_request.new_epoch, NEXT_EPOCH);
+        assert_eq!(
+            common_signature_from_proto(
+                required(commit_request.commit_signature, "commit_signature").unwrap()
+            )
+            .sig,
+            commit_signature.sig
+        );
+        let restored_commit_buckets = commit_request
+            .updated_buckets
+            .into_iter()
+            .map(bucket_from_proto)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(!restored_commit_buckets.is_empty());
     }
 }
