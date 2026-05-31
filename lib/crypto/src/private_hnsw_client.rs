@@ -1698,7 +1698,7 @@ pub fn verify_private_hnsw_oram_merkle_proof(
     let mut buckets_by_id = BTreeMap::new();
     for bucket in buckets {
         if bucket.version != 1
-            || bucket.index_epoch != expected_epoch
+            || bucket.index_epoch > expected_epoch
             || bucket.bucket_id >= expected_bucket_count
         {
             return Err(PrivateHnswClientError::InvalidMerkleProof);
@@ -3033,7 +3033,25 @@ mod tests {
             std::slice::from_ref(&bucket),
         )
         .unwrap();
-        assert_eq!(opened, vec![plaintext_bucket]);
+        assert_eq!(opened, vec![plaintext_bucket.clone()]);
+
+        let carried_forward_proof = PrivateHnswOramMerkleProof {
+            index_epoch: 43,
+            ..proof.clone()
+        };
+        let carried_forward_json = serde_json::to_string(&carried_forward_proof).unwrap();
+        let carried_forward = open_private_hnsw_oram_verified_path_batch(
+            &keys,
+            bucket_base_context(),
+            config,
+            43,
+            &root_hash,
+            1,
+            &carried_forward_json,
+            std::slice::from_ref(&bucket),
+        )
+        .unwrap();
+        assert_eq!(carried_forward, vec![plaintext_bucket]);
 
         let mut tampered = proof;
         tampered.root_hash = commitment(9);

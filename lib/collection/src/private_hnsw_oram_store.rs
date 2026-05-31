@@ -175,7 +175,7 @@ impl PrivateHnswOramStore {
                 bucket.bucket_id,
             )));
         }
-        validate_bucket(&bucket, expected_epoch, bucket_count, max_ciphertext_bytes)?;
+        validate_bucket_for_read(&bucket, expected_epoch, bucket_count, max_ciphertext_bytes)?;
         Ok(bucket)
     }
 
@@ -569,6 +569,37 @@ fn validate_bucket(
     bucket_count: u64,
     max_ciphertext_bytes: usize,
 ) -> CollectionResult<()> {
+    validate_bucket_shape(bucket, bucket_count, max_ciphertext_bytes)?;
+    if bucket.index_epoch != expected_epoch {
+        return Err(CollectionError::bad_request(format!(
+            "private HNSW ORAM bucket {} has stale epoch {}",
+            bucket.bucket_id, bucket.index_epoch,
+        )));
+    }
+    Ok(())
+}
+
+fn validate_bucket_for_read(
+    bucket: &PrivateHnswOramBucket,
+    expected_epoch: u64,
+    bucket_count: u64,
+    max_ciphertext_bytes: usize,
+) -> CollectionResult<()> {
+    validate_bucket_shape(bucket, bucket_count, max_ciphertext_bytes)?;
+    if bucket.index_epoch > expected_epoch {
+        return Err(CollectionError::bad_request(format!(
+            "private HNSW ORAM bucket {} is newer than requested epoch {}",
+            bucket.bucket_id, expected_epoch,
+        )));
+    }
+    Ok(())
+}
+
+fn validate_bucket_shape(
+    bucket: &PrivateHnswOramBucket,
+    bucket_count: u64,
+    max_ciphertext_bytes: usize,
+) -> CollectionResult<()> {
     if bucket.version != 1 {
         return Err(CollectionError::bad_request(format!(
             "private HNSW ORAM bucket {} has unsupported version {}",
@@ -579,12 +610,6 @@ fn validate_bucket(
         return Err(CollectionError::bad_request(format!(
             "private HNSW ORAM bucket {} is out of range",
             bucket.bucket_id,
-        )));
-    }
-    if bucket.index_epoch != expected_epoch {
-        return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM bucket {} has stale epoch {}",
-            bucket.bucket_id, bucket.index_epoch,
         )));
     }
     let ciphertext = BASE64URL_NOPAD
@@ -864,15 +889,22 @@ fn sync_dir(path: &Path) -> CollectionResult<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use qdrant_sec::{
         DistanceKind, FixedBudgetParams, OramKind, OramParams, PRIVATE_HNSW_ORAM_BINDING,
-        PrivateHnswBucketAeadContext, PrivateHnswClientKeys, PrivateHnswNodeBlockPlaintext,
+        PrivateHnswBucketAeadBaseContext, PrivateHnswBucketAeadContext, PrivateHnswBuildPoint,
+        PrivateHnswClientError, PrivateHnswClientKeys, PrivateHnswEncryptedPathBatch,
+        PrivateHnswManifestBuildContext, PrivateHnswNodeBlockPlaintext,
         PrivateHnswOramClientConfig, PrivateHnswOramPlaintextBucket, PrivateHnswParams,
-        PrivateHnswVectorEncoding, ResultPrivacyMode, SecretKey, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+        PrivateHnswSearchParams, PrivateHnswVectorEncoding, ResultPrivacyMode, SecretKey,
+        VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, build_private_hnsw_oram_manifest_from_encrypted_index,
+        build_private_hnsw_oram_plaintext_index_from_auto_layered_f32_points,
         decode_private_hnsw_oram_bucket_plaintext, empty_private_hnsw_oram_plaintext_bucket,
         encode_private_hnsw_oram_bucket_plaintext, open_private_hnsw_oram_bucket,
-        plan_private_hnsw_oram_commit, private_hnsw_oram_merkle_root_for_commitments,
-        seal_private_hnsw_oram_bucket,
+        plan_private_hnsw_oram_commit, private_hnsw_oram_bucket_ids_for_leaf,
+        private_hnsw_oram_merkle_root_for_commitments, seal_private_hnsw_oram_bucket,
+        seal_private_hnsw_oram_plaintext_index, search_private_hnsw_oram_encrypted_verified,
     };
     use tempfile::TempDir;
 
@@ -957,14 +989,16 @@ mod tests {
     }
 
     fn client_bucket_context(bucket_id: u64) -> PrivateHnswBucketAeadContext<'static> {
-        PrivateHnswBucketAeadContext {
+        client_bucket_base_context().for_bucket(bucket_id, 42)
+    }
+
+    fn client_bucket_base_context() -> PrivateHnswBucketAeadBaseContext<'static> {
+        PrivateHnswBucketAeadBaseContext {
             collection_id: "collection-uuid-1",
             vector_name: "text",
             key_id: "tenant-a/vector-private-rk",
             rk_id: "tenant-a/vector-private-rk",
             rk_epoch: 7,
-            bucket_id,
-            index_epoch: 42,
         }
     }
 
@@ -1136,6 +1170,349 @@ mod tests {
                 .leaves[0]
                 .leaf_hash,
             updated_bucket.bucket_commitment
+        );
+    }
+
+    #[test]
+    fn bucket_read_accepts_unchanged_bucket_from_prior_committed_epoch() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let unchanged_bucket = fixture_bucket(0, 42, b"unchanged bucket");
+        let replaced_bucket = fixture_bucket(1, 42, b"old bucket");
+        let leaf_commitments = vec![
+            unchanged_bucket.bucket_commitment.clone(),
+            replaced_bucket.bucket_commitment.clone(),
+        ];
+        let old_root =
+            PrivateHnswOramStore::merkle_root_for_commitments(&leaf_commitments).unwrap();
+
+        store.write_bucket(&unchanged_bucket, 42, 2, 64).unwrap();
+        store.write_bucket(&replaced_bucket, 42, 2, 64).unwrap();
+        store
+            .write_merkle_tree_from_commitments(42, old_root.clone(), leaf_commitments.clone())
+            .unwrap();
+
+        let updated_bucket = fixture_bucket(1, 43, b"new bucket");
+        let mut updated_commitments = leaf_commitments;
+        updated_commitments[1] = updated_bucket.bucket_commitment.clone();
+        let new_root =
+            PrivateHnswOramStore::merkle_root_for_commitments(&updated_commitments).unwrap();
+        store
+            .prepare_merkle_commit(
+                42,
+                &old_root,
+                43,
+                &new_root,
+                2,
+                std::slice::from_ref(&updated_bucket),
+            )
+            .unwrap()
+            .write()
+            .unwrap();
+        store.write_bucket(&updated_bucket, 43, 2, 64).unwrap();
+
+        assert_eq!(store.read_bucket(0, 43, 2, 64).unwrap(), unchanged_bucket);
+        assert_eq!(store.read_bucket(1, 43, 2, 64).unwrap(), updated_bucket);
+        let err = store.read_bucket(1, 42, 2, 64).unwrap_err();
+        assert!(err.to_string().contains("newer than requested epoch"));
+    }
+
+    #[test]
+    fn sdk_upload_search_fixture_roundtrips_store_read_paths_and_commit() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let keys =
+            PrivateHnswClientKeys::derive_from_resource_key(&SecretKey::from_bytes([13; 32]))
+                .unwrap();
+        let base_context = client_bucket_base_context();
+        let config = PrivateHnswOramClientConfig {
+            tree_height: 2,
+            bucket_size: 2,
+            block_size_bytes: 512,
+            fixed_neighbor_slots: 4,
+        };
+        let entry_id = [1; 32];
+        let neighbor_id = [2; 32];
+        let far_id = [3; 32];
+        let points = vec![
+            PrivateHnswBuildPoint {
+                node_id: entry_id,
+                point_token: [11; 32],
+                vector: vec![1.0, 0.0],
+                payload_fetch_token: None,
+            },
+            PrivateHnswBuildPoint {
+                node_id: neighbor_id,
+                point_token: [22; 32],
+                vector: vec![2.0, 0.0],
+                payload_fetch_token: None,
+            },
+            PrivateHnswBuildPoint {
+                node_id: far_id,
+                point_token: [33; 32],
+                vector: vec![0.0, 1.0],
+                payload_fetch_token: None,
+            },
+        ];
+        let plaintext_build = build_private_hnsw_oram_plaintext_index_from_auto_layered_f32_points(
+            config,
+            DistanceKind::Euclid,
+            2,
+            1,
+            2,
+            &points,
+            &[0, 1, 2],
+        )
+        .unwrap();
+        let encrypted_build = seal_private_hnsw_oram_plaintext_index(
+            &keys,
+            base_context,
+            42,
+            &plaintext_build,
+            config,
+        )
+        .unwrap();
+        let manifest = build_private_hnsw_oram_manifest_from_encrypted_index(
+            PrivateHnswManifestBuildContext {
+                collection_id: "collection-uuid-1",
+                vector_name: "text",
+                key_id: "tenant-a/vector-private-rk",
+                rk_id: "tenant-a/vector-private-rk",
+                rk_epoch: 7,
+                dim: 2,
+                distance: DistanceKind::Euclid,
+                hnsw: PrivateHnswParams {
+                    m: 2,
+                    ef_construction: 4,
+                    max_layers: 3,
+                    fixed_neighbor_slots: config.fixed_neighbor_slots as u32,
+                },
+                oram: OramParams {
+                    kind: OramKind::PathOram,
+                    bucket_size: config.bucket_size as u32,
+                    block_size_bytes: config.block_size_bytes as u32,
+                    tree_height: config.tree_height,
+                    path_batch_size: 1,
+                },
+                fixed_budget: FixedBudgetParams {
+                    enabled: true,
+                    upper_layer_steps: 1,
+                    base_layer_steps: 3,
+                    paths_per_round: 1,
+                    fixed_result_k: 1,
+                },
+                result_privacy: ResultPrivacyMode::IdsVisible,
+                owner_signing_key_id: "tenant-a/private-hnsw-signing-v1",
+                created_at_unix: 1_770_000_000,
+            },
+            &encrypted_build,
+        )
+        .unwrap();
+        assert_eq!(manifest.root_hash, encrypted_build.root_hash);
+
+        let old_epoch = PrivateHnswOramEpochState {
+            index_epoch: encrypted_build.index_epoch,
+            root_hash: encrypted_build.root_hash.clone(),
+        };
+        let leaf_commitments = encrypted_build
+            .buckets
+            .iter()
+            .map(|bucket| bucket.bucket_commitment.clone())
+            .collect::<Vec<_>>();
+        store
+            .write_manifest(&manifest, &fixture_signature())
+            .unwrap();
+        store.write_initial_epoch(&old_epoch).unwrap();
+        store
+            .write_merkle_tree_from_commitments(
+                encrypted_build.index_epoch,
+                encrypted_build.root_hash.clone(),
+                leaf_commitments.clone(),
+            )
+            .unwrap();
+        for bucket in &encrypted_build.buckets {
+            store
+                .write_bucket(
+                    bucket,
+                    encrypted_build.index_epoch,
+                    encrypted_build.bucket_count,
+                    4096,
+                )
+                .unwrap();
+        }
+
+        let updated_by_bucket = std::cell::RefCell::new(BTreeMap::new());
+        let mut state = plaintext_build.state.clone();
+        let mut remaps = [3].into_iter();
+        let result = search_private_hnsw_oram_encrypted_verified(
+            &keys,
+            base_context,
+            encrypted_build.index_epoch,
+            &encrypted_build.root_hash,
+            encrypted_build.bucket_count,
+            43,
+            &mut state,
+            config,
+            &[1.0, 0.0],
+            PrivateHnswSearchParams {
+                entry_node_id: encrypted_build.entry_node_id,
+                k: 1,
+                ef: 1,
+                fixed_steps: 1,
+                distance: DistanceKind::Euclid,
+                padding_node_id: None,
+            },
+            |leaf| {
+                let bucket_ids = private_hnsw_oram_bucket_ids_for_leaf(leaf, config.tree_height)?;
+                let mut buckets = Vec::with_capacity(bucket_ids.len());
+                for bucket_id in &bucket_ids {
+                    let overlay_bucket = updated_by_bucket.borrow().get(bucket_id).cloned();
+                    let bucket = match overlay_bucket {
+                        Some(bucket) => bucket,
+                        None => store
+                            .read_bucket(
+                                *bucket_id,
+                                encrypted_build.index_epoch,
+                                encrypted_build.bucket_count,
+                                4096,
+                            )
+                            .map_err(|_| PrivateHnswClientError::PathBucketMismatch)?,
+                    };
+                    buckets.push(bucket);
+                }
+                let proof = store
+                    .read_merkle_path_batch(
+                        &bucket_ids,
+                        encrypted_build.index_epoch,
+                        &encrypted_build.root_hash,
+                        encrypted_build.bucket_count,
+                    )
+                    .map_err(|_| PrivateHnswClientError::MerkleProofMismatch)?;
+                Ok(PrivateHnswEncryptedPathBatch {
+                    index_epoch: encrypted_build.index_epoch,
+                    root_hash: encrypted_build.root_hash.clone(),
+                    bucket_count: encrypted_build.bucket_count,
+                    proof_value: serde_json::to_string(&proof).unwrap(),
+                    buckets,
+                })
+            },
+            |writeback_buckets| {
+                let mut updated = updated_by_bucket.borrow_mut();
+                for bucket in writeback_buckets {
+                    updated.insert(bucket.bucket_id, bucket.clone());
+                }
+                Ok(())
+            },
+            || remaps.next().ok_or(PrivateHnswClientError::LeafOutOfRange),
+        )
+        .unwrap();
+        assert_eq!(result.hits[0].node_id, entry_id);
+
+        let updated_buckets = updated_by_bucket
+            .into_inner()
+            .into_values()
+            .collect::<Vec<_>>();
+        let commit_plan = plan_private_hnsw_oram_commit(
+            42,
+            43,
+            &encrypted_build.root_hash,
+            &leaf_commitments,
+            &updated_buckets,
+        )
+        .unwrap();
+        let prepared = store
+            .prepare_merkle_commit(
+                42,
+                &encrypted_build.root_hash,
+                43,
+                &commit_plan.new_root_hash,
+                encrypted_build.bucket_count,
+                &updated_buckets,
+            )
+            .unwrap();
+        for bucket in &updated_buckets {
+            store
+                .write_bucket(bucket, 43, encrypted_build.bucket_count, 4096)
+                .unwrap();
+        }
+        prepared.write().unwrap();
+        let new_epoch = PrivateHnswOramEpochState {
+            index_epoch: 43,
+            root_hash: commit_plan.new_root_hash.clone(),
+        };
+        store
+            .compare_and_swap_epoch(&old_epoch, &new_epoch)
+            .unwrap();
+
+        let mut post_commit_remaps = [3].into_iter();
+        let post_commit_updates = std::cell::RefCell::new(BTreeMap::new());
+        let post_commit_result = search_private_hnsw_oram_encrypted_verified(
+            &keys,
+            base_context,
+            43,
+            &commit_plan.new_root_hash,
+            encrypted_build.bucket_count,
+            44,
+            &mut state,
+            config,
+            &[1.0, 0.0],
+            PrivateHnswSearchParams {
+                entry_node_id: encrypted_build.entry_node_id,
+                k: 1,
+                ef: 1,
+                fixed_steps: 1,
+                distance: DistanceKind::Euclid,
+                padding_node_id: None,
+            },
+            |leaf| {
+                let bucket_ids = private_hnsw_oram_bucket_ids_for_leaf(leaf, config.tree_height)?;
+                let mut buckets = Vec::with_capacity(bucket_ids.len());
+                for bucket_id in &bucket_ids {
+                    let overlay_bucket = post_commit_updates.borrow().get(bucket_id).cloned();
+                    let bucket = match overlay_bucket {
+                        Some(bucket) => bucket,
+                        None => store
+                            .read_bucket(*bucket_id, 43, encrypted_build.bucket_count, 4096)
+                            .map_err(|_| PrivateHnswClientError::PathBucketMismatch)?,
+                    };
+                    buckets.push(bucket);
+                }
+                let proof = store
+                    .read_merkle_path_batch(
+                        &bucket_ids,
+                        43,
+                        &commit_plan.new_root_hash,
+                        encrypted_build.bucket_count,
+                    )
+                    .map_err(|_| PrivateHnswClientError::MerkleProofMismatch)?;
+                Ok(PrivateHnswEncryptedPathBatch {
+                    index_epoch: 43,
+                    root_hash: commit_plan.new_root_hash.clone(),
+                    bucket_count: encrypted_build.bucket_count,
+                    proof_value: serde_json::to_string(&proof).unwrap(),
+                    buckets,
+                })
+            },
+            |writeback_buckets| {
+                let mut updated = post_commit_updates.borrow_mut();
+                for bucket in writeback_buckets {
+                    updated.insert(bucket.bucket_id, bucket.clone());
+                }
+                Ok(())
+            },
+            || {
+                post_commit_remaps
+                    .next()
+                    .ok_or(PrivateHnswClientError::LeafOutOfRange)
+            },
+        )
+        .unwrap();
+        assert_eq!(post_commit_result.hits[0].node_id, entry_id);
+        assert!(
+            post_commit_updates
+                .borrow()
+                .values()
+                .all(|bucket| bucket.index_epoch == 44)
         );
     }
 

@@ -556,7 +556,13 @@ upload without recomputing server-visible index metadata. The server-side
 private HNSW tests now package a tiny SDK-built encrypted index, sign its
 manifest, and verify that the initial bucket upload bundle satisfies the same
 manifest epoch/root and Merkle commitment contract used by REST/gRPC bucket
-upload. Search clients should open server `read_paths` responses with
+upload. The collection store tests also exercise a packaged
+upload/read_paths/verified-search/writeback-commit round trip against
+SDK-sealed buckets. ORAM commits may carry unchanged buckets forward from an
+older bucket epoch; the current Merkle root commits to each bucket commitment,
+and clients open each bucket with the epoch recorded in that bucket while
+rejecting buckets newer than the requested index epoch. Search clients should
+open server `read_paths` responses with
 `search_private_hnsw_oram_encrypted_verified`, which checks the response
 epoch/root/bucket count and Merkle path batch proof before decrypting buckets
 or issuing ORAM writeback.
