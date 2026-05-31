@@ -355,6 +355,7 @@
   - 현재 MVP는 `ids_visible`만 runtime에서 허용하고, manifest/session policy도 runtime result privacy와 불일치하는 manifest를 거부한다. `private_payload_oram_required`는 wire enum으로 예약하지만 payload ORAM provider가 구현될 때까지 runtime validation에서 fail closed 한다.
 - Phase F: upper-layer client cache, speculative neighbor prefetch, neighbor clustering, graph-tailored ORAM 실험을 benchmark와 함께 추가한다.
   - upper-layer client cache는 `PrivateHnswClientNodeCache`와 `*_with_cache` search helper로 시작했다. 캐시 hit는 local node copy로 traversal/distance를 수행하되 `padding_node_id` ORAM access를 소비해 fixed-step request volume을 유지한다.
+  - speculative neighbor prefetch는 `plan_private_hnsw_oram_speculative_prefetch` helper로 시작했다. SDK가 client position map에서 후보 node leaf를 deduplicate하고 고정 path 수까지 dummy leaf로 padding한 `read_paths` label 묶음을 만들 수 있다.
 - Phase G: cluster parity fingerprint, active-session transfer reject, shard-local epoch ownership, consensus-backed epoch/root CAS를 설계하고 e2e 테스트한다.
 
 테스트:

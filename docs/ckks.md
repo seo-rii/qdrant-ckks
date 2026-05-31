@@ -594,6 +594,10 @@ or issuing ORAM writeback. SDKs may keep high-level HNSW nodes in a local
 hit still consumes a padding ORAM access through `padding_node_id`, so fixed-step
 request volume remains constant while the client uses its local upper-layer node
 copy for traversal and distance calculation.
+`plan_private_hnsw_oram_speculative_prefetch` prepares fixed-count padded
+neighbor path labels from the client position map, deduplicating real candidate
+leaves and filling the remaining request slots with dummy leaves before the SDK
+calls `read_paths`.
 
 Client state is mandatory backup material for this provider. Qdrant snapshots
 contain encrypted buckets, manifest, and epoch/root metadata, but not the ORAM

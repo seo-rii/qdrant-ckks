@@ -427,6 +427,12 @@ pub struct PrivateHnswSearchResult {
     pub completed_steps: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateHnswSpeculativePrefetchPlan {
+    pub leaf_labels: Vec<String>,
+    pub real_path_count: usize,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrivateHnswBuildPoint {
     pub node_id: [u8; 32],
@@ -1552,6 +1558,49 @@ pub fn access_private_hnsw_oram_path(
         old_leaf_label: encode_private_hnsw_oram_leaf_label(old_leaf, config.tree_height)?,
         block,
         writeback_buckets,
+    })
+}
+
+pub fn plan_private_hnsw_oram_speculative_prefetch(
+    state: &PrivateHnswOramClientState,
+    config: PrivateHnswOramClientConfig,
+    candidate_node_ids: &[[u8; 32]],
+    fixed_path_count: usize,
+    padding_leaf: u64,
+) -> Result<PrivateHnswSpeculativePrefetchPlan, PrivateHnswClientError> {
+    validate_oram_client_config(config)?;
+    if fixed_path_count == 0 {
+        return Err(PrivateHnswClientError::InvalidSearchConfig(
+            "fixed_path_count",
+        ));
+    }
+    validate_private_hnsw_oram_leaf(padding_leaf, config.tree_height)?;
+
+    let mut leaves = Vec::with_capacity(fixed_path_count);
+    let mut seen_leaves = BTreeSet::new();
+    for node_id in candidate_node_ids {
+        if leaves.len() == fixed_path_count {
+            break;
+        }
+        let Some(leaf) = state.position(node_id) else {
+            continue;
+        };
+        if seen_leaves.insert(leaf) {
+            leaves.push(leaf);
+        }
+    }
+    let real_path_count = leaves.len();
+    while leaves.len() < fixed_path_count {
+        leaves.push(padding_leaf);
+    }
+
+    let leaf_labels = leaves
+        .into_iter()
+        .map(|leaf| encode_private_hnsw_oram_leaf_label(leaf, config.tree_height))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(PrivateHnswSpeculativePrefetchPlan {
+        leaf_labels,
+        real_path_count,
     })
 }
 
@@ -3074,6 +3123,39 @@ mod tests {
         assert_eq!(
             private_hnsw_oram_bucket_ids_for_leaf_labels([label.as_str()], 3, 14),
             Err(PrivateHnswClientError::BucketCountMismatch)
+        );
+    }
+
+    #[test]
+    fn speculative_prefetch_plan_deduplicates_positions_and_pads_paths() {
+        let config = oram_config();
+        let state = PrivateHnswOramClientState::with_position_map(
+            [([1; 32], 0), ([2; 32], 1), ([3; 32], 1)],
+            config.tree_height,
+        )
+        .unwrap();
+
+        let plan = plan_private_hnsw_oram_speculative_prefetch(
+            &state,
+            config,
+            &[[1; 32], [2; 32], [3; 32], [4; 32]],
+            4,
+            3,
+        )
+        .unwrap();
+        let leaves = plan
+            .leaf_labels
+            .iter()
+            .map(|label| decode_private_hnsw_oram_leaf_label(label, config.tree_height).unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(plan.real_path_count, 2);
+        assert_eq!(leaves, vec![0, 1, 3, 3]);
+        assert_eq!(
+            plan_private_hnsw_oram_speculative_prefetch(&state, config, &[[1; 32]], 0, 3),
+            Err(PrivateHnswClientError::InvalidSearchConfig(
+                "fixed_path_count"
+            ))
         );
     }
 
