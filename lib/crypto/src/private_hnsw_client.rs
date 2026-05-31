@@ -455,6 +455,35 @@ pub struct PrivateHnswEncryptedIndexBuild {
     pub buckets: Vec<PrivateHnswOramBucket>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateHnswOramUploadBundle {
+    pub manifest: PrivateHnswOramManifest,
+    pub manifest_signature: PrivateHnswOramSignature,
+    pub buckets: Vec<PrivateHnswOramBucket>,
+}
+
+impl PrivateHnswOramUploadBundle {
+    pub fn index_epoch(&self) -> u64 {
+        self.manifest.index_epoch
+    }
+
+    pub fn root_hash(&self) -> &str {
+        &self.manifest.root_hash
+    }
+
+    pub fn bucket_count(&self) -> u64 {
+        self.manifest.bucket_count
+    }
+
+    pub fn bucket_commitments(&self) -> Vec<String> {
+        self.buckets
+            .iter()
+            .map(|bucket| bucket.bucket_commitment.clone())
+            .collect()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrivateHnswManifestBuildContext<'a> {
     pub collection_id: &'a str,
@@ -1349,6 +1378,20 @@ pub fn build_private_hnsw_oram_manifest_from_encrypted_index(
         result_privacy: context.result_privacy,
         owner_signing_key_id: context.owner_signing_key_id.to_string(),
         created_at_unix: context.created_at_unix,
+    })
+}
+
+pub fn package_private_hnsw_oram_upload_bundle(
+    key_pair: &Ed25519KeyPair,
+    context: PrivateHnswManifestBuildContext<'_>,
+    build: &PrivateHnswEncryptedIndexBuild,
+) -> Result<PrivateHnswOramUploadBundle, PrivateHnswClientError> {
+    let manifest = build_private_hnsw_oram_manifest_from_encrypted_index(context, build)?;
+    let manifest_signature = sign_private_hnsw_oram_manifest(key_pair, &manifest)?;
+    Ok(PrivateHnswOramUploadBundle {
+        manifest,
+        manifest_signature,
+        buckets: build.buckets.clone(),
     })
 }
 
@@ -3942,6 +3985,131 @@ mod tests {
         let epoch = validate_private_hnsw_oram_manifest(
             &manifest,
             Some(&signature),
+            PrivateHnswManifestValidationContext {
+                expected_collection_id: "collection-uuid-1",
+                expected_vector_name: "text",
+                expected_key_id: "tenant-a/vector-private-rk",
+                expected_rk_id: "tenant-a/vector-private-rk",
+                min_rk_epoch: 7,
+                max_rk_epoch: 7,
+                expected_dim: 2,
+                expected_distance: DistanceKind::Euclid,
+                signature_verification: PrivateHnswSignatureVerification {
+                    expected_key_id: "tenant-a/private-hnsw-signing-v1",
+                    public_key: key_pair.public_key().as_ref(),
+                },
+            },
+        )
+        .unwrap();
+
+        assert_eq!(epoch.epoch, 42);
+        assert_eq!(
+            epoch.root_hash,
+            decode_merkle_root(&encrypted_build.root_hash).unwrap()
+        );
+    }
+
+    #[test]
+    fn upload_bundle_packages_signed_manifest_and_buckets() {
+        use ring::signature::{Ed25519KeyPair, KeyPair};
+
+        use crate::private_hnsw_oram::{
+            FixedBudgetParams, OramKind, OramParams, PrivateHnswManifestValidationContext,
+            PrivateHnswParams, PrivateHnswSignatureVerification, ResultPrivacyMode,
+            validate_private_hnsw_oram_manifest,
+        };
+
+        let keys = test_keys();
+        let config = PrivateHnswOramClientConfig {
+            bucket_size: 2,
+            ..oram_config()
+        };
+        let points = vec![
+            PrivateHnswBuildPoint {
+                node_id: [1; 32],
+                point_token: [11; 32],
+                vector: vec![10.0, 0.0],
+                payload_fetch_token: None,
+            },
+            PrivateHnswBuildPoint {
+                node_id: [2; 32],
+                point_token: [22; 32],
+                vector: vec![1.0, 0.0],
+                payload_fetch_token: None,
+            },
+        ];
+        let plaintext_build = build_private_hnsw_oram_plaintext_index_from_f32_points(
+            config,
+            DistanceKind::Euclid,
+            1,
+            &points,
+            &[0, 1],
+        )
+        .unwrap();
+        let encrypted_build = seal_private_hnsw_oram_plaintext_index(
+            &keys,
+            bucket_base_context(),
+            42,
+            &plaintext_build,
+            config,
+        )
+        .unwrap();
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[7; 32]).unwrap();
+
+        let bundle = package_private_hnsw_oram_upload_bundle(
+            &key_pair,
+            PrivateHnswManifestBuildContext {
+                collection_id: "collection-uuid-1",
+                vector_name: "text",
+                key_id: "tenant-a/vector-private-rk",
+                rk_id: "tenant-a/vector-private-rk",
+                rk_epoch: 7,
+                dim: 2,
+                distance: DistanceKind::Euclid,
+                hnsw: PrivateHnswParams {
+                    m: 1,
+                    ef_construction: 2,
+                    max_layers: 1,
+                    fixed_neighbor_slots: config.fixed_neighbor_slots as u32,
+                },
+                oram: OramParams {
+                    kind: OramKind::PathOram,
+                    bucket_size: config.bucket_size as u32,
+                    block_size_bytes: config.block_size_bytes as u32,
+                    tree_height: config.tree_height,
+                    path_batch_size: 2,
+                },
+                fixed_budget: FixedBudgetParams {
+                    enabled: true,
+                    upper_layer_steps: 1,
+                    base_layer_steps: 2,
+                    paths_per_round: 2,
+                    fixed_result_k: 1,
+                },
+                result_privacy: ResultPrivacyMode::IdsVisible,
+                owner_signing_key_id: "tenant-a/private-hnsw-signing-v1",
+                created_at_unix: 1_770_000_000,
+            },
+            &encrypted_build,
+        )
+        .unwrap();
+
+        assert_eq!(bundle.index_epoch(), 42);
+        assert_eq!(bundle.root_hash(), encrypted_build.root_hash.as_str());
+        assert_eq!(bundle.bucket_count(), encrypted_build.bucket_count);
+        assert_eq!(bundle.buckets, encrypted_build.buckets);
+        assert_eq!(
+            private_hnsw_oram_merkle_root_for_commitments(&bundle.bucket_commitments()).unwrap(),
+            encrypted_build.root_hash
+        );
+
+        let encoded = serde_json::to_string(&bundle).unwrap();
+        let decoded: PrivateHnswOramUploadBundle = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, bundle);
+
+        let epoch = validate_private_hnsw_oram_manifest(
+            &decoded.manifest,
+            Some(&decoded.manifest_signature),
             PrivateHnswManifestValidationContext {
                 expected_collection_id: "collection-uuid-1",
                 expected_vector_name: "text",

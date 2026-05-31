@@ -552,11 +552,14 @@ upload-ready encrypted `PrivateHnswOramBucket` records plus a Merkle
 `root_hash`. `build_private_hnsw_oram_manifest_from_encrypted_index`
 copies the encrypted build metadata into a signed manifest-ready
 `PrivateHnswOramManifest`, so clients can build, seal, manifest, sign, and
-upload without recomputing server-visible index metadata. The server-side
-private HNSW tests now package a tiny SDK-built encrypted index, sign its
-manifest, and verify that the initial bucket upload bundle satisfies the same
-manifest epoch/root and Merkle commitment contract used by REST/gRPC bucket
-upload. The collection store tests also exercise a packaged
+upload without recomputing server-visible index metadata.
+`package_private_hnsw_oram_upload_bundle` wraps that manifest, its Ed25519
+signature, and the sealed buckets into a serde-compatible upload bundle for
+REST/gRPC SDK distribution. The server-side private HNSW tests now package a
+tiny SDK-built encrypted index, sign its manifest, and verify that the initial
+bucket upload bundle satisfies the same manifest epoch/root and Merkle
+commitment contract used by REST/gRPC bucket upload. The collection store tests
+also exercise a packaged
 upload/read_paths/verified-search/writeback-commit round trip against
 SDK-sealed buckets. The qdrant route-layer tests reuse that SDK package across
 the REST JSON DTOs and gRPC protobuf messages for manifest upload, bucket
