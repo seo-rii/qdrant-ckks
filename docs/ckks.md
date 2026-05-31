@@ -546,6 +546,13 @@ with `search_private_hnsw_oram_encrypted_verified`, which checks the response
 epoch/root/bucket count and Merkle path batch proof before decrypting buckets
 or issuing ORAM writeback.
 
+Client state is mandatory backup material for this provider. Qdrant snapshots
+contain encrypted buckets, manifest, and epoch/root metadata, but not the ORAM
+position map or stash. SDKs should persist `PrivateHnswOramClientStateSnapshot`
+from `PrivateHnswOramClientState::to_snapshot` alongside their RK/signing-key
+backup and restore it with `PrivateHnswOramClientState::from_snapshot` before
+opening sessions against a pinned epoch/root.
+
 The client CKKS vector sidecar signature message is canonical and
 length-prefixed for SDK interop. The byte string is:
 

@@ -32,6 +32,7 @@ const BUCKET_AEAD_TAG_LEN: usize = 16;
 const PRIVATE_HNSW_BUCKET_AEAD_CONTEXT_DOMAIN: &str = "qdrant-sec/private-hnsw-oram-bucket-aead/v1";
 const PRIVATE_HNSW_BUCKET_COMMITMENT_DOMAIN: &str =
     "qdrant-sec/private-hnsw-oram-bucket-commitment/v1";
+const CLIENT_STATE_SNAPSHOT_VERSION: u16 = 1;
 pub const PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND: &str = "merkle_path_batch/v1";
 
 #[derive(Error, Debug, PartialEq, Eq)]
@@ -100,6 +101,10 @@ pub enum PrivateHnswClientError {
     InvalidBuildConfig(&'static str),
     #[error("private HNSW ORAM initial placement overflowed path for leaf {leaf}")]
     OramInitialPlacementOverflow { leaf: u64 },
+    #[error("private HNSW ORAM client state snapshot uses unsupported version {0}")]
+    UnsupportedClientStateSnapshotVersion(u16),
+    #[error("private HNSW ORAM client state snapshot is malformed")]
+    InvalidClientStateSnapshot,
     #[error("private HNSW search config field {0} is invalid")]
     InvalidSearchConfig(&'static str),
     #[error("private HNSW search currently requires f32_le node vectors")]
@@ -296,6 +301,22 @@ pub struct PrivateHnswOramPlaintextBucket {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct PrivateHnswOramClientStateSnapshot {
+    pub version: u16,
+    pub tree_height: u32,
+    pub positions: Vec<PrivateHnswPositionMapSnapshotEntry>,
+    pub stash: Vec<PrivateHnswNodeBlockPlaintext>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateHnswPositionMapSnapshotEntry {
+    pub node_id: String,
+    pub leaf_label: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PrivateHnswOramMerkleProof {
     pub kind: String,
     pub index_epoch: u64,
@@ -473,6 +494,71 @@ impl PrivateHnswOramClientState {
         self.position_map.get(node_id).copied()
     }
 
+    pub fn to_snapshot(
+        &self,
+        tree_height: u32,
+    ) -> Result<PrivateHnswOramClientStateSnapshot, PrivateHnswClientError> {
+        private_hnsw_oram_leaf_count(tree_height)?;
+        let positions = self
+            .position_map
+            .iter()
+            .map(|(node_id, leaf)| {
+                Ok(PrivateHnswPositionMapSnapshotEntry {
+                    node_id: BASE64URL_NOPAD.encode(node_id),
+                    leaf_label: encode_private_hnsw_oram_leaf_label(*leaf, tree_height)?,
+                })
+            })
+            .collect::<Result<Vec<_>, PrivateHnswClientError>>()?;
+        for node_id in self.stash.keys() {
+            if !self.position_map.contains_key(node_id) {
+                return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
+            }
+        }
+
+        Ok(PrivateHnswOramClientStateSnapshot {
+            version: CLIENT_STATE_SNAPSHOT_VERSION,
+            tree_height,
+            positions,
+            stash: self.stash.values().cloned().collect(),
+        })
+    }
+
+    pub fn from_snapshot(
+        snapshot: &PrivateHnswOramClientStateSnapshot,
+    ) -> Result<Self, PrivateHnswClientError> {
+        if snapshot.version != CLIENT_STATE_SNAPSHOT_VERSION {
+            return Err(
+                PrivateHnswClientError::UnsupportedClientStateSnapshotVersion(snapshot.version),
+            );
+        }
+        private_hnsw_oram_leaf_count(snapshot.tree_height)?;
+
+        let mut position_map = BTreeMap::new();
+        for entry in &snapshot.positions {
+            let node_id = decode_client_state_snapshot_node_id(&entry.node_id)?;
+            let leaf =
+                decode_private_hnsw_oram_leaf_label(&entry.leaf_label, snapshot.tree_height)?;
+            if position_map.insert(node_id, leaf).is_some() {
+                return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
+            }
+        }
+
+        let mut stash = BTreeMap::new();
+        for block in &snapshot.stash {
+            if !position_map.contains_key(&block.node_id) {
+                return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
+            }
+            if stash.insert(block.node_id, block.clone()).is_some() {
+                return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
+            }
+        }
+
+        Ok(Self {
+            position_map,
+            stash,
+        })
+    }
+
     pub fn stash_len(&self) -> usize {
         self.stash.len()
     }
@@ -517,6 +603,15 @@ pub fn decode_private_hnsw_oram_leaf_label(
     let leaf = u64::from_be_bytes(bytes);
     validate_private_hnsw_oram_leaf(leaf, tree_height)?;
     Ok(leaf)
+}
+
+fn decode_client_state_snapshot_node_id(value: &str) -> Result<[u8; 32], PrivateHnswClientError> {
+    let bytes = BASE64URL_NOPAD
+        .decode(value.as_bytes())
+        .map_err(|_| PrivateHnswClientError::InvalidClientStateSnapshot)?;
+    bytes
+        .try_into()
+        .map_err(|_| PrivateHnswClientError::InvalidClientStateSnapshot)
 }
 
 pub fn private_hnsw_oram_bucket_ids_for_leaf(
@@ -3148,6 +3243,46 @@ mod tests {
                 .borrow()
                 .iter()
                 .all(|bucket| bucket.index_epoch == 43)
+        );
+    }
+
+    #[test]
+    fn client_state_snapshot_roundtrips_position_map_and_stash() {
+        let config = oram_config();
+        let entry = node_block_with_vector(1, &[1.0, 0.0], vec![]);
+        let stash = node_block_with_vector(2, &[2.0, 0.0], vec![]);
+        let mut state = PrivateHnswOramClientState::with_position_map(
+            [(entry.node_id, 0), (stash.node_id, 1)],
+            config.tree_height,
+        )
+        .unwrap();
+        state.stash.insert(stash.node_id, stash.clone());
+
+        let snapshot = state.to_snapshot(config.tree_height).unwrap();
+        assert_eq!(snapshot.version, 1);
+        assert_eq!(snapshot.tree_height, config.tree_height);
+        assert_eq!(snapshot.positions.len(), 2);
+        assert_eq!(snapshot.stash, vec![stash]);
+
+        let encoded = serde_json::to_string(&snapshot).unwrap();
+        let decoded: PrivateHnswOramClientStateSnapshot = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(
+            PrivateHnswOramClientState::from_snapshot(&decoded).unwrap(),
+            state
+        );
+
+        let mut bad_version = decoded.clone();
+        bad_version.version = 2;
+        assert_eq!(
+            PrivateHnswOramClientState::from_snapshot(&bad_version),
+            Err(PrivateHnswClientError::UnsupportedClientStateSnapshotVersion(2))
+        );
+
+        let mut bad_stash = decoded;
+        bad_stash.stash[0].node_id = [9; 32];
+        assert_eq!(
+            PrivateHnswOramClientState::from_snapshot(&bad_stash),
+            Err(PrivateHnswClientError::InvalidClientStateSnapshot)
         );
     }
 
