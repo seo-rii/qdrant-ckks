@@ -350,7 +350,7 @@
 - Phase B: `PrivateHnswOramManifest` 타입, manifest signature format, collection-local `private_hnsw_oram/{vector}` store, bucket read/write primitive, epoch `current.json` CAS primitive를 추가한다.
 - Phase C: REST/gRPC manifest, session open/close, ORAM `read_paths`, `commit`, session lease, single-writer lock, fixed request-size validation을 추가한다.
 - Phase D: Rust 또는 Python reference SDK로 read-only bulk build, Path ORAM client, client-led HNSW traversal, known-answer fixtures를 제공한다.
-  - 현재 Rust helper는 f32 reference neighbor graph build, prebuilt node-block ORAM packing, encrypted bucket sealing/Merkle root generation, verified encrypted traversal wrapper, client state snapshot export/import를 제공한다. 남은 작업은 full HNSW layer construction, encrypted state-at-rest policy, end-to-end upload/search fixture packaging이다.
+  - 현재 Rust helper는 f32 reference neighbor graph build, prebuilt node-block ORAM packing, encrypted bucket sealing/Merkle root generation, verified encrypted traversal wrapper, client state snapshot export/import, RK-derived encrypted client-state backup을 제공한다. 남은 작업은 full HNSW layer construction과 end-to-end upload/search fixture packaging이다.
 - Phase E: `ids_visible` result privacy를 문서화하고, `private_payload_oram_required` payload/result fetch 설계를 별도 provider 또는 index-token 확장으로 구체화한다.
 - Phase F: upper-layer client cache, speculative neighbor prefetch, neighbor clustering, graph-tailored ORAM 실험을 benchmark와 함께 추가한다.
 - Phase G: cluster parity fingerprint, active-session transfer reject, shard-local epoch ownership, consensus-backed epoch/root CAS를 설계하고 e2e 테스트한다.

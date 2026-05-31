@@ -32,7 +32,10 @@ const BUCKET_AEAD_TAG_LEN: usize = 16;
 const PRIVATE_HNSW_BUCKET_AEAD_CONTEXT_DOMAIN: &str = "qdrant-sec/private-hnsw-oram-bucket-aead/v1";
 const PRIVATE_HNSW_BUCKET_COMMITMENT_DOMAIN: &str =
     "qdrant-sec/private-hnsw-oram-bucket-commitment/v1";
+const PRIVATE_HNSW_CLIENT_STATE_AEAD_CONTEXT_DOMAIN: &str =
+    "qdrant-sec/private-hnsw-client-state-aead/v1";
 const CLIENT_STATE_SNAPSHOT_VERSION: u16 = 1;
+const CLIENT_STATE_AEAD_VERSION: u16 = 1;
 pub const PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND: &str = "merkle_path_batch/v1";
 
 #[derive(Error, Debug, PartialEq, Eq)]
@@ -105,6 +108,16 @@ pub enum PrivateHnswClientError {
     UnsupportedClientStateSnapshotVersion(u16),
     #[error("private HNSW ORAM client state snapshot is malformed")]
     InvalidClientStateSnapshot,
+    #[error("private HNSW ORAM client state context field {0} is invalid")]
+    InvalidClientStateContext(&'static str),
+    #[error("private HNSW ORAM client state ciphertext is not base64url")]
+    InvalidClientStateCiphertextEncoding,
+    #[error("private HNSW ORAM client state ciphertext hash is invalid")]
+    InvalidClientStateCiphertextHash,
+    #[error("private HNSW ORAM client state uses unsupported ciphertext version {0}")]
+    UnsupportedClientStateCiphertextVersion(u16),
+    #[error("private HNSW ORAM client state decryption authentication failed")]
+    ClientStateOpenFailed,
     #[error("private HNSW search config field {0} is invalid")]
     InvalidSearchConfig(&'static str),
     #[error("private HNSW search currently requires f32_le node vectors")]
@@ -271,6 +284,17 @@ pub struct PrivateHnswBucketAeadBaseContext<'a> {
     pub rk_epoch: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateHnswClientStateAeadContext<'a> {
+    pub collection_id: &'a str,
+    pub vector_name: &'a str,
+    pub key_id: &'a str,
+    pub rk_id: &'a str,
+    pub rk_epoch: u64,
+    pub index_epoch: u64,
+    pub root_hash: &'a str,
+}
+
 impl<'a> PrivateHnswBucketAeadBaseContext<'a> {
     pub fn for_bucket(self, bucket_id: u64, index_epoch: u64) -> PrivateHnswBucketAeadContext<'a> {
         PrivateHnswBucketAeadContext {
@@ -306,6 +330,16 @@ pub struct PrivateHnswOramClientStateSnapshot {
     pub tree_height: u32,
     pub positions: Vec<PrivateHnswPositionMapSnapshotEntry>,
     pub stash: Vec<PrivateHnswNodeBlockPlaintext>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateHnswEncryptedClientStateSnapshot {
+    pub version: u16,
+    pub index_epoch: u64,
+    pub root_hash: String,
+    pub ciphertext: String,
+    pub ciphertext_sha256: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -566,6 +600,98 @@ impl PrivateHnswOramClientState {
     pub fn stash_contains(&self, node_id: &[u8; 32]) -> bool {
         self.stash.contains_key(node_id)
     }
+}
+
+pub fn seal_private_hnsw_oram_client_state_snapshot(
+    keys: &PrivateHnswClientKeys,
+    context: PrivateHnswClientStateAeadContext<'_>,
+    snapshot: &PrivateHnswOramClientStateSnapshot,
+) -> Result<PrivateHnswEncryptedClientStateSnapshot, PrivateHnswClientError> {
+    validate_client_state_context(context)?;
+    let plaintext = serde_json::to_vec(snapshot)
+        .map_err(|_| PrivateHnswClientError::InvalidClientStateSnapshot)?;
+
+    let rng = SystemRandom::new();
+    let mut nonce_bytes = [0u8; BUCKET_AEAD_NONCE_LEN];
+    rng.fill(&mut nonce_bytes)
+        .map_err(|_| EncryptionError::RandomFailure)?;
+
+    let unbound_key = UnboundKey::new(&AES_256_GCM, keys.position_map_key().as_bytes())
+        .map_err(|_| EncryptionError::SealFailed)?;
+    let key = LessSafeKey::new(unbound_key);
+    let nonce = Nonce::assume_unique_for_key(nonce_bytes);
+    let aad = private_hnsw_client_state_aead(context)?;
+    let mut in_out = plaintext;
+    let tag = key
+        .seal_in_place_separate_tag(nonce, Aad::from(aad.as_slice()), &mut in_out)
+        .map_err(|_| EncryptionError::SealFailed)?;
+    in_out.extend_from_slice(tag.as_ref());
+
+    let mut raw_ciphertext = Vec::with_capacity(2 + BUCKET_AEAD_NONCE_LEN + in_out.len());
+    raw_ciphertext.extend_from_slice(&CLIENT_STATE_AEAD_VERSION.to_be_bytes());
+    raw_ciphertext.extend_from_slice(&nonce_bytes);
+    raw_ciphertext.extend_from_slice(&in_out);
+
+    Ok(PrivateHnswEncryptedClientStateSnapshot {
+        version: CLIENT_STATE_AEAD_VERSION,
+        index_epoch: context.index_epoch,
+        root_hash: context.root_hash.to_string(),
+        ciphertext: BASE64URL_NOPAD.encode(&raw_ciphertext),
+        ciphertext_sha256: base64url_sha256(&raw_ciphertext),
+    })
+}
+
+pub fn open_private_hnsw_oram_client_state_snapshot(
+    keys: &PrivateHnswClientKeys,
+    context: PrivateHnswClientStateAeadContext<'_>,
+    encrypted: &PrivateHnswEncryptedClientStateSnapshot,
+) -> Result<PrivateHnswOramClientStateSnapshot, PrivateHnswClientError> {
+    validate_client_state_context(context)?;
+    if encrypted.version != CLIENT_STATE_AEAD_VERSION {
+        return Err(
+            PrivateHnswClientError::UnsupportedClientStateCiphertextVersion(encrypted.version),
+        );
+    }
+    if encrypted.index_epoch != context.index_epoch || encrypted.root_hash != context.root_hash {
+        return Err(PrivateHnswClientError::ClientStateOpenFailed);
+    }
+
+    let raw_ciphertext = BASE64URL_NOPAD
+        .decode(encrypted.ciphertext.as_bytes())
+        .map_err(|_| PrivateHnswClientError::InvalidClientStateCiphertextEncoding)?;
+    if raw_ciphertext.len() < 2 + BUCKET_AEAD_NONCE_LEN + BUCKET_AEAD_TAG_LEN {
+        return Err(PrivateHnswClientError::InvalidClientStateCiphertextEncoding);
+    }
+    if base64url_sha256(&raw_ciphertext) != encrypted.ciphertext_sha256 {
+        return Err(PrivateHnswClientError::InvalidClientStateCiphertextHash);
+    }
+    let encoded_version = u16::from_be_bytes(
+        raw_ciphertext[0..2]
+            .try_into()
+            .map_err(|_| PrivateHnswClientError::InvalidClientStateCiphertextEncoding)?,
+    );
+    if encoded_version != CLIENT_STATE_AEAD_VERSION {
+        return Err(
+            PrivateHnswClientError::UnsupportedClientStateCiphertextVersion(encoded_version),
+        );
+    }
+
+    let nonce_bytes: [u8; BUCKET_AEAD_NONCE_LEN] = raw_ciphertext[2..2 + BUCKET_AEAD_NONCE_LEN]
+        .try_into()
+        .map_err(|_| PrivateHnswClientError::InvalidClientStateCiphertextEncoding)?;
+    let nonce = Nonce::assume_unique_for_key(nonce_bytes);
+    let mut ciphertext = raw_ciphertext[2 + BUCKET_AEAD_NONCE_LEN..].to_vec();
+    let unbound_key = UnboundKey::new(&AES_256_GCM, keys.position_map_key().as_bytes())
+        .map_err(|_| EncryptionError::OpenFailed)?;
+    let key = LessSafeKey::new(unbound_key);
+    let aad = private_hnsw_client_state_aead(context)?;
+    let plaintext = key
+        .open_in_place(nonce, Aad::from(aad.as_slice()), &mut ciphertext)
+        .map_err(|_| PrivateHnswClientError::ClientStateOpenFailed)?;
+    let snapshot = serde_json::from_slice::<PrivateHnswOramClientStateSnapshot>(plaintext)
+        .map_err(|_| PrivateHnswClientError::InvalidClientStateSnapshot)?;
+    PrivateHnswOramClientState::from_snapshot(&snapshot)?;
+    Ok(snapshot)
 }
 
 pub fn private_hnsw_oram_leaf_count(tree_height: u32) -> Result<u64, PrivateHnswClientError> {
@@ -1814,6 +1940,26 @@ fn private_hnsw_bucket_aead(
     Ok(aad)
 }
 
+fn private_hnsw_client_state_aead(
+    context: PrivateHnswClientStateAeadContext<'_>,
+) -> Result<Vec<u8>, PrivateHnswClientError> {
+    validate_client_state_context(context)?;
+    let root_hash = decode_merkle_root(context.root_hash)?;
+    let mut aad = Vec::new();
+    append_len_prefixed(
+        &mut aad,
+        PRIVATE_HNSW_CLIENT_STATE_AEAD_CONTEXT_DOMAIN.as_bytes(),
+    );
+    append_len_prefixed(&mut aad, context.collection_id.as_bytes());
+    append_len_prefixed(&mut aad, context.vector_name.as_bytes());
+    append_len_prefixed(&mut aad, context.key_id.as_bytes());
+    append_len_prefixed(&mut aad, context.rk_id.as_bytes());
+    aad.extend_from_slice(&context.rk_epoch.to_be_bytes());
+    aad.extend_from_slice(&context.index_epoch.to_be_bytes());
+    aad.extend_from_slice(&root_hash);
+    Ok(aad)
+}
+
 fn validate_bucket_context(
     context: PrivateHnswBucketAeadContext<'_>,
 ) -> Result<(), PrivateHnswClientError> {
@@ -1829,6 +1975,28 @@ fn validate_bucket_context(
         .map_err(|_| PrivateHnswClientError::InvalidBucketContext("key_id"))?;
     validate_resource_key_id(context.rk_id)
         .map_err(|_| PrivateHnswClientError::InvalidBucketContext("rk_id"))?;
+    Ok(())
+}
+
+fn validate_client_state_context(
+    context: PrivateHnswClientStateAeadContext<'_>,
+) -> Result<(), PrivateHnswClientError> {
+    if context.collection_id.is_empty() {
+        return Err(PrivateHnswClientError::InvalidClientStateContext(
+            "collection_id",
+        ));
+    }
+    if context.vector_name.is_empty() {
+        return Err(PrivateHnswClientError::InvalidClientStateContext(
+            "vector_name",
+        ));
+    }
+    validate_resource_key_id(context.key_id)
+        .map_err(|_| PrivateHnswClientError::InvalidClientStateContext("key_id"))?;
+    validate_resource_key_id(context.rk_id)
+        .map_err(|_| PrivateHnswClientError::InvalidClientStateContext("rk_id"))?;
+    decode_merkle_root(context.root_hash)
+        .map_err(|_| PrivateHnswClientError::InvalidClientStateContext("root_hash"))?;
     Ok(())
 }
 
@@ -3283,6 +3451,65 @@ mod tests {
         assert_eq!(
             PrivateHnswOramClientState::from_snapshot(&bad_stash),
             Err(PrivateHnswClientError::InvalidClientStateSnapshot)
+        );
+    }
+
+    #[test]
+    fn client_state_snapshot_seal_open_binds_epoch_and_root_context() {
+        let keys = test_keys();
+        let config = oram_config();
+        let state =
+            PrivateHnswOramClientState::with_position_map([([1; 32], 0)], config.tree_height)
+                .unwrap();
+        let snapshot = state.to_snapshot(config.tree_height).unwrap();
+        let context = PrivateHnswClientStateAeadContext {
+            collection_id: "collection-uuid-1",
+            vector_name: "text",
+            key_id: "tenant-a/vector-private-rk",
+            rk_id: "tenant-a/vector-private-rk",
+            rk_epoch: 7,
+            index_epoch: 42,
+            root_hash: &BASE64URL_NOPAD.encode(&[42; 32]),
+        };
+
+        let encrypted =
+            seal_private_hnsw_oram_client_state_snapshot(&keys, context, &snapshot).unwrap();
+
+        assert_eq!(encrypted.version, 1);
+        assert_eq!(encrypted.index_epoch, 42);
+        assert_eq!(encrypted.root_hash, context.root_hash);
+        assert_eq!(
+            open_private_hnsw_oram_client_state_snapshot(&keys, context, &encrypted).unwrap(),
+            snapshot
+        );
+
+        let wrong_context = PrivateHnswClientStateAeadContext {
+            root_hash: &BASE64URL_NOPAD.encode(&[43; 32]),
+            ..context
+        };
+        assert_eq!(
+            open_private_hnsw_oram_client_state_snapshot(&keys, wrong_context, &encrypted),
+            Err(PrivateHnswClientError::ClientStateOpenFailed)
+        );
+
+        let mut tampered_hash = encrypted.clone();
+        tampered_hash.ciphertext_sha256 = BASE64URL_NOPAD.encode(&[9; 32]);
+        assert_eq!(
+            open_private_hnsw_oram_client_state_snapshot(&keys, context, &tampered_hash),
+            Err(PrivateHnswClientError::InvalidClientStateCiphertextHash)
+        );
+
+        let mut tampered_ciphertext = encrypted;
+        let mut raw = BASE64URL_NOPAD
+            .decode(tampered_ciphertext.ciphertext.as_bytes())
+            .unwrap();
+        let last = raw.last_mut().unwrap();
+        *last ^= 0x80;
+        tampered_ciphertext.ciphertext = BASE64URL_NOPAD.encode(&raw);
+        tampered_ciphertext.ciphertext_sha256 = base64url_sha256(&raw);
+        assert_eq!(
+            open_private_hnsw_oram_client_state_snapshot(&keys, context, &tampered_ciphertext),
+            Err(PrivateHnswClientError::ClientStateOpenFailed)
         );
     }
 
