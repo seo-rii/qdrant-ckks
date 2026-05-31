@@ -404,19 +404,8 @@ pub async fn do_upload_private_hnsw_buckets(
             "private HNSW ORAM bucket upload epoch/root does not match current manifest epoch",
         ));
     }
-    if manifest.index_epoch != index_epoch || manifest.root_hash != root_hash {
-        return Err(StorageError::bad_request(
-            "private HNSW ORAM bucket upload epoch/root does not match manifest",
-        ));
-    }
     let leaf_commitments =
-        ordered_initial_bucket_commitments(&buckets, index_epoch, manifest.bucket_count)?;
-    let computed_root = PrivateHnswOramStore::merkle_root_for_commitments(&leaf_commitments)?;
-    if computed_root != root_hash {
-        return Err(StorageError::bad_request(format!(
-            "private HNSW ORAM bucket upload Merkle root mismatch: computed {computed_root}",
-        )));
-    }
+        validate_initial_private_hnsw_upload_bundle(&manifest, index_epoch, &root_hash, &buckets)?;
     let max_ciphertext_bytes = max_bucket_ciphertext_bytes(&manifest)?;
     for bucket in &buckets {
         store.write_bucket(
@@ -1064,6 +1053,28 @@ fn max_updated_bucket_count(session: &PrivateHnswSession) -> StorageResult<usize
         .ok_or_else(|| StorageError::bad_request("private HNSW ORAM writeback size overflows"))
 }
 
+fn validate_initial_private_hnsw_upload_bundle(
+    manifest: &PrivateHnswOramManifest,
+    index_epoch: u64,
+    root_hash: &str,
+    buckets: &[PrivateHnswOramBucket],
+) -> StorageResult<Vec<String>> {
+    if manifest.index_epoch != index_epoch || manifest.root_hash != root_hash {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM bucket upload epoch/root does not match manifest",
+        ));
+    }
+    let leaf_commitments =
+        ordered_initial_bucket_commitments(buckets, index_epoch, manifest.bucket_count)?;
+    let computed_root = PrivateHnswOramStore::merkle_root_for_commitments(&leaf_commitments)?;
+    if computed_root != root_hash {
+        return Err(StorageError::bad_request(format!(
+            "private HNSW ORAM bucket upload Merkle root mismatch: computed {computed_root}",
+        )));
+    }
+    Ok(leaf_commitments)
+}
+
 fn ordered_initial_bucket_commitments(
     buckets: &[PrivateHnswOramBucket],
     expected_epoch: u64,
@@ -1144,6 +1155,16 @@ fn validate_root_hash_string(value: &str, field: &str) -> StorageResult<()> {
 #[cfg(test)]
 mod private_hnsw_tests {
     use data_encoding::BASE64URL_NOPAD;
+    use qdrant_sec::{
+        FixedBudgetParams, OramKind, OramParams, PrivateHnswBucketAeadBaseContext,
+        PrivateHnswBuildPoint, PrivateHnswClientKeys, PrivateHnswManifestBuildContext,
+        PrivateHnswOramClientConfig, PrivateHnswParams, PrivateHnswSignatureVerification,
+        SecretKey, build_private_hnsw_oram_manifest_from_encrypted_index,
+        build_private_hnsw_oram_plaintext_index_from_f32_points,
+        encode_private_hnsw_oram_leaf_label, seal_private_hnsw_oram_plaintext_index,
+        sign_private_hnsw_oram_manifest,
+    };
+    use ring::signature::{Ed25519KeyPair, KeyPair};
 
     use super::*;
 
@@ -1205,6 +1226,141 @@ mod private_hnsw_tests {
 
         let err = ordered_initial_bucket_commitments(&[fixture_bucket(0, 41)], 42, 1).unwrap_err();
         assert!(err.to_string().contains("stale epoch"));
+    }
+
+    #[test]
+    fn sdk_packaged_initial_upload_bundle_matches_server_contract() {
+        let collection_id = "collection-uuid-1";
+        let vector_name = "text";
+        let key_id = "tenant-a/vector-private-rk";
+        let signing_key_id = "tenant-a/private-hnsw-signing-v1";
+        let rk_epoch = 7;
+        let config = PrivateHnswOramClientConfig {
+            tree_height: 1,
+            bucket_size: 2,
+            block_size_bytes: 512,
+            fixed_neighbor_slots: 2,
+        };
+        let keys = PrivateHnswClientKeys::derive_from_resource_key(&SecretKey::from_bytes([9; 32]))
+            .unwrap();
+        let base_context = PrivateHnswBucketAeadBaseContext {
+            collection_id,
+            vector_name,
+            key_id,
+            rk_id: key_id,
+            rk_epoch,
+        };
+        let points = vec![
+            PrivateHnswBuildPoint {
+                node_id: [1; 32],
+                point_token: [11; 32],
+                vector: vec![0.0, 1.0],
+                payload_fetch_token: None,
+            },
+            PrivateHnswBuildPoint {
+                node_id: [2; 32],
+                point_token: [22; 32],
+                vector: vec![1.0, 0.0],
+                payload_fetch_token: None,
+            },
+        ];
+        let plaintext_build = build_private_hnsw_oram_plaintext_index_from_f32_points(
+            config,
+            DistanceKind::Euclid,
+            1,
+            &points,
+            &[0, 1],
+        )
+        .unwrap();
+        let encrypted_build = seal_private_hnsw_oram_plaintext_index(
+            &keys,
+            base_context,
+            42,
+            &plaintext_build,
+            config,
+        )
+        .unwrap();
+        let manifest = build_private_hnsw_oram_manifest_from_encrypted_index(
+            PrivateHnswManifestBuildContext {
+                collection_id,
+                vector_name,
+                key_id,
+                rk_id: key_id,
+                rk_epoch,
+                dim: 2,
+                distance: DistanceKind::Euclid,
+                hnsw: PrivateHnswParams {
+                    m: 1,
+                    ef_construction: 2,
+                    max_layers: 1,
+                    fixed_neighbor_slots: config.fixed_neighbor_slots as u32,
+                },
+                oram: OramParams {
+                    kind: OramKind::PathOram,
+                    bucket_size: config.bucket_size as u32,
+                    block_size_bytes: config.block_size_bytes as u32,
+                    tree_height: config.tree_height,
+                    path_batch_size: 1,
+                },
+                fixed_budget: FixedBudgetParams {
+                    enabled: true,
+                    upper_layer_steps: 1,
+                    base_layer_steps: 2,
+                    paths_per_round: 1,
+                    fixed_result_k: 1,
+                },
+                result_privacy: ResultPrivacyMode::IdsVisible,
+                owner_signing_key_id: signing_key_id,
+                created_at_unix: 1_770_000_000,
+            },
+            &encrypted_build,
+        )
+        .unwrap();
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[7; 32]).unwrap();
+        let signature = sign_private_hnsw_oram_manifest(&key_pair, &manifest).unwrap();
+        validate_private_hnsw_oram_manifest(
+            &manifest,
+            Some(&signature),
+            PrivateHnswManifestValidationContext {
+                expected_collection_id: collection_id,
+                expected_vector_name: vector_name,
+                expected_key_id: key_id,
+                expected_rk_id: key_id,
+                min_rk_epoch: rk_epoch,
+                max_rk_epoch: rk_epoch,
+                expected_dim: 2,
+                expected_distance: DistanceKind::Euclid,
+                signature_verification: PrivateHnswSignatureVerification {
+                    expected_key_id: signing_key_id,
+                    public_key: key_pair.public_key().as_ref(),
+                },
+            },
+        )
+        .unwrap();
+
+        let leaf_commitments = validate_initial_private_hnsw_upload_bundle(
+            &manifest,
+            encrypted_build.index_epoch,
+            &encrypted_build.root_hash,
+            &encrypted_build.buckets,
+        )
+        .unwrap();
+        assert_eq!(leaf_commitments.len() as u64, manifest.bucket_count);
+        assert_eq!(
+            PrivateHnswOramStore::merkle_root_for_commitments(&leaf_commitments).unwrap(),
+            manifest.root_hash,
+        );
+
+        let first_leaf = encode_private_hnsw_oram_leaf_label(0, config.tree_height).unwrap();
+        assert_eq!(
+            bucket_ids_for_path_batch(
+                &[first_leaf],
+                manifest.oram.tree_height,
+                manifest.bucket_count
+            )
+            .unwrap(),
+            vec![0, 1],
+        );
     }
 
     #[test]
