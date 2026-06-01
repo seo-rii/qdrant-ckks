@@ -5,9 +5,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
-    PrivateResultOramBucket, PrivateResultOramBucketValidationContext, PrivateResultOramManifest,
-    PrivateResultOramSignature, PrivateResultOramUploadBundle,
-    validate_private_result_oram_bucket_shape,
+    PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND, PrivateResultOramBucket,
+    PrivateResultOramBucketValidationContext, PrivateResultOramManifest,
+    PrivateResultOramMerkleProof, PrivateResultOramMerkleProofLeaf, PrivateResultOramMerkleSibling,
+    PrivateResultOramMerkleSiblingPosition, PrivateResultOramSignature,
+    PrivateResultOramUploadBundle, validate_private_result_oram_bucket_shape,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -27,7 +29,6 @@ const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_SIGNATURE_BYTES: u64 = 16 * 1024;
 const MAX_EPOCH_BYTES: u64 = 16 * 1024;
 const MAX_MERKLE_BYTES: u64 = 256 * 1024 * 1024;
-pub const PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND: &str = "merkle_path_batch/v1";
 
 #[derive(Clone, Debug)]
 pub struct PrivateResultOramStore {
@@ -39,39 +40,6 @@ pub struct PrivateResultOramStore {
 pub struct PrivateResultOramEpochState {
     pub index_epoch: u64,
     pub root_hash: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PrivateResultOramMerkleProof {
-    pub kind: String,
-    pub index_epoch: u64,
-    pub root_hash: String,
-    pub bucket_count: u64,
-    pub leaves: Vec<PrivateResultOramMerkleProofLeaf>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PrivateResultOramMerkleProofLeaf {
-    pub bucket_id: u64,
-    pub leaf_hash: String,
-    pub siblings: Vec<PrivateResultOramMerkleSibling>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PrivateResultOramMerkleSibling {
-    pub level: u32,
-    pub position: MerkleSiblingPosition,
-    pub hash: String,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MerkleSiblingPosition {
-    Left,
-    Right,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -620,9 +588,9 @@ fn merkle_siblings_for_bucket(
     {
         let sibling_index = if index % 2 == 0 { index + 1 } else { index - 1 };
         let position = if index % 2 == 0 {
-            MerkleSiblingPosition::Right
+            PrivateResultOramMerkleSiblingPosition::Right
         } else {
-            MerkleSiblingPosition::Left
+            PrivateResultOramMerkleSiblingPosition::Left
         };
         let sibling = level.get(sibling_index).ok_or_else(|| {
             CollectionError::bad_request("private result ORAM Merkle proof sibling is missing")
@@ -966,7 +934,7 @@ fn sync_dir(path: &Path) -> CollectionResult<()> {
 mod tests {
     use qdrant_sec::{
         OramKind, OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_RESULT_ORAM_BINDING,
-        private_result_oram_merkle_root_for_commitments,
+        private_result_oram_merkle_root_for_commitments, verify_private_result_oram_merkle_proof,
     };
     use tempfile::TempDir;
 
@@ -1177,6 +1145,14 @@ mod tests {
             proof.leaves[0].leaf_hash,
             bundle.buckets[1].bucket_commitment
         );
+        verify_private_result_oram_merkle_proof(
+            &proof,
+            bundle.manifest.index_epoch,
+            &bundle.manifest.root_hash,
+            bundle.manifest.bucket_count,
+            &[bundle.buckets[1].clone()],
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1367,11 +1343,11 @@ mod tests {
         assert_eq!(proof.leaves[1].leaf_hash, leaf_commitments[2]);
         assert_eq!(
             proof.leaves[0].siblings[0].position,
-            MerkleSiblingPosition::Right
+            PrivateResultOramMerkleSiblingPosition::Right
         );
         assert_eq!(
             proof.leaves[1].siblings[0].position,
-            MerkleSiblingPosition::Right
+            PrivateResultOramMerkleSiblingPosition::Right
         );
 
         let err = store
