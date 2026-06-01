@@ -533,6 +533,10 @@ provider and does not score or traverse HNSW server-side; normal vector writes
 and server scoring fail closed and direct clients to the private HNSW ORAM
 session APIs. Phase 11 implements the encrypted bucket store and session
 read/commit APIs behind this validated control-plane contract.
+The private ORAM bucket store is canonical encrypted index data, not an
+untrusted acceleration hint: manifests, epoch files, Merkle metadata, and
+buckets must live under private non-symlink directories, and Unix group/world
+access on bucket directories or files is rejected fail closed.
 
 Current result privacy support is deliberately narrow. `result_privacy:
 ids_visible` is the only accepted runtime mode in the MVP: Qdrant remains blind
