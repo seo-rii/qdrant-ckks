@@ -6,7 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     PrivateResultOramBucket, PrivateResultOramBucketValidationContext, PrivateResultOramManifest,
-    PrivateResultOramSignature, validate_private_result_oram_bucket_shape,
+    PrivateResultOramSignature, PrivateResultOramUploadBundle,
+    validate_private_result_oram_bucket_shape,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -137,6 +138,35 @@ impl PrivateResultOramStore {
         let signature =
             read_json_private_file(&self.manifest_signature_path(), MAX_SIGNATURE_BYTES)?;
         Ok((manifest, signature))
+    }
+
+    pub fn write_initial_upload_bundle(
+        &self,
+        bundle: &PrivateResultOramUploadBundle,
+        max_ciphertext_bytes: usize,
+    ) -> CollectionResult<PrivateResultOramEpochState> {
+        let leaf_commitments = validate_upload_bundle(bundle, max_ciphertext_bytes)?;
+        let epoch = PrivateResultOramEpochState {
+            index_epoch: bundle.manifest.index_epoch,
+            root_hash: bundle.manifest.root_hash.clone(),
+        };
+
+        self.write_manifest(&bundle.manifest, &bundle.manifest_signature)?;
+        self.write_merkle_tree_from_commitments(
+            bundle.manifest.index_epoch,
+            bundle.manifest.root_hash.clone(),
+            leaf_commitments,
+        )?;
+        for bucket in &bundle.buckets {
+            self.write_bucket(
+                bucket,
+                bundle.manifest.index_epoch,
+                bundle.manifest.bucket_count,
+                max_ciphertext_bytes,
+            )?;
+        }
+        self.write_initial_epoch_if_absent_or_matching(&epoch)?;
+        Ok(epoch)
     }
 
     pub fn write_bucket(
@@ -578,6 +608,43 @@ fn validate_bucket(
     .map_err(private_result_oram_error)
 }
 
+fn validate_upload_bundle(
+    bundle: &PrivateResultOramUploadBundle,
+    max_ciphertext_bytes: usize,
+) -> CollectionResult<Vec<String>> {
+    if bundle.manifest.bucket_count != bundle.buckets.len() as u64 {
+        return Err(CollectionError::bad_request(
+            "private result ORAM upload bundle bucket_count does not match buckets",
+        ));
+    }
+
+    let mut leaf_commitments = Vec::with_capacity(bundle.buckets.len());
+    for (expected_bucket_id, bucket) in bundle.buckets.iter().enumerate() {
+        if bucket.bucket_id != expected_bucket_id as u64 {
+            return Err(CollectionError::bad_request(format!(
+                "private result ORAM upload bundle bucket {} is not ordered",
+                bucket.bucket_id,
+            )));
+        }
+        validate_bucket(
+            bucket,
+            bundle.manifest.index_epoch,
+            bundle.manifest.bucket_count,
+            max_ciphertext_bytes,
+        )?;
+        leaf_commitments.push(bucket.bucket_commitment.clone());
+    }
+
+    let computed_root = PrivateResultOramStore::merkle_root_for_commitments(&leaf_commitments)?;
+    if computed_root != bundle.manifest.root_hash {
+        return Err(CollectionError::bad_request(format!(
+            "private result ORAM upload bundle root_hash mismatch: computed {computed_root}",
+        )));
+    }
+
+    Ok(leaf_commitments)
+}
+
 fn validate_epoch_state(epoch: &PrivateResultOramEpochState) -> CollectionResult<()> {
     decode_base64url_32(&epoch.root_hash, "root_hash")?;
     Ok(())
@@ -887,6 +954,29 @@ mod tests {
         }
     }
 
+    fn fixture_upload_bundle() -> PrivateResultOramUploadBundle {
+        let buckets = vec![
+            fixture_bucket(0, 42, b"encrypted result bucket 0"),
+            fixture_bucket(1, 42, b"encrypted result bucket 1"),
+            fixture_bucket(2, 42, b"encrypted result bucket 2"),
+        ];
+        let commitments = buckets
+            .iter()
+            .map(|bucket| bucket.bucket_commitment.clone())
+            .collect::<Vec<_>>();
+        let mut manifest = fixture_manifest();
+        manifest.bucket_count = buckets.len() as u64;
+        manifest.logical_result_count = 2;
+        manifest.dummy_result_count = 1;
+        manifest.root_hash =
+            PrivateResultOramStore::merkle_root_for_commitments(&commitments).unwrap();
+        PrivateResultOramUploadBundle {
+            manifest,
+            manifest_signature: fixture_signature(),
+            buckets,
+        }
+    }
+
     #[test]
     fn manifest_roundtrip_writes_private_files() {
         let temp = TempDir::new().unwrap();
@@ -949,6 +1039,58 @@ mod tests {
         let oversized = fixture_bucket(4, 42, &[8; 65]);
         let err = store.write_bucket(&oversized, 42, 16, 64).unwrap_err();
         assert!(err.to_string().contains("exceeds maximum size"));
+    }
+
+    #[test]
+    fn initial_upload_bundle_writes_manifest_buckets_merkle_and_epoch() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let bundle = fixture_upload_bundle();
+
+        let epoch = store.write_initial_upload_bundle(&bundle, 128).unwrap();
+
+        assert_eq!(
+            epoch,
+            PrivateResultOramEpochState {
+                index_epoch: bundle.manifest.index_epoch,
+                root_hash: bundle.manifest.root_hash.clone(),
+            }
+        );
+        assert_eq!(
+            store.read_manifest().unwrap(),
+            (bundle.manifest.clone(), bundle.manifest_signature.clone()),
+        );
+        assert_eq!(store.read_current_epoch().unwrap(), epoch);
+        assert_eq!(
+            store
+                .read_bucket(1, bundle.manifest.index_epoch, 3, 128)
+                .unwrap(),
+            bundle.buckets[1],
+        );
+        let proof = store
+            .read_merkle_path_batch(
+                &[1],
+                bundle.manifest.index_epoch,
+                &bundle.manifest.root_hash,
+                3,
+            )
+            .unwrap();
+        assert_eq!(
+            proof.leaves[0].leaf_hash,
+            bundle.buckets[1].bucket_commitment
+        );
+    }
+
+    #[test]
+    fn initial_upload_bundle_rejects_root_mismatch() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let mut bundle = fixture_upload_bundle();
+        bundle.manifest.root_hash = root_hash(99);
+
+        let err = store.write_initial_upload_bundle(&bundle, 128).unwrap_err();
+
+        assert!(err.to_string().contains("root_hash mismatch"));
     }
 
     #[test]
