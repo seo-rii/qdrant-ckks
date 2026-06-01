@@ -151,6 +151,7 @@ impl PrivateResultOramStore {
             root_hash: bundle.manifest.root_hash.clone(),
         };
 
+        self.ensure_initial_epoch_absent_or_matching(&epoch)?;
         self.write_manifest(&bundle.manifest, &bundle.manifest_signature)?;
         self.write_merkle_tree_from_commitments(
             bundle.manifest.index_epoch,
@@ -167,6 +168,22 @@ impl PrivateResultOramStore {
         }
         self.write_initial_epoch_if_absent_or_matching(&epoch)?;
         Ok(epoch)
+    }
+
+    fn ensure_initial_epoch_absent_or_matching(
+        &self,
+        epoch: &PrivateResultOramEpochState,
+    ) -> CollectionResult<()> {
+        self.ensure_layout()?;
+        match self.read_current_epoch() {
+            Ok(current) if current == *epoch => Ok(()),
+            Ok(current) => Err(CollectionError::bad_request(format!(
+                "private result ORAM current epoch/root does not match upload bundle epoch {}",
+                current.index_epoch,
+            ))),
+            Err(CollectionError::NotFound { .. }) => Ok(()),
+            Err(err) => Err(err),
+        }
     }
 
     pub fn write_bucket(
@@ -1172,6 +1189,50 @@ mod tests {
         let err = store.write_initial_upload_bundle(&bundle, 128).unwrap_err();
 
         assert!(err.to_string().contains("root_hash mismatch"));
+    }
+
+    #[test]
+    fn initial_upload_bundle_preflights_existing_epoch_before_writes() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let original = fixture_upload_bundle();
+        store.write_initial_upload_bundle(&original, 128).unwrap();
+
+        let mut replacement = fixture_upload_bundle();
+        replacement.buckets[0] = fixture_bucket(0, 42, b"replacement encrypted result bucket");
+        replacement.buckets[0].bucket_commitment = root_hash(77);
+        let replacement_commitments = replacement
+            .buckets
+            .iter()
+            .map(|bucket| bucket.bucket_commitment.clone())
+            .collect::<Vec<_>>();
+        replacement.manifest.root_hash =
+            PrivateResultOramStore::merkle_root_for_commitments(&replacement_commitments).unwrap();
+
+        let err = store
+            .write_initial_upload_bundle(&replacement, 128)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("current epoch/root"));
+        assert_eq!(store.read_manifest().unwrap().0, original.manifest);
+        assert_eq!(
+            store
+                .read_bucket(0, original.manifest.index_epoch, 3, 128)
+                .unwrap(),
+            original.buckets[0],
+        );
+        let proof = store
+            .read_merkle_path_batch(
+                &[0],
+                original.manifest.index_epoch,
+                &original.manifest.root_hash,
+                3,
+            )
+            .unwrap();
+        assert_eq!(
+            proof.leaves[0].leaf_hash,
+            original.buckets[0].bucket_commitment
+        );
     }
 
     #[test]
