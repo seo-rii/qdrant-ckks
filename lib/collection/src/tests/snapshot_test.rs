@@ -4,11 +4,13 @@ use std::sync::Arc;
 
 use ahash::AHashMap;
 use common::budget::ResourceBudget;
+use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     PrivateHnswBucketAeadBaseContext, PrivateHnswClientKeys, SecretKey,
     seal_private_hnsw_oram_bucket,
 };
 use segment::types::Distance;
+use sha2::{Digest, Sha256};
 use shard::snapshots::snapshot_data::SnapshotData;
 use tempfile::Builder;
 
@@ -18,6 +20,7 @@ use crate::operations::shared_storage_config::SharedStorageConfig;
 use crate::operations::types::{NodeType, VectorsConfig};
 use crate::operations::vector_params_builder::VectorParamsBuilder;
 use crate::private_hnsw_oram_store::PRIVATE_HNSW_ORAM_DIR;
+use crate::private_result_oram_store::PRIVATE_RESULT_ORAM_DIR;
 use crate::shards::channel_service::ChannelService;
 use crate::shards::collection_shard_distribution::CollectionShardDistribution;
 use crate::shards::replica_set::{AbortShardTransfer, ChangePeerFromState};
@@ -224,6 +227,113 @@ async fn _test_snapshot_collection(node_type: NodeType) {
         assert!(replica_ser_3.is_local().await);
         assert_eq!(replica_ser_3.peers().len(), 3); // 2 remotes + 1 local
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_snapshot_private_result_oram_is_included_but_restore_fails_closed() {
+    init_logger();
+
+    let config = CollectionConfigInternal {
+        params: CollectionParams {
+            vectors: VectorsConfig::Single(VectorParamsBuilder::new(4, Distance::Dot).build()),
+            shard_number: NonZeroU32::new(1).unwrap(),
+            replication_factor: NonZeroU32::new(1).unwrap(),
+            write_consistency_factor: NonZeroU32::new(1).unwrap(),
+            ..CollectionParams::empty()
+        },
+        optimizer_config: TEST_OPTIMIZERS_CONFIG.clone(),
+        wal_config: WalConfig {
+            wal_capacity_mb: 1,
+            wal_segments_ahead: 0,
+            wal_retain_closed: 1,
+        },
+        hnsw_config: Default::default(),
+        quantization_config: Default::default(),
+        strict_mode_config: Default::default(),
+        uuid: None,
+        metadata: None,
+    };
+
+    let snapshots_path = Builder::new()
+        .prefix("test_result_oram_snapshots")
+        .tempdir()
+        .unwrap();
+    let collection_dir = Builder::new()
+        .prefix("test_result_oram_collection")
+        .tempdir()
+        .unwrap();
+    let mut shards = AHashMap::new();
+    shards.insert(0, HashSet::from([1]));
+
+    let collection = Collection::new(
+        "test_result_oram".to_string(),
+        1,
+        collection_dir.path(),
+        snapshots_path.path(),
+        &config,
+        Arc::new(SharedStorageConfig::default()),
+        CollectionShardDistribution { shards },
+        None,
+        ChannelService::default(),
+        dummy_on_replica_failure(),
+        dummy_request_shard_transfer(),
+        dummy_abort_shard_transfer(),
+        None,
+        None,
+        ResourceBudget::default(),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let private_result_plaintext_sentinel = b"qdrant-sec-private-result-oram-plaintext-sentinel";
+    let result_bucket_path = collection_dir
+        .path()
+        .join(PRIVATE_RESULT_ORAM_DIR)
+        .join("buckets")
+        .join("00000000.bucket");
+    std::fs::create_dir_all(result_bucket_path.parent().unwrap()).unwrap();
+    let ciphertext = BASE64URL_NOPAD.encode(b"encrypted result bucket 0");
+    let ciphertext_sha256 =
+        BASE64URL_NOPAD.encode(Sha256::digest(b"encrypted result bucket 0").as_ref());
+    let bucket_json = serde_json::to_vec(&serde_json::json!({
+        "version": 1,
+        "bucket_id": 0,
+        "index_epoch": 42,
+        "ciphertext": ciphertext,
+        "ciphertext_sha256": ciphertext_sha256,
+        "bucket_commitment": BASE64URL_NOPAD.encode(&[7; 32]),
+    }))
+    .unwrap();
+    assert!(!contains_bytes(
+        &bucket_json,
+        private_result_plaintext_sentinel
+    ));
+    std::fs::write(&result_bucket_path, &bucket_json).unwrap();
+
+    let snapshots_temp_dir = Builder::new().prefix("temp_dir").tempdir().unwrap();
+    let snapshot_description = collection
+        .create_snapshot(snapshots_temp_dir.path(), 0)
+        .await
+        .unwrap();
+    let snapshot_path = snapshots_path.path().join(&snapshot_description.name);
+    let snapshot_bytes = std::fs::read(&snapshot_path).unwrap();
+    assert!(contains_bytes(
+        &snapshot_bytes,
+        PRIVATE_RESULT_ORAM_DIR.as_bytes()
+    ));
+    assert!(!contains_bytes(
+        &snapshot_bytes,
+        private_result_plaintext_sentinel
+    ));
+
+    let recover_dir = Builder::new()
+        .prefix("test_result_oram_collection_rec")
+        .tempdir()
+        .unwrap();
+    let snapshot_data = SnapshotData::new_packed_persistent(snapshot_path);
+    let err = Collection::restore_snapshot(snapshot_data, recover_dir.path(), 0, true).unwrap_err();
+    assert!(err.to_string().contains("payload/private-result-oram@v1"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
