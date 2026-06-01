@@ -475,6 +475,7 @@ pub async fn do_open_private_hnsw_session(
             "private HNSW ORAM client_id must be non-empty and at most 256 bytes",
         ));
     }
+    validate_private_hnsw_session_cluster_epoch_mode(toc.is_distributed())?;
     if is_strict(settings) && !fixed_budget {
         return Err(StorageError::bad_request(
             "private HNSW ORAM strict mode requires fixed_budget=true",
@@ -1066,6 +1067,16 @@ fn is_strict(settings: &Settings) -> bool {
     settings.crypto.zero_trust_profile.as_deref() == Some(ZERO_TRUST_PROFILE_STRICT)
 }
 
+fn validate_private_hnsw_session_cluster_epoch_mode(distributed: bool) -> StorageResult<()> {
+    if distributed {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM distributed sessions require consensus-backed epoch/root CAS; \
+             this MVP supports private ORAM sessions only in single-node mode",
+        ));
+    }
+    Ok(())
+}
+
 fn current_unix_secs() -> StorageResult<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1415,6 +1426,14 @@ mod private_hnsw_tests {
             .unwrap(),
             vec![0, 1],
         );
+    }
+
+    #[test]
+    fn distributed_session_epoch_mode_requires_consensus_backed_cas() {
+        assert!(validate_private_hnsw_session_cluster_epoch_mode(false).is_ok());
+
+        let err = validate_private_hnsw_session_cluster_epoch_mode(true).unwrap_err();
+        assert!(err.to_string().contains("consensus-backed epoch/root CAS"));
     }
 
     #[test]

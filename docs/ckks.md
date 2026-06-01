@@ -552,6 +552,8 @@ treated as an equivalent private-HNSW-capable node.
 Shard transfer start operations are also blocked while a private HNSW ORAM
 session is active for the collection. Clients must close the session first so
 the ORAM epoch/root CAS and single-writer state cannot race with shard movement.
+Distributed private HNSW ORAM sessions themselves fail closed in this MVP until
+epoch/root CAS is backed by consensus rather than node-local files.
 
 The Rust reference SDK helpers in `qdrant-sec` now cover the MVP build/upload
 preparation loop. `build_private_hnsw_oram_plaintext_index_from_f32_points`
