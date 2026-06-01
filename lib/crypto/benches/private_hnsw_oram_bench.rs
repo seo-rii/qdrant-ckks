@@ -1,14 +1,17 @@
 use std::cell::RefCell;
 use std::hint::black_box;
+use std::sync::Arc;
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use qdrant_sec::{
-    DistanceKind, PrivateHnswBuildPoint, PrivateHnswClientError, PrivateHnswClientNodeCache,
+    DistanceKind, PrivateHnswBucketAeadBaseContext, PrivateHnswBuildPoint, PrivateHnswClientError,
+    PrivateHnswClientKeys, PrivateHnswClientNodeCache, PrivateHnswOramBucket,
     PrivateHnswOramClientConfig, PrivateHnswOramClientState, PrivateHnswOramPlaintextBucket,
-    PrivateHnswSearchAccessMetrics, PrivateHnswSearchParams,
+    PrivateHnswSearchAccessMetrics, PrivateHnswSearchParams, SecretKey,
     build_private_hnsw_oram_plaintext_index_from_f32_points,
     build_private_hnsw_oram_plaintext_index_from_layered_f32_points,
     private_hnsw_oram_bucket_ids_for_leaf, private_hnsw_oram_leaf_count,
+    seal_private_hnsw_oram_plaintext_index, search_private_hnsw_oram_encrypted,
     search_private_hnsw_oram_plaintext, search_private_hnsw_oram_plaintext_with_cache,
 };
 
@@ -16,6 +19,8 @@ const POINT_COUNT: usize = 64;
 const DIM: usize = 32;
 const NEIGHBORS: usize = 8;
 const FIXED_STEPS: usize = 32;
+const INDEX_EPOCH: u64 = 42;
+const WRITEBACK_EPOCH: u64 = 43;
 
 #[derive(Clone)]
 struct PlaintextSearchFixture {
@@ -184,12 +189,133 @@ impl PlaintextSearchFixture {
     }
 }
 
+#[derive(Clone)]
+struct EncryptedSearchFixture {
+    keys: Arc<PrivateHnswClientKeys>,
+    base_context: PrivateHnswBucketAeadBaseContext<'static>,
+    config: PrivateHnswOramClientConfig,
+    state: PrivateHnswOramClientState,
+    buckets: Vec<PrivateHnswOramBucket>,
+    query: Vec<f32>,
+    params: PrivateHnswSearchParams,
+}
+
+impl EncryptedSearchFixture {
+    fn new() -> Self {
+        let config = bench_config();
+        let points = build_points();
+        let leaves = build_leaves(config, points.len());
+        let build = build_private_hnsw_oram_plaintext_index_from_f32_points(
+            config,
+            DistanceKind::Euclid,
+            NEIGHBORS,
+            &points,
+            &leaves,
+        )
+        .unwrap();
+        let keys = Arc::new(client_keys());
+        let base_context = bucket_base_context();
+        let encrypted_build = seal_private_hnsw_oram_plaintext_index(
+            &keys,
+            base_context,
+            INDEX_EPOCH,
+            &build,
+            config,
+        )
+        .unwrap();
+        let query = deterministic_vector(7, DIM);
+        let params = PrivateHnswSearchParams {
+            entry_node_id: build.entry_node_id,
+            k: 10,
+            ef: 16,
+            fixed_steps: FIXED_STEPS,
+            distance: DistanceKind::Euclid,
+            padding_node_id: Some(build.entry_node_id),
+        };
+
+        Self {
+            keys,
+            base_context,
+            config,
+            state: build.state,
+            buckets: encrypted_build.buckets,
+            query,
+            params,
+        }
+    }
+
+    fn search_metrics(&mut self) -> PrivateHnswSearchAccessMetrics {
+        let config = self.config;
+        let query = self.query.clone();
+        let params = self.params;
+        let store = RefCell::new(self.buckets.clone());
+        let leaf_count = private_hnsw_oram_leaf_count(config.tree_height).unwrap();
+        let mut next_leaf = 0;
+        let result = search_private_hnsw_oram_encrypted(
+            &self.keys,
+            self.base_context,
+            WRITEBACK_EPOCH,
+            &mut self.state,
+            config,
+            &query,
+            params,
+            |leaf| {
+                private_hnsw_oram_bucket_ids_for_leaf(leaf, config.tree_height)?
+                    .into_iter()
+                    .map(|bucket_id| {
+                        store
+                            .borrow()
+                            .get(bucket_id as usize)
+                            .cloned()
+                            .ok_or(PrivateHnswClientError::PathBucketMismatch)
+                    })
+                    .collect()
+            },
+            |writeback_buckets| {
+                let mut store_mut = store.borrow_mut();
+                for bucket in writeback_buckets {
+                    let slot = store_mut
+                        .get_mut(bucket.bucket_id as usize)
+                        .ok_or(PrivateHnswClientError::PathBucketMismatch)?;
+                    *slot = bucket.clone();
+                }
+                Ok(())
+            },
+            || {
+                let leaf = next_leaf;
+                next_leaf = (next_leaf + 1) % leaf_count;
+                Ok(leaf)
+            },
+        )
+        .unwrap();
+        let metrics = result.access_metrics(&params);
+        assert_eq!(metrics.path_accesses, FIXED_STEPS);
+        assert!(metrics.exhausted_fixed_budget);
+        metrics
+    }
+}
+
 fn bench_config() -> PrivateHnswOramClientConfig {
     PrivateHnswOramClientConfig {
         tree_height: 8,
         bucket_size: 4,
         block_size_bytes: 4096,
         fixed_neighbor_slots: 16,
+    }
+}
+
+fn client_keys() -> PrivateHnswClientKeys {
+    let resource_key = SecretKey::from_bytes([9; 32]);
+    PrivateHnswClientKeys::derive_from_resource_key(&resource_key).unwrap()
+}
+
+fn bucket_base_context() -> PrivateHnswBucketAeadBaseContext<'static> {
+    PrivateHnswBucketAeadBaseContext {
+        collection_id: "bench-collection",
+        vector_name: "text",
+        key_id: "bench/vector-rk",
+        rk_id: "bench/vector-rk",
+        rk_epoch: 7,
     }
 }
 
@@ -273,6 +399,15 @@ fn private_hnsw_oram_bench(c: &mut Criterion) {
     group.bench_function("search-plaintext-cache-fixed-budget-64x32", |b| {
         b.iter_batched(
             || cached_fixture.clone(),
+            |mut fixture| black_box(fixture.search_metrics()),
+            BatchSize::SmallInput,
+        )
+    });
+
+    let encrypted_fixture = EncryptedSearchFixture::new();
+    group.bench_function("search-encrypted-fixed-budget-64x32", |b| {
+        b.iter_batched(
+            || encrypted_fixture.clone(),
             |mut fixture| black_box(fixture.search_metrics()),
             BatchSize::SmallInput,
         )
