@@ -57,6 +57,8 @@ pub enum PrivateResultOramError {
     BucketOversized,
     #[error("private result ORAM bucket ciphertext_sha256 mismatch")]
     InvalidBucketHash,
+    #[error("private result ORAM Merkle tree is empty")]
+    EmptyMerkleTree,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -334,6 +336,17 @@ pub fn private_result_oram_commit_signature_message(
     message
 }
 
+pub fn private_result_oram_merkle_root_for_commitments(
+    commitments: &[String],
+) -> Result<String, PrivateResultOramError> {
+    let levels = private_result_oram_merkle_levels(commitments)?;
+    let root = levels
+        .last()
+        .and_then(|level| level.first())
+        .ok_or(PrivateResultOramError::EmptyMerkleTree)?;
+    Ok(BASE64URL_NOPAD.encode(root))
+}
+
 fn validate_id(value: &str, field: &'static str) -> Result<(), PrivateResultOramError> {
     if value.is_empty()
         || value.len() > 255
@@ -426,6 +439,47 @@ fn decode_base64url_64(value: &str) -> Result<[u8; 64], PrivateResultOramError> 
     bytes
         .try_into()
         .map_err(|_| PrivateResultOramError::MalformedSignature)
+}
+
+fn decode_bucket_commitment(value: &str) -> Result<[u8; 32], PrivateResultOramError> {
+    decode_base64url_32(value, "bucket_commitment")
+        .map_err(|_| PrivateResultOramError::InvalidBucketField("bucket_commitment"))
+}
+
+fn private_result_oram_merkle_levels(
+    commitments: &[String],
+) -> Result<Vec<Vec<[u8; 32]>>, PrivateResultOramError> {
+    if commitments.is_empty() {
+        return Err(PrivateResultOramError::EmptyMerkleTree);
+    }
+    let mut leaves = commitments
+        .iter()
+        .map(|commitment| decode_bucket_commitment(commitment))
+        .collect::<Result<Vec<_>, _>>()?;
+    let padded_len = leaves
+        .len()
+        .checked_next_power_of_two()
+        .ok_or(PrivateResultOramError::InvalidManifestField("bucket_count"))?;
+    leaves.resize(padded_len, [0; 32]);
+
+    let mut levels = vec![leaves];
+    while levels.last().is_some_and(|level| level.len() > 1) {
+        let previous = levels.last().expect("checked above");
+        let mut next = Vec::with_capacity(previous.len() / 2);
+        for pair in previous.chunks_exact(2) {
+            next.push(private_result_oram_merkle_parent_hash(&pair[0], &pair[1]));
+        }
+        levels.push(next);
+    }
+    Ok(levels)
+}
+
+fn private_result_oram_merkle_parent_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update([1]);
+    hasher.update(left);
+    hasher.update(right);
+    hasher.finalize().into()
 }
 
 fn push_domain(message: &mut Vec<u8>, domain: &[u8]) {
@@ -526,6 +580,10 @@ mod tests {
             ciphertext_sha256: BASE64URL_NOPAD.encode(Sha256::digest(ciphertext).as_ref()),
             bucket_commitment: BASE64URL_NOPAD.encode(&[4; 32]),
         }
+    }
+
+    fn commitment(byte: u8) -> String {
+        BASE64URL_NOPAD.encode(&[byte; 32])
     }
 
     #[test]
@@ -644,6 +702,29 @@ mod tests {
         assert_eq!(
             validate_private_result_oram_bucket_shape(&oversized, bucket_validation_context()),
             Err(PrivateResultOramError::BucketOversized)
+        );
+    }
+
+    #[test]
+    fn merkle_root_for_commitments_is_stable_and_rejects_bad_leaves() {
+        assert_eq!(
+            private_result_oram_merkle_root_for_commitments(&[
+                commitment(1),
+                commitment(2),
+                commitment(3),
+            ])
+            .unwrap(),
+            "WaBpZZL4P-1d3PL6tJFGletAnWPATB_KlpiiL9p5U5E"
+        );
+        assert_eq!(
+            private_result_oram_merkle_root_for_commitments(&[]),
+            Err(PrivateResultOramError::EmptyMerkleTree)
+        );
+        assert_eq!(
+            private_result_oram_merkle_root_for_commitments(&["bad".to_string()]),
+            Err(PrivateResultOramError::InvalidBucketField(
+                "bucket_commitment"
+            ))
         );
     }
 
