@@ -71,6 +71,12 @@ pub enum PrivateResultOramError {
     },
     #[error("private result ORAM commit repeats bucket {bucket_id}")]
     DuplicateUpdatedBucket { bucket_id: u64 },
+    #[error("private result ORAM Merkle proof is malformed")]
+    InvalidMerkleProof,
+    #[error("private result ORAM Merkle proof JSON is malformed")]
+    InvalidMerkleProofJson,
+    #[error("private result ORAM Merkle proof does not match bucket commitments")]
+    MerkleProofMismatch,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,6 +116,41 @@ pub struct PrivateResultOramSignature {
     pub alg: String,
     pub key_id: String,
     pub sig: String,
+}
+
+pub const PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND: &str = "merkle_path_batch/v1";
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateResultOramMerkleProof {
+    pub kind: String,
+    pub index_epoch: u64,
+    pub root_hash: String,
+    pub bucket_count: u64,
+    pub leaves: Vec<PrivateResultOramMerkleProofLeaf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateResultOramMerkleProofLeaf {
+    pub bucket_id: u64,
+    pub leaf_hash: String,
+    pub siblings: Vec<PrivateResultOramMerkleSibling>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateResultOramMerkleSibling {
+    pub level: u32,
+    pub position: PrivateResultOramMerkleSiblingPosition,
+    pub hash: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrivateResultOramMerkleSiblingPosition {
+    Left,
+    Right,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -523,6 +564,105 @@ pub fn private_result_oram_merkle_root_for_commitments(
     Ok(BASE64URL_NOPAD.encode(root))
 }
 
+pub fn verify_private_result_oram_merkle_proof_json(
+    proof_value: &str,
+    expected_epoch: u64,
+    expected_root_hash: &str,
+    expected_bucket_count: u64,
+    buckets: &[PrivateResultOramBucket],
+) -> Result<(), PrivateResultOramError> {
+    let proof: PrivateResultOramMerkleProof = serde_json::from_str(proof_value)
+        .map_err(|_| PrivateResultOramError::InvalidMerkleProofJson)?;
+    verify_private_result_oram_merkle_proof(
+        &proof,
+        expected_epoch,
+        expected_root_hash,
+        expected_bucket_count,
+        buckets,
+    )
+}
+
+pub fn verify_private_result_oram_merkle_proof(
+    proof: &PrivateResultOramMerkleProof,
+    expected_epoch: u64,
+    expected_root_hash: &str,
+    expected_bucket_count: u64,
+    buckets: &[PrivateResultOramBucket],
+) -> Result<(), PrivateResultOramError> {
+    if expected_bucket_count == 0
+        || proof.kind != PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND
+        || proof.index_epoch != expected_epoch
+        || proof.bucket_count != expected_bucket_count
+        || proof.leaves.len() != buckets.len()
+    {
+        return Err(PrivateResultOramError::InvalidMerkleProof);
+    }
+
+    let expected_root = decode_merkle_proof_hash(expected_root_hash)?;
+    let proof_root = decode_merkle_proof_hash(&proof.root_hash)?;
+    if proof_root != expected_root {
+        return Err(PrivateResultOramError::MerkleProofMismatch);
+    }
+
+    let mut buckets_by_id = std::collections::BTreeMap::new();
+    for bucket in buckets {
+        if bucket.version != PRIVATE_RESULT_ORAM_BUCKET_VERSION
+            || bucket.index_epoch > expected_epoch
+            || bucket.bucket_id >= expected_bucket_count
+        {
+            return Err(PrivateResultOramError::InvalidMerkleProof);
+        }
+        decode_bucket_commitment(&bucket.bucket_commitment)?;
+        if buckets_by_id.insert(bucket.bucket_id, bucket).is_some() {
+            return Err(PrivateResultOramError::InvalidMerkleProof);
+        }
+    }
+
+    let mut seen_leaves = std::collections::BTreeSet::new();
+    for leaf in &proof.leaves {
+        if leaf.bucket_id >= expected_bucket_count || !seen_leaves.insert(leaf.bucket_id) {
+            return Err(PrivateResultOramError::InvalidMerkleProof);
+        }
+        let Some(bucket) = buckets_by_id.get(&leaf.bucket_id) else {
+            return Err(PrivateResultOramError::MerkleProofMismatch);
+        };
+        if bucket.bucket_commitment != leaf.leaf_hash {
+            return Err(PrivateResultOramError::MerkleProofMismatch);
+        }
+
+        let mut node_hash = decode_merkle_proof_hash(&leaf.leaf_hash)?;
+        let mut index = leaf.bucket_id;
+        for (expected_level, sibling) in leaf.siblings.iter().enumerate() {
+            if sibling.level != expected_level as u32 {
+                return Err(PrivateResultOramError::InvalidMerkleProof);
+            }
+            let sibling_hash = decode_merkle_proof_hash(&sibling.hash)?;
+            let expected_position = if index % 2 == 0 {
+                PrivateResultOramMerkleSiblingPosition::Right
+            } else {
+                PrivateResultOramMerkleSiblingPosition::Left
+            };
+            if sibling.position != expected_position {
+                return Err(PrivateResultOramError::InvalidMerkleProof);
+            }
+            node_hash = match sibling.position {
+                PrivateResultOramMerkleSiblingPosition::Left => {
+                    private_result_oram_merkle_parent_hash(&sibling_hash, &node_hash)
+                }
+                PrivateResultOramMerkleSiblingPosition::Right => {
+                    private_result_oram_merkle_parent_hash(&node_hash, &sibling_hash)
+                }
+            };
+            index /= 2;
+        }
+        if node_hash != expected_root {
+            return Err(PrivateResultOramError::MerkleProofMismatch);
+        }
+    }
+
+    Ok(())
+}
+
 pub fn plan_private_result_oram_commit(
     old_epoch: u64,
     new_epoch: u64,
@@ -700,6 +840,11 @@ fn decode_base64url_64(value: &str) -> Result<[u8; 64], PrivateResultOramError> 
 fn decode_bucket_commitment(value: &str) -> Result<[u8; 32], PrivateResultOramError> {
     decode_base64url_32(value, "bucket_commitment")
         .map_err(|_| PrivateResultOramError::InvalidBucketField("bucket_commitment"))
+}
+
+fn decode_merkle_proof_hash(value: &str) -> Result<[u8; 32], PrivateResultOramError> {
+    decode_base64url_32(value, "merkle_proof_hash")
+        .map_err(|_| PrivateResultOramError::InvalidMerkleProof)
 }
 
 fn private_result_oram_merkle_levels(
@@ -1013,6 +1158,71 @@ mod tests {
             Err(PrivateResultOramError::InvalidBucketField(
                 "bucket_commitment"
             ))
+        );
+    }
+
+    #[test]
+    fn merkle_proof_verifies_bucket_commitments_and_json() {
+        let bucket0 = fixture_commit_bucket(0, 42, 1);
+        let bucket1 = fixture_commit_bucket(1, 42, 2);
+        let root = private_result_oram_merkle_root_for_commitments(&[
+            bucket0.bucket_commitment.clone(),
+            bucket1.bucket_commitment.clone(),
+        ])
+        .unwrap();
+        let proof = PrivateResultOramMerkleProof {
+            kind: PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND.to_string(),
+            index_epoch: 42,
+            root_hash: root.clone(),
+            bucket_count: 2,
+            leaves: vec![
+                PrivateResultOramMerkleProofLeaf {
+                    bucket_id: 0,
+                    leaf_hash: bucket0.bucket_commitment.clone(),
+                    siblings: vec![PrivateResultOramMerkleSibling {
+                        level: 0,
+                        position: PrivateResultOramMerkleSiblingPosition::Right,
+                        hash: bucket1.bucket_commitment.clone(),
+                    }],
+                },
+                PrivateResultOramMerkleProofLeaf {
+                    bucket_id: 1,
+                    leaf_hash: bucket1.bucket_commitment.clone(),
+                    siblings: vec![PrivateResultOramMerkleSibling {
+                        level: 0,
+                        position: PrivateResultOramMerkleSiblingPosition::Left,
+                        hash: bucket0.bucket_commitment.clone(),
+                    }],
+                },
+            ],
+        };
+
+        verify_private_result_oram_merkle_proof(
+            &proof,
+            42,
+            &root,
+            2,
+            &[bucket0.clone(), bucket1.clone()],
+        )
+        .unwrap();
+        verify_private_result_oram_merkle_proof_json(
+            &serde_json::to_string(&proof).unwrap(),
+            42,
+            &root,
+            2,
+            &[bucket0.clone(), bucket1.clone()],
+        )
+        .unwrap();
+
+        let mut tampered = proof.clone();
+        tampered.leaves[0].leaf_hash = bucket1.bucket_commitment.clone();
+        assert_eq!(
+            verify_private_result_oram_merkle_proof(&tampered, 42, &root, 2, &[bucket0, bucket1]),
+            Err(PrivateResultOramError::MerkleProofMismatch)
+        );
+        assert_eq!(
+            verify_private_result_oram_merkle_proof_json("not-json", 42, &root, 2, &[]),
+            Err(PrivateResultOramError::InvalidMerkleProofJson)
         );
     }
 

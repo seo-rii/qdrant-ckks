@@ -593,14 +593,16 @@ payload/result layer. It writes `private_result_oram/manifest.json`,
 contract used by private HNSW ORAM. It also exposes
 `read_merkle_path_batch` with `merkle_path_batch/v1` proof records so a future
 result ORAM read API can return server-verifiable bucket commitment proofs
-without opening ciphertexts. `write_initial_upload_bundle` validates an
-SDK-packaged signed manifest plus complete ordered bucket set, writes the
-manifest, Merkle metadata, encrypted buckets, and initial epoch state, and keeps
-root mismatch failures fail-closed. `commit_writeback` mirrors the private HNSW
-ORAM commit order by preparing the Merkle update, writing updated encrypted
-buckets, writing Merkle metadata, then applying epoch/root CAS. These types and
-storage primitives are contract scaffolding only and are not wired into runtime
-upload/session APIs yet.
+without opening ciphertexts. The SDK-side `verify_private_result_oram_merkle_proof`
+and JSON helper validate proof kind, epoch/root, bucket count, duplicate leaves,
+sibling level/position, and bucket commitment matches. `write_initial_upload_bundle`
+validates an SDK-packaged signed manifest plus complete ordered bucket set,
+writes the manifest, Merkle metadata, encrypted buckets, and initial epoch
+state, and keeps root mismatch failures fail-closed. `commit_writeback` mirrors
+the private HNSW ORAM commit order by preparing the Merkle update, writing
+updated encrypted buckets, writing Merkle metadata, then applying epoch/root
+CAS. These types and storage primitives are contract scaffolding only and are
+not wired into runtime upload/session APIs yet.
 Collection snapshots include the `private_result_oram/` directory if it is
 present, but current restore fail-closes when that directory appears because
 `payload/private-result-oram@v1` is still reserved.
