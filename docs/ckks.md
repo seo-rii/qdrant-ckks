@@ -577,9 +577,11 @@ shape, Ed25519 signatures, collection/key/epoch context, and root hash pinning;
 writeback CAS signature input. `validate_private_result_oram_bucket_shape`
 checks bucket version, epoch, range, ciphertext size, ciphertext SHA-256, and
 bucket commitment encoding, while `private_result_oram_merkle_root_for_commitments`
-fixes the root hash calculation over bucket commitments. These types are
-contract scaffolding only and are not wired into runtime upload/session APIs
-yet.
+fixes the root hash calculation over bucket commitments.
+`plan_private_result_oram_commit` prepares the future writeback plan by checking
+old-root consistency, bucket epoch/range uniqueness, the next root, and commit
+signature bucket refs. These types are contract scaffolding only and are not
+wired into runtime upload/session APIs yet.
 Cluster runtime parity uses the existing crypto capability fingerprint for this
 provider as well. The fingerprint includes non-secret private HNSW ORAM policy
 such as tree shape, fixed budget, result privacy mode, and signing verifier

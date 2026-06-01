@@ -59,6 +59,18 @@ pub enum PrivateResultOramError {
     InvalidBucketHash,
     #[error("private result ORAM Merkle tree is empty")]
     EmptyMerkleTree,
+    #[error("private result ORAM Merkle root does not match current commitments")]
+    MerkleRootMismatch,
+    #[error(
+        "private result ORAM bucket {bucket_id} has stale epoch {actual_epoch}; expected {expected_epoch}"
+    )]
+    StaleBucketEpoch {
+        bucket_id: u64,
+        expected_epoch: u64,
+        actual_epoch: u64,
+    },
+    #[error("private result ORAM commit repeats bucket {bucket_id}")]
+    DuplicateUpdatedBucket { bucket_id: u64 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,6 +139,34 @@ pub struct PrivateResultOramBucketValidationContext {
     pub expected_index_epoch: u64,
     pub bucket_count: u64,
     pub max_ciphertext_bytes: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateResultOramClientCommitBucketRef {
+    pub bucket_id: u64,
+    pub ciphertext_sha256: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateResultOramCommitPlan {
+    pub old_epoch: u64,
+    pub new_epoch: u64,
+    pub old_root_hash: String,
+    pub new_root_hash: String,
+    pub leaf_commitments: Vec<String>,
+    pub updated_buckets: Vec<PrivateResultOramClientCommitBucketRef>,
+}
+
+impl PrivateResultOramCommitPlan {
+    pub fn signature_bucket_refs(&self) -> Vec<PrivateResultOramCommitBucketRef<'_>> {
+        self.updated_buckets
+            .iter()
+            .map(|bucket| PrivateResultOramCommitBucketRef {
+                bucket_id: bucket.bucket_id,
+                ciphertext_sha256: bucket.ciphertext_sha256.as_str(),
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -345,6 +385,76 @@ pub fn private_result_oram_merkle_root_for_commitments(
         .and_then(|level| level.first())
         .ok_or(PrivateResultOramError::EmptyMerkleTree)?;
     Ok(BASE64URL_NOPAD.encode(root))
+}
+
+pub fn plan_private_result_oram_commit(
+    old_epoch: u64,
+    new_epoch: u64,
+    old_root_hash: &str,
+    current_leaf_commitments: &[String],
+    updated_buckets: &[PrivateResultOramBucket],
+) -> Result<PrivateResultOramCommitPlan, PrivateResultOramError> {
+    if new_epoch <= old_epoch {
+        return Err(PrivateResultOramError::InvalidManifestField("new_epoch"));
+    }
+    let computed_old_root =
+        private_result_oram_merkle_root_for_commitments(current_leaf_commitments)?;
+    if computed_old_root != old_root_hash {
+        return Err(PrivateResultOramError::MerkleRootMismatch);
+    }
+
+    let bucket_count = u64::try_from(current_leaf_commitments.len())
+        .map_err(|_| PrivateResultOramError::InvalidManifestField("bucket_count"))?;
+    let mut next_leaf_commitments = current_leaf_commitments.to_vec();
+    let mut seen_bucket_ids = std::collections::BTreeSet::new();
+    let mut commit_bucket_refs = Vec::with_capacity(updated_buckets.len());
+
+    for bucket in updated_buckets {
+        if bucket.version != PRIVATE_RESULT_ORAM_BUCKET_VERSION {
+            return Err(PrivateResultOramError::UnsupportedBucketVersion(
+                bucket.version,
+            ));
+        }
+        if bucket.index_epoch != new_epoch {
+            return Err(PrivateResultOramError::StaleBucketEpoch {
+                bucket_id: bucket.bucket_id,
+                expected_epoch: new_epoch,
+                actual_epoch: bucket.index_epoch,
+            });
+        }
+        if bucket.bucket_id >= bucket_count {
+            return Err(PrivateResultOramError::BucketOutOfRange {
+                bucket_id: bucket.bucket_id,
+                bucket_count,
+            });
+        }
+        if !seen_bucket_ids.insert(bucket.bucket_id) {
+            return Err(PrivateResultOramError::DuplicateUpdatedBucket {
+                bucket_id: bucket.bucket_id,
+            });
+        }
+        decode_base64url_32(&bucket.ciphertext_sha256, "ciphertext_sha256")
+            .map_err(|_| PrivateResultOramError::InvalidBucketField("ciphertext_sha256"))?;
+        decode_bucket_commitment(&bucket.bucket_commitment)?;
+
+        let bucket_index = usize::try_from(bucket.bucket_id)
+            .map_err(|_| PrivateResultOramError::InvalidManifestField("bucket_count"))?;
+        next_leaf_commitments[bucket_index] = bucket.bucket_commitment.clone();
+        commit_bucket_refs.push(PrivateResultOramClientCommitBucketRef {
+            bucket_id: bucket.bucket_id,
+            ciphertext_sha256: bucket.ciphertext_sha256.clone(),
+        });
+    }
+
+    let new_root_hash = private_result_oram_merkle_root_for_commitments(&next_leaf_commitments)?;
+    Ok(PrivateResultOramCommitPlan {
+        old_epoch,
+        new_epoch,
+        old_root_hash: old_root_hash.to_string(),
+        new_root_hash,
+        leaf_commitments: next_leaf_commitments,
+        updated_buckets: commit_bucket_refs,
+    })
 }
 
 fn validate_id(value: &str, field: &'static str) -> Result<(), PrivateResultOramError> {
@@ -582,6 +692,22 @@ mod tests {
         }
     }
 
+    fn fixture_commit_bucket(
+        bucket_id: u64,
+        epoch: u64,
+        commitment_byte: u8,
+    ) -> PrivateResultOramBucket {
+        let ciphertext = [bucket_id as u8; 32];
+        PrivateResultOramBucket {
+            version: 1,
+            bucket_id,
+            index_epoch: epoch,
+            ciphertext: BASE64URL_NOPAD.encode(&ciphertext),
+            ciphertext_sha256: BASE64URL_NOPAD.encode(Sha256::digest(ciphertext).as_ref()),
+            bucket_commitment: commitment(commitment_byte),
+        }
+    }
+
     fn commitment(byte: u8) -> String {
         BASE64URL_NOPAD.encode(&[byte; 32])
     }
@@ -725,6 +851,102 @@ mod tests {
             Err(PrivateResultOramError::InvalidBucketField(
                 "bucket_commitment"
             ))
+        );
+    }
+
+    #[test]
+    fn commit_plan_updates_merkle_root_and_signature_refs() {
+        let leaf_commitments = vec![commitment(1), commitment(2), commitment(3), commitment(4)];
+        let old_root = private_result_oram_merkle_root_for_commitments(&leaf_commitments).unwrap();
+        let updated_bucket = fixture_commit_bucket(2, 43, 9);
+
+        let plan = plan_private_result_oram_commit(
+            42,
+            43,
+            &old_root,
+            &leaf_commitments,
+            std::slice::from_ref(&updated_bucket),
+        )
+        .unwrap();
+
+        assert_eq!(plan.old_epoch, 42);
+        assert_eq!(plan.new_epoch, 43);
+        assert_eq!(plan.old_root_hash, old_root);
+        assert_ne!(plan.new_root_hash, plan.old_root_hash);
+        assert_eq!(plan.leaf_commitments[2], updated_bucket.bucket_commitment);
+        assert_eq!(
+            plan.updated_buckets,
+            vec![PrivateResultOramClientCommitBucketRef {
+                bucket_id: updated_bucket.bucket_id,
+                ciphertext_sha256: updated_bucket.ciphertext_sha256.clone(),
+            }]
+        );
+        assert_eq!(
+            plan.signature_bucket_refs(),
+            vec![PrivateResultOramCommitBucketRef {
+                bucket_id: updated_bucket.bucket_id,
+                ciphertext_sha256: updated_bucket.ciphertext_sha256.as_str(),
+            }]
+        );
+    }
+
+    #[test]
+    fn commit_plan_rejects_stale_duplicate_out_of_range_and_root_mismatch() {
+        let leaf_commitments = vec![commitment(1), commitment(2), commitment(3), commitment(4)];
+        let old_root = private_result_oram_merkle_root_for_commitments(&leaf_commitments).unwrap();
+        let updated_bucket = fixture_commit_bucket(2, 43, 9);
+
+        assert_eq!(
+            plan_private_result_oram_commit(
+                42,
+                43,
+                &commitment(99),
+                &leaf_commitments,
+                std::slice::from_ref(&updated_bucket),
+            ),
+            Err(PrivateResultOramError::MerkleRootMismatch)
+        );
+
+        let stale_bucket = fixture_commit_bucket(2, 42, 9);
+        assert_eq!(
+            plan_private_result_oram_commit(
+                42,
+                43,
+                &old_root,
+                &leaf_commitments,
+                std::slice::from_ref(&stale_bucket),
+            ),
+            Err(PrivateResultOramError::StaleBucketEpoch {
+                bucket_id: 2,
+                expected_epoch: 43,
+                actual_epoch: 42,
+            })
+        );
+
+        assert_eq!(
+            plan_private_result_oram_commit(
+                42,
+                43,
+                &old_root,
+                &leaf_commitments,
+                &[updated_bucket.clone(), updated_bucket.clone()],
+            ),
+            Err(PrivateResultOramError::DuplicateUpdatedBucket { bucket_id: 2 })
+        );
+
+        let out_of_range = fixture_commit_bucket(4, 43, 9);
+        assert_eq!(
+            plan_private_result_oram_commit(
+                42,
+                43,
+                &old_root,
+                &leaf_commitments,
+                std::slice::from_ref(&out_of_range),
+            ),
+            Err(PrivateResultOramError::BucketOutOfRange {
+                bucket_id: 4,
+                bucket_count: 4,
+            })
         );
     }
 
