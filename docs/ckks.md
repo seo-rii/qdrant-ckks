@@ -553,7 +553,9 @@ malformed path labels fail without echoing the submitted path label or any
 stored bucket ciphertext into the response body/status message.
 The same live fixtures reject `read_paths` calls whose path count or padding
 metadata does not match the configured fixed path budget, before bucket reads
-are served.
+are served. Valid `read_paths` calls must carry an Ed25519 client signature over
+collection/vector identity, key lineage, epoch/root, path labels, and padding
+metadata before encrypted buckets are returned.
 Snapshot restore preflight follows the same MVP result-privacy boundary:
 private HNSW ORAM manifests with `private_payload_oram_required` are rejected
 until the payload ORAM provider exists.
@@ -657,7 +659,7 @@ buckets and a Merkle path batch proof into the SDK verifier, so proof-bearing
 wire responses are checked before bucket decryption. Dispatcher-backed REST and
 gRPC live route tests now create encrypted collections with stable UUIDs, upload
 the SDK manifest and bucket bundle through the private HNSW APIs, open sessions,
-verify live `read_paths` responses with the SDK Merkle verifier, commit
+sign live `read_paths` requests, verify responses with the SDK Merkle verifier, commit
 writeback buckets, and close the sessions. Initial manifest upload creates the
 private epoch layout when no current epoch exists; repeated uploads still
 require the current epoch/root to match. ORAM commits may carry unchanged

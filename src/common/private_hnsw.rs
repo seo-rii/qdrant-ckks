@@ -14,10 +14,11 @@ use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     DistanceKind, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_HNSW_ORAM_BINDING,
     PrivateHnswManifestValidationContext, PrivateHnswOramBucket, PrivateHnswOramCommitBucketRef,
-    PrivateHnswOramCommitSignatureInput, PrivateHnswOramManifest, PrivateHnswOramSignature,
+    PrivateHnswOramCommitSignatureInput, PrivateHnswOramManifest,
+    PrivateHnswOramReadPathsSignatureInput, PrivateHnswOramSignature,
     PrivateHnswSignatureVerification, ResultPrivacyMode, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
     private_hnsw_oram_bucket_ids_for_leaf_labels, validate_private_hnsw_oram_commit_signature,
-    validate_private_hnsw_oram_manifest,
+    validate_private_hnsw_oram_manifest, validate_private_hnsw_oram_read_paths_signature,
 };
 use segment::types::Distance;
 use serde::{Deserialize, Serialize};
@@ -613,6 +614,29 @@ pub async fn do_read_private_hnsw_paths(
             }
             let bucket_ids =
                 bucket_ids_for_path_batch(&paths, session.tree_height, session.bucket_count)?;
+            let path_refs = paths.iter().map(String::as_str).collect::<Vec<_>>();
+            validate_private_hnsw_oram_read_paths_signature(
+                PrivateHnswOramReadPathsSignatureInput {
+                    collection_id: &session.collection_id,
+                    vector_name,
+                    key_id: &session.manifest.key_id,
+                    rk_id: &session.manifest.rk_id,
+                    rk_epoch: session.manifest.rk_epoch,
+                    index_epoch,
+                    root_hash,
+                    paths: &path_refs,
+                    requested_paths: padding.requested_paths,
+                    dummy_paths_included: padding.dummy_paths_included,
+                    signature_alg: &client_signature.alg,
+                    signature_key_id: &client_signature.key_id,
+                },
+                &client_signature.sig,
+                PrivateHnswSignatureVerification {
+                    expected_key_id: &client_signature.key_id,
+                    public_key: &request_context.public_key,
+                },
+            )
+            .map_err(private_hnsw_error)?;
             let store = PrivateHnswOramStore::new(&session.collection_path, vector_name)?;
             let mut buckets = Vec::with_capacity(bucket_ids.len());
             for bucket_id in bucket_ids {

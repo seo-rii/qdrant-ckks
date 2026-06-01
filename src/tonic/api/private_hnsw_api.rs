@@ -683,18 +683,20 @@ mod private_hnsw_grpc_tests {
             |leaf| {
                 let leaf_label =
                     encode_private_hnsw_oram_leaf_label(leaf, fixture.config.tree_height).unwrap();
+                let paths = vec![leaf_label.clone()];
+                let read_signature = fixture.sign_read_paths(&paths, 1, true);
                 let read_request = grpc::OramReadPathsRequest {
                     collection_name: COLLECTION_NAME.to_string(),
                     vector_name: VECTOR_NAME.to_string(),
                     session_id: SESSION_ID.to_string(),
                     index_epoch: fixture.encrypted_build.index_epoch,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
-                    paths: vec![leaf_label.clone()],
+                    paths,
                     padding: Some(grpc::OramReadPadding {
                         requested_paths: 1,
                         dummy_paths_included: true,
                     }),
-                    client_signature: Some(signature_to_proto(fixture.client_signature())),
+                    client_signature: Some(signature_to_proto(read_signature)),
                 };
                 let padding =
                     padding_from_proto(required(read_request.padding.clone(), "padding").unwrap());
@@ -853,6 +855,8 @@ mod private_hnsw_grpc_tests {
             assert_eq!(session.index_epoch, BASE_EPOCH);
 
             let path_label_sentinel = "qdrant-sec-private-hnsw-path-label-sentinel";
+            let sentinel_paths = vec![path_label_sentinel.to_string()];
+            let sentinel_signature = fixture.sign_read_paths(&sentinel_paths, 1, true);
             let err = PrivateHnswOram::read_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramReadPathsRequest {
@@ -861,12 +865,12 @@ mod private_hnsw_grpc_tests {
                     session_id: session.session_id.clone(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
-                    paths: vec![path_label_sentinel.to_string()],
+                    paths: sentinel_paths,
                     padding: Some(grpc::OramReadPadding {
                         requested_paths: 1,
                         dummy_paths_included: true,
                     }),
-                    client_signature: Some(signature_to_proto(fixture.client_signature())),
+                    client_signature: Some(signature_to_proto(sentinel_signature)),
                 }),
             )
             .await
@@ -878,6 +882,8 @@ mod private_hnsw_grpc_tests {
                 !err.message()
                     .contains(&fixture.encrypted_build.buckets[0].ciphertext)
             );
+            let wrong_budget_paths = vec![fixture.entry_leaf_label()];
+            let wrong_budget_signature = fixture.sign_read_paths(&wrong_budget_paths, 2, true);
             let err = PrivateHnswOram::read_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramReadPathsRequest {
@@ -886,12 +892,12 @@ mod private_hnsw_grpc_tests {
                     session_id: session.session_id.clone(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
-                    paths: vec![fixture.entry_leaf_label()],
+                    paths: wrong_budget_paths,
                     padding: Some(grpc::OramReadPadding {
                         requested_paths: 2,
                         dummy_paths_included: true,
                     }),
-                    client_signature: Some(signature_to_proto(fixture.client_signature())),
+                    client_signature: Some(signature_to_proto(wrong_budget_signature)),
                 }),
             )
             .await
@@ -899,7 +905,7 @@ mod private_hnsw_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("fixed path budget"));
 
-            let read_response = PrivateHnswOram::read_private_hnsw_paths(
+            let err = PrivateHnswOram::read_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramReadPathsRequest {
                     collection_name: COLLECTION_NAME.to_string(),
@@ -913,6 +919,32 @@ mod private_hnsw_grpc_tests {
                         dummy_paths_included: true,
                     }),
                     client_signature: Some(signature_to_proto(fixture.client_signature())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("read_paths signature verification failed")
+            );
+
+            let read_paths = vec![fixture.entry_leaf_label()];
+            let read_signature = fixture.sign_read_paths(&read_paths, 1, true);
+            let read_response = PrivateHnswOram::read_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramReadPathsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: read_paths,
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    }),
+                    client_signature: Some(signature_to_proto(read_signature)),
                 }),
             )
             .await

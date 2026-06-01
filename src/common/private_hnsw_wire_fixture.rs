@@ -23,7 +23,7 @@ use qdrant_sec::{
     encode_private_hnsw_oram_leaf_label, plan_private_hnsw_oram_commit,
     private_hnsw_oram_bucket_ids_for_leaf, seal_private_hnsw_oram_plaintext_index,
     search_private_hnsw_oram_encrypted_verified, sign_private_hnsw_oram_commit,
-    sign_private_hnsw_oram_manifest,
+    sign_private_hnsw_oram_manifest, sign_private_hnsw_oram_read_paths,
 };
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::json;
@@ -245,6 +245,31 @@ impl PrivateHnswRouteWireFixture {
             key_id: SIGNING_KEY_ID.to_string(),
             sig: self.manifest_signature.sig.clone(),
         }
+    }
+
+    pub(crate) fn sign_read_paths(
+        &self,
+        paths: &[String],
+        requested_paths: u32,
+        dummy_paths_included: bool,
+    ) -> PrivateHnswOramSignature {
+        sign_private_hnsw_oram_read_paths(
+            &self.signing_key,
+            PrivateHnswCommitSignatureContext {
+                collection_id: COLLECTION_ID,
+                vector_name: VECTOR_NAME,
+                key_id: KEY_ID,
+                rk_id: KEY_ID,
+                rk_epoch: RK_EPOCH,
+                signing_key_id: SIGNING_KEY_ID,
+            },
+            self.encrypted_build.index_epoch,
+            &self.encrypted_build.root_hash,
+            paths,
+            requested_paths,
+            dummy_paths_included,
+        )
+        .unwrap()
     }
 
     pub(crate) fn signing_public_key_b64(&self) -> String {

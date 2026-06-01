@@ -14,8 +14,9 @@ use crate::control_plane::{PRIVATE_HNSW_ORAM_BINDING, VECTOR_PRIVATE_HNSW_ORAM_P
 use crate::private_hnsw_oram::{
     DistanceKind, FixedBudgetParams, OramParams, PrivateHnswOramBucket,
     PrivateHnswOramCommitBucketRef, PrivateHnswOramCommitSignatureInput, PrivateHnswOramManifest,
-    PrivateHnswOramSignature, PrivateHnswParams, ResultPrivacyMode,
-    private_hnsw_oram_commit_signature_message, private_hnsw_oram_manifest_signature_message,
+    PrivateHnswOramReadPathsSignatureInput, PrivateHnswOramSignature, PrivateHnswParams,
+    ResultPrivacyMode, private_hnsw_oram_commit_signature_message,
+    private_hnsw_oram_manifest_signature_message, private_hnsw_oram_read_paths_signature_message,
 };
 
 pub const PRIVATE_HNSW_NODE_AEAD_DOMAIN: &[u8] = b"qdrant-sec/private-hnsw-node-aead/v1";
@@ -2393,6 +2394,40 @@ pub fn sign_private_hnsw_oram_commit(
         signature_key_id: context.signing_key_id,
     };
     let message = private_hnsw_oram_commit_signature_message(input);
+    let signature = key_pair.sign(&message);
+    Ok(PrivateHnswOramSignature {
+        alg: "ed25519".to_string(),
+        key_id: context.signing_key_id.to_string(),
+        sig: BASE64URL_NOPAD.encode(signature.as_ref()),
+    })
+}
+
+pub fn sign_private_hnsw_oram_read_paths(
+    key_pair: &Ed25519KeyPair,
+    context: PrivateHnswCommitSignatureContext<'_>,
+    index_epoch: u64,
+    root_hash: &str,
+    paths: &[String],
+    requested_paths: u32,
+    dummy_paths_included: bool,
+) -> Result<PrivateHnswOramSignature, PrivateHnswClientError> {
+    validate_commit_signature_context(context)?;
+    let path_refs = paths.iter().map(String::as_str).collect::<Vec<_>>();
+    let input = PrivateHnswOramReadPathsSignatureInput {
+        collection_id: context.collection_id,
+        vector_name: context.vector_name,
+        key_id: context.key_id,
+        rk_id: context.rk_id,
+        rk_epoch: context.rk_epoch,
+        index_epoch,
+        root_hash,
+        paths: &path_refs,
+        requested_paths,
+        dummy_paths_included,
+        signature_alg: "ed25519",
+        signature_key_id: context.signing_key_id,
+    };
+    let message = private_hnsw_oram_read_paths_signature_message(input);
     let signature = key_pair.sign(&message);
     Ok(PrivateHnswOramSignature {
         alg: "ed25519".to_string(),

@@ -10,6 +10,8 @@ pub const PRIVATE_HNSW_ORAM_MANIFEST_SIGNATURE_DOMAIN: &str =
     "qdrant-sec/private-hnsw-oram-manifest-signature/v1";
 pub const PRIVATE_HNSW_ORAM_COMMIT_SIGNATURE_DOMAIN: &str =
     "qdrant-sec/private-hnsw-oram-commit-signature/v1";
+pub const PRIVATE_HNSW_ORAM_READ_PATHS_SIGNATURE_DOMAIN: &str =
+    "qdrant-sec/private-hnsw-oram-read-paths-signature/v1";
 
 const PRIVATE_HNSW_ORAM_SIGNATURE_ALGORITHM: &str = "ed25519";
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
@@ -40,6 +42,8 @@ pub enum PrivateHnswOramError {
     InvalidManifestSignature,
     #[error("private HNSW ORAM commit signature verification failed")]
     InvalidCommitSignature,
+    #[error("private HNSW ORAM read_paths signature verification failed")]
+    InvalidReadPathsSignature,
     #[error("private HNSW ORAM resource key id is invalid")]
     InvalidResourceKeyId,
 }
@@ -215,6 +219,22 @@ pub struct PrivateHnswOramCommitSignatureInput<'a> {
     pub signature_key_id: &'a str,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateHnswOramReadPathsSignatureInput<'a> {
+    pub collection_id: &'a str,
+    pub vector_name: &'a str,
+    pub key_id: &'a str,
+    pub rk_id: &'a str,
+    pub rk_epoch: u64,
+    pub index_epoch: u64,
+    pub root_hash: &'a str,
+    pub paths: &'a [&'a str],
+    pub requested_paths: u32,
+    pub dummy_paths_included: bool,
+    pub signature_alg: &'a str,
+    pub signature_key_id: &'a str,
+}
+
 pub fn validate_private_hnsw_oram_manifest(
     manifest: &PrivateHnswOramManifest,
     signature: Option<&PrivateHnswOramSignature>,
@@ -285,6 +305,19 @@ pub fn validate_private_hnsw_oram_commit_signature(
         .map_err(|_| PrivateHnswOramError::InvalidCommitSignature)
 }
 
+pub fn validate_private_hnsw_oram_read_paths_signature(
+    input: PrivateHnswOramReadPathsSignatureInput<'_>,
+    signature: &str,
+    verification: PrivateHnswSignatureVerification<'_>,
+) -> Result<(), PrivateHnswOramError> {
+    validate_signature_fields(input.signature_alg, input.signature_key_id, verification)?;
+    let signature_bytes = decode_base64url_64(signature)?;
+    let message = private_hnsw_oram_read_paths_signature_message(input);
+    UnparsedPublicKey::new(&ED25519, verification.public_key)
+        .verify(&message, &signature_bytes)
+        .map_err(|_| PrivateHnswOramError::InvalidReadPathsSignature)
+}
+
 pub fn private_hnsw_oram_manifest_signature_message(manifest: &PrivateHnswOramManifest) -> Vec<u8> {
     let mut message = Vec::new();
     push_domain(
@@ -321,6 +354,32 @@ pub fn private_hnsw_oram_manifest_signature_message(manifest: &PrivateHnswOramMa
     push_u64(&mut message, manifest.logical_node_count);
     push_u64(&mut message, manifest.dummy_node_count);
     push_str(&mut message, manifest.result_privacy.as_str());
+    message
+}
+
+pub fn private_hnsw_oram_read_paths_signature_message(
+    input: PrivateHnswOramReadPathsSignatureInput<'_>,
+) -> Vec<u8> {
+    let mut message = Vec::new();
+    push_domain(
+        &mut message,
+        PRIVATE_HNSW_ORAM_READ_PATHS_SIGNATURE_DOMAIN.as_bytes(),
+    );
+    push_str(&mut message, input.collection_id);
+    push_str(&mut message, input.vector_name);
+    push_str(&mut message, input.key_id);
+    push_str(&mut message, input.rk_id);
+    push_u64(&mut message, input.rk_epoch);
+    push_u64(&mut message, input.index_epoch);
+    push_str(&mut message, input.root_hash);
+    push_u32(&mut message, input.paths.len() as u32);
+    for path in input.paths {
+        push_str(&mut message, path);
+    }
+    push_u32(&mut message, input.requested_paths);
+    push_bool(&mut message, input.dummy_paths_included);
+    push_str(&mut message, input.signature_alg);
+    push_str(&mut message, input.signature_key_id);
     message
 }
 
@@ -663,6 +722,44 @@ mod tests {
         assert_eq!(
             BASE64URL_NOPAD.encode(digest.as_ref()),
             "K7D-QZtqOp7EBdqB0idlNYPSzjPMcg_Uripj067shYQ"
+        );
+    }
+
+    #[test]
+    fn read_paths_signature_verifies_and_tamper_fails() {
+        let key_pair = deterministic_key_pair();
+        let paths = ["AAAAAAAAAAA"];
+        let input = PrivateHnswOramReadPathsSignatureInput {
+            collection_id: "collection-uuid-1",
+            vector_name: "text",
+            key_id: "tenant-a/vector-private-rk",
+            rk_id: "tenant-a/vector-private-rk",
+            rk_epoch: 7,
+            index_epoch: 42,
+            root_hash: &BASE64URL_NOPAD.encode(&[42; 32]),
+            paths: &paths,
+            requested_paths: 1,
+            dummy_paths_included: true,
+            signature_alg: "ed25519",
+            signature_key_id: "tenant-a/private-hnsw-signing-v1",
+        };
+        let signature = sign_b64(
+            &key_pair,
+            &private_hnsw_oram_read_paths_signature_message(input),
+        );
+        let verification = PrivateHnswSignatureVerification {
+            expected_key_id: "tenant-a/private-hnsw-signing-v1",
+            public_key: key_pair.public_key().as_ref(),
+        };
+        validate_private_hnsw_oram_read_paths_signature(input, &signature, verification).unwrap();
+
+        let tampered = PrivateHnswOramReadPathsSignatureInput {
+            requested_paths: 2,
+            ..input
+        };
+        assert_eq!(
+            validate_private_hnsw_oram_read_paths_signature(tampered, &signature, verification),
+            Err(PrivateHnswOramError::InvalidReadPathsSignature)
         );
     }
 

@@ -497,21 +497,23 @@ mod private_hnsw_rest_tests {
             assert_eq!(session_result["index_epoch"], BASE_EPOCH);
 
             let path_label_sentinel = "qdrant-sec-private-hnsw-path-label-sentinel";
+            let sentinel_paths = vec![path_label_sentinel.to_string()];
+            let sentinel_signature = fixture.sign_read_paths(&sentinel_paths, 1, true);
             let read_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",
                 OramReadPathsRequest {
                     session_id: session_id.clone(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
-                    paths: vec![path_label_sentinel.to_string()],
+                    paths: sentinel_paths,
                     padding: OramReadPadding {
                         requested_paths: 1,
                         dummy_paths_included: true,
                     },
                     client_signature: PrivateHnswClientSignature {
-                        alg: "ed25519".to_string(),
-                        key_id: SIGNING_KEY_ID.to_string(),
-                        sig: fixture.client_signature().sig,
+                        alg: sentinel_signature.alg,
+                        key_id: sentinel_signature.key_id,
+                        sig: sentinel_signature.sig,
                     },
                 },
                 StatusCode::BAD_REQUEST,
@@ -522,15 +524,39 @@ mod private_hnsw_rest_tests {
                 !read_error.contains(&fixture.encrypted_build.buckets[0].ciphertext),
                 "{read_error}"
             );
+            let wrong_budget_paths = vec![fixture.entry_leaf_label()];
+            let wrong_budget_signature = fixture.sign_read_paths(&wrong_budget_paths, 2, true);
             post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",
                 OramReadPathsRequest {
                     session_id: session_id.clone(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
-                    paths: vec![fixture.entry_leaf_label()],
+                    paths: wrong_budget_paths,
                     padding: OramReadPadding {
                         requested_paths: 2,
+                        dummy_paths_included: true,
+                    },
+                    client_signature: PrivateHnswClientSignature {
+                        alg: wrong_budget_signature.alg,
+                        key_id: wrong_budget_signature.key_id,
+                        sig: wrong_budget_signature.sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "fixed path budget"
+            );
+
+            let invalid_signature_paths = vec![fixture.entry_leaf_label()];
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/read_paths",
+                OramReadPathsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: invalid_signature_paths,
+                    padding: OramReadPadding {
+                        requested_paths: 1,
                         dummy_paths_included: true,
                     },
                     client_signature: PrivateHnswClientSignature {
@@ -540,24 +566,26 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "fixed path budget"
+                "read_paths signature verification failed"
             );
 
+            let ok_read_paths = vec![fixture.entry_leaf_label()];
+            let read_signature = fixture.sign_read_paths(&ok_read_paths, 1, true);
             let read_result = post_json_ok!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",
                 OramReadPathsRequest {
                     session_id: session_id.clone(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
-                    paths: vec![fixture.entry_leaf_label()],
+                    paths: ok_read_paths,
                     padding: OramReadPadding {
                         requested_paths: 1,
                         dummy_paths_included: true,
                     },
                     client_signature: PrivateHnswClientSignature {
-                        alg: "ed25519".to_string(),
-                        key_id: SIGNING_KEY_ID.to_string(),
-                        sig: fixture.client_signature().sig,
+                        alg: read_signature.alg,
+                        key_id: read_signature.key_id,
+                        sig: read_signature.sig,
                     },
                 }
             );
