@@ -29,6 +29,7 @@ use crate::config::{
 use crate::operations::snapshot_ops::SnapshotDescription;
 use crate::operations::types::{CollectionError, CollectionResult, NodeType};
 use crate::private_hnsw_oram_store::{PRIVATE_HNSW_ORAM_DIR, PrivateHnswOramStore};
+use crate::private_result_oram_store::PRIVATE_RESULT_ORAM_DIR;
 use crate::shards::local_shard::LocalShard;
 use crate::shards::remote_shard::RemoteShard;
 use crate::shards::replica_set::ShardReplicaSet;
@@ -177,6 +178,19 @@ impl Collection {
             .map_err(CollectionError::from)??;
         }
 
+        let private_result_oram_path = self.path.join(PRIVATE_RESULT_ORAM_DIR);
+        if private_result_oram_path.exists() {
+            let tar = tar.clone();
+            tokio::task::spawn_blocking(move || {
+                tar.blocking_append_dir_all(
+                    &private_result_oram_path,
+                    Path::new(PRIVATE_RESULT_ORAM_DIR),
+                )
+            })
+            .await
+            .map_err(CollectionError::from)??;
+        }
+
         tar.finish().await.map_err(|err| {
             CollectionError::service_error(format!("failed to create snapshot archive: {err}"))
         })?;
@@ -216,6 +230,7 @@ impl Collection {
 
         let config = CollectionConfigInternal::load(target_dir)?;
         config.validate_and_warn();
+        ensure_private_result_oram_snapshot_restore_not_present(target_dir)?;
         let configured_shards = config.params.shard_number.get();
 
         let shard_ids_list: Vec<_> = match config.params.sharding_method.unwrap_or_default() {
@@ -486,6 +501,20 @@ fn ensure_snapshot_crypto_migration_state_allows_snapshot(
     Ok(())
 }
 
+fn ensure_private_result_oram_snapshot_restore_not_present(
+    collection_dir: &Path,
+) -> CollectionResult<()> {
+    let private_result_oram_path = collection_dir.join(PRIVATE_RESULT_ORAM_DIR);
+    if private_result_oram_path.exists() {
+        return Err(CollectionError::bad_request(format!(
+            "private result ORAM snapshot restore requires {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}, \
+             which is reserved until the payload ORAM provider runtime is implemented"
+        )));
+    }
+
+    Ok(())
+}
+
 fn validate_private_hnsw_oram_vector_snapshot(
     collection_dir: &Path,
     stable_crypto_id: &str,
@@ -620,6 +649,7 @@ fn private_hnsw_distance_kind(distance: segment::types::Distance) -> DistanceKin
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::fs;
 
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_sec::{
@@ -803,6 +833,24 @@ mod tests {
                 "unexpected error for {migration_state:?}: {err}",
             );
         }
+    }
+
+    #[test]
+    fn private_result_oram_restore_guard_rejects_reserved_directory() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-reserved")
+            .tempdir()
+            .unwrap();
+
+        ensure_private_result_oram_snapshot_restore_not_present(temp_dir.path()).unwrap();
+
+        fs::create_dir(temp_dir.path().join(PRIVATE_RESULT_ORAM_DIR)).unwrap();
+        let err =
+            ensure_private_result_oram_snapshot_restore_not_present(temp_dir.path()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains(PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
+        );
     }
 
     #[test]

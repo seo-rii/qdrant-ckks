@@ -591,7 +591,9 @@ payload/result layer. It writes `private_result_oram/manifest.json`,
 `epochs/current.json` with the same private directory hardening and epoch CAS
 contract used by private HNSW ORAM. These types and storage primitives are
 contract scaffolding only and are not wired into runtime upload/session APIs
-yet.
+yet. Collection snapshots include the `private_result_oram/` directory if it is
+present, but current restore fail-closes when that directory appears because
+`payload/private-result-oram@v1` is still reserved.
 Cluster runtime parity uses the existing crypto capability fingerprint for this
 provider as well. The fingerprint includes non-secret private HNSW ORAM policy
 such as tree shape, fixed budget, result privacy mode, and signing verifier
