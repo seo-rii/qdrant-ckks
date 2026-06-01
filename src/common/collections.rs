@@ -7,7 +7,7 @@ use api::grpc::qdrant::CollectionExists;
 use api::rest::models::{
     CollectionDescription, CollectionsResponse, ShardKeyDescription, ShardKeysResponse,
 };
-use collection::config::ShardingMethod;
+use collection::config::{CollectionConfigInternal, ShardingMethod};
 #[cfg(feature = "staging")]
 use collection::operations::cluster_ops::TestSlowDownOperation;
 use collection::operations::cluster_ops::{
@@ -28,6 +28,7 @@ use collection::shards::resharding::ReshardKey;
 use collection::shards::shard::{PeerId, ShardId, ShardsPlacement};
 use collection::shards::transfer::{ShardTransfer, ShardTransferKey, ShardTransferRestart};
 use itertools::Itertools;
+use qdrant_sec::PRIVATE_HNSW_ORAM_BINDING;
 use rand::prelude::SliceRandom;
 use rand::seq::IteratorRandom;
 use storage::content_manager::collection_meta_ops::ShardTransferOperations::{Abort, Start};
@@ -44,6 +45,7 @@ use storage::rbac::AccessRequirements;
 use uuid::Uuid;
 
 use super::auth::Auth;
+use super::private_hnsw::has_active_private_hnsw_session_for_collection;
 
 pub async fn do_collection_exists(
     toc: &TableOfContent,
@@ -310,6 +312,11 @@ pub async fn do_update_collection_cluster(
         consensus_state.persistent.read().this_peer_id(),
         &get_all_peer_ids(),
         &peer_metadata_by_id,
+    )?;
+    reject_private_hnsw_cluster_transfer_during_active_session(
+        &collection_name,
+        &collection_state.config,
+        &operation,
     )?;
 
     match operation {
@@ -1090,6 +1097,51 @@ fn validate_encrypted_cluster_data_movement_parity(
     Ok(())
 }
 
+fn reject_private_hnsw_cluster_transfer_during_active_session(
+    collection_name: &str,
+    config: &CollectionConfigInternal,
+    operation: &ClusterOperations,
+) -> Result<(), StorageError> {
+    if !cluster_operation_starts_shard_transfer(operation)
+        || !collection_uses_private_hnsw_oram(config)
+    {
+        return Ok(());
+    }
+
+    let collection_crypto_id = config.stable_crypto_id(collection_name)?;
+    if has_active_private_hnsw_session_for_collection(&collection_crypto_id)? {
+        return Err(StorageError::BadRequest {
+            description: format!(
+                "cannot start shard transfer for private HNSW ORAM collection {collection_name}: \
+                 active private HNSW ORAM session must be closed before shard transfer",
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn cluster_operation_starts_shard_transfer(operation: &ClusterOperations) -> bool {
+    matches!(
+        operation,
+        ClusterOperations::MoveShard(_)
+            | ClusterOperations::ReplicateShard(_)
+            | ClusterOperations::ReplicatePoints(_)
+            | ClusterOperations::RestartTransfer(_)
+    )
+}
+
+fn collection_uses_private_hnsw_oram(config: &CollectionConfigInternal) -> bool {
+    config
+        .params
+        .effective_encryption()
+        .is_some_and(|encryption| {
+            encryption
+                .rules
+                .iter()
+                .any(|rule| rule.binding.as_deref() == Some(PRIVATE_HNSW_ORAM_BINDING))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -1247,6 +1299,30 @@ mod tests {
                 "unexpected error for {operation:?}: {err}",
             );
         }
+    }
+
+    #[test]
+    fn private_hnsw_active_session_guard_only_blocks_transfer_start_operations() {
+        let move_shard = ClusterOperations::MoveShard(MoveShardOperation {
+            move_shard: collection::operations::cluster_ops::MoveShard {
+                shard_id: 1,
+                to_shard_id: None,
+                from_peer_id: 1,
+                to_peer_id: 2,
+                method: None,
+            },
+        });
+        let abort_transfer = ClusterOperations::AbortTransfer(AbortTransferOperation {
+            abort_transfer: collection::operations::cluster_ops::AbortShardTransfer {
+                shard_id: 1,
+                to_shard_id: None,
+                from_peer_id: 1,
+                to_peer_id: 2,
+            },
+        });
+
+        assert!(cluster_operation_starts_shard_transfer(&move_shard));
+        assert!(!cluster_operation_starts_shard_transfer(&abort_transfer));
     }
 
     #[test]

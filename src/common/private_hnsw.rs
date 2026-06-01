@@ -154,6 +154,13 @@ impl PrivateHnswSessionRegistry {
         false
     }
 
+    fn has_active_collection(&mut self, collection_id: &str, now_unix: u64) -> bool {
+        self.expire(now_unix);
+        self.sessions
+            .values()
+            .any(|session| session.collection_id == collection_id)
+    }
+
     fn with_session_mut<T>(
         &mut self,
         collection_id: &str,
@@ -200,6 +207,14 @@ impl PrivateHnswSessionRegistry {
             }
         }
     }
+}
+
+pub fn has_active_private_hnsw_session_for_collection(collection_id: &str) -> StorageResult<bool> {
+    let now_unix = current_unix_secs()?;
+    Ok(session_registry()
+        .lock()
+        .expect("private HNSW session registry lock poisoned")
+        .has_active_collection(collection_id, now_unix))
 }
 
 impl PrivateHnswSession {
@@ -1462,6 +1477,8 @@ mod private_hnsw_tests {
         };
         let mut registry = PrivateHnswSessionRegistry::default();
         registry.open(session.clone(), now).unwrap();
+        assert!(registry.has_active_collection("collection-uuid-1", now));
+        assert!(!registry.has_active_collection("other-collection", now));
         let err = registry.open(
             PrivateHnswSession {
                 session_id: "session-2".to_string(),
@@ -1471,5 +1488,6 @@ mod private_hnsw_tests {
         );
         assert!(err.unwrap_err().to_string().contains("ConcurrentWriter"));
         assert!(registry.close("collection-uuid-1", "text", "session-1"));
+        assert!(!registry.has_active_collection("collection-uuid-1", now));
     }
 }

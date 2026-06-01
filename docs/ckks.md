@@ -549,6 +549,9 @@ such as tree shape, fixed budget, result privacy mode, and signing verifier
 digests, while redacting raw verifier public keys. A peer with a different ORAM
 shape or signing verifier fails runtime capability parity before it can be
 treated as an equivalent private-HNSW-capable node.
+Shard transfer start operations are also blocked while a private HNSW ORAM
+session is active for the collection. Clients must close the session first so
+the ORAM epoch/root CAS and single-writer state cannot race with shard movement.
 
 The Rust reference SDK helpers in `qdrant-sec` now cover the MVP build/upload
 preparation loop. `build_private_hnsw_oram_plaintext_index_from_f32_points`
