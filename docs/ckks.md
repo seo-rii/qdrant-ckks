@@ -551,6 +551,9 @@ against the active session state.
 REST and gRPC `read_paths` error handling is checked for non-reflection:
 malformed path labels fail without echoing the submitted path label or any
 stored bucket ciphertext into the response body/status message.
+The same live fixtures reject `read_paths` calls whose path count or padding
+metadata does not match the configured fixed path budget, before bucket reads
+are served.
 
 Current result privacy support is deliberately narrow. `result_privacy:
 ids_visible` is the only accepted runtime mode in the MVP: Qdrant remains blind

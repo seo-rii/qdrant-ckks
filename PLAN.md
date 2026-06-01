@@ -372,6 +372,7 @@
 - collection snapshot은 client-sealed private HNSW bucket ciphertext를 포함하되 bucket plaintext sentinel bytes를 archive/restore 파일에 노출하지 않는다.
 - REST/gRPC ORAM commit fixture는 invalid Ed25519 commit signature와 successful commit 이후 stale old_epoch replay를 모두 fail-closed로 검증한다.
 - REST/gRPC `read_paths` 오류 응답은 malformed path label sentinel과 stored bucket ciphertext를 반사하지 않는다.
+- REST/gRPC `read_paths` fixture는 path count 또는 padding metadata가 fixed path budget과 다르면 bucket read 전에 fail-closed로 거부한다.
 - Phase B 이후 manifest signature, bucket hash, stale epoch, invalid commit signature, symlink/permission hardening, snapshot leakage, crash recovery를 추가한다.
 
 완료 조건:

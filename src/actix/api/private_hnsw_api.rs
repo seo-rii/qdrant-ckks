@@ -522,6 +522,26 @@ mod private_hnsw_rest_tests {
                 !read_error.contains(&fixture.encrypted_build.buckets[0].ciphertext),
                 "{read_error}"
             );
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/read_paths",
+                OramReadPathsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: vec![fixture.entry_leaf_label()],
+                    padding: OramReadPadding {
+                        requested_paths: 2,
+                        dummy_paths_included: true,
+                    },
+                    client_signature: PrivateHnswClientSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: SIGNING_KEY_ID.to_string(),
+                        sig: fixture.client_signature().sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "fixed path budget"
+            );
 
             let read_result = post_json_ok!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",
