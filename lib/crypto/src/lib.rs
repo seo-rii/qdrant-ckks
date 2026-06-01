@@ -105,10 +105,11 @@ pub use private_hnsw_oram::{
     validate_private_hnsw_oram_manifest_signature_shape,
 };
 pub use private_result_oram::{
-    PRIVATE_RESULT_ORAM_MANIFEST_SIGNATURE_DOMAIN, PrivateResultOramBucket, PrivateResultOramError,
-    PrivateResultOramManifest, PrivateResultOramSignature, PrivateResultOramSignatureVerification,
-    private_result_oram_manifest_signature_message, validate_private_result_oram_manifest_shape,
-    validate_private_result_oram_manifest_signature,
+    PRIVATE_RESULT_ORAM_MANIFEST_SIGNATURE_DOMAIN, PrivateResultOramBucket, PrivateResultOramEpoch,
+    PrivateResultOramError, PrivateResultOramManifest, PrivateResultOramManifestValidationContext,
+    PrivateResultOramSignature, PrivateResultOramSignatureVerification,
+    private_result_oram_manifest_signature_message, validate_private_result_oram_manifest,
+    validate_private_result_oram_manifest_shape, validate_private_result_oram_manifest_signature,
     validate_private_result_oram_manifest_signature_shape,
 };
 pub use vector::{

@@ -25,6 +25,8 @@ pub enum PrivateResultOramError {
     InvalidBinding,
     #[error("private result ORAM manifest field {0} is invalid")]
     InvalidManifestField(&'static str),
+    #[error("private result ORAM manifest field {0} does not match runtime context")]
+    ManifestContextMismatch(&'static str),
     #[error("private result ORAM manifest signature is missing")]
     MissingManifestSignature,
     #[error("private result ORAM signature uses unsupported algorithm {0}")]
@@ -79,9 +81,45 @@ pub struct PrivateResultOramSignature {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateResultOramEpoch {
+    pub epoch: u64,
+    pub root_hash: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrivateResultOramSignatureVerification<'a> {
     pub expected_key_id: &'a str,
     pub public_key: &'a [u8],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateResultOramManifestValidationContext<'a> {
+    pub expected_collection_id: &'a str,
+    pub expected_key_id: &'a str,
+    pub expected_rk_id: &'a str,
+    pub min_rk_epoch: u64,
+    pub max_rk_epoch: u64,
+    pub signature_verification: PrivateResultOramSignatureVerification<'a>,
+}
+
+pub fn validate_private_result_oram_manifest(
+    manifest: &PrivateResultOramManifest,
+    signature: Option<&PrivateResultOramSignature>,
+    context: PrivateResultOramManifestValidationContext<'_>,
+) -> Result<PrivateResultOramEpoch, PrivateResultOramError> {
+    validate_private_result_oram_manifest_shape(manifest)?;
+    validate_manifest_context(manifest, context)?;
+    validate_private_result_oram_manifest_signature(
+        manifest,
+        signature,
+        context.signature_verification,
+    )?;
+
+    let root_hash = decode_base64url_32(&manifest.root_hash, "root_hash")?;
+    Ok(PrivateResultOramEpoch {
+        epoch: manifest.index_epoch,
+        root_hash,
+    })
 }
 
 pub fn validate_private_result_oram_manifest_shape(
@@ -192,6 +230,27 @@ fn validate_resource_id(value: &str) -> Result<(), PrivateResultOramError> {
     validate_resource_key_id(value).map_err(|_| PrivateResultOramError::InvalidResourceKeyId)
 }
 
+fn validate_manifest_context(
+    manifest: &PrivateResultOramManifest,
+    context: PrivateResultOramManifestValidationContext<'_>,
+) -> Result<(), PrivateResultOramError> {
+    if manifest.collection_id != context.expected_collection_id {
+        return Err(PrivateResultOramError::ManifestContextMismatch(
+            "collection_id",
+        ));
+    }
+    if manifest.key_id != context.expected_key_id {
+        return Err(PrivateResultOramError::ManifestContextMismatch("key_id"));
+    }
+    if manifest.rk_id != context.expected_rk_id {
+        return Err(PrivateResultOramError::ManifestContextMismatch("rk_id"));
+    }
+    if manifest.rk_epoch < context.min_rk_epoch || manifest.rk_epoch > context.max_rk_epoch {
+        return Err(PrivateResultOramError::ManifestContextMismatch("rk_epoch"));
+    }
+    Ok(())
+}
+
 fn validate_signature_header(
     signature: &PrivateResultOramSignature,
     expected_owner_key_id: &str,
@@ -292,6 +351,23 @@ mod tests {
         Ed25519KeyPair::from_seed_unchecked(&[11; 32]).unwrap()
     }
 
+    fn fixture_context<'a>(
+        public_key: &'a [u8],
+        key_id: &'a str,
+    ) -> PrivateResultOramManifestValidationContext<'a> {
+        PrivateResultOramManifestValidationContext {
+            expected_collection_id: "collection-uuid-1",
+            expected_key_id: "tenant-a/payload-private-rk",
+            expected_rk_id: "tenant-a/payload-private-rk",
+            min_rk_epoch: 7,
+            max_rk_epoch: 7,
+            signature_verification: PrivateResultOramSignatureVerification {
+                expected_key_id: key_id,
+                public_key,
+            },
+        }
+    }
+
     fn sign_b64(key_pair: &Ed25519KeyPair, message: &[u8]) -> String {
         BASE64URL_NOPAD.encode(key_pair.sign(message).as_ref())
     }
@@ -382,6 +458,56 @@ mod tests {
         assert_eq!(
             validate_private_result_oram_manifest_signature(&manifest, None, verification),
             Err(PrivateResultOramError::MissingManifestSignature)
+        );
+    }
+
+    #[test]
+    fn manifest_validation_binds_context_and_returns_epoch() {
+        let key_pair = deterministic_key_pair();
+        let manifest = fixture_manifest();
+        let signature = PrivateResultOramSignature {
+            alg: "ed25519".to_string(),
+            key_id: manifest.owner_signing_key_id.clone(),
+            sig: sign_b64(
+                &key_pair,
+                &private_result_oram_manifest_signature_message(&manifest),
+            ),
+        };
+        let context = fixture_context(key_pair.public_key().as_ref(), &signature.key_id);
+
+        assert_eq!(
+            validate_private_result_oram_manifest(&manifest, Some(&signature), context),
+            Ok(PrivateResultOramEpoch {
+                epoch: 42,
+                root_hash: [42; 32],
+            })
+        );
+
+        let bad_context = PrivateResultOramManifestValidationContext {
+            expected_collection_id: "other-collection",
+            ..context
+        };
+        assert_eq!(
+            validate_private_result_oram_manifest(&manifest, Some(&signature), bad_context),
+            Err(PrivateResultOramError::ManifestContextMismatch(
+                "collection_id"
+            ))
+        );
+
+        let bad_signature_context = PrivateResultOramManifestValidationContext {
+            signature_verification: PrivateResultOramSignatureVerification {
+                expected_key_id: "tenant-a/other-signing-v1",
+                public_key: key_pair.public_key().as_ref(),
+            },
+            ..context
+        };
+        assert_eq!(
+            validate_private_result_oram_manifest(
+                &manifest,
+                Some(&signature),
+                bad_signature_context,
+            ),
+            Err(PrivateResultOramError::SignatureKeyIdMismatch)
         );
     }
 }

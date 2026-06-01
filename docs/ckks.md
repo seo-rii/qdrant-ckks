@@ -571,8 +571,10 @@ provider ID until the payload ORAM layer exists. Do not advertise
 provider version.
 The crypto crate reserves the future payload/result ORAM manifest shape through
 `PrivateResultOramManifest`, `PrivateResultOramBucket`, and
-`private_result_oram_manifest_signature_message`; these types are contract
-scaffolding only and are not wired into runtime upload/session APIs yet.
+`private_result_oram_manifest_signature_message`. It can validate manifest
+shape, Ed25519 signatures, collection/key/epoch context, and root hash pinning;
+these types are contract scaffolding only and are not wired into runtime
+upload/session APIs yet.
 Cluster runtime parity uses the existing crypto capability fingerprint for this
 provider as well. The fingerprint includes non-secret private HNSW ORAM policy
 such as tree shape, fixed budget, result privacy mode, and signing verifier

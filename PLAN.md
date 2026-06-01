@@ -354,7 +354,7 @@
 - Phase E: `ids_visible` result privacy를 문서화하고, `private_payload_oram_required` payload/result fetch 설계를 별도 provider 또는 index-token 확장으로 구체화한다.
   - 현재 MVP는 `ids_visible`만 runtime에서 허용하고, manifest/session policy도 runtime result privacy와 불일치하는 manifest를 거부한다. `private_payload_oram_required`는 wire enum으로 예약하지만 payload ORAM provider가 구현될 때까지 runtime validation에서 fail closed 한다.
   - `payload/private-result-oram@v1` 및 `private-result-oram/v1` 식별자는 예약했지만 runtime provider로는 아직 허용하지 않는다. 설정에 등장하면 reserved/not implemented 오류로 fail closed 한다.
-  - `PrivateResultOramManifest`, `PrivateResultOramBucket`, `PrivateResultOramSignature`, canonical manifest signature message는 crypto crate에 contract skeleton으로 추가했다. runtime upload/session/store는 아직 열지 않는다.
+  - `PrivateResultOramManifest`, `PrivateResultOramBucket`, `PrivateResultOramSignature`, canonical manifest signature message, Ed25519 signature verification, collection/key/epoch context validation은 crypto crate에 contract skeleton으로 추가했다. runtime upload/session/store는 아직 열지 않는다.
 - Phase F: upper-layer client cache, speculative neighbor prefetch, neighbor clustering, graph-tailored ORAM 실험을 benchmark와 함께 추가한다.
   - upper-layer client cache는 `PrivateHnswClientNodeCache`와 `*_with_cache` search helper로 시작했다. 캐시 hit는 local node copy로 traversal/distance를 수행하되 `padding_node_id` ORAM access를 소비해 fixed-step request volume을 유지한다.
   - search access metrics는 `PrivateHnswSearchResult::access_metrics`와 `PrivateHnswSearchAccessMetrics`로 시작했다. SDK benchmark가 fixed-budget ORAM search의 path access 수, unique leaf 수, budget exhaustion 여부를 plaintext 노출 없이 기록할 수 있다.
