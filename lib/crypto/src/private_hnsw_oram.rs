@@ -726,6 +726,31 @@ mod tests {
     }
 
     #[test]
+    fn read_paths_signature_message_is_stable() {
+        let paths = ["AAAAAAAAAAA", "AAAAAAAAAAE"];
+        let input = PrivateHnswOramReadPathsSignatureInput {
+            collection_id: "collection-uuid-1",
+            vector_name: "text",
+            key_id: "tenant-a/vector-private-rk",
+            rk_id: "tenant-a/vector-private-rk",
+            rk_epoch: 7,
+            index_epoch: 42,
+            root_hash: &BASE64URL_NOPAD.encode(&[42; 32]),
+            paths: &paths,
+            requested_paths: 2,
+            dummy_paths_included: true,
+            signature_alg: "ed25519",
+            signature_key_id: "tenant-a/private-hnsw-signing-v1",
+        };
+
+        let digest = Sha256::digest(private_hnsw_oram_read_paths_signature_message(input));
+        assert_eq!(
+            BASE64URL_NOPAD.encode(digest.as_ref()),
+            "n_ChN7eT7j4hxnccWt9L4u65CYHUnOMr5K3f80SJTaA"
+        );
+    }
+
+    #[test]
     fn read_paths_signature_verifies_and_tamper_fails() {
         let key_pair = deterministic_key_pair();
         let paths = ["AAAAAAAAAAA"];
