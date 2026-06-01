@@ -9,6 +9,8 @@ use crate::private_hnsw_oram::OramParams;
 
 pub const PRIVATE_RESULT_ORAM_MANIFEST_SIGNATURE_DOMAIN: &str =
     "qdrant-sec/private-result-oram-manifest-signature/v1";
+pub const PRIVATE_RESULT_ORAM_COMMIT_SIGNATURE_DOMAIN: &str =
+    "qdrant-sec/private-result-oram-commit-signature/v1";
 
 const PRIVATE_RESULT_ORAM_SIGNATURE_ALGORITHM: &str = "ed25519";
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
@@ -37,6 +39,8 @@ pub enum PrivateResultOramError {
     MalformedSignature,
     #[error("private result ORAM manifest signature verification failed")]
     InvalidManifestSignature,
+    #[error("private result ORAM commit signature verification failed")]
+    InvalidCommitSignature,
     #[error("private result ORAM resource key id is invalid")]
     InvalidResourceKeyId,
 }
@@ -100,6 +104,27 @@ pub struct PrivateResultOramManifestValidationContext<'a> {
     pub min_rk_epoch: u64,
     pub max_rk_epoch: u64,
     pub signature_verification: PrivateResultOramSignatureVerification<'a>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateResultOramCommitBucketRef<'a> {
+    pub bucket_id: u64,
+    pub ciphertext_sha256: &'a str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateResultOramCommitSignatureInput<'a> {
+    pub collection_id: &'a str,
+    pub key_id: &'a str,
+    pub rk_id: &'a str,
+    pub rk_epoch: u64,
+    pub old_epoch: u64,
+    pub new_epoch: u64,
+    pub old_root_hash: &'a str,
+    pub new_root_hash: &'a str,
+    pub updated_buckets: &'a [PrivateResultOramCommitBucketRef<'a>],
+    pub signature_alg: &'a str,
+    pub signature_key_id: &'a str,
 }
 
 pub fn validate_private_result_oram_manifest(
@@ -185,6 +210,19 @@ pub fn validate_private_result_oram_manifest_signature(
         .map_err(|_| PrivateResultOramError::InvalidManifestSignature)
 }
 
+pub fn validate_private_result_oram_commit_signature(
+    input: PrivateResultOramCommitSignatureInput<'_>,
+    signature: &str,
+    verification: PrivateResultOramSignatureVerification<'_>,
+) -> Result<(), PrivateResultOramError> {
+    validate_signature_fields(input.signature_alg, input.signature_key_id, verification)?;
+    let signature_bytes = decode_base64url_64(signature)?;
+    let message = private_result_oram_commit_signature_message(input);
+    UnparsedPublicKey::new(&ED25519, verification.public_key)
+        .verify(&message, &signature_bytes)
+        .map_err(|_| PrivateResultOramError::InvalidCommitSignature)
+}
+
 pub fn private_result_oram_manifest_signature_message(
     manifest: &PrivateResultOramManifest,
 ) -> Vec<u8> {
@@ -211,6 +249,32 @@ pub fn private_result_oram_manifest_signature_message(
     push_u64(&mut message, manifest.logical_result_count);
     push_u64(&mut message, manifest.dummy_result_count);
     push_str(&mut message, &manifest.owner_signing_key_id);
+    message
+}
+
+pub fn private_result_oram_commit_signature_message(
+    input: PrivateResultOramCommitSignatureInput<'_>,
+) -> Vec<u8> {
+    let mut message = Vec::new();
+    push_domain(
+        &mut message,
+        PRIVATE_RESULT_ORAM_COMMIT_SIGNATURE_DOMAIN.as_bytes(),
+    );
+    push_str(&mut message, input.collection_id);
+    push_str(&mut message, input.key_id);
+    push_str(&mut message, input.rk_id);
+    push_u64(&mut message, input.rk_epoch);
+    push_u64(&mut message, input.old_epoch);
+    push_u64(&mut message, input.new_epoch);
+    push_str(&mut message, input.old_root_hash);
+    push_str(&mut message, input.new_root_hash);
+    push_u32(&mut message, input.updated_buckets.len() as u32);
+    for bucket in input.updated_buckets {
+        push_u64(&mut message, bucket.bucket_id);
+        push_str(&mut message, bucket.ciphertext_sha256);
+    }
+    push_str(&mut message, input.signature_alg);
+    push_str(&mut message, input.signature_key_id);
     message
 }
 
@@ -256,9 +320,26 @@ fn validate_signature_header(
     expected_owner_key_id: &str,
     verification: PrivateResultOramSignatureVerification<'_>,
 ) -> Result<(), PrivateResultOramError> {
-    validate_private_result_oram_manifest_signature_shape(signature)?;
-    if signature.key_id != verification.expected_key_id || signature.key_id != expected_owner_key_id
-    {
+    validate_signature_fields(&signature.alg, &signature.key_id, verification)?;
+    decode_base64url_64(&signature.sig)?;
+    if signature.key_id != expected_owner_key_id {
+        return Err(PrivateResultOramError::SignatureKeyIdMismatch);
+    }
+    Ok(())
+}
+
+fn validate_signature_fields(
+    alg: &str,
+    key_id: &str,
+    verification: PrivateResultOramSignatureVerification<'_>,
+) -> Result<(), PrivateResultOramError> {
+    if alg != PRIVATE_RESULT_ORAM_SIGNATURE_ALGORITHM {
+        return Err(PrivateResultOramError::UnsupportedSignatureAlgorithm(
+            alg.to_string(),
+        ));
+    }
+    validate_resource_id(key_id)?;
+    if key_id != verification.expected_key_id {
         return Err(PrivateResultOramError::SignatureKeyIdMismatch);
     }
     Ok(())
@@ -384,6 +465,39 @@ mod tests {
     }
 
     #[test]
+    fn commit_signature_message_is_stable() {
+        let buckets = [
+            PrivateResultOramCommitBucketRef {
+                bucket_id: 9,
+                ciphertext_sha256: &BASE64URL_NOPAD.encode(&[9; 32]),
+            },
+            PrivateResultOramCommitBucketRef {
+                bucket_id: 27,
+                ciphertext_sha256: &BASE64URL_NOPAD.encode(&[27; 32]),
+            },
+        ];
+        let input = PrivateResultOramCommitSignatureInput {
+            collection_id: "collection-uuid-1",
+            key_id: "tenant-a/payload-private-rk",
+            rk_id: "tenant-a/payload-private-rk",
+            rk_epoch: 7,
+            old_epoch: 42,
+            new_epoch: 43,
+            old_root_hash: &BASE64URL_NOPAD.encode(&[42; 32]),
+            new_root_hash: &BASE64URL_NOPAD.encode(&[43; 32]),
+            updated_buckets: &buckets,
+            signature_alg: "ed25519",
+            signature_key_id: "tenant-a/private-result-signing-v1",
+        };
+
+        let digest = Sha256::digest(private_result_oram_commit_signature_message(input));
+        assert_eq!(
+            BASE64URL_NOPAD.encode(digest.as_ref()),
+            "Dsso6H8kYZbPZHYG49vdmgVaLa02M2fP47VCQH4wPtM"
+        );
+    }
+
+    #[test]
     fn manifest_shape_rejects_wrong_provider_and_root() {
         let mut manifest = fixture_manifest();
         validate_private_result_oram_manifest_shape(&manifest).unwrap();
@@ -458,6 +572,46 @@ mod tests {
         assert_eq!(
             validate_private_result_oram_manifest_signature(&manifest, None, verification),
             Err(PrivateResultOramError::MissingManifestSignature)
+        );
+    }
+
+    #[test]
+    fn commit_signature_verifies_and_tamper_fails() {
+        let key_pair = deterministic_key_pair();
+        let buckets = [PrivateResultOramCommitBucketRef {
+            bucket_id: 9,
+            ciphertext_sha256: &BASE64URL_NOPAD.encode(&[9; 32]),
+        }];
+        let input = PrivateResultOramCommitSignatureInput {
+            collection_id: "collection-uuid-1",
+            key_id: "tenant-a/payload-private-rk",
+            rk_id: "tenant-a/payload-private-rk",
+            rk_epoch: 7,
+            old_epoch: 42,
+            new_epoch: 43,
+            old_root_hash: &BASE64URL_NOPAD.encode(&[42; 32]),
+            new_root_hash: &BASE64URL_NOPAD.encode(&[43; 32]),
+            updated_buckets: &buckets,
+            signature_alg: "ed25519",
+            signature_key_id: "tenant-a/private-result-signing-v1",
+        };
+        let signature = sign_b64(
+            &key_pair,
+            &private_result_oram_commit_signature_message(input),
+        );
+        let verification = PrivateResultOramSignatureVerification {
+            expected_key_id: "tenant-a/private-result-signing-v1",
+            public_key: key_pair.public_key().as_ref(),
+        };
+        validate_private_result_oram_commit_signature(input, &signature, verification).unwrap();
+
+        let tampered = PrivateResultOramCommitSignatureInput {
+            new_epoch: 44,
+            ..input
+        };
+        assert_eq!(
+            validate_private_result_oram_commit_signature(tampered, &signature, verification),
+            Err(PrivateResultOramError::InvalidCommitSignature)
         );
     }
 
