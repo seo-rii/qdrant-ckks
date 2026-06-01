@@ -456,6 +456,7 @@ mod private_hnsw_rest_tests {
                     let body = String::from_utf8_lossy(&body_bytes);
                     assert_eq!(status, $status, "{body}");
                     assert!(body.contains($needle), "{body}");
+                    body.to_string()
                 }};
             }
 
@@ -494,6 +495,33 @@ mod private_hnsw_rest_tests {
             let session_id = session_result["session_id"].as_str().unwrap().to_string();
             assert_eq!(session_result["collection_id"], COLLECTION_ID);
             assert_eq!(session_result["index_epoch"], BASE_EPOCH);
+
+            let path_label_sentinel = "qdrant-sec-private-hnsw-path-label-sentinel";
+            let read_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/read_paths",
+                OramReadPathsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: vec![path_label_sentinel.to_string()],
+                    padding: OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    },
+                    client_signature: PrivateHnswClientSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: SIGNING_KEY_ID.to_string(),
+                        sig: fixture.client_signature().sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "leaf label"
+            );
+            assert!(!read_error.contains(path_label_sentinel), "{read_error}");
+            assert!(
+                !read_error.contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{read_error}"
+            );
 
             let read_result = post_json_ok!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",

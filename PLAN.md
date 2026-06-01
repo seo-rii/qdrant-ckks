@@ -371,6 +371,7 @@
 - crash window에서 bucket/Merkle writeback이 epoch CAS보다 먼저 보이더라도 old current epoch와 new bucket/root를 섞어 serving하지 않고 fail closed 한다.
 - collection snapshot은 client-sealed private HNSW bucket ciphertext를 포함하되 bucket plaintext sentinel bytes를 archive/restore 파일에 노출하지 않는다.
 - REST/gRPC ORAM commit fixture는 invalid Ed25519 commit signature와 successful commit 이후 stale old_epoch replay를 모두 fail-closed로 검증한다.
+- REST `read_paths` 오류 응답은 malformed path label sentinel과 stored bucket ciphertext를 반사하지 않는다.
 - Phase B 이후 manifest signature, bucket hash, stale epoch, invalid commit signature, symlink/permission hardening, snapshot leakage, crash recovery를 추가한다.
 
 완료 조건:
