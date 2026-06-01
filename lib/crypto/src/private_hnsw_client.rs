@@ -427,6 +427,33 @@ pub struct PrivateHnswSearchResult {
     pub completed_steps: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateHnswSearchAccessMetrics {
+    pub path_accesses: usize,
+    pub unique_leaf_labels: usize,
+    pub fixed_steps: usize,
+    pub exhausted_fixed_budget: bool,
+}
+
+impl PrivateHnswSearchResult {
+    pub fn access_metrics(
+        &self,
+        params: &PrivateHnswSearchParams,
+    ) -> PrivateHnswSearchAccessMetrics {
+        PrivateHnswSearchAccessMetrics {
+            path_accesses: self.accessed_leaf_labels.len(),
+            unique_leaf_labels: self
+                .accessed_leaf_labels
+                .iter()
+                .collect::<BTreeSet<_>>()
+                .len(),
+            fixed_steps: params.fixed_steps,
+            exhausted_fixed_budget: self.completed_steps == params.fixed_steps,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrivateHnswSpeculativePrefetchPlan {
     pub leaf_labels: Vec<String>,
@@ -4880,19 +4907,20 @@ mod tests {
             *slot = Some(block);
         }
 
+        let params = PrivateHnswSearchParams {
+            entry_node_id: entry.node_id,
+            k: 1,
+            ef: 1,
+            fixed_steps: 3,
+            distance: DistanceKind::Euclid,
+            padding_node_id: Some(dummy.node_id),
+        };
         let mut remaps = [2, 3, 0].into_iter();
         let result = search_private_hnsw_oram_plaintext(
             &mut state,
             config,
             &[1.0, 0.0],
-            PrivateHnswSearchParams {
-                entry_node_id: entry.node_id,
-                k: 1,
-                ef: 1,
-                fixed_steps: 3,
-                distance: DistanceKind::Euclid,
-                padding_node_id: Some(dummy.node_id),
-            },
+            params,
             |leaf| {
                 private_hnsw_oram_bucket_ids_for_leaf(leaf, config.tree_height)?
                     .into_iter()
@@ -4917,6 +4945,15 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.completed_steps, 3);
+        assert_eq!(
+            result.access_metrics(&params),
+            PrivateHnswSearchAccessMetrics {
+                path_accesses: 3,
+                unique_leaf_labels: 3,
+                fixed_steps: 3,
+                exhausted_fixed_budget: true,
+            }
+        );
         assert_eq!(
             result.accessed_leaf_labels,
             vec![

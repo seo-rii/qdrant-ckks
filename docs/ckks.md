@@ -631,6 +631,11 @@ or issuing ORAM writeback. SDKs may keep high-level HNSW nodes in a local
 hit still consumes a padding ORAM access through `padding_node_id`, so fixed-step
 request volume remains constant while the client uses its local upper-layer node
 copy for traversal and distance calculation.
+`PrivateHnswSearchResult::access_metrics` returns
+`PrivateHnswSearchAccessMetrics` with path-access count, unique leaf count,
+fixed-step budget, and budget-exhaustion status for latency/ORAM-volume
+benchmarks without exposing plaintext vectors, distances beyond client-local
+hits, or decrypted neighbor lists.
 `plan_private_hnsw_oram_speculative_prefetch` prepares fixed-count padded
 neighbor path labels from the client position map, deduplicating real candidate
 leaves and filling the remaining request slots with dummy leaves before the SDK
