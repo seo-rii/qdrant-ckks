@@ -563,10 +563,12 @@ ids_visible` is the only accepted runtime mode in the MVP: Qdrant remains blind
 to vectors, query vectors, visited HNSW nodes, distances, and client-side top-k
 during the private session, but a later ordinary retrieve leaks the retrieved
 point ids to Qdrant. The enum and wire schema reserve
-`private_payload_oram_required` for a future payload/result ORAM provider, but
-runtime validation and manifest/session policy reject that mode until the
-payload ORAM layer exists. Do not advertise `private_payload_oram_required` as a
-working result-private fetch mode for this provider version.
+`private_payload_oram_required` for future `payload/private-result-oram@v1`
+with binding `private-result-oram/v1`, but runtime validation and
+manifest/session policy reject that mode and reject the reserved payload
+provider ID until the payload ORAM layer exists. Do not advertise
+`private_payload_oram_required` as a working result-private fetch mode for this
+provider version.
 Cluster runtime parity uses the existing crypto capability fingerprint for this
 provider as well. The fingerprint includes non-secret private HNSW ORAM policy
 such as tree shape, fixed budget, result privacy mode, and signing verifier

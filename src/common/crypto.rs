@@ -25,12 +25,12 @@ use qdrant_sec::{
     LOCAL_RESOURCE_KEY_WRAP_CIPHERTEXT_LEN, LocalMasterKeyProvider, METADATA_AES_GCM_PROVIDER,
     METADATA_BLIND_INDEX_PROVIDER, METADATA_EXACT_MATCH_TOKEN_BINDING, METADATA_VALUE_BINDING,
     MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER,
-    PAYLOAD_FIELD_BINDING, PRIVATE_HNSW_ORAM_BINDING, PayloadEncryptionError,
-    PayloadEncryptionPolicy, PayloadTextEncryptor, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey,
-    ServerPayloadVerifiedEnvelopeKey, VECTOR_CLIENT_CKKS_PROVIDER, VECTOR_ENVELOPE_BINDING,
-    VECTOR_OPENFHE_CKKS_PROVIDER, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, WrappedKeyBlob,
-    client_ckks_vector_sidecar_envelope_key, client_payload_nonce_replay_key,
-    client_payload_signature_key_id, rewrap_resource_key,
+    PAYLOAD_FIELD_BINDING, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_HNSW_ORAM_BINDING,
+    PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
+    RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, ServerPayloadVerifiedEnvelopeKey,
+    VECTOR_CLIENT_CKKS_PROVIDER, VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER,
+    VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, WrappedKeyBlob, client_ckks_vector_sidecar_envelope_key,
+    client_payload_nonce_replay_key, client_payload_signature_key_id, rewrap_resource_key,
     validate_client_ckks_vector_payload_value_for_runtime,
     validate_client_payload_value_for_runtime,
 };
@@ -2809,6 +2809,15 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                 instance: instance_name.clone(),
                 option: "provider".to_string(),
                 reason: format!("invalid provider {}", instance.provider),
+            });
+        }
+        if instance.provider == PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER {
+            return Err(CryptoSetupError::InvalidInstanceOption {
+                instance: instance_name.clone(),
+                option: "provider".to_string(),
+                reason: format!(
+                    "{PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER} is reserved for future result-private payload fetch and is not implemented in this MVP"
+                ),
             });
         }
         if !matches!(
@@ -9217,6 +9226,34 @@ mod tests {
         assert!(
             matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
                 if option == "result_privacy" && reason.contains("ids_visible")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
+    fn validate_crypto_settings_rejects_reserved_private_result_oram_provider() {
+        let settings = CryptoSettings {
+            zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+            allow_inline_key_material: false,
+            instances: HashMap::from([(
+                "payload_result_oram_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+                    materials: HashMap::new(),
+                    backend_ref: None,
+                    options: json!({}),
+                },
+            )]),
+            ..CryptoSettings::default()
+        };
+
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private result payload ORAM provider is only reserved");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "provider"
+                    && reason.contains(PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
+                    && reason.contains("reserved")),
             "unexpected error: {err:?}",
         );
     }
