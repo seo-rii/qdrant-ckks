@@ -548,9 +548,9 @@ The live REST and gRPC fixtures also exercise adversarial commit handling: a
 commit with a validly-shaped but wrong Ed25519 signature is rejected, and
 replaying a previous old epoch/root after a successful commit is rejected
 against the active session state.
-REST `read_paths` error handling is checked for non-reflection: malformed path
-labels fail without echoing the submitted path label or any stored bucket
-ciphertext into the response body.
+REST and gRPC `read_paths` error handling is checked for non-reflection:
+malformed path labels fail without echoing the submitted path label or any
+stored bucket ciphertext into the response body/status message.
 
 Current result privacy support is deliberately narrow. `result_privacy:
 ids_visible` is the only accepted runtime mode in the MVP: Qdrant remains blind
