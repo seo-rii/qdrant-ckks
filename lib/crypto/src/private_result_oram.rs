@@ -1,5 +1,5 @@
 use data_encoding::BASE64URL_NOPAD;
-use ring::signature::{ED25519, UnparsedPublicKey};
+use ring::signature::{ED25519, Ed25519KeyPair, UnparsedPublicKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -132,6 +132,15 @@ pub struct PrivateResultOramManifestValidationContext<'a> {
     pub min_rk_epoch: u64,
     pub max_rk_epoch: u64,
     pub signature_verification: PrivateResultOramSignatureVerification<'a>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateResultOramCommitSignatureContext<'a> {
+    pub collection_id: &'a str,
+    pub key_id: &'a str,
+    pub rk_id: &'a str,
+    pub rk_epoch: u64,
+    pub signing_key_id: &'a str,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -321,6 +330,49 @@ pub fn validate_private_result_oram_commit_signature(
         .map_err(|_| PrivateResultOramError::InvalidCommitSignature)
 }
 
+pub fn sign_private_result_oram_manifest(
+    key_pair: &Ed25519KeyPair,
+    manifest: &PrivateResultOramManifest,
+) -> Result<PrivateResultOramSignature, PrivateResultOramError> {
+    validate_resource_id(&manifest.owner_signing_key_id)?;
+    let message = private_result_oram_manifest_signature_message(manifest);
+    let signature = key_pair.sign(&message);
+    Ok(PrivateResultOramSignature {
+        alg: PRIVATE_RESULT_ORAM_SIGNATURE_ALGORITHM.to_string(),
+        key_id: manifest.owner_signing_key_id.clone(),
+        sig: BASE64URL_NOPAD.encode(signature.as_ref()),
+    })
+}
+
+pub fn sign_private_result_oram_commit(
+    key_pair: &Ed25519KeyPair,
+    context: PrivateResultOramCommitSignatureContext<'_>,
+    plan: &PrivateResultOramCommitPlan,
+) -> Result<PrivateResultOramSignature, PrivateResultOramError> {
+    validate_commit_signature_context(context)?;
+    let bucket_refs = plan.signature_bucket_refs();
+    let input = PrivateResultOramCommitSignatureInput {
+        collection_id: context.collection_id,
+        key_id: context.key_id,
+        rk_id: context.rk_id,
+        rk_epoch: context.rk_epoch,
+        old_epoch: plan.old_epoch,
+        new_epoch: plan.new_epoch,
+        old_root_hash: &plan.old_root_hash,
+        new_root_hash: &plan.new_root_hash,
+        updated_buckets: &bucket_refs,
+        signature_alg: PRIVATE_RESULT_ORAM_SIGNATURE_ALGORITHM,
+        signature_key_id: context.signing_key_id,
+    };
+    let message = private_result_oram_commit_signature_message(input);
+    let signature = key_pair.sign(&message);
+    Ok(PrivateResultOramSignature {
+        alg: PRIVATE_RESULT_ORAM_SIGNATURE_ALGORITHM.to_string(),
+        key_id: context.signing_key_id.to_string(),
+        sig: BASE64URL_NOPAD.encode(signature.as_ref()),
+    })
+}
+
 pub fn private_result_oram_manifest_signature_message(
     manifest: &PrivateResultOramManifest,
 ) -> Vec<u8> {
@@ -491,6 +543,16 @@ fn validate_manifest_context(
     if manifest.rk_epoch < context.min_rk_epoch || manifest.rk_epoch > context.max_rk_epoch {
         return Err(PrivateResultOramError::ManifestContextMismatch("rk_epoch"));
     }
+    Ok(())
+}
+
+fn validate_commit_signature_context(
+    context: PrivateResultOramCommitSignatureContext<'_>,
+) -> Result<(), PrivateResultOramError> {
+    validate_id(context.collection_id, "collection_id")?;
+    validate_resource_id(context.key_id)?;
+    validate_resource_id(context.rk_id)?;
+    validate_resource_id(context.signing_key_id)?;
     Ok(())
 }
 
@@ -951,6 +1013,58 @@ mod tests {
     }
 
     #[test]
+    fn commit_plan_can_be_signed_and_verified_by_server_validator() {
+        let key_pair = deterministic_key_pair();
+        let leaf_commitments = vec![commitment(1), commitment(2), commitment(3), commitment(4)];
+        let old_root = private_result_oram_merkle_root_for_commitments(&leaf_commitments).unwrap();
+        let updated_bucket = fixture_commit_bucket(2, 43, 9);
+        let plan = plan_private_result_oram_commit(
+            42,
+            43,
+            &old_root,
+            &leaf_commitments,
+            std::slice::from_ref(&updated_bucket),
+        )
+        .unwrap();
+
+        let signature = sign_private_result_oram_commit(
+            &key_pair,
+            PrivateResultOramCommitSignatureContext {
+                collection_id: "collection-uuid-1",
+                key_id: "tenant-a/payload-private-rk",
+                rk_id: "tenant-a/payload-private-rk",
+                rk_epoch: 7,
+                signing_key_id: "tenant-a/private-result-signing-v1",
+            },
+            &plan,
+        )
+        .unwrap();
+
+        let bucket_refs = plan.signature_bucket_refs();
+        validate_private_result_oram_commit_signature(
+            PrivateResultOramCommitSignatureInput {
+                collection_id: "collection-uuid-1",
+                key_id: "tenant-a/payload-private-rk",
+                rk_id: "tenant-a/payload-private-rk",
+                rk_epoch: 7,
+                old_epoch: plan.old_epoch,
+                new_epoch: plan.new_epoch,
+                old_root_hash: &plan.old_root_hash,
+                new_root_hash: &plan.new_root_hash,
+                updated_buckets: &bucket_refs,
+                signature_alg: &signature.alg,
+                signature_key_id: &signature.key_id,
+            },
+            &signature.sig,
+            PrivateResultOramSignatureVerification {
+                expected_key_id: "tenant-a/private-result-signing-v1",
+                public_key: key_pair.public_key().as_ref(),
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn manifest_signature_verifies_and_tamper_fails() {
         let key_pair = deterministic_key_pair();
         let mut manifest = fixture_manifest();
@@ -982,6 +1096,23 @@ mod tests {
             validate_private_result_oram_manifest_signature(&manifest, None, verification),
             Err(PrivateResultOramError::MissingManifestSignature)
         );
+    }
+
+    #[test]
+    fn manifest_can_be_signed_and_verified_by_server_validator() {
+        let key_pair = deterministic_key_pair();
+        let manifest = fixture_manifest();
+        let signature = sign_private_result_oram_manifest(&key_pair, &manifest).unwrap();
+
+        let epoch = validate_private_result_oram_manifest(
+            &manifest,
+            Some(&signature),
+            fixture_context(key_pair.public_key().as_ref(), &signature.key_id),
+        )
+        .unwrap();
+
+        assert_eq!(epoch.epoch, 42);
+        assert_eq!(epoch.root_hash, [42; 32]);
     }
 
     #[test]

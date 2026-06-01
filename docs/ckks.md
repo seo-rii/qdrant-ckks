@@ -580,8 +580,10 @@ bucket commitment encoding, while `private_result_oram_merkle_root_for_commitmen
 fixes the root hash calculation over bucket commitments.
 `plan_private_result_oram_commit` prepares the future writeback plan by checking
 old-root consistency, bucket epoch/range uniqueness, the next root, and commit
-signature bucket refs. These types are contract scaffolding only and are not
-wired into runtime upload/session APIs yet.
+signature bucket refs. `sign_private_result_oram_manifest` and
+`sign_private_result_oram_commit` provide the matching SDK-side Ed25519 signing
+helpers. These types are contract scaffolding only and are not wired into
+runtime upload/session APIs yet.
 Cluster runtime parity uses the existing crypto capability fingerprint for this
 provider as well. The fingerprint includes non-secret private HNSW ORAM policy
 such as tree shape, fixed budget, result privacy mode, and signing verifier
