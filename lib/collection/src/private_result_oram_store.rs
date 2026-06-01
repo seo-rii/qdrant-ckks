@@ -278,6 +278,30 @@ impl PrivateResultOramStore {
         )
     }
 
+    pub fn commit_writeback(
+        &self,
+        old: &PrivateResultOramEpochState,
+        new: &PrivateResultOramEpochState,
+        bucket_count: u64,
+        updated_buckets: &[PrivateResultOramBucket],
+        max_ciphertext_bytes: usize,
+    ) -> CollectionResult<PrivateResultOramEpochState> {
+        let prepared_merkle_commit = self.prepare_merkle_commit(
+            old.index_epoch,
+            &old.root_hash,
+            new.index_epoch,
+            &new.root_hash,
+            bucket_count,
+            updated_buckets,
+        )?;
+        for bucket in updated_buckets {
+            self.write_bucket(bucket, new.index_epoch, bucket_count, max_ciphertext_bytes)?;
+        }
+        prepared_merkle_commit.write()?;
+        self.compare_and_swap_epoch(old, new)?;
+        Ok(new.clone())
+    }
+
     pub fn merkle_root_for_commitments(commitments: &[String]) -> CollectionResult<String> {
         let levels = merkle_levels(commitments)?;
         let root = levels
@@ -1091,6 +1115,52 @@ mod tests {
         let err = store.write_initial_upload_bundle(&bundle, 128).unwrap_err();
 
         assert!(err.to_string().contains("root_hash mismatch"));
+    }
+
+    #[test]
+    fn writeback_commit_updates_bucket_merkle_and_epoch() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let bundle = fixture_upload_bundle();
+        let old = store.write_initial_upload_bundle(&bundle, 128).unwrap();
+
+        let mut updated_bucket = fixture_bucket(1, 43, b"updated result bucket 1");
+        updated_bucket.bucket_commitment = root_hash(88);
+        let mut next_commitments = bundle.bucket_commitments();
+        next_commitments[1] = updated_bucket.bucket_commitment.clone();
+        let new = PrivateResultOramEpochState {
+            index_epoch: 43,
+            root_hash: PrivateResultOramStore::merkle_root_for_commitments(&next_commitments)
+                .unwrap(),
+        };
+
+        let committed = store
+            .commit_writeback(
+                &old,
+                &new,
+                bundle.bucket_count(),
+                &[updated_bucket.clone()],
+                128,
+            )
+            .unwrap();
+
+        assert_eq!(committed, new);
+        assert_eq!(store.read_current_epoch().unwrap(), new);
+        assert_eq!(
+            store
+                .read_bucket(1, new.index_epoch, bundle.bucket_count(), 128)
+                .unwrap(),
+            updated_bucket,
+        );
+        let proof = store
+            .read_merkle_path_batch(&[1], new.index_epoch, &new.root_hash, bundle.bucket_count())
+            .unwrap();
+        assert_eq!(proof.leaves[0].leaf_hash, root_hash(88));
+
+        let err = store
+            .commit_writeback(&old, &new, bundle.bucket_count(), &[], 128)
+            .unwrap_err();
+        assert!(err.to_string().contains("epoch mismatch"));
     }
 
     #[test]

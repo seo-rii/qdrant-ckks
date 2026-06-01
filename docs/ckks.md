@@ -596,7 +596,11 @@ without opening ciphertexts. `write_initial_upload_bundle` validates an
 SDK-packaged signed manifest plus complete ordered bucket set, writes the
 manifest, Merkle metadata, encrypted buckets, and initial epoch state, and keeps
 root mismatch failures fail-closed. These types and storage primitives are
-contract scaffolding only and are not wired into runtime upload/session APIs yet.
+root mismatch failures fail-closed. `commit_writeback` mirrors the private HNSW
+ORAM commit order by preparing the Merkle update, writing updated encrypted
+buckets, writing Merkle metadata, then applying epoch/root CAS. These types and
+storage primitives are contract scaffolding only and are not wired into runtime
+upload/session APIs yet.
 Collection snapshots include the `private_result_oram/` directory if it is
 present, but current restore fail-closes when that directory appears because
 `payload/private-result-oram@v1` is still reserved.
