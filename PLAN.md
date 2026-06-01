@@ -368,6 +368,7 @@
 - collection config는 `private-hnsw-oram/v1` binding과 rule당 단일 vector name만 허용하고, vector dim/distance와 runtime options mismatch를 거부한다.
 - normal `upsert`/`update_vectors` plaintext write와 server-side search/scoring은 private ORAM session API 안내 메시지로 fail closed 된다.
 - private ORAM bucket store는 symlink bucket과 Unix group/world-accessible bucket directory/file을 fail-closed로 거부한다.
+- crash window에서 bucket/Merkle writeback이 epoch CAS보다 먼저 보이더라도 old current epoch와 new bucket/root를 섞어 serving하지 않고 fail closed 한다.
 - Phase B 이후 manifest signature, bucket hash, stale epoch, invalid commit signature, symlink/permission hardening, snapshot leakage, crash recovery를 추가한다.
 
 완료 조건:

@@ -1560,6 +1560,57 @@ mod tests {
         assert!(err.to_string().contains("RootHashMismatch"));
     }
 
+    #[test]
+    fn crash_window_before_epoch_cas_fails_closed_instead_of_serving_mixed_root() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let old_bucket = fixture_bucket(0, 42, b"old bucket");
+        let other_bucket = fixture_bucket(1, 42, b"other bucket");
+        let old_commitments = vec![
+            old_bucket.bucket_commitment.clone(),
+            other_bucket.bucket_commitment.clone(),
+        ];
+        let old_root = PrivateHnswOramStore::merkle_root_for_commitments(&old_commitments).unwrap();
+        let old_epoch = PrivateHnswOramEpochState {
+            index_epoch: 42,
+            root_hash: old_root.clone(),
+        };
+
+        store.write_initial_epoch(&old_epoch).unwrap();
+        store.write_bucket(&old_bucket, 42, 2, 64).unwrap();
+        store.write_bucket(&other_bucket, 42, 2, 64).unwrap();
+        store
+            .write_merkle_tree_from_commitments(42, old_root.clone(), old_commitments.clone())
+            .unwrap();
+
+        let updated_bucket = fixture_bucket(0, 43, b"new bucket");
+        store.write_bucket(&updated_bucket, 43, 2, 64).unwrap();
+        assert_eq!(store.read_current_epoch().unwrap(), old_epoch);
+        let err = store.read_bucket(0, 42, 2, 64).unwrap_err();
+        assert!(err.to_string().contains("newer than requested epoch"));
+
+        let mut new_commitments = old_commitments;
+        new_commitments[0] = updated_bucket.bucket_commitment.clone();
+        let new_root = PrivateHnswOramStore::merkle_root_for_commitments(&new_commitments).unwrap();
+        store
+            .prepare_merkle_commit(
+                42,
+                &old_root,
+                43,
+                &new_root,
+                2,
+                std::slice::from_ref(&updated_bucket),
+            )
+            .unwrap()
+            .write()
+            .unwrap();
+        assert_eq!(store.read_current_epoch().unwrap(), old_epoch);
+        let err = store
+            .read_merkle_path_batch(&[0], 42, &old_root, 2)
+            .unwrap_err();
+        assert!(err.to_string().contains("epoch mismatch"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn bucket_symlink_rejects() {

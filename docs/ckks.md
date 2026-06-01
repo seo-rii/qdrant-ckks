@@ -537,6 +537,9 @@ The private ORAM bucket store is canonical encrypted index data, not an
 untrusted acceleration hint: manifests, epoch files, Merkle metadata, and
 buckets must live under private non-symlink directories, and Unix group/world
 access on bucket directories or files is rejected fail closed.
+If a process crashes after bucket or Merkle writeback but before the epoch CAS,
+recovery continues to report the old current epoch and rejects mixed old-root /
+new-bucket reads rather than serving an inconsistent ORAM view.
 
 Current result privacy support is deliberately narrow. `result_privacy:
 ids_visible` is the only accepted runtime mode in the MVP: Qdrant remains blind
