@@ -289,6 +289,17 @@ pub fn validate_private_result_oram_manifest_shape(
     if manifest.bucket_count == 0 {
         return Err(PrivateResultOramError::InvalidManifestField("bucket_count"));
     }
+    let capacity = manifest
+        .bucket_count
+        .checked_mul(u64::from(manifest.oram.bucket_size))
+        .ok_or(PrivateResultOramError::InvalidManifestField("bucket_count"))?;
+    let result_count = manifest
+        .logical_result_count
+        .checked_add(manifest.dummy_result_count)
+        .ok_or(PrivateResultOramError::InvalidManifestField("result_count"))?;
+    if result_count > capacity {
+        return Err(PrivateResultOramError::InvalidManifestField("result_count"));
+    }
     decode_base64url_32(&manifest.root_hash, "root_hash")?;
     Ok(())
 }
@@ -914,6 +925,16 @@ mod tests {
             validate_private_result_oram_manifest_shape(&manifest),
             Err(PrivateResultOramError::InvalidManifestField("root_hash"))
         );
+
+        manifest = fixture_manifest();
+        manifest.bucket_count = 1;
+        manifest.oram.bucket_size = 1;
+        manifest.logical_result_count = 2;
+        manifest.dummy_result_count = 0;
+        assert_eq!(
+            validate_private_result_oram_manifest_shape(&manifest),
+            Err(PrivateResultOramError::InvalidManifestField("result_count"))
+        );
     }
 
     #[test]
@@ -1208,6 +1229,8 @@ mod tests {
         let manifest = PrivateResultOramManifest {
             root_hash: root_hash.clone(),
             bucket_count: buckets.len() as u64,
+            logical_result_count: 3,
+            dummy_result_count: 1,
             ..fixture_manifest()
         };
 
