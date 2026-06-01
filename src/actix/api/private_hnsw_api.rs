@@ -444,6 +444,20 @@ mod private_hnsw_rest_tests {
                     body["result"].clone()
                 }};
             }
+            macro_rules! post_json_error_contains {
+                ($uri:expr, $body:expr, $status:expr, $needle:expr) => {{
+                    let request = actix_test::TestRequest::post()
+                        .uri($uri)
+                        .set_json(&$body)
+                        .to_request();
+                    let response = actix_test::call_service(&app, request).await;
+                    let status = response.status();
+                    let body_bytes = actix_test::read_body(response).await;
+                    let body = String::from_utf8_lossy(&body_bytes);
+                    assert_eq!(status, $status, "{body}");
+                    assert!(body.contains($needle), "{body}");
+                }};
+            }
 
             let manifest_result = post_json_ok!(
                 "/collections/docs/private-hnsw/text/manifest",
@@ -516,7 +530,42 @@ mod private_hnsw_rest_tests {
             assert!(!opened_buckets.is_empty());
 
             let search_run = fixture.run_single_search_collect_writeback();
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/commit",
+                OramCommitRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run.updated_buckets.clone(),
+                    commit_signature: PrivateHnswClientSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: SIGNING_KEY_ID.to_string(),
+                        sig: fixture.client_signature().sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "commit signature verification failed"
+            );
             let commit_result = post_json_ok!(
+                "/collections/docs/private-hnsw/text/oram/commit",
+                OramCommitRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run.updated_buckets.clone(),
+                    commit_signature: PrivateHnswClientSignature {
+                        alg: search_run.commit_signature.alg.clone(),
+                        key_id: search_run.commit_signature.key_id.clone(),
+                        sig: search_run.commit_signature.sig.clone(),
+                    },
+                }
+            );
+            assert_eq!(commit_result["index_epoch"], NEXT_EPOCH);
+            post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
                     session_id: session_id.clone(),
@@ -530,9 +579,10 @@ mod private_hnsw_rest_tests {
                         key_id: search_run.commit_signature.key_id,
                         sig: search_run.commit_signature.sig,
                     },
-                }
+                },
+                StatusCode::BAD_REQUEST,
+                "old epoch/root does not match active session"
             );
-            assert_eq!(commit_result["index_epoch"], NEXT_EPOCH);
 
             let close_request = actix_test::TestRequest::post()
                 .uri(&format!(
