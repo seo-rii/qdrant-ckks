@@ -12,10 +12,10 @@ use collection::private_hnsw_oram_store::{
 };
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
-    DistanceKind, PRIVATE_HNSW_ORAM_BINDING, PrivateHnswManifestValidationContext,
-    PrivateHnswOramBucket, PrivateHnswOramCommitBucketRef, PrivateHnswOramCommitSignatureInput,
-    PrivateHnswOramManifest, PrivateHnswOramSignature, PrivateHnswSignatureVerification,
-    ResultPrivacyMode, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+    DistanceKind, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_HNSW_ORAM_BINDING,
+    PrivateHnswManifestValidationContext, PrivateHnswOramBucket, PrivateHnswOramCommitBucketRef,
+    PrivateHnswOramCommitSignatureInput, PrivateHnswOramManifest, PrivateHnswOramSignature,
+    PrivateHnswSignatureVerification, ResultPrivacyMode, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
     private_hnsw_oram_bucket_ids_for_leaf_labels, validate_private_hnsw_oram_commit_signature,
     validate_private_hnsw_oram_manifest,
 };
@@ -273,9 +273,9 @@ impl ResolvedPrivateHnswContext {
             ));
         }
         if manifest.result_privacy != ResultPrivacyMode::IdsVisible {
-            return Err(StorageError::bad_request(
-                "private HNSW ORAM result_privacy=private_payload_oram_required requires a private payload ORAM provider and is not implemented in this MVP",
-            ));
+            return Err(StorageError::bad_request(format!(
+                "private HNSW ORAM result_privacy=private_payload_oram_required requires {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}, which is not implemented in this MVP"
+            )));
         }
         Ok(())
     }
@@ -918,9 +918,9 @@ fn result_privacy_from_runtime(
 ) -> StorageResult<ResultPrivacyMode> {
     match required_option_string(instance, RESULT_PRIVACY_OPTION)?.as_str() {
         "ids_visible" => Ok(ResultPrivacyMode::IdsVisible),
-        "private_payload_oram_required" => Err(StorageError::bad_request(
-            "private HNSW ORAM result_privacy=private_payload_oram_required requires a private payload ORAM provider and is not implemented in this MVP",
-        )),
+        "private_payload_oram_required" => Err(StorageError::bad_request(format!(
+            "private HNSW ORAM result_privacy=private_payload_oram_required requires {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}, which is not implemented in this MVP"
+        ))),
         value => Err(StorageError::bad_request(format!(
             "private HNSW ORAM option {RESULT_PRIVACY_OPTION} has unsupported value {value}",
         ))),

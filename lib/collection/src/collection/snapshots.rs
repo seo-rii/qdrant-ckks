@@ -7,9 +7,9 @@ use common::tar_ext::BuilderExt;
 use common::tar_unpack::tar_unpack_file;
 use fs_err::File;
 use qdrant_sec::{
-    DistanceKind, PRIVATE_HNSW_ORAM_BINDING, PrivateHnswOramManifest, PrivateHnswOramSignature,
-    ResultPrivacyMode, validate_private_hnsw_oram_manifest_shape,
-    validate_private_hnsw_oram_manifest_signature_shape,
+    DistanceKind, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_HNSW_ORAM_BINDING,
+    PrivateHnswOramManifest, PrivateHnswOramSignature, ResultPrivacyMode,
+    validate_private_hnsw_oram_manifest_shape, validate_private_hnsw_oram_manifest_signature_shape,
 };
 use segment::types::SnapshotFormat;
 use segment::utils::fs::move_all;
@@ -552,10 +552,11 @@ fn validate_private_hnsw_oram_restore_manifest(
     validate_private_hnsw_oram_manifest_signature_shape(signature)
         .map_err(private_hnsw_restore_error)?;
     if manifest.result_privacy != ResultPrivacyMode::IdsVisible {
-        return Err(CollectionError::bad_request(
+        return Err(CollectionError::bad_request(format!(
             "private HNSW ORAM snapshot restore supports result_privacy=ids_visible only; \
-             private_payload_oram_required is reserved until the payload ORAM provider exists",
-        ));
+             private_payload_oram_required requires {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}, \
+             which is reserved until the payload ORAM provider exists"
+        )));
     }
     if signature.key_id != manifest.owner_signing_key_id {
         return Err(CollectionError::bad_request(format!(
