@@ -569,6 +569,10 @@ manifest/session policy reject that mode and reject the reserved payload
 provider ID until the payload ORAM layer exists. Do not advertise
 `private_payload_oram_required` as a working result-private fetch mode for this
 provider version.
+The crypto crate reserves the future payload/result ORAM manifest shape through
+`PrivateResultOramManifest`, `PrivateResultOramBucket`, and
+`private_result_oram_manifest_signature_message`; these types are contract
+scaffolding only and are not wired into runtime upload/session APIs yet.
 Cluster runtime parity uses the existing crypto capability fingerprint for this
 provider as well. The fingerprint includes non-secret private HNSW ORAM policy
 such as tree shape, fixed budget, result privacy mode, and signing verifier

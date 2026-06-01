@@ -10,6 +10,7 @@ pub mod openfhe;
 pub mod payload;
 pub mod private_hnsw_client;
 pub mod private_hnsw_oram;
+pub mod private_result_oram;
 pub mod vector;
 
 pub use aead::{
@@ -102,6 +103,12 @@ pub use private_hnsw_oram::{
     validate_private_hnsw_oram_commit_signature, validate_private_hnsw_oram_manifest,
     validate_private_hnsw_oram_manifest_shape, validate_private_hnsw_oram_manifest_signature,
     validate_private_hnsw_oram_manifest_signature_shape,
+};
+pub use private_result_oram::{
+    PRIVATE_RESULT_ORAM_MANIFEST_SIGNATURE_DOMAIN, PrivateResultOramBucket, PrivateResultOramError,
+    PrivateResultOramManifest, PrivateResultOramSignature,
+    private_result_oram_manifest_signature_message, validate_private_result_oram_manifest_shape,
+    validate_private_result_oram_manifest_signature_shape,
 };
 pub use vector::{
     CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_PUBLIC_MATERIAL_MAX_CRYPTO_CONTEXT_BYTES,
