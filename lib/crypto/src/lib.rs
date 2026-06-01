@@ -106,8 +106,9 @@ pub use private_hnsw_oram::{
 };
 pub use private_result_oram::{
     PRIVATE_RESULT_ORAM_MANIFEST_SIGNATURE_DOMAIN, PrivateResultOramBucket, PrivateResultOramError,
-    PrivateResultOramManifest, PrivateResultOramSignature,
+    PrivateResultOramManifest, PrivateResultOramSignature, PrivateResultOramSignatureVerification,
     private_result_oram_manifest_signature_message, validate_private_result_oram_manifest_shape,
+    validate_private_result_oram_manifest_signature,
     validate_private_result_oram_manifest_signature_shape,
 };
 pub use vector::{

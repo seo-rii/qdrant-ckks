@@ -1,4 +1,5 @@
 use data_encoding::BASE64URL_NOPAD;
+use ring::signature::{ED25519, UnparsedPublicKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -24,10 +25,16 @@ pub enum PrivateResultOramError {
     InvalidBinding,
     #[error("private result ORAM manifest field {0} is invalid")]
     InvalidManifestField(&'static str),
+    #[error("private result ORAM manifest signature is missing")]
+    MissingManifestSignature,
     #[error("private result ORAM signature uses unsupported algorithm {0}")]
     UnsupportedSignatureAlgorithm(String),
+    #[error("private result ORAM signature key id does not match runtime context")]
+    SignatureKeyIdMismatch,
     #[error("private result ORAM signature is malformed")]
     MalformedSignature,
+    #[error("private result ORAM manifest signature verification failed")]
+    InvalidManifestSignature,
     #[error("private result ORAM resource key id is invalid")]
     InvalidResourceKeyId,
 }
@@ -69,6 +76,12 @@ pub struct PrivateResultOramSignature {
     pub alg: String,
     pub key_id: String,
     pub sig: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateResultOramSignatureVerification<'a> {
+    pub expected_key_id: &'a str,
+    pub public_key: &'a [u8],
 }
 
 pub fn validate_private_result_oram_manifest_shape(
@@ -116,6 +129,24 @@ pub fn validate_private_result_oram_manifest_signature_shape(
     Ok(())
 }
 
+pub fn validate_private_result_oram_manifest_signature(
+    manifest: &PrivateResultOramManifest,
+    signature: Option<&PrivateResultOramSignature>,
+    verification: PrivateResultOramSignatureVerification<'_>,
+) -> Result<(), PrivateResultOramError> {
+    let signature = signature.ok_or(PrivateResultOramError::MissingManifestSignature)?;
+    validate_signature_header(
+        signature,
+        manifest.owner_signing_key_id.as_str(),
+        verification,
+    )?;
+    let signature_bytes = decode_base64url_64(&signature.sig)?;
+    let message = private_result_oram_manifest_signature_message(manifest);
+    UnparsedPublicKey::new(&ED25519, verification.public_key)
+        .verify(&message, &signature_bytes)
+        .map_err(|_| PrivateResultOramError::InvalidManifestSignature)
+}
+
 pub fn private_result_oram_manifest_signature_message(
     manifest: &PrivateResultOramManifest,
 ) -> Vec<u8> {
@@ -159,6 +190,19 @@ fn validate_id(value: &str, field: &'static str) -> Result<(), PrivateResultOram
 
 fn validate_resource_id(value: &str) -> Result<(), PrivateResultOramError> {
     validate_resource_key_id(value).map_err(|_| PrivateResultOramError::InvalidResourceKeyId)
+}
+
+fn validate_signature_header(
+    signature: &PrivateResultOramSignature,
+    expected_owner_key_id: &str,
+    verification: PrivateResultOramSignatureVerification<'_>,
+) -> Result<(), PrivateResultOramError> {
+    validate_private_result_oram_manifest_signature_shape(signature)?;
+    if signature.key_id != verification.expected_key_id || signature.key_id != expected_owner_key_id
+    {
+        return Err(PrivateResultOramError::SignatureKeyIdMismatch);
+    }
+    Ok(())
 }
 
 fn decode_base64url_32(
@@ -212,6 +256,7 @@ fn push_u64(message: &mut Vec<u8>, value: u64) {
 
 #[cfg(test)]
 mod tests {
+    use ring::signature::{Ed25519KeyPair, KeyPair};
     use sha2::{Digest, Sha256};
 
     use super::*;
@@ -241,6 +286,14 @@ mod tests {
             owner_signing_key_id: "tenant-a/private-result-signing-v1".to_string(),
             created_at_unix: 1_770_000_000,
         }
+    }
+
+    fn deterministic_key_pair() -> Ed25519KeyPair {
+        Ed25519KeyPair::from_seed_unchecked(&[11; 32]).unwrap()
+    }
+
+    fn sign_b64(key_pair: &Ed25519KeyPair, message: &[u8]) -> String {
+        BASE64URL_NOPAD.encode(key_pair.sign(message).as_ref())
     }
 
     #[test]
@@ -295,6 +348,40 @@ mod tests {
         assert_eq!(
             validate_private_result_oram_manifest_signature_shape(&signature),
             Err(PrivateResultOramError::MalformedSignature)
+        );
+    }
+
+    #[test]
+    fn manifest_signature_verifies_and_tamper_fails() {
+        let key_pair = deterministic_key_pair();
+        let mut manifest = fixture_manifest();
+        let signature = PrivateResultOramSignature {
+            alg: "ed25519".to_string(),
+            key_id: manifest.owner_signing_key_id.clone(),
+            sig: sign_b64(
+                &key_pair,
+                &private_result_oram_manifest_signature_message(&manifest),
+            ),
+        };
+        let verification = PrivateResultOramSignatureVerification {
+            expected_key_id: signature.key_id.as_str(),
+            public_key: key_pair.public_key().as_ref(),
+        };
+        validate_private_result_oram_manifest_signature(&manifest, Some(&signature), verification)
+            .unwrap();
+
+        manifest.index_epoch += 1;
+        assert_eq!(
+            validate_private_result_oram_manifest_signature(
+                &manifest,
+                Some(&signature),
+                verification,
+            ),
+            Err(PrivateResultOramError::InvalidManifestSignature)
+        );
+        assert_eq!(
+            validate_private_result_oram_manifest_signature(&manifest, None, verification),
+            Err(PrivateResultOramError::MissingManifestSignature)
         );
     }
 }
