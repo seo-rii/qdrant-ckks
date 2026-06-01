@@ -574,8 +574,10 @@ digests, while redacting raw verifier public keys. A peer with a different ORAM
 shape or signing verifier fails runtime capability parity before it can be
 treated as an equivalent private-HNSW-capable node.
 Shard transfer start operations are also blocked while a private HNSW ORAM
-session is active for the collection. Clients must close the session first so
-the ORAM epoch/root CAS and single-writer state cannot race with shard movement.
+collection is configured. The MVP stores the private index as collection-level
+encrypted ORAM buckets, and shard transfer does not yet copy bucket files or
+move epoch/root ownership through consensus, so transfer start operations fail
+closed instead of producing a partial private index on the receiver.
 Distributed private HNSW ORAM sessions themselves fail closed in this MVP until
 epoch/root CAS is backed by consensus rather than node-local files.
 

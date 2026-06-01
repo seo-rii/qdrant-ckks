@@ -209,14 +209,6 @@ impl PrivateHnswSessionRegistry {
     }
 }
 
-pub fn has_active_private_hnsw_session_for_collection(collection_id: &str) -> StorageResult<bool> {
-    let now_unix = current_unix_secs()?;
-    Ok(session_registry()
-        .lock()
-        .expect("private HNSW session registry lock poisoned")
-        .has_active_collection(collection_id, now_unix))
-}
-
 impl PrivateHnswSession {
     fn response(&self) -> PrivateHnswSessionResponse {
         PrivateHnswSessionResponse {

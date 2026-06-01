@@ -357,9 +357,9 @@
   - upper-layer client cache는 `PrivateHnswClientNodeCache`와 `*_with_cache` search helper로 시작했다. 캐시 hit는 local node copy로 traversal/distance를 수행하되 `padding_node_id` ORAM access를 소비해 fixed-step request volume을 유지한다.
   - speculative neighbor prefetch는 `plan_private_hnsw_oram_speculative_prefetch` helper로 시작했다. SDK가 client position map에서 후보 node leaf를 deduplicate하고 고정 path 수까지 dummy leaf로 padding한 `read_paths` label 묶음을 만들 수 있다.
   - neighbor clustering은 `plan_private_hnsw_oram_neighbor_clustered_leaves` helper로 시작했다. bulk build 전에 entry에서 graph-order BFS를 수행해 관련 node chain을 인접 leaf에 배정하는 실험용 leaf planner다.
-- Phase G: cluster parity fingerprint, active-session transfer reject, shard-local epoch ownership, consensus-backed epoch/root CAS를 설계하고 e2e 테스트한다.
+- Phase G: cluster parity fingerprint, private-HNSW transfer fail-closed, shard-local epoch ownership, consensus-backed epoch/root CAS를 설계하고 e2e 테스트한다.
   - cluster parity fingerprint는 기존 crypto runtime capability fingerprint에 private HNSW ORAM options/signing verifier policy가 포함되는 테스트로 고정했다. ORAM tree shape 또는 private HNSW signing verifier drift는 peer parity mismatch로 실패한다.
-  - active-session transfer reject는 cluster update 진입점에서 시작형 shard transfer(`move_shard`, `replicate_shard`, `replicate_points`, `restart_transfer`)를 consensus submit 전에 막도록 연결했다. private HNSW ORAM session registry에 해당 collection의 active session이 있으면 먼저 close하도록 fail closed 한다.
+  - private-HNSW transfer fail-closed는 cluster update 진입점에서 시작형 shard transfer(`move_shard`, `replicate_shard`, `replicate_points`, `restart_transfer`)를 consensus submit 전에 막도록 연결했다. private ORAM bucket file transfer와 consensus-backed epoch/root ownership이 구현될 때까지 shard transfer를 허용하지 않는다.
   - distributed session open은 consensus-backed epoch/root CAS가 구현될 때까지 fail closed 한다. 현재 MVP의 ORAM commit CAS는 node-local 파일 상태만 원자화하므로 cluster session을 열지 않는다.
 
 테스트:

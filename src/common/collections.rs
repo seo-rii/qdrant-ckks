@@ -45,8 +45,6 @@ use storage::rbac::AccessRequirements;
 use uuid::Uuid;
 
 use super::auth::Auth;
-use super::private_hnsw::has_active_private_hnsw_session_for_collection;
-
 pub async fn do_collection_exists(
     toc: &TableOfContent,
     auth: &Auth,
@@ -313,7 +311,7 @@ pub async fn do_update_collection_cluster(
         &get_all_peer_ids(),
         &peer_metadata_by_id,
     )?;
-    reject_private_hnsw_cluster_transfer_during_active_session(
+    reject_private_hnsw_cluster_transfer_until_supported(
         &collection_name,
         &collection_state.config,
         &operation,
@@ -1097,7 +1095,7 @@ fn validate_encrypted_cluster_data_movement_parity(
     Ok(())
 }
 
-fn reject_private_hnsw_cluster_transfer_during_active_session(
+fn reject_private_hnsw_cluster_transfer_until_supported(
     collection_name: &str,
     config: &CollectionConfigInternal,
     operation: &ClusterOperations,
@@ -1108,16 +1106,14 @@ fn reject_private_hnsw_cluster_transfer_during_active_session(
         return Ok(());
     }
 
-    let collection_crypto_id = config.stable_crypto_id(collection_name)?;
-    if has_active_private_hnsw_session_for_collection(&collection_crypto_id)? {
-        return Err(StorageError::BadRequest {
-            description: format!(
-                "cannot start shard transfer for private HNSW ORAM collection {collection_name}: \
-                 active private HNSW ORAM session must be closed before shard transfer",
-            ),
-        });
-    }
-    Ok(())
+    Err(StorageError::BadRequest {
+        description: format!(
+            "cannot start shard transfer for private HNSW ORAM collection {collection_name}: \
+             encrypted ORAM bucket transfer and consensus-backed epoch/root ownership are not \
+             implemented for shard transfer; use collection snapshot/restore preflight or keep \
+             the private HNSW ORAM collection on the current shard owner",
+        ),
+    })
 }
 
 fn cluster_operation_starts_shard_transfer(operation: &ClusterOperations) -> bool {
@@ -1302,7 +1298,7 @@ mod tests {
     }
 
     #[test]
-    fn private_hnsw_active_session_guard_only_blocks_transfer_start_operations() {
+    fn private_hnsw_transfer_guard_classifies_transfer_start_operations() {
         let move_shard = ClusterOperations::MoveShard(MoveShardOperation {
             move_shard: collection::operations::cluster_ops::MoveShard {
                 shard_id: 1,
@@ -1323,6 +1319,68 @@ mod tests {
 
         assert!(cluster_operation_starts_shard_transfer(&move_shard));
         assert!(!cluster_operation_starts_shard_transfer(&abort_transfer));
+    }
+
+    fn private_hnsw_collection_config() -> CollectionConfigInternal {
+        CollectionConfigInternal {
+            params: collection::config::CollectionParams {
+                encryption: Some(collection::config::CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a/vector-private-rk".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 7,
+                    migration_state: collection::config::CryptoMigrationState::Active,
+                    rules: vec![collection::config::EncryptionRuleRef {
+                        id: "docs_text_private_hnsw".to_string(),
+                        selector: collection::config::EncryptionSelector::VectorNames {
+                            names: vec!["text".to_string()],
+                        },
+                        instance: "docs_text_private_hnsw".to_string(),
+                        binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                    }],
+                }),
+                ..collection::config::CollectionParams::empty()
+            },
+            hnsw_config: Default::default(),
+            optimizer_config: collection::optimizers_builder::OptimizersConfig {
+                deleted_threshold: 0.1,
+                vacuum_min_vector_number: 1000,
+                default_segment_number: 0,
+                max_segment_size: None,
+                #[expect(deprecated)]
+                memmap_threshold: None,
+                indexing_threshold: Some(100_000),
+                flush_interval_sec: 60,
+                max_optimization_threads: Some(0),
+                prevent_unoptimized: None,
+            },
+            wal_config: collection::config::WalConfig::default(),
+            quantization_config: None,
+            strict_mode_config: None,
+            uuid: Some(Uuid::from_u128(11)),
+            metadata: None,
+        }
+    }
+
+    #[test]
+    fn private_hnsw_transfer_guard_blocks_until_bucket_transfer_is_supported() {
+        let config = private_hnsw_collection_config();
+        let move_shard = ClusterOperations::MoveShard(MoveShardOperation {
+            move_shard: collection::operations::cluster_ops::MoveShard {
+                shard_id: 1,
+                to_shard_id: None,
+                from_peer_id: 1,
+                to_peer_id: 2,
+                method: None,
+            },
+        });
+
+        let err =
+            reject_private_hnsw_cluster_transfer_until_supported("docs", &config, &move_shard)
+                .expect_err(
+                    "private HNSW ORAM transfer must fail closed until bucket transfer exists",
+                );
+        assert!(err.to_string().contains("encrypted ORAM bucket transfer"));
     }
 
     #[test]
