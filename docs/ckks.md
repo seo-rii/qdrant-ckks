@@ -589,9 +589,12 @@ collection crate also has a `PrivateResultOramStore` skeleton for the future
 payload/result layer. It writes `private_result_oram/manifest.json`,
 `manifest.sig`, encrypted bucket files, Merkle commitment metadata, and
 `epochs/current.json` with the same private directory hardening and epoch CAS
-contract used by private HNSW ORAM. These types and storage primitives are
-contract scaffolding only and are not wired into runtime upload/session APIs
-yet. Collection snapshots include the `private_result_oram/` directory if it is
+contract used by private HNSW ORAM. It also exposes
+`read_merkle_path_batch` with `merkle_path_batch/v1` proof records so a future
+result ORAM read API can return server-verifiable bucket commitment proofs
+without opening ciphertexts. These types and storage primitives are contract
+scaffolding only and are not wired into runtime upload/session APIs yet.
+Collection snapshots include the `private_result_oram/` directory if it is
 present, but current restore fail-closes when that directory appears because
 `payload/private-result-oram@v1` is still reserved.
 Cluster runtime parity uses the existing crypto capability fingerprint for this

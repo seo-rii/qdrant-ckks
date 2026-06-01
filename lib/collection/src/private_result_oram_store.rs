@@ -26,6 +26,7 @@ const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_SIGNATURE_BYTES: u64 = 16 * 1024;
 const MAX_EPOCH_BYTES: u64 = 16 * 1024;
 const MAX_MERKLE_BYTES: u64 = 256 * 1024 * 1024;
+pub const PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND: &str = "merkle_path_batch/v1";
 
 #[derive(Clone, Debug)]
 pub struct PrivateResultOramStore {
@@ -37,6 +38,39 @@ pub struct PrivateResultOramStore {
 pub struct PrivateResultOramEpochState {
     pub index_epoch: u64,
     pub root_hash: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateResultOramMerkleProof {
+    pub kind: String,
+    pub index_epoch: u64,
+    pub root_hash: String,
+    pub bucket_count: u64,
+    pub leaves: Vec<PrivateResultOramMerkleProofLeaf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateResultOramMerkleProofLeaf {
+    pub bucket_id: u64,
+    pub leaf_hash: String,
+    pub siblings: Vec<PrivateResultOramMerkleSibling>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateResultOramMerkleSibling {
+    pub level: u32,
+    pub position: MerkleSiblingPosition,
+    pub hash: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MerkleSiblingPosition {
+    Left,
+    Right,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -243,6 +277,49 @@ impl PrivateResultOramStore {
         self.write_merkle_tree(&tree)
     }
 
+    pub fn read_merkle_path_batch(
+        &self,
+        bucket_ids: &[u64],
+        expected_epoch: u64,
+        expected_root_hash: &str,
+        expected_bucket_count: u64,
+    ) -> CollectionResult<PrivateResultOramMerkleProof> {
+        let tree = self.read_merkle_tree()?;
+        validate_merkle_tree_context(
+            &tree,
+            expected_epoch,
+            expected_root_hash,
+            expected_bucket_count,
+        )?;
+        let levels = merkle_levels(&tree.leaf_hashes)?;
+        let mut leaves = Vec::with_capacity(bucket_ids.len());
+        for &bucket_id in bucket_ids {
+            if bucket_id >= tree.bucket_count {
+                return Err(CollectionError::bad_request(format!(
+                    "private result ORAM Merkle proof bucket {bucket_id} is out of range",
+                )));
+            }
+            let bucket_index = usize::try_from(bucket_id).map_err(|_| {
+                CollectionError::bad_request(
+                    "private result ORAM Merkle proof bucket id exceeds usize",
+                )
+            })?;
+            leaves.push(PrivateResultOramMerkleProofLeaf {
+                bucket_id,
+                leaf_hash: tree.leaf_hashes[bucket_index].clone(),
+                siblings: merkle_siblings_for_bucket(&levels, bucket_index)?,
+            });
+        }
+
+        Ok(PrivateResultOramMerkleProof {
+            kind: PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND.to_string(),
+            index_epoch: tree.index_epoch,
+            root_hash: tree.root_hash,
+            bucket_count: tree.bucket_count,
+            leaves,
+        })
+    }
+
     pub fn prepare_merkle_commit(
         &self,
         old_epoch: u64,
@@ -446,6 +523,42 @@ fn merkle_parent_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     hasher.update(left);
     hasher.update(right);
     hasher.finalize().into()
+}
+
+fn merkle_siblings_for_bucket(
+    levels: &[Vec<[u8; 32]>],
+    mut index: usize,
+) -> CollectionResult<Vec<PrivateResultOramMerkleSibling>> {
+    if levels.is_empty() || index >= levels[0].len() {
+        return Err(CollectionError::bad_request(
+            "private result ORAM Merkle proof bucket index is out of range",
+        ));
+    }
+    let mut siblings = Vec::with_capacity(levels.len().saturating_sub(1));
+    for (level_index, level) in levels
+        .iter()
+        .enumerate()
+        .take(levels.len().saturating_sub(1))
+    {
+        let sibling_index = if index % 2 == 0 { index + 1 } else { index - 1 };
+        let position = if index % 2 == 0 {
+            MerkleSiblingPosition::Right
+        } else {
+            MerkleSiblingPosition::Left
+        };
+        let sibling = level.get(sibling_index).ok_or_else(|| {
+            CollectionError::bad_request("private result ORAM Merkle proof sibling is missing")
+        })?;
+        siblings.push(PrivateResultOramMerkleSibling {
+            level: u32::try_from(level_index).map_err(|_| {
+                CollectionError::bad_request("private result ORAM Merkle proof level exceeds u32")
+            })?,
+            position,
+            hash: BASE64URL_NOPAD.encode(sibling),
+        });
+        index /= 2;
+    }
+    Ok(siblings)
 }
 
 fn validate_bucket(
@@ -869,6 +982,40 @@ mod tests {
             .prepare_merkle_commit(42, &old_root, 43, &new_root, 4, &[])
             .unwrap_err();
         assert!(err.to_string().contains("epoch mismatch"));
+    }
+
+    #[test]
+    fn merkle_path_batch_returns_leaf_hashes_and_siblings() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let leaf_commitments = vec![root_hash(1), root_hash(2), root_hash(3)];
+        let root = PrivateResultOramStore::merkle_root_for_commitments(&leaf_commitments).unwrap();
+        store
+            .write_merkle_tree_from_commitments(42, root.clone(), leaf_commitments.clone())
+            .unwrap();
+
+        let proof = store.read_merkle_path_batch(&[0, 2], 42, &root, 3).unwrap();
+        assert_eq!(proof.kind, PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND);
+        assert_eq!(proof.index_epoch, 42);
+        assert_eq!(proof.root_hash, root);
+        assert_eq!(proof.bucket_count, 3);
+        assert_eq!(proof.leaves[0].bucket_id, 0);
+        assert_eq!(proof.leaves[0].leaf_hash, leaf_commitments[0]);
+        assert_eq!(proof.leaves[1].bucket_id, 2);
+        assert_eq!(proof.leaves[1].leaf_hash, leaf_commitments[2]);
+        assert_eq!(
+            proof.leaves[0].siblings[0].position,
+            MerkleSiblingPosition::Right
+        );
+        assert_eq!(
+            proof.leaves[1].siblings[0].position,
+            MerkleSiblingPosition::Right
+        );
+
+        let err = store
+            .read_merkle_path_batch(&[3], 42, &root, 3)
+            .unwrap_err();
+        assert!(err.to_string().contains("out of range"));
     }
 
     #[test]
