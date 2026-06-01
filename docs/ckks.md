@@ -554,6 +554,9 @@ stored bucket ciphertext into the response body/status message.
 The same live fixtures reject `read_paths` calls whose path count or padding
 metadata does not match the configured fixed path budget, before bucket reads
 are served.
+Snapshot restore preflight follows the same MVP result-privacy boundary:
+private HNSW ORAM manifests with `private_payload_oram_required` are rejected
+until the payload ORAM provider exists.
 
 Current result privacy support is deliberately narrow. `result_privacy:
 ids_visible` is the only accepted runtime mode in the MVP: Qdrant remains blind
