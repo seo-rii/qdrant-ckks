@@ -683,7 +683,8 @@ fixed-budget plaintext ORAM-HNSW traversal, including an upper-layer client
 cache variant, plus client-AEAD encrypted bucket open/reseal traversal. It is
 intentionally client-local: the benchmark exercises ORAM path read/writeback
 closures, speculative prefetch planning, neighbor-clustered leaf planning, and
-access metrics, but it does not route vectors or queries through Qdrant.
+directional neighbor filtering, and access metrics, but it does not route
+vectors or queries through Qdrant.
 `plan_private_hnsw_oram_speculative_prefetch` prepares fixed-count padded
 neighbor path labels from the client position map, deduplicating real candidate
 leaves and filling the remaining request slots with dummy leaves before the SDK
@@ -691,6 +692,11 @@ calls `read_paths`. `plan_private_hnsw_oram_neighbor_clustered_leaves` provides
 a deterministic graph-order leaf assignment helper for bulk builds, so SDK
 experiments can place entry-near neighbor chains on adjacent ORAM leaves before
 calling `build_private_hnsw_oram_plaintext_index_from_blocks`.
+`plan_private_hnsw_oram_directional_neighbor_filter` is an experimental
+client-local helper for Compass-style directional neighbor filtering: given the
+current node block, decrypted neighbor blocks, and the query vector, it keeps
+only neighbor nodes that move in the query direction and ranks them by
+client-side distance before the SDK chooses which padded ORAM paths to request.
 
 Client state is mandatory backup material for this provider. Qdrant snapshots
 contain encrypted buckets, manifest, and epoch/root metadata, but not the ORAM

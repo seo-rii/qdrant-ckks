@@ -10,6 +10,7 @@ use qdrant_sec::{
     PrivateHnswOramPlaintextBucket, PrivateHnswSearchAccessMetrics, PrivateHnswSearchParams,
     SecretKey, build_private_hnsw_oram_plaintext_index_from_f32_points,
     build_private_hnsw_oram_plaintext_index_from_layered_f32_points,
+    plan_private_hnsw_oram_directional_neighbor_filter,
     plan_private_hnsw_oram_neighbor_clustered_leaves, plan_private_hnsw_oram_speculative_prefetch,
     private_hnsw_oram_bucket_ids_for_leaf, private_hnsw_oram_leaf_count,
     seal_private_hnsw_oram_plaintext_index, search_private_hnsw_oram_encrypted,
@@ -303,6 +304,7 @@ struct PlanningFixture {
     padding_leaf: u64,
     blocks: Vec<PrivateHnswNodeBlockPlaintext>,
     entry_node_id: [u8; 32],
+    query: Vec<f32>,
 }
 
 impl PlanningFixture {
@@ -341,6 +343,7 @@ impl PlanningFixture {
             padding_leaf: 0,
             blocks,
             entry_node_id: build.entry_node_id,
+            query: deterministic_vector(7, DIM),
         }
     }
 }
@@ -485,6 +488,25 @@ fn private_hnsw_oram_bench(c: &mut Criterion) {
                     black_box(planning_fixture.config),
                     black_box(planning_fixture.blocks.as_slice()),
                     black_box(planning_fixture.entry_node_id),
+                )
+                .unwrap(),
+            )
+        })
+    });
+    group.bench_function("plan-directional-neighbor-filter-64x32", |b| {
+        let current_block = planning_fixture
+            .blocks
+            .iter()
+            .find(|block| block.node_id == planning_fixture.entry_node_id)
+            .unwrap();
+        b.iter(|| {
+            black_box(
+                plan_private_hnsw_oram_directional_neighbor_filter(
+                    black_box(current_block),
+                    black_box(planning_fixture.blocks.as_slice()),
+                    black_box(planning_fixture.query.as_slice()),
+                    black_box(DistanceKind::Euclid),
+                    black_box(NEIGHBORS),
                 )
                 .unwrap(),
             )

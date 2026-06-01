@@ -460,6 +460,12 @@ pub struct PrivateHnswSpeculativePrefetchPlan {
     pub real_path_count: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateHnswDirectionalNeighborFilterPlan {
+    pub node_ids: Vec<[u8; 32]>,
+    pub retained_count: usize,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrivateHnswBuildPoint {
     pub node_id: [u8; 32],
@@ -1146,6 +1152,76 @@ pub fn plan_private_hnsw_oram_neighbor_clustered_leaves(
         leaves[index] = (rank as u64) % leaf_count;
     }
     Ok(leaves)
+}
+
+pub fn plan_private_hnsw_oram_directional_neighbor_filter(
+    current_block: &PrivateHnswNodeBlockPlaintext,
+    neighbor_blocks: &[PrivateHnswNodeBlockPlaintext],
+    query: &[f32],
+    distance: DistanceKind,
+    max_neighbors: usize,
+) -> Result<PrivateHnswDirectionalNeighborFilterPlan, PrivateHnswClientError> {
+    if max_neighbors == 0 {
+        return Err(PrivateHnswClientError::InvalidSearchConfig("max_neighbors"));
+    }
+    if query.is_empty() {
+        return Err(PrivateHnswClientError::InvalidSearchConfig("query"));
+    }
+    if query.iter().any(|value| !value.is_finite()) {
+        return Err(PrivateHnswClientError::NonFiniteDistance);
+    }
+
+    let current_vector = decode_f32_le_vector(current_block)?;
+    if current_vector.len() != query.len() {
+        return Err(PrivateHnswClientError::VectorDimensionMismatch);
+    }
+
+    let allowed_neighbors = current_block
+        .neighbors
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let mut seen_neighbors = BTreeSet::new();
+    let mut candidates = Vec::new();
+    for block in neighbor_blocks {
+        if !allowed_neighbors.contains(&block.node_id) {
+            continue;
+        }
+        if !seen_neighbors.insert(block.node_id) {
+            return Err(PrivateHnswClientError::DuplicateBlock);
+        }
+        if block.deleted {
+            continue;
+        }
+
+        let vector = decode_f32_le_vector(block)?;
+        if vector.len() != query.len() {
+            return Err(PrivateHnswClientError::VectorDimensionMismatch);
+        }
+        let direction_score = directional_neighbor_score(&current_vector, &vector, query)?;
+        if direction_score <= 0.0 {
+            continue;
+        }
+        let query_distance = private_hnsw_distance(query, &vector, distance)?;
+        candidates.push((block.node_id, query_distance, direction_score));
+    }
+
+    candidates.sort_by(|lhs, rhs| {
+        lhs.1
+            .total_cmp(&rhs.1)
+            .then_with(|| rhs.2.total_cmp(&lhs.2))
+            .then_with(|| lhs.0.cmp(&rhs.0))
+    });
+
+    let node_ids = candidates
+        .into_iter()
+        .take(max_neighbors)
+        .map(|candidate| candidate.0)
+        .collect::<Vec<_>>();
+    Ok(PrivateHnswDirectionalNeighborFilterPlan {
+        retained_count: node_ids.len(),
+        node_ids,
+    })
 }
 
 pub fn build_private_hnsw_oram_plaintext_index_from_layered_f32_points(
@@ -2819,6 +2895,27 @@ fn private_hnsw_distance(
     }
 }
 
+fn directional_neighbor_score(
+    current_vector: &[f32],
+    neighbor_vector: &[f32],
+    query: &[f32],
+) -> Result<f32, PrivateHnswClientError> {
+    if current_vector.len() != neighbor_vector.len() || current_vector.len() != query.len() {
+        return Err(PrivateHnswClientError::VectorDimensionMismatch);
+    }
+    let score = current_vector
+        .iter()
+        .zip(neighbor_vector)
+        .zip(query)
+        .map(|((current, neighbor), query)| (neighbor - current) * (query - current))
+        .sum::<f32>();
+    if score.is_finite() {
+        Ok(score)
+    } else {
+        Err(PrivateHnswClientError::NonFiniteDistance)
+    }
+}
+
 fn sort_hits(hits: &mut [PrivateHnswSearchHit]) {
     hits.sort_by(|lhs, rhs| {
         lhs.distance
@@ -3244,6 +3341,58 @@ mod tests {
             Err(PrivateHnswClientError::InvalidSearchConfig(
                 "fixed_path_count"
             ))
+        );
+    }
+
+    #[test]
+    fn directional_neighbor_filter_keeps_query_aligned_neighbors() {
+        let current =
+            node_block_with_vector(1, &[0.0, 0.0], vec![[2; 32], [3; 32], [4; 32], [5; 32]]);
+        let forward_far = node_block_with_vector(2, &[2.0, 0.0], vec![]);
+        let backward = node_block_with_vector(3, &[-2.0, 0.0], vec![]);
+        let sideways = node_block_with_vector(4, &[0.0, 2.0], vec![]);
+        let forward_near = node_block_with_vector(5, &[4.0, 0.0], vec![]);
+        let unrelated = node_block_with_vector(6, &[9.0, 0.0], vec![]);
+
+        let plan = plan_private_hnsw_oram_directional_neighbor_filter(
+            &current,
+            &[
+                forward_far.clone(),
+                backward,
+                sideways,
+                forward_near.clone(),
+                unrelated,
+            ],
+            &[10.0, 0.0],
+            DistanceKind::Euclid,
+            2,
+        )
+        .unwrap();
+
+        assert_eq!(plan.retained_count, 2);
+        assert_eq!(
+            plan.node_ids,
+            vec![forward_near.node_id, forward_far.node_id]
+        );
+        assert_eq!(
+            plan_private_hnsw_oram_directional_neighbor_filter(
+                &current,
+                &[forward_far.clone(), forward_far],
+                &[10.0, 0.0],
+                DistanceKind::Euclid,
+                2,
+            ),
+            Err(PrivateHnswClientError::DuplicateBlock)
+        );
+        assert_eq!(
+            plan_private_hnsw_oram_directional_neighbor_filter(
+                &current,
+                &[forward_near],
+                &[10.0, 0.0],
+                DistanceKind::Euclid,
+                0,
+            ),
+            Err(PrivateHnswClientError::InvalidSearchConfig("max_neighbors"))
         );
     }
 
