@@ -584,9 +584,14 @@ signature bucket refs. `sign_private_result_oram_manifest` and
 `sign_private_result_oram_commit` provide the matching SDK-side Ed25519 signing
 helpers. `PrivateResultOramUploadBundle` and
 `package_private_result_oram_upload_bundle` package a signed manifest with a
-complete ordered bucket set whose commitments match the manifest root. These
-types are contract scaffolding only and are not wired into runtime
-upload/session APIs yet.
+complete ordered bucket set whose commitments match the manifest root. The
+collection crate also has a `PrivateResultOramStore` skeleton for the future
+payload/result layer. It writes `private_result_oram/manifest.json`,
+`manifest.sig`, encrypted bucket files, Merkle commitment metadata, and
+`epochs/current.json` with the same private directory hardening and epoch CAS
+contract used by private HNSW ORAM. These types and storage primitives are
+contract scaffolding only and are not wired into runtime upload/session APIs
+yet.
 Cluster runtime parity uses the existing crypto capability fingerprint for this
 provider as well. The fingerprint includes non-secret private HNSW ORAM policy
 such as tree shape, fixed budget, result privacy mode, and signing verifier

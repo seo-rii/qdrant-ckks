@@ -1,0 +1,898 @@
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use data_encoding::BASE64URL_NOPAD;
+use qdrant_sec::{
+    PrivateResultOramBucket, PrivateResultOramBucketValidationContext, PrivateResultOramManifest,
+    PrivateResultOramSignature, validate_private_result_oram_bucket_shape,
+};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use crate::operations::types::{CollectionError, CollectionResult};
+
+pub const PRIVATE_RESULT_ORAM_DIR: &str = "private_result_oram";
+const MANIFEST_FILE: &str = "manifest.json";
+const MANIFEST_SIGNATURE_FILE: &str = "manifest.sig";
+const BUCKETS_DIR: &str = "buckets";
+const EPOCHS_DIR: &str = "epochs";
+const MERKLE_DIR: &str = "merkle";
+const TEMP_DIR: &str = "temp";
+const CURRENT_EPOCH_FILE: &str = "current.json";
+const MERKLE_NODES_FILE: &str = "nodes.dat";
+const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+const MAX_SIGNATURE_BYTES: u64 = 16 * 1024;
+const MAX_EPOCH_BYTES: u64 = 16 * 1024;
+const MAX_MERKLE_BYTES: u64 = 256 * 1024 * 1024;
+
+#[derive(Clone, Debug)]
+pub struct PrivateResultOramStore {
+    root: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateResultOramEpochState {
+    pub index_epoch: u64,
+    pub root_hash: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrivateResultOramMerkleTree {
+    version: u16,
+    index_epoch: u64,
+    root_hash: String,
+    bucket_count: u64,
+    leaf_hashes: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PrivateResultPreparedMerkleCommit {
+    store: PrivateResultOramStore,
+    tree: PrivateResultOramMerkleTree,
+}
+
+impl PrivateResultOramStore {
+    pub fn new(collection_path: impl AsRef<Path>) -> Self {
+        Self {
+            root: collection_path.as_ref().join(PRIVATE_RESULT_ORAM_DIR),
+        }
+    }
+
+    pub fn root_path(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn ensure_layout(&self) -> CollectionResult<()> {
+        create_private_dir(&self.root)?;
+        create_private_dir(&self.buckets_dir())?;
+        create_private_dir(&self.epochs_dir())?;
+        create_private_dir(&self.merkle_dir())?;
+        create_private_dir(&self.temp_dir())?;
+        Ok(())
+    }
+
+    pub fn write_manifest(
+        &self,
+        manifest: &PrivateResultOramManifest,
+        signature: &PrivateResultOramSignature,
+    ) -> CollectionResult<()> {
+        self.ensure_layout()?;
+        write_json_atomic(
+            &self.root,
+            &self.temp_dir(),
+            &self.manifest_path(),
+            manifest,
+        )?;
+        write_json_atomic(
+            &self.root,
+            &self.temp_dir(),
+            &self.manifest_signature_path(),
+            signature,
+        )
+    }
+
+    pub fn read_manifest(
+        &self,
+    ) -> CollectionResult<(PrivateResultOramManifest, PrivateResultOramSignature)> {
+        validate_private_dir(&self.root)?;
+        let manifest = read_json_private_file(&self.manifest_path(), MAX_MANIFEST_BYTES)?;
+        let signature =
+            read_json_private_file(&self.manifest_signature_path(), MAX_SIGNATURE_BYTES)?;
+        Ok((manifest, signature))
+    }
+
+    pub fn write_bucket(
+        &self,
+        bucket: &PrivateResultOramBucket,
+        expected_epoch: u64,
+        bucket_count: u64,
+        max_ciphertext_bytes: usize,
+    ) -> CollectionResult<()> {
+        self.ensure_layout()?;
+        validate_bucket(bucket, expected_epoch, bucket_count, max_ciphertext_bytes)?;
+        write_json_atomic(
+            &self.root,
+            &self.temp_dir(),
+            &self.bucket_path(bucket.bucket_id),
+            bucket,
+        )
+    }
+
+    pub fn read_bucket(
+        &self,
+        bucket_id: u64,
+        expected_epoch: u64,
+        bucket_count: u64,
+        max_ciphertext_bytes: usize,
+    ) -> CollectionResult<PrivateResultOramBucket> {
+        validate_private_dir(&self.buckets_dir())?;
+        let max_bucket_file_bytes = max_ciphertext_bytes as u64 + 32 * 1024;
+        let bucket: PrivateResultOramBucket =
+            read_json_private_file(&self.bucket_path(bucket_id), max_bucket_file_bytes)?;
+        if bucket.bucket_id != bucket_id {
+            return Err(CollectionError::service_error(format!(
+                "private result ORAM bucket file id mismatch: requested {bucket_id}, found {}",
+                bucket.bucket_id,
+            )));
+        }
+        validate_bucket(&bucket, expected_epoch, bucket_count, max_ciphertext_bytes)?;
+        Ok(bucket)
+    }
+
+    pub fn write_initial_epoch(&self, epoch: &PrivateResultOramEpochState) -> CollectionResult<()> {
+        self.ensure_layout()?;
+        validate_epoch_state(epoch)?;
+        let current_path = self.current_epoch_path();
+        if current_path.exists() {
+            return Err(CollectionError::bad_request(
+                "private result ORAM current epoch already exists",
+            ));
+        }
+        write_json_atomic(&self.root, &self.temp_dir(), &current_path, epoch)
+    }
+
+    pub fn write_initial_epoch_if_absent_or_matching(
+        &self,
+        epoch: &PrivateResultOramEpochState,
+    ) -> CollectionResult<()> {
+        self.ensure_layout()?;
+        match self.read_current_epoch() {
+            Ok(current) if current == *epoch => Ok(()),
+            Ok(current) => Err(CollectionError::bad_request(format!(
+                "private result ORAM current epoch/root does not match uploaded manifest epoch {}",
+                current.index_epoch,
+            ))),
+            Err(CollectionError::NotFound { .. }) => self.write_initial_epoch(epoch),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub fn read_current_epoch(&self) -> CollectionResult<PrivateResultOramEpochState> {
+        validate_private_dir(&self.epochs_dir())?;
+        let epoch = read_json_private_file(&self.current_epoch_path(), MAX_EPOCH_BYTES)?;
+        validate_epoch_state(&epoch)?;
+        Ok(epoch)
+    }
+
+    pub fn compare_and_swap_epoch(
+        &self,
+        old: &PrivateResultOramEpochState,
+        new: &PrivateResultOramEpochState,
+    ) -> CollectionResult<()> {
+        self.ensure_layout()?;
+        validate_epoch_state(old)?;
+        validate_epoch_state(new)?;
+        if new.index_epoch <= old.index_epoch {
+            return Err(CollectionError::bad_request(
+                "private result ORAM new epoch must be greater than old epoch",
+            ));
+        }
+
+        let current = self.read_current_epoch()?;
+        if &current != old {
+            return Err(CollectionError::bad_request(format!(
+                "private result ORAM RootHashMismatch: current epoch/root does not match old epoch {}",
+                old.index_epoch,
+            )));
+        }
+
+        write_json_atomic(
+            &self.root,
+            &self.temp_dir(),
+            &self.commit_epoch_path(new.index_epoch),
+            new,
+        )?;
+        write_json_atomic(
+            &self.root,
+            &self.temp_dir(),
+            &self.current_epoch_path(),
+            new,
+        )
+    }
+
+    pub fn merkle_root_for_commitments(commitments: &[String]) -> CollectionResult<String> {
+        let levels = merkle_levels(commitments)?;
+        let root = levels
+            .last()
+            .and_then(|level| level.first())
+            .ok_or_else(|| {
+                CollectionError::bad_request("private result ORAM Merkle tree is empty")
+            })?;
+        Ok(BASE64URL_NOPAD.encode(root))
+    }
+
+    pub fn write_merkle_tree_from_commitments(
+        &self,
+        index_epoch: u64,
+        root_hash: String,
+        leaf_hashes: Vec<String>,
+    ) -> CollectionResult<()> {
+        self.ensure_layout()?;
+        let tree = PrivateResultOramMerkleTree {
+            version: 1,
+            index_epoch,
+            root_hash,
+            bucket_count: leaf_hashes.len() as u64,
+            leaf_hashes,
+        };
+        validate_merkle_tree(&tree)?;
+        self.write_merkle_tree(&tree)
+    }
+
+    pub fn prepare_merkle_commit(
+        &self,
+        old_epoch: u64,
+        old_root_hash: &str,
+        new_epoch: u64,
+        new_root_hash: &str,
+        bucket_count: u64,
+        updated_buckets: &[PrivateResultOramBucket],
+    ) -> CollectionResult<PrivateResultPreparedMerkleCommit> {
+        if new_epoch <= old_epoch {
+            return Err(CollectionError::bad_request(
+                "private result ORAM Merkle commit new epoch must be greater than old epoch",
+            ));
+        }
+        let mut tree = self.read_merkle_tree()?;
+        validate_merkle_tree_context(&tree, old_epoch, old_root_hash, bucket_count)?;
+        for bucket in updated_buckets {
+            if bucket.index_epoch != new_epoch {
+                return Err(CollectionError::bad_request(format!(
+                    "private result ORAM Merkle commit bucket {} has stale epoch {}",
+                    bucket.bucket_id, bucket.index_epoch,
+                )));
+            }
+            if bucket.bucket_id >= bucket_count {
+                return Err(CollectionError::bad_request(format!(
+                    "private result ORAM Merkle commit bucket {} is out of range",
+                    bucket.bucket_id,
+                )));
+            }
+            decode_base64url_32(&bucket.bucket_commitment, "bucket_commitment")?;
+            let bucket_index = usize::try_from(bucket.bucket_id).map_err(|_| {
+                CollectionError::bad_request(
+                    "private result ORAM Merkle commit bucket id exceeds usize",
+                )
+            })?;
+            tree.leaf_hashes[bucket_index] = bucket.bucket_commitment.clone();
+        }
+        let computed_root = Self::merkle_root_for_commitments(&tree.leaf_hashes)?;
+        if computed_root != new_root_hash {
+            return Err(CollectionError::bad_request(format!(
+                "private result ORAM Merkle commit new_root_hash mismatch: computed {computed_root}",
+            )));
+        }
+        tree.index_epoch = new_epoch;
+        tree.root_hash = new_root_hash.to_string();
+        validate_merkle_tree(&tree)?;
+        Ok(PrivateResultPreparedMerkleCommit {
+            store: self.clone(),
+            tree,
+        })
+    }
+
+    fn read_merkle_tree(&self) -> CollectionResult<PrivateResultOramMerkleTree> {
+        validate_private_dir(&self.merkle_dir())?;
+        let tree = read_json_private_file(&self.merkle_nodes_path(), MAX_MERKLE_BYTES)?;
+        validate_merkle_tree(&tree)?;
+        Ok(tree)
+    }
+
+    fn write_merkle_tree(&self, tree: &PrivateResultOramMerkleTree) -> CollectionResult<()> {
+        self.ensure_layout()?;
+        validate_merkle_tree(tree)?;
+        write_json_atomic(
+            &self.root,
+            &self.temp_dir(),
+            &self.merkle_nodes_path(),
+            tree,
+        )
+    }
+
+    fn manifest_path(&self) -> PathBuf {
+        self.root.join(MANIFEST_FILE)
+    }
+
+    fn manifest_signature_path(&self) -> PathBuf {
+        self.root.join(MANIFEST_SIGNATURE_FILE)
+    }
+
+    fn buckets_dir(&self) -> PathBuf {
+        self.root.join(BUCKETS_DIR)
+    }
+
+    fn epochs_dir(&self) -> PathBuf {
+        self.root.join(EPOCHS_DIR)
+    }
+
+    fn merkle_dir(&self) -> PathBuf {
+        self.root.join(MERKLE_DIR)
+    }
+
+    fn temp_dir(&self) -> PathBuf {
+        self.root.join(TEMP_DIR)
+    }
+
+    fn current_epoch_path(&self) -> PathBuf {
+        self.epochs_dir().join(CURRENT_EPOCH_FILE)
+    }
+
+    fn merkle_nodes_path(&self) -> PathBuf {
+        self.merkle_dir().join(MERKLE_NODES_FILE)
+    }
+
+    fn commit_epoch_path(&self, epoch: u64) -> PathBuf {
+        self.epochs_dir().join(format!("{epoch:08}.commit"))
+    }
+
+    fn bucket_path(&self, bucket_id: u64) -> PathBuf {
+        self.buckets_dir().join(format!("{bucket_id:08}.bucket"))
+    }
+}
+
+impl PrivateResultPreparedMerkleCommit {
+    pub fn write(self) -> CollectionResult<()> {
+        self.store.write_merkle_tree(&self.tree)
+    }
+}
+
+fn validate_merkle_tree(tree: &PrivateResultOramMerkleTree) -> CollectionResult<()> {
+    if tree.version != 1 {
+        return Err(CollectionError::bad_request(format!(
+            "private result ORAM Merkle tree has unsupported version {}",
+            tree.version,
+        )));
+    }
+    if tree.bucket_count == 0 {
+        return Err(CollectionError::bad_request(
+            "private result ORAM Merkle tree bucket_count must be non-zero",
+        ));
+    }
+    if tree.leaf_hashes.len() as u64 != tree.bucket_count {
+        return Err(CollectionError::bad_request(
+            "private result ORAM Merkle tree leaf count does not match bucket_count",
+        ));
+    }
+    let computed_root = PrivateResultOramStore::merkle_root_for_commitments(&tree.leaf_hashes)?;
+    if computed_root != tree.root_hash {
+        return Err(CollectionError::bad_request(format!(
+            "private result ORAM Merkle tree root_hash mismatch: computed {computed_root}",
+        )));
+    }
+    Ok(())
+}
+
+fn validate_merkle_tree_context(
+    tree: &PrivateResultOramMerkleTree,
+    expected_epoch: u64,
+    expected_root_hash: &str,
+    expected_bucket_count: u64,
+) -> CollectionResult<()> {
+    validate_merkle_tree(tree)?;
+    if tree.index_epoch != expected_epoch {
+        return Err(CollectionError::bad_request(format!(
+            "private result ORAM Merkle tree epoch mismatch: expected {expected_epoch}, found {}",
+            tree.index_epoch,
+        )));
+    }
+    if tree.root_hash != expected_root_hash {
+        return Err(CollectionError::bad_request(
+            "private result ORAM Merkle tree root_hash mismatch",
+        ));
+    }
+    if tree.bucket_count != expected_bucket_count {
+        return Err(CollectionError::bad_request(format!(
+            "private result ORAM Merkle tree bucket_count mismatch: expected {expected_bucket_count}, found {}",
+            tree.bucket_count,
+        )));
+    }
+    Ok(())
+}
+
+fn merkle_levels(commitments: &[String]) -> CollectionResult<Vec<Vec<[u8; 32]>>> {
+    if commitments.is_empty() {
+        return Err(CollectionError::bad_request(
+            "private result ORAM Merkle tree must contain at least one leaf",
+        ));
+    }
+    let mut leaves = commitments
+        .iter()
+        .map(|commitment| decode_base64url_32(commitment, "bucket_commitment"))
+        .collect::<CollectionResult<Vec<_>>>()?;
+    let padded_len = leaves.len().checked_next_power_of_two().ok_or_else(|| {
+        CollectionError::bad_request("private result ORAM Merkle tree is too large")
+    })?;
+    leaves.resize(padded_len, [0; 32]);
+
+    let mut levels = vec![leaves];
+    while levels.last().is_some_and(|level| level.len() > 1) {
+        let previous = levels.last().expect("checked above");
+        let mut next = Vec::with_capacity(previous.len() / 2);
+        for pair in previous.chunks_exact(2) {
+            next.push(merkle_parent_hash(&pair[0], &pair[1]));
+        }
+        levels.push(next);
+    }
+    Ok(levels)
+}
+
+fn merkle_parent_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update([1]);
+    hasher.update(left);
+    hasher.update(right);
+    hasher.finalize().into()
+}
+
+fn validate_bucket(
+    bucket: &PrivateResultOramBucket,
+    expected_epoch: u64,
+    bucket_count: u64,
+    max_ciphertext_bytes: usize,
+) -> CollectionResult<()> {
+    validate_private_result_oram_bucket_shape(
+        bucket,
+        PrivateResultOramBucketValidationContext {
+            expected_index_epoch: expected_epoch,
+            bucket_count,
+            max_ciphertext_bytes,
+        },
+    )
+    .map_err(private_result_oram_error)
+}
+
+fn validate_epoch_state(epoch: &PrivateResultOramEpochState) -> CollectionResult<()> {
+    decode_base64url_32(&epoch.root_hash, "root_hash")?;
+    Ok(())
+}
+
+fn private_result_oram_error(err: qdrant_sec::PrivateResultOramError) -> CollectionError {
+    CollectionError::bad_request(err.to_string())
+}
+
+fn decode_base64url_32(value: &str, field: &str) -> CollectionResult<[u8; 32]> {
+    if value.len() != 43 {
+        return Err(CollectionError::bad_request(format!(
+            "private result ORAM {field} must encode 32 bytes",
+        )));
+    }
+    let bytes = BASE64URL_NOPAD.decode(value.as_bytes()).map_err(|_| {
+        CollectionError::bad_request(format!("private result ORAM {field} is not base64url"))
+    })?;
+    bytes.try_into().map_err(|_| {
+        CollectionError::bad_request(format!("private result ORAM {field} must encode 32 bytes"))
+    })
+}
+
+fn create_private_dir(path: &Path) -> CollectionResult<()> {
+    if !path.exists() {
+        fs::create_dir_all(path).map_err(|err| {
+            CollectionError::service_error(format!(
+                "failed to create private result ORAM directory {path:?}: {err}",
+            ))
+        })?;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|err| {
+            CollectionError::service_error(format!(
+                "failed to harden private result ORAM directory {path:?}: {err}",
+            ))
+        })?;
+    }
+    validate_private_dir(path)
+}
+
+fn validate_private_dir(path: &Path) -> CollectionResult<()> {
+    let metadata = fs::symlink_metadata(path).map_err(|err| {
+        CollectionError::service_error(format!(
+            "failed to inspect private result ORAM directory {path:?}: {err}",
+        ))
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        return Err(CollectionError::service_error(format!(
+            "private result ORAM path {path:?} must be a non-symlink directory",
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let effective_uid = nix::unistd::Uid::effective().as_raw();
+        if metadata.uid() != effective_uid {
+            return Err(CollectionError::service_error(format!(
+                "private result ORAM directory {path:?} must be owned by the current user",
+            )));
+        }
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(CollectionError::service_error(format!(
+                "private result ORAM directory {path:?} must not be group/world accessible",
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn read_json_private_file<T: for<'de> Deserialize<'de>>(
+    path: &Path,
+    max_bytes: u64,
+) -> CollectionResult<T> {
+    let mut file = open_private_file_for_read(path, max_bytes)?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|err| {
+        CollectionError::service_error(format!(
+            "failed to read private result ORAM file {path:?}: {err}",
+        ))
+    })?;
+    serde_json::from_slice(&bytes).map_err(|err| {
+        CollectionError::bad_request(format!(
+            "private result ORAM file {path:?} contains invalid JSON: {err}",
+        ))
+    })
+}
+
+fn write_json_atomic<T: Serialize>(
+    root: &Path,
+    temp_dir: &Path,
+    target: &Path,
+    value: &T,
+) -> CollectionResult<()> {
+    validate_target_under_root(root, target)?;
+    validate_private_dir(temp_dir)?;
+    let bytes = serde_json::to_vec_pretty(value).map_err(|err| {
+        CollectionError::service_error(format!(
+            "failed to serialize private result ORAM file {target:?}: {err}",
+        ))
+    })?;
+    let temp_path = unique_temp_path(temp_dir);
+    let mut file = open_private_file_for_write(&temp_path)?;
+    file.write_all(&bytes).map_err(|err| {
+        CollectionError::service_error(format!(
+            "failed to write private result ORAM temp file {temp_path:?}: {err}",
+        ))
+    })?;
+    file.flush().map_err(|err| {
+        CollectionError::service_error(format!(
+            "failed to flush private result ORAM temp file {temp_path:?}: {err}",
+        ))
+    })?;
+    file.sync_all().map_err(|err| {
+        CollectionError::service_error(format!(
+            "failed to sync private result ORAM temp file {temp_path:?}: {err}",
+        ))
+    })?;
+    drop(file);
+
+    fs::rename(&temp_path, target).map_err(|err| {
+        let _ = fs::remove_file(&temp_path);
+        CollectionError::service_error(format!(
+            "failed to replace private result ORAM file {target:?}: {err}",
+        ))
+    })?;
+    if let Some(parent) = target.parent() {
+        sync_dir(parent)?;
+    }
+    Ok(())
+}
+
+fn validate_target_under_root(root: &Path, target: &Path) -> CollectionResult<()> {
+    if !target.starts_with(root) {
+        return Err(CollectionError::service_error(format!(
+            "private result ORAM target {target:?} escapes root {root:?}",
+        )));
+    }
+    if let Some(parent) = target.parent() {
+        validate_private_dir(parent)?;
+    }
+    Ok(())
+}
+
+fn open_private_file_for_read(path: &Path, max_bytes: u64) -> CollectionResult<File> {
+    let metadata = fs::symlink_metadata(path).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            return CollectionError::not_found(format!("private result ORAM file {path:?}"));
+        }
+        CollectionError::service_error(format!(
+            "failed to inspect private result ORAM file {path:?}: {err}",
+        ))
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(CollectionError::service_error(format!(
+            "private result ORAM file {path:?} must be a non-symlink regular file",
+        )));
+    }
+    if metadata.len() > max_bytes {
+        return Err(CollectionError::bad_request(format!(
+            "private result ORAM file {path:?} exceeds maximum size",
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(CollectionError::service_error(format!(
+                "private result ORAM file {path:?} must not be group/world accessible",
+            )));
+        }
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+            .open(path)
+            .map_err(|err| {
+                CollectionError::service_error(format!(
+                    "failed to open private result ORAM file {path:?}: {err}",
+                ))
+            })?;
+        return Ok(file);
+    }
+    #[cfg(not(unix))]
+    {
+        File::open(path).map_err(|err| {
+            CollectionError::service_error(format!(
+                "failed to open private result ORAM file {path:?}: {err}",
+            ))
+        })
+    }
+}
+
+fn open_private_file_for_write(path: &Path) -> CollectionResult<File> {
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.mode(0o600);
+        options.custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
+    }
+    options.open(path).map_err(|err| {
+        CollectionError::service_error(format!(
+            "failed to create private result ORAM temp file {path:?}: {err}",
+        ))
+    })
+}
+
+fn unique_temp_path(temp_dir: &Path) -> PathBuf {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    temp_dir.join(format!(
+        "private-result-oram-{}-{timestamp}.tmp",
+        std::process::id(),
+    ))
+}
+
+fn sync_dir(path: &Path) -> CollectionResult<()> {
+    let file = File::open(path).map_err(|err| {
+        CollectionError::service_error(format!(
+            "failed to open private result ORAM directory {path:?} for sync: {err}",
+        ))
+    })?;
+    file.sync_all().map_err(|err| {
+        CollectionError::service_error(format!(
+            "failed to sync private result ORAM directory {path:?}: {err}",
+        ))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use qdrant_sec::{
+        OramKind, OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_RESULT_ORAM_BINDING,
+        private_result_oram_merkle_root_for_commitments,
+    };
+    use tempfile::TempDir;
+
+    use super::*;
+
+    fn root_hash(byte: u8) -> String {
+        BASE64URL_NOPAD.encode(&[byte; 32])
+    }
+
+    fn bucket_ciphertext(bytes: &[u8]) -> (String, String) {
+        (
+            BASE64URL_NOPAD.encode(bytes),
+            BASE64URL_NOPAD.encode(Sha256::digest(bytes).as_ref()),
+        )
+    }
+
+    fn fixture_store(temp: &TempDir) -> PrivateResultOramStore {
+        PrivateResultOramStore::new(temp.path())
+    }
+
+    fn fixture_manifest() -> PrivateResultOramManifest {
+        PrivateResultOramManifest {
+            version: 1,
+            provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+            binding: PRIVATE_RESULT_ORAM_BINDING.to_string(),
+            collection_id: "collection-uuid-1".to_string(),
+            key_id: "tenant-a/result-private-rk".to_string(),
+            rk_id: "tenant-a/result-private-rk".to_string(),
+            rk_epoch: 7,
+            oram: OramParams {
+                kind: OramKind::PathOram,
+                bucket_size: 4,
+                block_size_bytes: 8192,
+                tree_height: 24,
+                path_batch_size: 8,
+            },
+            index_epoch: 42,
+            root_hash: root_hash(42),
+            bucket_count: 16,
+            logical_result_count: 10,
+            dummy_result_count: 6,
+            owner_signing_key_id: "tenant-a/private-result-signing-v1".to_string(),
+            created_at_unix: 1_770_000_000,
+        }
+    }
+
+    fn fixture_signature() -> PrivateResultOramSignature {
+        PrivateResultOramSignature {
+            alg: "ed25519".to_string(),
+            key_id: "tenant-a/private-result-signing-v1".to_string(),
+            sig: BASE64URL_NOPAD.encode(&[7; 64]),
+        }
+    }
+
+    fn fixture_bucket(bucket_id: u64, epoch: u64, plaintext: &[u8]) -> PrivateResultOramBucket {
+        let (ciphertext, ciphertext_sha256) = bucket_ciphertext(plaintext);
+        PrivateResultOramBucket {
+            version: 1,
+            bucket_id,
+            index_epoch: epoch,
+            ciphertext,
+            ciphertext_sha256,
+            bucket_commitment: root_hash((bucket_id + 1) as u8),
+        }
+    }
+
+    #[test]
+    fn manifest_roundtrip_writes_private_files() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let manifest = fixture_manifest();
+        let signature = fixture_signature();
+
+        store.write_manifest(&manifest, &signature).unwrap();
+        let (stored_manifest, stored_signature) = store.read_manifest().unwrap();
+        assert_eq!(stored_manifest, manifest);
+        assert_eq!(stored_signature, signature);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let manifest_mode = fs::metadata(store.root_path().join(MANIFEST_FILE))
+                .unwrap()
+                .permissions()
+                .mode();
+            let root_mode = fs::metadata(store.root_path())
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(manifest_mode & 0o077, 0);
+            assert_eq!(root_mode & 0o077, 0);
+        }
+    }
+
+    #[test]
+    fn initial_epoch_if_absent_creates_private_layout() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let epoch = PrivateResultOramEpochState {
+            index_epoch: 42,
+            root_hash: root_hash(42),
+        };
+
+        store
+            .write_initial_epoch_if_absent_or_matching(&epoch)
+            .unwrap();
+
+        assert_eq!(store.read_current_epoch().unwrap(), epoch);
+    }
+
+    #[test]
+    fn bucket_write_rejects_hash_mismatch_and_oversize() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let bucket = fixture_bucket(3, 42, b"encrypted result bucket");
+
+        store.write_bucket(&bucket, 42, 16, 64).unwrap();
+        assert_eq!(store.read_bucket(3, 42, 16, 64).unwrap(), bucket);
+
+        let mut bad_hash = bucket.clone();
+        bad_hash.ciphertext_sha256 = root_hash(1);
+        let err = store.write_bucket(&bad_hash, 42, 16, 64).unwrap_err();
+        assert!(err.to_string().contains("ciphertext_sha256 mismatch"));
+
+        let oversized = fixture_bucket(4, 42, &[8; 65]);
+        let err = store.write_bucket(&oversized, 42, 16, 64).unwrap_err();
+        assert!(err.to_string().contains("exceeds maximum size"));
+    }
+
+    #[test]
+    fn merkle_commit_updates_root_consistently() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let leaf_commitments = vec![root_hash(1), root_hash(2), root_hash(3), root_hash(4)];
+        let old_root =
+            PrivateResultOramStore::merkle_root_for_commitments(&leaf_commitments).unwrap();
+        assert_eq!(
+            private_result_oram_merkle_root_for_commitments(&leaf_commitments).unwrap(),
+            old_root,
+        );
+        store
+            .write_merkle_tree_from_commitments(42, old_root.clone(), leaf_commitments.clone())
+            .unwrap();
+
+        let updated_bucket = fixture_bucket(2, 43, b"updated result bucket");
+        let mut next_commitments = leaf_commitments;
+        next_commitments[2] = updated_bucket.bucket_commitment.clone();
+        let new_root =
+            PrivateResultOramStore::merkle_root_for_commitments(&next_commitments).unwrap();
+
+        store
+            .prepare_merkle_commit(42, &old_root, 43, &new_root, 4, &[updated_bucket])
+            .unwrap()
+            .write()
+            .unwrap();
+
+        let err = store
+            .prepare_merkle_commit(42, &old_root, 43, &new_root, 4, &[])
+            .unwrap_err();
+        assert!(err.to_string().contains("epoch mismatch"));
+    }
+
+    #[test]
+    fn epoch_cas_rejects_stale_root() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let old = PrivateResultOramEpochState {
+            index_epoch: 42,
+            root_hash: root_hash(42),
+        };
+        let stale = PrivateResultOramEpochState {
+            index_epoch: 42,
+            root_hash: root_hash(41),
+        };
+        let new = PrivateResultOramEpochState {
+            index_epoch: 43,
+            root_hash: root_hash(43),
+        };
+
+        store.write_initial_epoch(&old).unwrap();
+        let err = store.compare_and_swap_epoch(&stale, &new).unwrap_err();
+        assert!(err.to_string().contains("RootHashMismatch"));
+
+        store.compare_and_swap_epoch(&old, &new).unwrap();
+        assert_eq!(store.read_current_epoch().unwrap(), new);
+    }
+}

@@ -10,6 +10,7 @@ pub mod lookup;
 pub mod operations;
 pub mod optimizers_builder;
 pub mod private_hnsw_oram_store;
+pub mod private_result_oram_store;
 pub mod problems;
 pub mod recommendations;
 pub mod shards;
