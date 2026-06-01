@@ -1,6 +1,7 @@
 use data_encoding::BASE64URL_NOPAD;
 use ring::signature::{ED25519, UnparsedPublicKey};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::aead::validate_resource_key_id;
@@ -16,6 +17,7 @@ const PRIVATE_RESULT_ORAM_SIGNATURE_ALGORITHM: &str = "ed25519";
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
 const BASE64URL_NOPAD_64_BYTE_LEN: usize = 86;
 const PRIVATE_RESULT_ORAM_MANIFEST_VERSION: u16 = 1;
+const PRIVATE_RESULT_ORAM_BUCKET_VERSION: u16 = 1;
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum PrivateResultOramError {
@@ -43,6 +45,18 @@ pub enum PrivateResultOramError {
     InvalidCommitSignature,
     #[error("private result ORAM resource key id is invalid")]
     InvalidResourceKeyId,
+    #[error("private result ORAM bucket uses unsupported version {0}")]
+    UnsupportedBucketVersion(u16),
+    #[error(
+        "private result ORAM bucket {bucket_id} is out of range for bucket_count {bucket_count}"
+    )]
+    BucketOutOfRange { bucket_id: u64, bucket_count: u64 },
+    #[error("private result ORAM bucket field {0} is invalid")]
+    InvalidBucketField(&'static str),
+    #[error("private result ORAM bucket ciphertext exceeds maximum size")]
+    BucketOversized,
+    #[error("private result ORAM bucket ciphertext_sha256 mismatch")]
+    InvalidBucketHash,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +118,13 @@ pub struct PrivateResultOramManifestValidationContext<'a> {
     pub min_rk_epoch: u64,
     pub max_rk_epoch: u64,
     pub signature_verification: PrivateResultOramSignatureVerification<'a>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateResultOramBucketValidationContext {
+    pub expected_index_epoch: u64,
+    pub bucket_count: u64,
+    pub max_ciphertext_bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -176,6 +197,41 @@ pub fn validate_private_result_oram_manifest_shape(
         return Err(PrivateResultOramError::InvalidManifestField("bucket_count"));
     }
     decode_base64url_32(&manifest.root_hash, "root_hash")?;
+    Ok(())
+}
+
+pub fn validate_private_result_oram_bucket_shape(
+    bucket: &PrivateResultOramBucket,
+    context: PrivateResultOramBucketValidationContext,
+) -> Result<(), PrivateResultOramError> {
+    if bucket.version != PRIVATE_RESULT_ORAM_BUCKET_VERSION {
+        return Err(PrivateResultOramError::UnsupportedBucketVersion(
+            bucket.version,
+        ));
+    }
+    if bucket.bucket_id >= context.bucket_count {
+        return Err(PrivateResultOramError::BucketOutOfRange {
+            bucket_id: bucket.bucket_id,
+            bucket_count: context.bucket_count,
+        });
+    }
+    if bucket.index_epoch != context.expected_index_epoch {
+        return Err(PrivateResultOramError::InvalidBucketField("index_epoch"));
+    }
+    let ciphertext = BASE64URL_NOPAD
+        .decode(bucket.ciphertext.as_bytes())
+        .map_err(|_| PrivateResultOramError::InvalidBucketField("ciphertext"))?;
+    if ciphertext.len() > context.max_ciphertext_bytes {
+        return Err(PrivateResultOramError::BucketOversized);
+    }
+    let ciphertext_hash = decode_base64url_32(&bucket.ciphertext_sha256, "ciphertext_sha256")
+        .map_err(|_| PrivateResultOramError::InvalidBucketField("ciphertext_sha256"))?;
+    let computed_hash: [u8; 32] = Sha256::digest(&ciphertext).into();
+    if computed_hash != ciphertext_hash {
+        return Err(PrivateResultOramError::InvalidBucketHash);
+    }
+    decode_base64url_32(&bucket.bucket_commitment, "bucket_commitment")
+        .map_err(|_| PrivateResultOramError::InvalidBucketField("bucket_commitment"))?;
     Ok(())
 }
 
@@ -397,7 +453,6 @@ fn push_u64(message: &mut Vec<u8>, value: u64) {
 #[cfg(test)]
 mod tests {
     use ring::signature::{Ed25519KeyPair, KeyPair};
-    use sha2::{Digest, Sha256};
 
     use super::*;
     use crate::private_hnsw_oram::OramKind;
@@ -451,6 +506,26 @@ mod tests {
 
     fn sign_b64(key_pair: &Ed25519KeyPair, message: &[u8]) -> String {
         BASE64URL_NOPAD.encode(key_pair.sign(message).as_ref())
+    }
+
+    fn bucket_validation_context() -> PrivateResultOramBucketValidationContext {
+        PrivateResultOramBucketValidationContext {
+            expected_index_epoch: 42,
+            bucket_count: 16,
+            max_ciphertext_bytes: 128,
+        }
+    }
+
+    fn fixture_bucket() -> PrivateResultOramBucket {
+        let ciphertext = [3; 32];
+        PrivateResultOramBucket {
+            version: 1,
+            bucket_id: 9,
+            index_epoch: 42,
+            ciphertext: BASE64URL_NOPAD.encode(&ciphertext),
+            ciphertext_sha256: BASE64URL_NOPAD.encode(Sha256::digest(ciphertext).as_ref()),
+            bucket_commitment: BASE64URL_NOPAD.encode(&[4; 32]),
+        }
     }
 
     #[test]
@@ -538,6 +613,37 @@ mod tests {
         assert_eq!(
             validate_private_result_oram_manifest_signature_shape(&signature),
             Err(PrivateResultOramError::MalformedSignature)
+        );
+    }
+
+    #[test]
+    fn bucket_shape_validates_hash_range_and_size() {
+        let bucket = fixture_bucket();
+        validate_private_result_oram_bucket_shape(&bucket, bucket_validation_context()).unwrap();
+
+        let mut out_of_range = bucket.clone();
+        out_of_range.bucket_id = 16;
+        assert_eq!(
+            validate_private_result_oram_bucket_shape(&out_of_range, bucket_validation_context()),
+            Err(PrivateResultOramError::BucketOutOfRange {
+                bucket_id: 16,
+                bucket_count: 16,
+            })
+        );
+
+        let mut hash_mismatch = bucket.clone();
+        hash_mismatch.ciphertext_sha256 = BASE64URL_NOPAD.encode(&[5; 32]);
+        assert_eq!(
+            validate_private_result_oram_bucket_shape(&hash_mismatch, bucket_validation_context()),
+            Err(PrivateResultOramError::InvalidBucketHash)
+        );
+
+        let mut oversized = bucket;
+        oversized.ciphertext = BASE64URL_NOPAD.encode(&[7; 129]);
+        oversized.ciphertext_sha256 = BASE64URL_NOPAD.encode(Sha256::digest([7; 129]).as_ref());
+        assert_eq!(
+            validate_private_result_oram_bucket_shape(&oversized, bucket_validation_context()),
+            Err(PrivateResultOramError::BucketOversized)
         );
     }
 
