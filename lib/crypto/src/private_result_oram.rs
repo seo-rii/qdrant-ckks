@@ -112,6 +112,35 @@ pub struct PrivateResultOramSignature {
     pub sig: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateResultOramUploadBundle {
+    pub manifest: PrivateResultOramManifest,
+    pub manifest_signature: PrivateResultOramSignature,
+    pub buckets: Vec<PrivateResultOramBucket>,
+}
+
+impl PrivateResultOramUploadBundle {
+    pub fn index_epoch(&self) -> u64 {
+        self.manifest.index_epoch
+    }
+
+    pub fn root_hash(&self) -> &str {
+        &self.manifest.root_hash
+    }
+
+    pub fn bucket_count(&self) -> u64 {
+        self.manifest.bucket_count
+    }
+
+    pub fn bucket_commitments(&self) -> Vec<String> {
+        self.buckets
+            .iter()
+            .map(|bucket| bucket.bucket_commitment.clone())
+            .collect()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrivateResultOramEpoch {
     pub epoch: u64,
@@ -370,6 +399,37 @@ pub fn sign_private_result_oram_commit(
         alg: PRIVATE_RESULT_ORAM_SIGNATURE_ALGORITHM.to_string(),
         key_id: context.signing_key_id.to_string(),
         sig: BASE64URL_NOPAD.encode(signature.as_ref()),
+    })
+}
+
+pub fn package_private_result_oram_upload_bundle(
+    key_pair: &Ed25519KeyPair,
+    manifest: PrivateResultOramManifest,
+    buckets: Vec<PrivateResultOramBucket>,
+) -> Result<PrivateResultOramUploadBundle, PrivateResultOramError> {
+    validate_private_result_oram_manifest_shape(&manifest)?;
+    if manifest.bucket_count != buckets.len() as u64 {
+        return Err(PrivateResultOramError::InvalidManifestField("bucket_count"));
+    }
+    let mut commitments = Vec::with_capacity(buckets.len());
+    for (expected_bucket_id, bucket) in buckets.iter().enumerate() {
+        if bucket.bucket_id != expected_bucket_id as u64 {
+            return Err(PrivateResultOramError::InvalidBucketField("bucket_id"));
+        }
+        if bucket.index_epoch != manifest.index_epoch {
+            return Err(PrivateResultOramError::InvalidBucketField("index_epoch"));
+        }
+        decode_bucket_commitment(&bucket.bucket_commitment)?;
+        commitments.push(bucket.bucket_commitment.clone());
+    }
+    if private_result_oram_merkle_root_for_commitments(&commitments)? != manifest.root_hash {
+        return Err(PrivateResultOramError::MerkleRootMismatch);
+    }
+    let manifest_signature = sign_private_result_oram_manifest(key_pair, &manifest)?;
+    Ok(PrivateResultOramUploadBundle {
+        manifest,
+        manifest_signature,
+        buckets,
     })
 }
 
@@ -774,6 +834,12 @@ mod tests {
         BASE64URL_NOPAD.encode(&[byte; 32])
     }
 
+    fn fixture_bucket_set() -> Vec<PrivateResultOramBucket> {
+        (0..4)
+            .map(|bucket_id| fixture_commit_bucket(bucket_id, 42, bucket_id as u8 + 1))
+            .collect()
+    }
+
     #[test]
     fn manifest_signature_message_is_stable() {
         let digest = Sha256::digest(private_result_oram_manifest_signature_message(
@@ -1113,6 +1179,58 @@ mod tests {
 
         assert_eq!(epoch.epoch, 42);
         assert_eq!(epoch.root_hash, [42; 32]);
+    }
+
+    #[test]
+    fn upload_bundle_packages_signed_manifest_and_buckets() {
+        let key_pair = deterministic_key_pair();
+        let buckets = fixture_bucket_set();
+        let root_hash = private_result_oram_merkle_root_for_commitments(
+            &buckets
+                .iter()
+                .map(|bucket| bucket.bucket_commitment.clone())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let manifest = PrivateResultOramManifest {
+            root_hash: root_hash.clone(),
+            bucket_count: buckets.len() as u64,
+            ..fixture_manifest()
+        };
+
+        let bundle =
+            package_private_result_oram_upload_bundle(&key_pair, manifest.clone(), buckets.clone())
+                .unwrap();
+
+        assert_eq!(bundle.index_epoch(), 42);
+        assert_eq!(bundle.root_hash(), root_hash);
+        assert_eq!(bundle.bucket_count(), 4);
+        assert_eq!(bundle.buckets, buckets);
+        assert_eq!(
+            private_result_oram_merkle_root_for_commitments(&bundle.bucket_commitments()).unwrap(),
+            root_hash
+        );
+
+        let encoded = serde_json::to_string(&bundle).unwrap();
+        let decoded: PrivateResultOramUploadBundle = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, bundle);
+
+        validate_private_result_oram_manifest(
+            &decoded.manifest,
+            Some(&decoded.manifest_signature),
+            fixture_context(
+                key_pair.public_key().as_ref(),
+                &decoded.manifest_signature.key_id,
+            ),
+        )
+        .unwrap();
+
+        let mut wrong_root = manifest;
+        wrong_root.root_hash = commitment(99);
+        assert_eq!(
+            package_private_result_oram_upload_bundle(&key_pair, wrong_root, buckets),
+            Err(PrivateResultOramError::MerkleRootMismatch)
+        );
     }
 
     #[test]

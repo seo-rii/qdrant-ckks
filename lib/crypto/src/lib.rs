@@ -112,6 +112,7 @@ pub use private_result_oram::{
     PrivateResultOramCommitSignatureInput, PrivateResultOramEpoch, PrivateResultOramError,
     PrivateResultOramManifest, PrivateResultOramManifestValidationContext,
     PrivateResultOramSignature, PrivateResultOramSignatureVerification,
+    PrivateResultOramUploadBundle, package_private_result_oram_upload_bundle,
     plan_private_result_oram_commit, private_result_oram_commit_signature_message,
     private_result_oram_manifest_signature_message,
     private_result_oram_merkle_root_for_commitments, sign_private_result_oram_commit,
