@@ -79,6 +79,7 @@ pub use private_hnsw_client::{
     open_private_hnsw_oram_client_state_snapshot, open_private_hnsw_oram_plaintext_bucket,
     open_private_hnsw_oram_verified_path_batch, package_private_hnsw_oram_upload_bundle,
     plan_private_hnsw_oram_commit, plan_private_hnsw_oram_directional_neighbor_filter,
+    plan_private_hnsw_oram_graph_traversal_path_batch,
     plan_private_hnsw_oram_neighbor_clustered_leaves, plan_private_hnsw_oram_speculative_prefetch,
     private_hnsw_bucket_commitment, private_hnsw_level_from_node_id,
     private_hnsw_node_reaches_level, private_hnsw_oram_bucket_count,

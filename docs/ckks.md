@@ -697,6 +697,9 @@ client-local helper for Compass-style directional neighbor filtering: given the
 current node block, decrypted neighbor blocks, and the query vector, it keeps
 only neighbor nodes that move in the query direction and ranks them by
 client-side distance before the SDK chooses which padded ORAM paths to request.
+`plan_private_hnsw_oram_graph_traversal_path_batch` composes that filter with
+the client position map and speculative prefetch padding to produce a fixed-size
+`read_paths` label batch for graph-traversal tailored ORAM experiments.
 
 Client state is mandatory backup material for this provider. Qdrant snapshots
 contain encrypted buckets, manifest, and epoch/root metadata, but not the ORAM

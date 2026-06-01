@@ -1224,6 +1224,32 @@ pub fn plan_private_hnsw_oram_directional_neighbor_filter(
     })
 }
 
+pub fn plan_private_hnsw_oram_graph_traversal_path_batch(
+    state: &PrivateHnswOramClientState,
+    config: PrivateHnswOramClientConfig,
+    current_block: &PrivateHnswNodeBlockPlaintext,
+    neighbor_blocks: &[PrivateHnswNodeBlockPlaintext],
+    query: &[f32],
+    distance: DistanceKind,
+    fixed_path_count: usize,
+    padding_leaf: u64,
+) -> Result<PrivateHnswSpeculativePrefetchPlan, PrivateHnswClientError> {
+    let directional_plan = plan_private_hnsw_oram_directional_neighbor_filter(
+        current_block,
+        neighbor_blocks,
+        query,
+        distance,
+        fixed_path_count,
+    )?;
+    plan_private_hnsw_oram_speculative_prefetch(
+        state,
+        config,
+        &directional_plan.node_ids,
+        fixed_path_count,
+        padding_leaf,
+    )
+}
+
 pub fn build_private_hnsw_oram_plaintext_index_from_layered_f32_points(
     config: PrivateHnswOramClientConfig,
     distance: DistanceKind,
@@ -3394,6 +3420,45 @@ mod tests {
             ),
             Err(PrivateHnswClientError::InvalidSearchConfig("max_neighbors"))
         );
+    }
+
+    #[test]
+    fn graph_traversal_path_batch_filters_neighbors_then_pads_paths() {
+        let config = PrivateHnswOramClientConfig {
+            tree_height: 3,
+            ..oram_config()
+        };
+        let current =
+            node_block_with_vector(1, &[0.0, 0.0], vec![[2; 32], [3; 32], [4; 32], [5; 32]]);
+        let forward_far = node_block_with_vector(2, &[2.0, 0.0], vec![]);
+        let backward = node_block_with_vector(3, &[-2.0, 0.0], vec![]);
+        let sideways = node_block_with_vector(4, &[0.0, 2.0], vec![]);
+        let forward_near = node_block_with_vector(5, &[4.0, 0.0], vec![]);
+        let state = PrivateHnswOramClientState::with_position_map(
+            [(forward_far.node_id, 1), (forward_near.node_id, 2)],
+            config.tree_height,
+        )
+        .unwrap();
+
+        let plan = plan_private_hnsw_oram_graph_traversal_path_batch(
+            &state,
+            config,
+            &current,
+            &[forward_far, backward, sideways, forward_near],
+            &[10.0, 0.0],
+            DistanceKind::Euclid,
+            3,
+            7,
+        )
+        .unwrap();
+        let leaves = plan
+            .leaf_labels
+            .iter()
+            .map(|label| decode_private_hnsw_oram_leaf_label(label, config.tree_height).unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(plan.real_path_count, 2);
+        assert_eq!(leaves, vec![2, 1, 7]);
     }
 
     #[test]
