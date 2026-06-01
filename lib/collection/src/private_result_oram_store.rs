@@ -390,7 +390,14 @@ impl PrivateResultOramStore {
         }
         let mut tree = self.read_merkle_tree()?;
         validate_merkle_tree_context(&tree, old_epoch, old_root_hash, bucket_count)?;
+        let mut seen_bucket_ids = std::collections::BTreeSet::new();
         for bucket in updated_buckets {
+            if !seen_bucket_ids.insert(bucket.bucket_id) {
+                return Err(CollectionError::bad_request(format!(
+                    "private result ORAM Merkle commit repeats bucket {}",
+                    bucket.bucket_id,
+                )));
+            }
             if bucket.index_epoch != new_epoch {
                 return Err(CollectionError::bad_request(format!(
                     "private result ORAM Merkle commit bucket {} has stale epoch {}",
@@ -1255,6 +1262,27 @@ mod tests {
             .prepare_merkle_commit(42, &old_root, 43, &new_root, 4, &[])
             .unwrap_err();
         assert!(err.to_string().contains("epoch mismatch"));
+    }
+
+    #[test]
+    fn merkle_commit_rejects_duplicate_bucket_updates() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let leaf_commitments = vec![root_hash(1), root_hash(2)];
+        let old_root =
+            PrivateResultOramStore::merkle_root_for_commitments(&leaf_commitments).unwrap();
+        store
+            .write_merkle_tree_from_commitments(42, old_root.clone(), leaf_commitments)
+            .unwrap();
+
+        let first = fixture_bucket(1, 43, b"first update");
+        let second = fixture_bucket(1, 43, b"second update");
+
+        let err = store
+            .prepare_merkle_commit(42, &old_root, 43, &root_hash(43), 2, &[first, second])
+            .unwrap_err();
+
+        assert!(err.to_string().contains("repeats bucket 1"));
     }
 
     #[test]
