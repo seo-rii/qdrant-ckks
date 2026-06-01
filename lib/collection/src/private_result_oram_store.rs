@@ -1065,6 +1065,25 @@ mod tests {
         assert!(err.to_string().contains("exceeds maximum size"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn bucket_read_rejects_symlink_file() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        store.ensure_layout().unwrap();
+        let outside_bucket = temp.path().join("outside.bucket");
+        std::fs::write(&outside_bucket, b"{}").unwrap();
+        std::os::unix::fs::symlink(
+            &outside_bucket,
+            store.root_path().join(BUCKETS_DIR).join("00000000.bucket"),
+        )
+        .unwrap();
+
+        let err = store.read_bucket(0, 42, 1, 128).unwrap_err();
+
+        assert!(err.to_string().contains("non-symlink regular file"));
+    }
+
     #[test]
     fn initial_upload_bundle_writes_manifest_buckets_merkle_and_epoch() {
         let temp = TempDir::new().unwrap();
