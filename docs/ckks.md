@@ -636,6 +636,11 @@ copy for traversal and distance calculation.
 fixed-step budget, and budget-exhaustion status for latency/ORAM-volume
 benchmarks without exposing plaintext vectors, distances beyond client-local
 hits, or decrypted neighbor lists.
+`cargo bench -p qdrant-sec --bench private_hnsw_oram_bench` provides the
+initial SDK-side benchmark harness for plaintext reference index build and
+fixed-budget plaintext ORAM-HNSW traversal. It is intentionally client-local:
+the benchmark exercises ORAM path read/writeback closures and records access
+metrics, but it does not route vectors or queries through Qdrant.
 `plan_private_hnsw_oram_speculative_prefetch` prepares fixed-count padded
 neighbor path labels from the client position map, deduplicating real candidate
 leaves and filling the remaining request slots with dummy leaves before the SDK

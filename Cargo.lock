@@ -5929,6 +5929,7 @@ dependencies = [
 name = "qdrant-sec"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "data-encoding",
  "nix 0.31.2",
  "proptest",
