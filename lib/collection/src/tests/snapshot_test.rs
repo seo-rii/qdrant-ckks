@@ -4,6 +4,10 @@ use std::sync::Arc;
 
 use ahash::AHashMap;
 use common::budget::ResourceBudget;
+use qdrant_sec::{
+    PrivateHnswBucketAeadBaseContext, PrivateHnswClientKeys, SecretKey,
+    seal_private_hnsw_oram_bucket,
+};
 use segment::types::Distance;
 use shard::snapshots::snapshot_data::SnapshotData;
 use tempfile::Builder;
@@ -33,6 +37,12 @@ pub fn dummy_abort_shard_transfer() -> AbortShardTransfer {
 
 fn init_logger() {
     let _ = env_logger::builder().is_test(true).try_init();
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
 }
 
 async fn _test_snapshot_collection(node_type: NodeType) {
@@ -98,6 +108,7 @@ async fn _test_snapshot_collection(node_type: NodeType) {
     .await
     .unwrap();
 
+    let private_hnsw_plaintext_sentinel = b"qdrant-sec-private-hnsw-plaintext-sentinel";
     let private_hnsw_bucket = collection_dir
         .path()
         .join(PRIVATE_HNSW_ORAM_DIR)
@@ -105,11 +116,27 @@ async fn _test_snapshot_collection(node_type: NodeType) {
         .join("buckets")
         .join("00000000.bucket");
     std::fs::create_dir_all(private_hnsw_bucket.parent().unwrap()).unwrap();
-    std::fs::write(
-        &private_hnsw_bucket,
-        br#"{"ciphertext":"encrypted-private-hnsw"}"#,
+    let keys =
+        PrivateHnswClientKeys::derive_from_resource_key(&SecretKey::from_bytes([91; 32])).unwrap();
+    let bucket = seal_private_hnsw_oram_bucket(
+        &keys,
+        PrivateHnswBucketAeadBaseContext {
+            collection_id: "test-private-hnsw-collection",
+            vector_name: "text",
+            key_id: "tenant-a/vector-private-rk",
+            rk_id: "tenant-a/vector-private-rk",
+            rk_epoch: 7,
+        }
+        .for_bucket(0, 42),
+        private_hnsw_plaintext_sentinel,
     )
     .unwrap();
+    let bucket_json = serde_json::to_vec(&bucket).unwrap();
+    assert!(!contains_bytes(
+        &bucket_json,
+        private_hnsw_plaintext_sentinel
+    ));
+    std::fs::write(&private_hnsw_bucket, &bucket_json).unwrap();
 
     let snapshots_temp_dir = Builder::new().prefix("temp_dir").tempdir().unwrap();
     let snapshot_description = collection
@@ -118,15 +145,23 @@ async fn _test_snapshot_collection(node_type: NodeType) {
         .unwrap();
 
     assert_eq!(snapshot_description.checksum.unwrap().len(), 64);
+    let snapshot_path = snapshots_path.path().join(&snapshot_description.name);
+    let snapshot_bytes = std::fs::read(&snapshot_path).unwrap();
+    assert!(contains_bytes(
+        &snapshot_bytes,
+        PRIVATE_HNSW_ORAM_DIR.as_bytes()
+    ));
+    assert!(!contains_bytes(
+        &snapshot_bytes,
+        private_hnsw_plaintext_sentinel
+    ));
 
     {
         let recover_dir = Builder::new()
             .prefix("test_collection_rec")
             .tempdir()
             .unwrap();
-        let snapshot_data = SnapshotData::new_packed_persistent(
-            snapshots_path.path().join(&snapshot_description.name),
-        );
+        let snapshot_data = SnapshotData::new_packed_persistent(snapshot_path.clone());
 
         // Do not recover in local mode if some shards are remote
         assert!(
@@ -138,13 +173,12 @@ async fn _test_snapshot_collection(node_type: NodeType) {
         .prefix("test_collection_rec")
         .tempdir()
         .unwrap();
-    let snapshot_data =
-        SnapshotData::new_packed_persistent(snapshots_path.path().join(&snapshot_description.name));
+    let snapshot_data = SnapshotData::new_packed_persistent(snapshot_path);
     if let Err(err) = Collection::restore_snapshot(snapshot_data, recover_dir.path(), 0, true) {
         panic!("Failed to restore snapshot: {err}")
     }
     assert_eq!(
-        std::fs::read_to_string(
+        std::fs::read(
             recover_dir
                 .path()
                 .join(PRIVATE_HNSW_ORAM_DIR)
@@ -153,7 +187,7 @@ async fn _test_snapshot_collection(node_type: NodeType) {
                 .join("00000000.bucket"),
         )
         .unwrap(),
-        r#"{"ciphertext":"encrypted-private-hnsw"}"#,
+        bucket_json,
     );
 
     let recovered_collection = Collection::load(

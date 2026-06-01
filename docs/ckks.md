@@ -540,6 +540,10 @@ access on bucket directories or files is rejected fail closed.
 If a process crashes after bucket or Merkle writeback but before the epoch CAS,
 recovery continues to report the old current epoch and rejects mixed old-root /
 new-bucket reads rather than serving an inconsistent ORAM view.
+Collection snapshots include private HNSW ORAM bucket files as ciphertext-only
+JSON artifacts; snapshot tests seal a plaintext sentinel into a client bucket
+and assert that the raw snapshot archive and restored bucket file do not contain
+the sentinel bytes.
 
 Current result privacy support is deliberately narrow. `result_privacy:
 ids_visible` is the only accepted runtime mode in the MVP: Qdrant remains blind
