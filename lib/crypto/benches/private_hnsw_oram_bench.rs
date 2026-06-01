@@ -5,11 +5,12 @@ use std::sync::Arc;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use qdrant_sec::{
     DistanceKind, PrivateHnswBucketAeadBaseContext, PrivateHnswBuildPoint, PrivateHnswClientError,
-    PrivateHnswClientKeys, PrivateHnswClientNodeCache, PrivateHnswOramBucket,
-    PrivateHnswOramClientConfig, PrivateHnswOramClientState, PrivateHnswOramPlaintextBucket,
-    PrivateHnswSearchAccessMetrics, PrivateHnswSearchParams, SecretKey,
-    build_private_hnsw_oram_plaintext_index_from_f32_points,
+    PrivateHnswClientKeys, PrivateHnswClientNodeCache, PrivateHnswNodeBlockPlaintext,
+    PrivateHnswOramBucket, PrivateHnswOramClientConfig, PrivateHnswOramClientState,
+    PrivateHnswOramPlaintextBucket, PrivateHnswSearchAccessMetrics, PrivateHnswSearchParams,
+    SecretKey, build_private_hnsw_oram_plaintext_index_from_f32_points,
     build_private_hnsw_oram_plaintext_index_from_layered_f32_points,
+    plan_private_hnsw_oram_neighbor_clustered_leaves, plan_private_hnsw_oram_speculative_prefetch,
     private_hnsw_oram_bucket_ids_for_leaf, private_hnsw_oram_leaf_count,
     seal_private_hnsw_oram_plaintext_index, search_private_hnsw_oram_encrypted,
     search_private_hnsw_oram_plaintext, search_private_hnsw_oram_plaintext_with_cache,
@@ -295,6 +296,55 @@ impl EncryptedSearchFixture {
     }
 }
 
+struct PlanningFixture {
+    config: PrivateHnswOramClientConfig,
+    state: PrivateHnswOramClientState,
+    candidate_node_ids: Vec<[u8; 32]>,
+    padding_leaf: u64,
+    blocks: Vec<PrivateHnswNodeBlockPlaintext>,
+    entry_node_id: [u8; 32],
+}
+
+impl PlanningFixture {
+    fn new() -> Self {
+        let config = bench_config();
+        let points = build_points();
+        let leaves = build_leaves(config, points.len());
+        let levels = build_levels(points.len());
+        let build = build_private_hnsw_oram_plaintext_index_from_layered_f32_points(
+            config,
+            DistanceKind::Euclid,
+            NEIGHBORS,
+            4,
+            &points,
+            &levels,
+            &leaves,
+        )
+        .unwrap();
+        let candidate_node_ids = points
+            .iter()
+            .cycle()
+            .skip(3)
+            .take(24)
+            .map(|point| point.node_id)
+            .collect();
+        let blocks = build
+            .buckets
+            .iter()
+            .flat_map(|bucket| bucket.blocks.iter().flatten().cloned())
+            .collect();
+
+        Self {
+            config,
+            state: build.state,
+            candidate_node_ids,
+            padding_leaf: 0,
+            blocks,
+            entry_node_id: build.entry_node_id,
+        }
+    }
+}
+
 fn bench_config() -> PrivateHnswOramClientConfig {
     PrivateHnswOramClientConfig {
         tree_height: 8,
@@ -411,6 +461,34 @@ fn private_hnsw_oram_bench(c: &mut Criterion) {
             |mut fixture| black_box(fixture.search_metrics()),
             BatchSize::SmallInput,
         )
+    });
+
+    let planning_fixture = PlanningFixture::new();
+    group.bench_function("plan-speculative-prefetch-16-of-64", |b| {
+        b.iter(|| {
+            black_box(
+                plan_private_hnsw_oram_speculative_prefetch(
+                    black_box(&planning_fixture.state),
+                    black_box(planning_fixture.config),
+                    black_box(planning_fixture.candidate_node_ids.as_slice()),
+                    black_box(16),
+                    black_box(planning_fixture.padding_leaf),
+                )
+                .unwrap(),
+            )
+        })
+    });
+    group.bench_function("plan-neighbor-clustered-leaves-64", |b| {
+        b.iter(|| {
+            black_box(
+                plan_private_hnsw_oram_neighbor_clustered_leaves(
+                    black_box(planning_fixture.config),
+                    black_box(planning_fixture.blocks.as_slice()),
+                    black_box(planning_fixture.entry_node_id),
+                )
+                .unwrap(),
+            )
+        })
     });
 
     group.finish();

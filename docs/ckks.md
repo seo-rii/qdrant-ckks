@@ -641,8 +641,8 @@ initial SDK-side benchmark harness for plaintext reference index build and
 fixed-budget plaintext ORAM-HNSW traversal, including an upper-layer client
 cache variant, plus client-AEAD encrypted bucket open/reseal traversal. It is
 intentionally client-local: the benchmark exercises ORAM path read/writeback
-closures and records access metrics, but it does not route vectors or queries
-through Qdrant.
+closures, speculative prefetch planning, neighbor-clustered leaf planning, and
+access metrics, but it does not route vectors or queries through Qdrant.
 `plan_private_hnsw_oram_speculative_prefetch` prepares fixed-count padded
 neighbor path labels from the client position map, deduplicating real candidate
 leaves and filling the remaining request slots with dummy leaves before the SDK
