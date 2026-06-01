@@ -179,6 +179,19 @@ pub struct PrivateResultOramBucketValidationContext {
     pub max_ciphertext_bytes: usize,
 }
 
+impl PrivateResultOramBucketValidationContext {
+    pub fn from_manifest(
+        manifest: &PrivateResultOramManifest,
+        max_ciphertext_bytes: usize,
+    ) -> Self {
+        Self {
+            expected_index_epoch: manifest.index_epoch,
+            bucket_count: manifest.bucket_count,
+            max_ciphertext_bytes,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrivateResultOramClientCommitBucketRef {
     pub bucket_id: u64,
@@ -795,11 +808,11 @@ mod tests {
     }
 
     fn bucket_validation_context() -> PrivateResultOramBucketValidationContext {
-        PrivateResultOramBucketValidationContext {
-            expected_index_epoch: 42,
+        let manifest = PrivateResultOramManifest {
             bucket_count: 16,
-            max_ciphertext_bytes: 128,
-        }
+            ..fixture_manifest()
+        };
+        PrivateResultOramBucketValidationContext::from_manifest(&manifest, 128)
     }
 
     fn fixture_bucket() -> PrivateResultOramBucket {
