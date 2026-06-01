@@ -203,7 +203,7 @@ impl PrivateResultOramStore {
                 bucket.bucket_id,
             )));
         }
-        validate_bucket(&bucket, expected_epoch, bucket_count, max_ciphertext_bytes)?;
+        validate_bucket_for_read(&bucket, expected_epoch, bucket_count, max_ciphertext_bytes)?;
         Ok(bucket)
     }
 
@@ -621,10 +621,41 @@ fn validate_bucket(
     bucket_count: u64,
     max_ciphertext_bytes: usize,
 ) -> CollectionResult<()> {
+    validate_bucket_shape(bucket, bucket_count, max_ciphertext_bytes)?;
+    if bucket.index_epoch != expected_epoch {
+        return Err(CollectionError::bad_request(format!(
+            "private result ORAM bucket {} has stale epoch {}",
+            bucket.bucket_id, bucket.index_epoch,
+        )));
+    }
+    Ok(())
+}
+
+fn validate_bucket_for_read(
+    bucket: &PrivateResultOramBucket,
+    expected_epoch: u64,
+    bucket_count: u64,
+    max_ciphertext_bytes: usize,
+) -> CollectionResult<()> {
+    validate_bucket_shape(bucket, bucket_count, max_ciphertext_bytes)?;
+    if bucket.index_epoch > expected_epoch {
+        return Err(CollectionError::bad_request(format!(
+            "private result ORAM bucket {} is newer than requested epoch {}",
+            bucket.bucket_id, expected_epoch,
+        )));
+    }
+    Ok(())
+}
+
+fn validate_bucket_shape(
+    bucket: &PrivateResultOramBucket,
+    bucket_count: u64,
+    max_ciphertext_bytes: usize,
+) -> CollectionResult<()> {
     validate_private_result_oram_bucket_shape(
         bucket,
         PrivateResultOramBucketValidationContext {
-            expected_index_epoch: expected_epoch,
+            expected_index_epoch: bucket.index_epoch,
             bucket_count,
             max_ciphertext_bytes,
         },
@@ -1171,6 +1202,17 @@ mod tests {
                 .unwrap(),
             updated_bucket,
         );
+        assert_eq!(
+            store
+                .read_bucket(0, new.index_epoch, bundle.bucket_count(), 128)
+                .unwrap()
+                .index_epoch,
+            old.index_epoch,
+        );
+        let err = store
+            .read_bucket(1, old.index_epoch, bundle.bucket_count(), 128)
+            .unwrap_err();
+        assert!(err.to_string().contains("newer than requested epoch"));
         let proof = store
             .read_merkle_path_batch(&[1], new.index_epoch, &new.root_hash, bundle.bucket_count())
             .unwrap();
