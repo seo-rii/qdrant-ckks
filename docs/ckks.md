@@ -543,6 +543,12 @@ point ids to Qdrant. The enum and wire schema reserve
 runtime validation and manifest/session policy reject that mode until the
 payload ORAM layer exists. Do not advertise `private_payload_oram_required` as a
 working result-private fetch mode for this provider version.
+Cluster runtime parity uses the existing crypto capability fingerprint for this
+provider as well. The fingerprint includes non-secret private HNSW ORAM policy
+such as tree shape, fixed budget, result privacy mode, and signing verifier
+digests, while redacting raw verifier public keys. A peer with a different ORAM
+shape or signing verifier fails runtime capability parity before it can be
+treated as an equivalent private-HNSW-capable node.
 
 The Rust reference SDK helpers in `qdrant-sec` now cover the MVP build/upload
 preparation loop. `build_private_hnsw_oram_plaintext_index_from_f32_points`

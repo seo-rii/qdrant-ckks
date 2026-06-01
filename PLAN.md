@@ -358,6 +358,7 @@
   - speculative neighbor prefetch는 `plan_private_hnsw_oram_speculative_prefetch` helper로 시작했다. SDK가 client position map에서 후보 node leaf를 deduplicate하고 고정 path 수까지 dummy leaf로 padding한 `read_paths` label 묶음을 만들 수 있다.
   - neighbor clustering은 `plan_private_hnsw_oram_neighbor_clustered_leaves` helper로 시작했다. bulk build 전에 entry에서 graph-order BFS를 수행해 관련 node chain을 인접 leaf에 배정하는 실험용 leaf planner다.
 - Phase G: cluster parity fingerprint, active-session transfer reject, shard-local epoch ownership, consensus-backed epoch/root CAS를 설계하고 e2e 테스트한다.
+  - cluster parity fingerprint는 기존 crypto runtime capability fingerprint에 private HNSW ORAM options/signing verifier policy가 포함되는 테스트로 고정했다. ORAM tree shape 또는 private HNSW signing verifier drift는 peer parity mismatch로 실패한다.
 
 테스트:
 
