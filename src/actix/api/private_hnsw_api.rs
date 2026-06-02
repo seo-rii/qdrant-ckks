@@ -936,6 +936,33 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "commit signature verification failed"
             );
+
+            let commit_ciphertext_sentinel = "commit-error-ciphertext-sentinel";
+            let mut malformed_commit_buckets = search_run.updated_buckets.clone();
+            malformed_commit_buckets[0].ciphertext = commit_ciphertext_sentinel.to_string();
+            let malformed_commit_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/commit",
+                OramCommitRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: malformed_commit_buckets,
+                    commit_signature: PrivateHnswClientSignature {
+                        alg: search_run.commit_signature.alg.clone(),
+                        key_id: search_run.commit_signature.key_id.clone(),
+                        sig: search_run.commit_signature.sig.clone(),
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "ciphertext"
+            );
+            assert!(
+                !malformed_commit_error.contains(commit_ciphertext_sentinel),
+                "{malformed_commit_error}"
+            );
+
             let commit_result = post_json_ok!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {

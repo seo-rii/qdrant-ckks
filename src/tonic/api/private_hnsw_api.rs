@@ -1385,6 +1385,36 @@ mod private_hnsw_grpc_tests {
                     .contains("commit signature verification failed")
             );
 
+            let commit_ciphertext_sentinel = "commit-error-ciphertext-sentinel";
+            let mut malformed_commit_buckets = search_run.updated_buckets.clone();
+            malformed_commit_buckets[0].ciphertext = commit_ciphertext_sentinel.to_string();
+            let err = PrivateHnswOram::commit_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramCommitRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: malformed_commit_buckets
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                    commit_signature: Some(signature_to_proto(search_run.commit_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("ciphertext"));
+            assert!(
+                !err.message().contains(commit_ciphertext_sentinel),
+                "{}",
+                err.message()
+            );
+
             let commit_epoch = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
