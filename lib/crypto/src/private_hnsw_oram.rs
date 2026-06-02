@@ -455,6 +455,11 @@ fn validate_manifest_shape(manifest: &PrivateHnswOramManifest) -> Result<(), Pri
     if manifest.bucket_count == 0 {
         return Err(PrivateHnswOramError::InvalidManifestField("bucket_count"));
     }
+    let expected_bucket_count = path_oram_bucket_count(manifest.oram.tree_height)
+        .ok_or(PrivateHnswOramError::InvalidManifestField("oram"))?;
+    if manifest.bucket_count != expected_bucket_count {
+        return Err(PrivateHnswOramError::InvalidManifestField("bucket_count"));
+    }
     let capacity = manifest
         .bucket_count
         .checked_mul(u64::from(manifest.oram.bucket_size))
@@ -468,6 +473,15 @@ fn validate_manifest_shape(manifest: &PrivateHnswOramManifest) -> Result<(), Pri
     }
     decode_base64url_32(&manifest.root_hash, "root_hash")?;
     Ok(())
+}
+
+fn path_oram_bucket_count(tree_height: u32) -> Option<u64> {
+    if tree_height >= 63 {
+        return None;
+    }
+    (1u64 << tree_height)
+        .checked_mul(2)
+        .and_then(|count| count.checked_sub(1))
 }
 
 fn validate_manifest_context(
@@ -644,7 +658,7 @@ mod tests {
             },
             index_epoch: 42,
             root_hash: BASE64URL_NOPAD.encode(&[42; 32]),
-            bucket_count: 1 << 20,
+            bucket_count: (1 << 25) - 1,
             logical_node_count: 500_000,
             dummy_node_count: 24_288,
             result_privacy: ResultPrivacyMode::IdsVisible,
@@ -687,7 +701,7 @@ mod tests {
         let digest = Sha256::digest(private_hnsw_oram_manifest_signature_message(&manifest));
         assert_eq!(
             BASE64URL_NOPAD.encode(digest.as_ref()),
-            "NysgLtDq-ZNT2yCs8hECga8BSo_6hH2NrievkTY0fuw"
+            "9AnLVsSwTaLPfRx8dTkLIxOReGmQYYJ5p5UVIP0sPGQ"
         );
     }
 
@@ -818,14 +832,26 @@ mod tests {
     #[test]
     fn manifest_shape_rejects_node_count_over_capacity() {
         let mut manifest = fixture_manifest();
-        manifest.bucket_count = 1;
+        manifest.oram.tree_height = 1;
+        manifest.bucket_count = 3;
         manifest.oram.bucket_size = 1;
-        manifest.logical_node_count = 2;
+        manifest.logical_node_count = 4;
         manifest.dummy_node_count = 0;
 
         assert_eq!(
             validate_private_hnsw_oram_manifest_shape(&manifest),
             Err(PrivateHnswOramError::InvalidManifestField("node_count"))
+        );
+    }
+
+    #[test]
+    fn manifest_shape_rejects_path_oram_bucket_count_mismatch() {
+        let mut manifest = fixture_manifest();
+        manifest.bucket_count -= 1;
+
+        assert_eq!(
+            validate_private_hnsw_oram_manifest_shape(&manifest),
+            Err(PrivateHnswOramError::InvalidManifestField("bucket_count"))
         );
     }
 

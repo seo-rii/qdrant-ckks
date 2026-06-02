@@ -569,6 +569,20 @@ mod private_hnsw_rest_tests {
                 "vector_name"
             );
 
+            let mut mismatched_bucket_count_manifest = fixture.manifest.clone();
+            mismatched_bucket_count_manifest.bucket_count -= 1;
+            let mismatched_bucket_count_signature =
+                fixture.sign_manifest(&mismatched_bucket_count_manifest);
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: mismatched_bucket_count_manifest,
+                    signature: mismatched_bucket_count_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "bucket_count"
+            );
+
             let mut mismatched_privacy_manifest = fixture.manifest.clone();
             mismatched_privacy_manifest.result_privacy =
                 qdrant_sec::ResultPrivacyMode::PrivatePayloadOramRequired;

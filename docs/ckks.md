@@ -546,8 +546,9 @@ and assert that the raw snapshot archive and restored bucket file do not contain
 the sentinel bytes.
 Restore preflight rejects result-private manifests, collection/vector context
 mismatches, vector dimension/distance mismatches, manifest signature key-id
-mismatches, current epoch/root mismatches, and missing encrypted bucket files
-anywhere in the manifest bucket range before shard restore proceeds.
+mismatches, Path ORAM tree_height/bucket_count mismatches, current epoch/root
+mismatches, and missing encrypted bucket files anywhere in the manifest bucket
+range before shard restore proceeds.
 The live REST and gRPC fixtures also exercise adversarial commit handling: a
 commit with a validly-shaped but wrong Ed25519 signature is rejected, and
 replaying a previous old epoch/root after a successful commit is rejected
@@ -571,6 +572,9 @@ upload, and session open calls fail closed with a sanitized `NotFound`
 response; they do not surface collection-local private ORAM paths.
 Signed manifest uploads whose collection/vector context does not match the
 route and runtime context fail closed before manifest persistence.
+Path ORAM manifests must also bind `bucket_count` to the canonical full binary
+tree size implied by `tree_height`, so malformed layouts are rejected before a
+session can reach `read_paths`.
 Initial bucket upload also rejects incomplete bucket sets, duplicated bucket
 ids, and ciphertext hash mismatches before encrypted bucket files are written.
 REST and gRPC `read_paths` error handling is checked for non-reflection:

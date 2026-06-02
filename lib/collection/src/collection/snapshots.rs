@@ -727,6 +727,10 @@ mod tests {
     }
 
     fn private_hnsw_manifest(collection_id: String) -> PrivateHnswOramManifest {
+        let bucket_count = 3;
+        let commitments = private_hnsw_snapshot_leaf_commitments(bucket_count);
+        let root_hash = PrivateHnswOramStore::merkle_root_for_commitments(&commitments).unwrap();
+
         PrivateHnswOramManifest {
             version: 1,
             provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
@@ -748,7 +752,7 @@ mod tests {
                 kind: OramKind::PathOram,
                 bucket_size: 4,
                 block_size_bytes: 8192,
-                tree_height: 3,
+                tree_height: 1,
                 path_batch_size: 2,
             },
             fixed_budget: FixedBudgetParams {
@@ -759,14 +763,20 @@ mod tests {
                 fixed_result_k: 10,
             },
             index_epoch: 42,
-            root_hash: BASE64URL_NOPAD.encode(&[9; 32]),
-            bucket_count: 1,
+            root_hash,
+            bucket_count,
             logical_node_count: 3,
             dummy_node_count: 1,
             result_privacy: ResultPrivacyMode::IdsVisible,
             owner_signing_key_id: "tenant-a/private-hnsw-signing-v1".to_string(),
             created_at_unix: 1,
         }
+    }
+
+    fn private_hnsw_snapshot_leaf_commitments(bucket_count: u64) -> Vec<String> {
+        (0..bucket_count)
+            .map(|bucket_id| BASE64URL_NOPAD.encode(&[9 + bucket_id as u8; 32]))
+            .collect()
     }
 
     fn write_private_hnsw_snapshot_fixture(
@@ -787,29 +797,33 @@ mod tests {
             })
             .unwrap();
 
-        let ciphertext = BASE64URL_NOPAD.encode(b"encrypted bucket 0");
-        let ciphertext_sha256 =
-            BASE64URL_NOPAD.encode(Sha256::digest(b"encrypted bucket 0").as_ref());
-        store
-            .write_bucket(
-                &PrivateHnswOramBucket {
-                    version: 1,
-                    bucket_id: 0,
-                    index_epoch: manifest.index_epoch,
-                    ciphertext,
-                    ciphertext_sha256,
-                    bucket_commitment: BASE64URL_NOPAD.encode(&[9; 32]),
-                },
-                manifest.index_epoch,
-                manifest.bucket_count,
-                private_hnsw_restore_max_bucket_ciphertext_bytes(manifest).unwrap(),
-            )
-            .unwrap();
+        let commitments = private_hnsw_snapshot_leaf_commitments(manifest.bucket_count);
+        for (bucket_id, commitment) in commitments.iter().enumerate() {
+            let plaintext = format!("encrypted bucket {bucket_id}");
+            let ciphertext = BASE64URL_NOPAD.encode(plaintext.as_bytes());
+            let ciphertext_sha256 =
+                BASE64URL_NOPAD.encode(Sha256::digest(plaintext.as_bytes()).as_ref());
+            store
+                .write_bucket(
+                    &PrivateHnswOramBucket {
+                        version: 1,
+                        bucket_id: bucket_id as u64,
+                        index_epoch: manifest.index_epoch,
+                        ciphertext,
+                        ciphertext_sha256,
+                        bucket_commitment: commitment.clone(),
+                    },
+                    manifest.index_epoch,
+                    manifest.bucket_count,
+                    private_hnsw_restore_max_bucket_ciphertext_bytes(manifest).unwrap(),
+                )
+                .unwrap();
+        }
         store
             .write_merkle_tree_from_commitments(
                 manifest.index_epoch,
                 manifest.root_hash.clone(),
-                vec![BASE64URL_NOPAD.encode(&[9; 32])],
+                commitments,
             )
             .unwrap();
     }
@@ -1065,7 +1079,7 @@ mod tests {
             .write_merkle_tree_from_commitments(
                 manifest.index_epoch,
                 manifest.root_hash.clone(),
-                vec![BASE64URL_NOPAD.encode(&[9; 32])],
+                private_hnsw_snapshot_leaf_commitments(manifest.bucket_count),
             )
             .unwrap();
 
@@ -1086,13 +1100,10 @@ mod tests {
             .unwrap();
         let uuid = Uuid::from_u128(7);
         let config = private_hnsw_config(uuid);
-        let mut manifest = private_hnsw_manifest(uuid.to_string());
-        manifest.bucket_count = 2;
+        let manifest = private_hnsw_manifest(uuid.to_string());
         let leaf0 = BASE64URL_NOPAD.encode(&[9; 32]);
         let leaf1 = BASE64URL_NOPAD.encode(&[10; 32]);
-        manifest.root_hash =
-            PrivateHnswOramStore::merkle_root_for_commitments(&[leaf0.clone(), leaf1.clone()])
-                .unwrap();
+        let leaf2 = BASE64URL_NOPAD.encode(&[11; 32]);
 
         let store = PrivateHnswOramStore::new(temp_dir.path(), "text").unwrap();
         let signature = PrivateHnswOramSignature {
@@ -1108,29 +1119,33 @@ mod tests {
             })
             .unwrap();
 
-        let ciphertext = BASE64URL_NOPAD.encode(b"encrypted bucket 0");
-        let ciphertext_sha256 =
-            BASE64URL_NOPAD.encode(Sha256::digest(b"encrypted bucket 0").as_ref());
-        store
-            .write_bucket(
-                &PrivateHnswOramBucket {
-                    version: 1,
-                    bucket_id: 0,
-                    index_epoch: manifest.index_epoch,
-                    ciphertext,
-                    ciphertext_sha256,
-                    bucket_commitment: leaf0.clone(),
-                },
-                manifest.index_epoch,
-                manifest.bucket_count,
-                private_hnsw_restore_max_bucket_ciphertext_bytes(&manifest).unwrap(),
-            )
-            .unwrap();
+        for (bucket_id, leaf, plaintext) in [
+            (0, leaf0.clone(), b"encrypted bucket 0".as_slice()),
+            (1, leaf1.clone(), b"encrypted bucket 1".as_slice()),
+        ] {
+            let ciphertext = BASE64URL_NOPAD.encode(plaintext);
+            let ciphertext_sha256 = BASE64URL_NOPAD.encode(Sha256::digest(plaintext).as_ref());
+            store
+                .write_bucket(
+                    &PrivateHnswOramBucket {
+                        version: 1,
+                        bucket_id,
+                        index_epoch: manifest.index_epoch,
+                        ciphertext,
+                        ciphertext_sha256,
+                        bucket_commitment: leaf,
+                    },
+                    manifest.index_epoch,
+                    manifest.bucket_count,
+                    private_hnsw_restore_max_bucket_ciphertext_bytes(&manifest).unwrap(),
+                )
+                .unwrap();
+        }
         store
             .write_merkle_tree_from_commitments(
                 manifest.index_epoch,
                 manifest.root_hash.clone(),
-                vec![leaf0, leaf1],
+                vec![leaf0, leaf1, leaf2],
             )
             .unwrap();
 
@@ -1140,7 +1155,7 @@ mod tests {
             temp_dir.path(),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("00000001.bucket"));
+        assert!(err.to_string().contains("00000002.bucket"));
     }
 
     #[test]
@@ -1151,17 +1166,10 @@ mod tests {
             .unwrap();
         let uuid = Uuid::from_u128(7);
         let config = private_hnsw_config(uuid);
-        let mut manifest = private_hnsw_manifest(uuid.to_string());
-        manifest.bucket_count = 3;
+        let manifest = private_hnsw_manifest(uuid.to_string());
         let leaf0 = BASE64URL_NOPAD.encode(&[9; 32]);
         let leaf1 = BASE64URL_NOPAD.encode(&[10; 32]);
         let leaf2 = BASE64URL_NOPAD.encode(&[11; 32]);
-        manifest.root_hash = PrivateHnswOramStore::merkle_root_for_commitments(&[
-            leaf0.clone(),
-            leaf1.clone(),
-            leaf2.clone(),
-        ])
-        .unwrap();
 
         let store = PrivateHnswOramStore::new(temp_dir.path(), "text").unwrap();
         let signature = PrivateHnswOramSignature {

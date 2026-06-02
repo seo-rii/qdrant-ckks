@@ -891,6 +891,24 @@ mod private_hnsw_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("vector_name"));
 
+            let mut mismatched_bucket_count_manifest = fixture.manifest.clone();
+            mismatched_bucket_count_manifest.bucket_count -= 1;
+            let mismatched_bucket_count_signature =
+                fixture.sign_manifest(&mismatched_bucket_count_manifest);
+            let err = PrivateHnswOram::upload_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(mismatched_bucket_count_manifest)),
+                    signature: Some(signature_to_proto(mismatched_bucket_count_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("bucket_count"));
+
             let mut mismatched_privacy_manifest = fixture.manifest.clone();
             mismatched_privacy_manifest.result_privacy =
                 ResultPrivacyMode::PrivatePayloadOramRequired;
