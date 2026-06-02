@@ -159,6 +159,16 @@ impl PrivateHnswOramStore {
         )
     }
 
+    pub fn validate_bucket_for_write(
+        &self,
+        bucket: &PrivateHnswOramBucket,
+        expected_epoch: u64,
+        bucket_count: u64,
+        max_ciphertext_bytes: usize,
+    ) -> CollectionResult<()> {
+        validate_bucket(bucket, expected_epoch, bucket_count, max_ciphertext_bytes)
+    }
+
     pub fn read_bucket(
         &self,
         bucket_id: u64,
@@ -1125,15 +1135,26 @@ mod tests {
         let store = fixture_store(&temp);
         let bucket = fixture_bucket(3, 42, b"encrypted bucket");
 
+        store
+            .validate_bucket_for_write(&bucket, 42, 16, 64)
+            .unwrap();
         store.write_bucket(&bucket, 42, 16, 64).unwrap();
         assert_eq!(store.read_bucket(3, 42, 16, 64).unwrap(), bucket);
 
         let mut bad_hash = bucket.clone();
         bad_hash.ciphertext_sha256 = root_hash(1);
+        let err = store
+            .validate_bucket_for_write(&bad_hash, 42, 16, 64)
+            .unwrap_err();
+        assert!(err.to_string().contains("ciphertext_sha256 mismatch"));
         let err = store.write_bucket(&bad_hash, 42, 16, 64).unwrap_err();
         assert!(err.to_string().contains("ciphertext_sha256 mismatch"));
 
         let oversized = fixture_bucket(4, 42, &[8; 65]);
+        let err = store
+            .validate_bucket_for_write(&oversized, 42, 16, 64)
+            .unwrap_err();
+        assert!(err.to_string().contains("exceeds maximum size"));
         let err = store.write_bucket(&oversized, 42, 16, 64).unwrap_err();
         assert!(err.to_string().contains("exceeds maximum size"));
     }

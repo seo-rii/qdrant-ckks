@@ -912,6 +912,37 @@ mod private_hnsw_rest_tests {
                 "{malformed_upload_error}"
             );
 
+            let first_upload_bucket_path = manifest_store
+                .root_path()
+                .join("buckets")
+                .join("00000000.bucket");
+            assert!(
+                !first_upload_bucket_path.exists(),
+                "failed upload tests should not write bucket files before full preflight"
+            );
+            let late_upload_ciphertext_sentinel = "bucket-upload-late-ciphertext-sentinel";
+            let mut late_malformed_upload_buckets = fixture.encrypted_build.buckets.clone();
+            late_malformed_upload_buckets[1].ciphertext =
+                late_upload_ciphertext_sentinel.to_string();
+            let late_malformed_upload_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/buckets",
+                UploadPrivateHnswBucketsRequest {
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: late_malformed_upload_buckets,
+                },
+                StatusCode::BAD_REQUEST,
+                "ciphertext"
+            );
+            assert!(
+                !late_malformed_upload_error.contains(late_upload_ciphertext_sentinel),
+                "{late_malformed_upload_error}"
+            );
+            assert!(
+                !first_upload_bucket_path.exists(),
+                "bucket upload must preflight all bucket bodies before writing any bucket file"
+            );
+
             let mut missing_bucket_set = fixture.encrypted_build.buckets.clone();
             missing_bucket_set.pop();
             post_json_error_contains!(

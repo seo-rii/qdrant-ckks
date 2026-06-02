@@ -1355,6 +1355,45 @@ mod private_hnsw_grpc_tests {
                 err.message()
             );
 
+            let first_upload_bucket_path = manifest_store
+                .root_path()
+                .join("buckets")
+                .join("00000000.bucket");
+            assert!(
+                !first_upload_bucket_path.exists(),
+                "failed upload tests should not write bucket files before full preflight"
+            );
+            let late_upload_ciphertext_sentinel = "bucket-upload-late-ciphertext-sentinel";
+            let mut late_malformed_upload_buckets = fixture.encrypted_build.buckets.clone();
+            late_malformed_upload_buckets[1].ciphertext =
+                late_upload_ciphertext_sentinel.to_string();
+            let err = PrivateHnswOram::upload_private_hnsw_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateHnswBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: late_malformed_upload_buckets
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("ciphertext"));
+            assert!(
+                !err.message().contains(late_upload_ciphertext_sentinel),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !first_upload_bucket_path.exists(),
+                "bucket upload must preflight all bucket bodies before writing any bucket file"
+            );
+
             let mut missing_bucket_set = fixture.encrypted_build.buckets.clone();
             missing_bucket_set.pop();
             let err = PrivateHnswOram::upload_private_hnsw_buckets(

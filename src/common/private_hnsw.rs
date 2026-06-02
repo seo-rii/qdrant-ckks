@@ -445,6 +445,16 @@ pub async fn do_upload_private_hnsw_buckets(
     let max_ciphertext_bytes = max_bucket_ciphertext_bytes(&manifest)?;
     for bucket in &buckets {
         store
+            .validate_bucket_for_write(
+                bucket,
+                index_epoch,
+                manifest.bucket_count,
+                max_ciphertext_bytes,
+            )
+            .map_err(private_hnsw_upload_store_error)?;
+    }
+    for bucket in &buckets {
+        store
             .write_bucket(
                 bucket,
                 index_epoch,
@@ -787,6 +797,16 @@ pub async fn do_commit_private_hnsw_paths(
             &updated_buckets,
         ).map_err(private_hnsw_commit_metadata_store_error)?;
         ensure_private_hnsw_commit_current_epoch(&store, old_epoch, &old_root_hash)?;
+        for bucket in &updated_buckets {
+            store
+                .validate_bucket_for_write(
+                    bucket,
+                    new_epoch,
+                    session.bucket_count,
+                    session.max_bucket_ciphertext_bytes,
+                )
+                .map_err(private_hnsw_commit_bucket_store_error)?;
+        }
         for bucket in &updated_buckets {
             store.write_bucket(
                 bucket,
