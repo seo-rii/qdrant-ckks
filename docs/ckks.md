@@ -550,7 +550,8 @@ replaying a previous old epoch/root after a successful commit is rejected
 against the active session state.
 They also reject opening a second session for the same private index while the
 first session is active, exercising the MVP single-writer lock at the route
-layer.
+layer. Session open requests with `fixed_budget=false` in strict mode or a
+non-current desired epoch are rejected before any ORAM path reads are served.
 Because the manifest signs the current index epoch/root, a writeback commit
 that advances epoch/root must be followed by a freshly signed manifest upload
 before a later session can open at that new epoch. REST and gRPC live fixtures

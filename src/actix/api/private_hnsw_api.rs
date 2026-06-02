@@ -483,6 +483,29 @@ mod private_hnsw_rest_tests {
             );
             assert_eq!(bucket_result["index_epoch"], BASE_EPOCH);
 
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/session",
+                OpenPrivateHnswSessionRequest {
+                    client_id: "tenant-a/sdk-instance-fixed-budget-off".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: false,
+                    result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
+                },
+                StatusCode::BAD_REQUEST,
+                "strict mode requires fixed_budget=true"
+            );
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/session",
+                OpenPrivateHnswSessionRequest {
+                    client_id: "tenant-a/sdk-instance-stale-epoch".to_string(),
+                    desired_epoch: NEXT_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
+                },
+                StatusCode::BAD_REQUEST,
+                "requested epoch"
+            );
+
             let session_result = post_json_ok!(
                 "/collections/docs/private-hnsw/text/session",
                 OpenPrivateHnswSessionRequest {
