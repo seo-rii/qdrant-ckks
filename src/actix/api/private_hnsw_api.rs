@@ -1011,6 +1011,23 @@ mod private_hnsw_rest_tests {
             let close_body: Value = actix_test::read_body_json(close_response).await;
             assert_eq!(close_body["result"], true);
 
+            let missing_close_session_id = "close-session-id-sentinel";
+            let missing_close_request = actix_test::TestRequest::post()
+                .uri(&format!(
+                    "/collections/docs/private-hnsw/text/session/{missing_close_session_id}/close"
+                ))
+                .to_request();
+            let missing_close_response =
+                actix_test::call_service(&app, missing_close_request).await;
+            assert_eq!(missing_close_response.status(), StatusCode::BAD_REQUEST);
+            let missing_close_body = actix_test::read_body(missing_close_response).await;
+            let missing_close_body = String::from_utf8_lossy(&missing_close_body);
+            assert!(missing_close_body.contains("session is missing or already closed"));
+            assert!(
+                !missing_close_body.contains(missing_close_session_id),
+                "{missing_close_body}"
+            );
+
             let closed_read_paths = vec![fixture.entry_leaf_label()];
             let closed_read_signature = fixture.sign_read_paths(&closed_read_paths, 1, true);
             post_json_error_contains!(

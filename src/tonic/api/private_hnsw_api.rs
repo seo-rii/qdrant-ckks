@@ -1481,6 +1481,28 @@ mod private_hnsw_grpc_tests {
             .into_inner();
             assert!(closed.closed);
 
+            let missing_close_session_id = "close-session-id-sentinel";
+            let err = PrivateHnswOram::close_private_hnsw_session(
+                &service,
+                Request::new(grpc::ClosePrivateHnswSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: missing_close_session_id.to_string(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("session is missing or already closed")
+            );
+            assert!(
+                !err.message().contains(missing_close_session_id),
+                "{}",
+                err.message()
+            );
+
             let closed_read_paths = vec![fixture.entry_leaf_label()];
             let closed_read_signature = fixture.sign_read_paths(&closed_read_paths, 1, true);
             let err = PrivateHnswOram::read_private_hnsw_paths(
