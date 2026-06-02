@@ -553,14 +553,23 @@ fn validate_private_hnsw_oram_vector_snapshot(
         )));
     }
 
-    store.read_bucket(
-        0,
-        manifest.index_epoch,
-        manifest.bucket_count,
-        private_hnsw_restore_max_bucket_ciphertext_bytes(&manifest)?,
-    )?;
+    let last_bucket_id = manifest.bucket_count.saturating_sub(1);
+    let bucket_ids = if last_bucket_id == 0 {
+        vec![0]
+    } else {
+        vec![0, last_bucket_id]
+    };
+    let max_bucket_ciphertext_bytes = private_hnsw_restore_max_bucket_ciphertext_bytes(&manifest)?;
+    for bucket_id in &bucket_ids {
+        store.read_bucket(
+            *bucket_id,
+            manifest.index_epoch,
+            manifest.bucket_count,
+            max_bucket_ciphertext_bytes,
+        )?;
+    }
     store.read_merkle_path_batch(
-        &[0],
+        &bucket_ids,
         manifest.index_epoch,
         &manifest.root_hash,
         manifest.bucket_count,
@@ -1067,5 +1076,70 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("00000000.bucket"));
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_missing_last_bucket() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-missing-last-bucket")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let mut manifest = private_hnsw_manifest(uuid.to_string());
+        manifest.bucket_count = 2;
+        let leaf0 = BASE64URL_NOPAD.encode(&[9; 32]);
+        let leaf1 = BASE64URL_NOPAD.encode(&[10; 32]);
+        manifest.root_hash =
+            PrivateHnswOramStore::merkle_root_for_commitments(&[leaf0.clone(), leaf1.clone()])
+                .unwrap();
+
+        let store = PrivateHnswOramStore::new(temp_dir.path(), "text").unwrap();
+        let signature = PrivateHnswOramSignature {
+            alg: "ed25519".to_string(),
+            key_id: manifest.owner_signing_key_id.clone(),
+            sig: BASE64URL_NOPAD.encode(&[7; 64]),
+        };
+        store.write_manifest(&manifest, &signature).unwrap();
+        store
+            .write_initial_epoch(&crate::private_hnsw_oram_store::PrivateHnswOramEpochState {
+                index_epoch: manifest.index_epoch,
+                root_hash: manifest.root_hash.clone(),
+            })
+            .unwrap();
+
+        let ciphertext = BASE64URL_NOPAD.encode(b"encrypted bucket 0");
+        let ciphertext_sha256 =
+            BASE64URL_NOPAD.encode(Sha256::digest(b"encrypted bucket 0").as_ref());
+        store
+            .write_bucket(
+                &PrivateHnswOramBucket {
+                    version: 1,
+                    bucket_id: 0,
+                    index_epoch: manifest.index_epoch,
+                    ciphertext,
+                    ciphertext_sha256,
+                    bucket_commitment: leaf0.clone(),
+                },
+                manifest.index_epoch,
+                manifest.bucket_count,
+                private_hnsw_restore_max_bucket_ciphertext_bytes(&manifest).unwrap(),
+            )
+            .unwrap();
+        store
+            .write_merkle_tree_from_commitments(
+                manifest.index_epoch,
+                manifest.root_hash.clone(),
+                vec![leaf0, leaf1],
+            )
+            .unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("00000001.bucket"));
     }
 }
