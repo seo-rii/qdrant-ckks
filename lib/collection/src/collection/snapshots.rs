@@ -894,6 +894,38 @@ mod tests {
     }
 
     #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_signature_key_mismatch() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-bad-signature-key")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+
+        let store = PrivateHnswOramStore::new(temp_dir.path(), "text").unwrap();
+        store
+            .write_manifest(
+                &manifest,
+                &PrivateHnswOramSignature {
+                    alg: "ed25519".to_string(),
+                    key_id: "tenant-a/private-hnsw-signing-v2".to_string(),
+                    sig: BASE64URL_NOPAD.encode(&[7; 64]),
+                },
+            )
+            .unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("signature key_id"));
+    }
+
+    #[test]
     fn private_hnsw_oram_restore_preflight_rejects_context_mismatch() {
         let temp_dir = tempfile::Builder::new()
             .prefix("private-hnsw-restore-bad-context")
