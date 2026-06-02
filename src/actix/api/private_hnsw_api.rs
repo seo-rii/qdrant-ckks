@@ -1437,6 +1437,47 @@ mod private_hnsw_rest_tests {
                 "{malformed_commit_error}"
             );
 
+            std::fs::remove_file(uploaded_store.root_path().join("merkle").join("nodes.dat"))
+                .unwrap();
+            let missing_commit_metadata_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/commit",
+                OramCommitRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run.updated_buckets.clone(),
+                    commit_signature: PrivateHnswClientSignature {
+                        alg: search_run.commit_signature.alg.clone(),
+                        key_id: search_run.commit_signature.key_id.clone(),
+                        sig: search_run.commit_signature.sig.clone(),
+                    },
+                },
+                StatusCode::NOT_FOUND,
+                "encrypted bucket store metadata is unavailable"
+            );
+            assert!(
+                !missing_commit_metadata_error.contains("private_hnsw_oram"),
+                "{missing_commit_metadata_error}"
+            );
+            assert!(
+                !missing_commit_metadata_error.contains("/tmp"),
+                "{missing_commit_metadata_error}"
+            );
+            uploaded_store
+                .write_merkle_tree_from_commitments(
+                    BASE_EPOCH,
+                    fixture.encrypted_build.root_hash.clone(),
+                    fixture
+                        .encrypted_build
+                        .buckets
+                        .iter()
+                        .map(|bucket| bucket.bucket_commitment.clone())
+                        .collect(),
+                )
+                .unwrap();
+
             let commit_result = post_json_ok!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {

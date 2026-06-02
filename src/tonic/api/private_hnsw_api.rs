@@ -2019,6 +2019,49 @@ mod private_hnsw_grpc_tests {
                 err.message()
             );
 
+            std::fs::remove_file(uploaded_store.root_path().join("merkle").join("nodes.dat"))
+                .unwrap();
+            let err = PrivateHnswOram::commit_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramCommitRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run
+                        .updated_buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                    commit_signature: Some(signature_to_proto(search_run.commit_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::NotFound);
+            assert!(
+                err.message()
+                    .contains("encrypted bucket store metadata is unavailable")
+            );
+            assert!(!err.message().contains("private_hnsw_oram"));
+            assert!(!err.message().contains("/tmp"));
+            uploaded_store
+                .write_merkle_tree_from_commitments(
+                    BASE_EPOCH,
+                    fixture.encrypted_build.root_hash.clone(),
+                    fixture
+                        .encrypted_build
+                        .buckets
+                        .iter()
+                        .map(|bucket| bucket.bucket_commitment.clone())
+                        .collect(),
+                )
+                .unwrap();
+
             let commit_epoch = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {

@@ -765,16 +765,18 @@ pub async fn do_commit_private_hnsw_paths(
             &new_root_hash,
             session.bucket_count,
             &updated_buckets,
-        )?;
+        ).map_err(private_hnsw_commit_metadata_store_error)?;
         for bucket in &updated_buckets {
             store.write_bucket(
                 bucket,
                 new_epoch,
                 session.bucket_count,
                 session.max_bucket_ciphertext_bytes,
-            )?;
+            ).map_err(private_hnsw_commit_bucket_store_error)?;
         }
-        prepared_merkle_commit.write()?;
+        prepared_merkle_commit
+            .write()
+            .map_err(private_hnsw_commit_metadata_store_error)?;
         let old = PrivateHnswOramEpochState {
             index_epoch: old_epoch,
             root_hash: old_root_hash,
@@ -783,7 +785,9 @@ pub async fn do_commit_private_hnsw_paths(
             index_epoch: new_epoch,
             root_hash: new_root_hash,
         };
-        store.compare_and_swap_epoch(&old, &new)?;
+        store
+            .compare_and_swap_epoch(&old, &new)
+            .map_err(private_hnsw_commit_metadata_store_error)?;
         session.index_epoch = new.index_epoch;
         session.root_hash = new.root_hash.clone();
         session.lease_expires_unix = now_unix.saturating_add(SESSION_LEASE_SECS);
@@ -924,6 +928,33 @@ fn private_hnsw_read_store_error(err: CollectionError) -> StorageError {
         }
         CollectionError::BadRequest { .. } => {
             StorageError::bad_request("private HNSW ORAM encrypted bucket store validation failed")
+        }
+        CollectionError::ServiceError { .. } => StorageError::service_error(
+            "private HNSW ORAM encrypted bucket store validation failed",
+        ),
+        other => StorageError::from(other),
+    }
+}
+
+fn private_hnsw_commit_metadata_store_error(err: CollectionError) -> StorageError {
+    match err {
+        CollectionError::NotFound { .. } => StorageError::not_found(
+            "private HNSW ORAM encrypted bucket store metadata is unavailable",
+        ),
+        CollectionError::BadRequest { .. } => StorageError::bad_request(
+            "private HNSW ORAM encrypted bucket store metadata validation failed",
+        ),
+        CollectionError::ServiceError { .. } => StorageError::service_error(
+            "private HNSW ORAM encrypted bucket store metadata validation failed",
+        ),
+        other => StorageError::from(other),
+    }
+}
+
+fn private_hnsw_commit_bucket_store_error(err: CollectionError) -> StorageError {
+    match err {
+        CollectionError::NotFound { .. } => {
+            StorageError::not_found("private HNSW ORAM encrypted bucket store is unavailable")
         }
         CollectionError::ServiceError { .. } => StorageError::service_error(
             "private HNSW ORAM encrypted bucket store validation failed",
