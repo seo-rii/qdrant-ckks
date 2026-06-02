@@ -1299,15 +1299,6 @@ mod tests {
 
     #[test]
     fn private_hnsw_transfer_guard_classifies_transfer_start_operations() {
-        let move_shard = ClusterOperations::MoveShard(MoveShardOperation {
-            move_shard: collection::operations::cluster_ops::MoveShard {
-                shard_id: 1,
-                to_shard_id: None,
-                from_peer_id: 1,
-                to_peer_id: 2,
-                method: None,
-            },
-        });
         let abort_transfer = ClusterOperations::AbortTransfer(AbortTransferOperation {
             abort_transfer: collection::operations::cluster_ops::AbortShardTransfer {
                 shard_id: 1,
@@ -1317,8 +1308,52 @@ mod tests {
             },
         });
 
-        assert!(cluster_operation_starts_shard_transfer(&move_shard));
+        for operation in private_hnsw_transfer_start_operations() {
+            assert!(
+                cluster_operation_starts_shard_transfer(&operation),
+                "expected private HNSW ORAM transfer guard to classify {operation:?}",
+            );
+        }
         assert!(!cluster_operation_starts_shard_transfer(&abort_transfer));
+    }
+
+    fn private_hnsw_transfer_start_operations() -> Vec<ClusterOperations> {
+        vec![
+            ClusterOperations::MoveShard(MoveShardOperation {
+                move_shard: collection::operations::cluster_ops::MoveShard {
+                    shard_id: 1,
+                    to_shard_id: None,
+                    from_peer_id: 1,
+                    to_peer_id: 2,
+                    method: None,
+                },
+            }),
+            ClusterOperations::ReplicateShard(ReplicateShardOperation {
+                replicate_shard: collection::operations::cluster_ops::ReplicateShard {
+                    shard_id: 1,
+                    from_peer_id: 1,
+                    to_peer_id: 2,
+                    method: None,
+                    to_shard_id: None,
+                },
+            }),
+            ClusterOperations::ReplicatePoints(ReplicatePointsOperation {
+                replicate_points: ReplicatePoints {
+                    filter: None,
+                    from_shard_key: "source".into(),
+                    to_shard_key: "target".into(),
+                },
+            }),
+            ClusterOperations::RestartTransfer(RestartTransferOperation {
+                restart_transfer: RestartTransfer {
+                    shard_id: 1,
+                    to_shard_id: None,
+                    from_peer_id: 1,
+                    to_peer_id: 2,
+                    method: collection::shards::transfer::ShardTransferMethod::StreamRecords,
+                },
+            }),
+        ]
     }
 
     fn private_hnsw_collection_config() -> CollectionConfigInternal {
@@ -1365,22 +1400,17 @@ mod tests {
     #[test]
     fn private_hnsw_transfer_guard_blocks_until_bucket_transfer_is_supported() {
         let config = private_hnsw_collection_config();
-        let move_shard = ClusterOperations::MoveShard(MoveShardOperation {
-            move_shard: collection::operations::cluster_ops::MoveShard {
-                shard_id: 1,
-                to_shard_id: None,
-                from_peer_id: 1,
-                to_peer_id: 2,
-                method: None,
-            },
-        });
-
-        let err =
-            reject_private_hnsw_cluster_transfer_until_supported("docs", &config, &move_shard)
-                .expect_err(
-                    "private HNSW ORAM transfer must fail closed until bucket transfer exists",
-                );
-        assert!(err.to_string().contains("encrypted ORAM bucket transfer"));
+        for operation in private_hnsw_transfer_start_operations() {
+            let err =
+                reject_private_hnsw_cluster_transfer_until_supported("docs", &config, &operation)
+                    .expect_err(
+                        "private HNSW ORAM transfer must fail closed until bucket transfer exists",
+                    );
+            assert!(
+                err.to_string().contains("encrypted ORAM bucket transfer"),
+                "unexpected error for {operation:?}: {err}",
+            );
+        }
     }
 
     #[test]
