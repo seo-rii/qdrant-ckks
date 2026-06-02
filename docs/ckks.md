@@ -573,7 +573,9 @@ SDKs should use `refresh_private_hnsw_oram_manifest_for_commit` or
 plan's old epoch/root before a new manifest is signed.
 Before the first signed manifest upload, REST and gRPC manifest read, bucket
 upload, and session open calls fail closed with a sanitized `NotFound`
-response; they do not surface collection-local private ORAM paths.
+response; they do not surface collection-local private ORAM paths. Corrupt
+stored manifest reads are also sanitized without exposing collection-local
+`private_hnsw_oram` filesystem paths.
 Signed manifest uploads whose collection/vector, key lineage, or vector
 metadata context does not match the route and runtime context fail closed
 before manifest persistence. Unsupported manifest signature algorithms and

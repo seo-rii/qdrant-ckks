@@ -921,12 +921,24 @@ fn private_hnsw_instance<'a>(
 fn read_uploaded_manifest(
     store: &PrivateHnswOramStore,
 ) -> StorageResult<(PrivateHnswOramManifest, PrivateHnswOramSignature)> {
-    store.read_manifest().map_err(|err| match err {
+    store
+        .read_manifest()
+        .map_err(private_hnsw_manifest_read_store_error)
+}
+
+fn private_hnsw_manifest_read_store_error(err: CollectionError) -> StorageError {
+    match err {
         CollectionError::NotFound { .. } => {
             StorageError::not_found("private HNSW ORAM manifest has not been uploaded")
         }
+        CollectionError::BadRequest { .. } => {
+            StorageError::bad_request("private HNSW ORAM manifest store validation failed")
+        }
+        CollectionError::ServiceError { .. } => {
+            StorageError::service_error("private HNSW ORAM manifest store validation failed")
+        }
         other => StorageError::from(other),
-    })
+    }
 }
 
 fn private_hnsw_read_store_error(err: CollectionError) -> StorageError {

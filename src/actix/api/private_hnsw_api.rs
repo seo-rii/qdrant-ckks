@@ -784,6 +784,24 @@ mod private_hnsw_rest_tests {
                 fixture.manifest_signature.sig.as_str(),
             );
 
+            std::fs::write(manifest_store.root_path().join("manifest.json"), b"{").unwrap();
+            let malformed_manifest_store_error = get_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                StatusCode::BAD_REQUEST,
+                "manifest store validation failed"
+            );
+            assert!(
+                !malformed_manifest_store_error.contains("private_hnsw_oram"),
+                "{malformed_manifest_store_error}"
+            );
+            assert!(
+                !malformed_manifest_store_error.contains("/tmp"),
+                "{malformed_manifest_store_error}"
+            );
+            manifest_store
+                .write_manifest(&fixture.manifest, &fixture.manifest_signature)
+                .unwrap();
+
             let bucket_upload_root_sentinel = "bucket-upload-root-sentinel";
             let bucket_upload_epoch_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/buckets",

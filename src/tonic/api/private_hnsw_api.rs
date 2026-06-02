@@ -1186,6 +1186,24 @@ mod private_hnsw_grpc_tests {
                 fixture.manifest_signature.sig,
             );
 
+            std::fs::write(manifest_store.root_path().join("manifest.json"), b"{").unwrap();
+            let err = PrivateHnswOram::get_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::GetPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("manifest store validation failed"));
+            assert!(!err.message().contains("private_hnsw_oram"));
+            assert!(!err.message().contains("/tmp"));
+            manifest_store
+                .write_manifest(&fixture.manifest, &fixture.manifest_signature)
+                .unwrap();
+
             let bucket_upload_root_sentinel = "bucket-upload-root-sentinel";
             let err = PrivateHnswOram::upload_private_hnsw_buckets(
                 &service,
