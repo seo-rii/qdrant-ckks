@@ -689,6 +689,22 @@ mod private_hnsw_rest_tests {
                 fixture.manifest_signature.sig.as_str(),
             );
 
+            let bucket_upload_root_sentinel = "bucket-upload-root-sentinel";
+            let bucket_upload_epoch_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/buckets",
+                UploadPrivateHnswBucketsRequest {
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: bucket_upload_root_sentinel.to_string(),
+                    buckets: fixture.encrypted_build.buckets.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "bucket upload epoch/root does not match current manifest epoch"
+            );
+            assert!(
+                !bucket_upload_epoch_error.contains(bucket_upload_root_sentinel),
+                "{bucket_upload_epoch_error}"
+            );
+
             let mut hash_mismatch_buckets = fixture.encrypted_build.buckets.clone();
             let replacement = if hash_mismatch_buckets[0].ciphertext_sha256.starts_with('A') {
                 "B"

@@ -581,7 +581,8 @@ Initial bucket upload also rejects incomplete bucket sets, duplicated bucket
 ids, malformed bucket ciphertext, and ciphertext hash mismatches before
 encrypted bucket files are written. The malformed ciphertext error path does
 not echo the submitted ciphertext into REST response bodies or gRPC status
-messages.
+messages, and epoch/root mismatch handling does not echo the submitted root
+hash.
 REST and gRPC `read_paths` error handling is checked for non-reflection:
 epoch/root mismatches and malformed path labels fail without echoing the
 submitted root hash, submitted path label, or any stored bucket ciphertext into

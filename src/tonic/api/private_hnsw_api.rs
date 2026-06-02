@@ -1059,6 +1059,36 @@ mod private_hnsw_grpc_tests {
                 fixture.manifest_signature.sig,
             );
 
+            let bucket_upload_root_sentinel = "bucket-upload-root-sentinel";
+            let err = PrivateHnswOram::upload_private_hnsw_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateHnswBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: bucket_upload_root_sentinel.to_string(),
+                    buckets: fixture
+                        .encrypted_build
+                        .buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("bucket upload epoch/root does not match current manifest epoch")
+            );
+            assert!(
+                !err.message().contains(bucket_upload_root_sentinel),
+                "{}",
+                err.message()
+            );
+
             let mut hash_mismatch_buckets = fixture.encrypted_build.buckets.clone();
             let replacement = if hash_mismatch_buckets[0].ciphertext_sha256.starts_with('A') {
                 "B"
