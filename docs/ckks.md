@@ -580,8 +580,9 @@ session can reach `read_paths`.
 Initial bucket upload also rejects incomplete bucket sets, duplicated bucket
 ids, and ciphertext hash mismatches before encrypted bucket files are written.
 REST and gRPC `read_paths` error handling is checked for non-reflection:
-malformed path labels fail without echoing the submitted path label or any
-stored bucket ciphertext into the response body/status message.
+epoch/root mismatches and malformed path labels fail without echoing the
+submitted root hash, submitted path label, or any stored bucket ciphertext into
+the response body/status message.
 Commit error handling follows the same boundary: malformed updated bucket
 ciphertext is rejected without echoing the submitted ciphertext into the REST
 body or gRPC status message.

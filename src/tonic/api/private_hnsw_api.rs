@@ -1240,6 +1240,36 @@ mod private_hnsw_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("ConcurrentWriter"));
 
+            let epoch_root_mismatch_paths = vec![fixture.entry_leaf_label()];
+            let epoch_root_mismatch_signature =
+                fixture.sign_read_paths(&epoch_root_mismatch_paths, 1, true);
+            let read_root_sentinel = "read-root-sentinel";
+            let err = PrivateHnswOram::read_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramReadPathsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: read_root_sentinel.to_string(),
+                    paths: epoch_root_mismatch_paths,
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    }),
+                    client_signature: Some(signature_to_proto(epoch_root_mismatch_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("session epoch/root mismatch"));
+            assert!(
+                !err.message().contains(read_root_sentinel),
+                "{}",
+                err.message()
+            );
+
             let path_label_sentinel = "qdrant-sec-private-hnsw-path-label-sentinel";
             let sentinel_paths = vec![path_label_sentinel.to_string()];
             let sentinel_signature = fixture.sign_read_paths(&sentinel_paths, 1, true);

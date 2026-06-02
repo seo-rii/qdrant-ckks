@@ -808,6 +808,35 @@ mod private_hnsw_rest_tests {
                 "ConcurrentWriter"
             );
 
+            let epoch_root_mismatch_paths = vec![fixture.entry_leaf_label()];
+            let epoch_root_mismatch_signature =
+                fixture.sign_read_paths(&epoch_root_mismatch_paths, 1, true);
+            let read_root_sentinel = "read-root-sentinel";
+            let epoch_root_mismatch_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/read_paths",
+                OramReadPathsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: read_root_sentinel.to_string(),
+                    paths: epoch_root_mismatch_paths,
+                    padding: OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    },
+                    client_signature: PrivateHnswClientSignature {
+                        alg: epoch_root_mismatch_signature.alg,
+                        key_id: epoch_root_mismatch_signature.key_id,
+                        sig: epoch_root_mismatch_signature.sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "session epoch/root mismatch"
+            );
+            assert!(
+                !epoch_root_mismatch_error.contains(read_root_sentinel),
+                "{epoch_root_mismatch_error}"
+            );
+
             let path_label_sentinel = "qdrant-sec-private-hnsw-path-label-sentinel";
             let sentinel_paths = vec![path_label_sentinel.to_string()];
             let sentinel_signature = fixture.sign_read_paths(&sentinel_paths, 1, true);
