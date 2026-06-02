@@ -778,6 +778,7 @@ pub async fn do_commit_private_hnsw_paths(
             session.bucket_count,
             &updated_buckets,
         ).map_err(private_hnsw_commit_metadata_store_error)?;
+        ensure_private_hnsw_commit_current_epoch(&store, old_epoch, &old_root_hash)?;
         for bucket in &updated_buckets {
             store.write_bucket(
                 bucket,
@@ -1222,6 +1223,22 @@ fn validate_private_hnsw_session_cluster_epoch_mode(distributed: bool) -> Storag
     Ok(())
 }
 
+fn ensure_private_hnsw_commit_current_epoch(
+    store: &PrivateHnswOramStore,
+    old_epoch: u64,
+    old_root_hash: &str,
+) -> StorageResult<()> {
+    let current = store
+        .read_current_epoch()
+        .map_err(private_hnsw_commit_metadata_store_error)?;
+    if current.index_epoch != old_epoch || current.root_hash != old_root_hash {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM commit current epoch/root does not match active session",
+        ));
+    }
+    Ok(())
+}
+
 fn current_unix_secs() -> StorageResult<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1579,6 +1596,32 @@ mod private_hnsw_tests {
 
         let err = validate_private_hnsw_session_cluster_epoch_mode(true).unwrap_err();
         assert!(err.to_string().contains("consensus-backed epoch/root CAS"));
+    }
+
+    #[test]
+    fn commit_current_epoch_preflight_rejects_stale_store_epoch() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let store = PrivateHnswOramStore::new(temp.path(), "text").unwrap();
+        let old_root_hash = BASE64URL_NOPAD.encode(&[42; 32]);
+        let old = PrivateHnswOramEpochState {
+            index_epoch: 42,
+            root_hash: old_root_hash.clone(),
+        };
+        let stale_current = PrivateHnswOramEpochState {
+            index_epoch: 43,
+            root_hash: BASE64URL_NOPAD.encode(&[43; 32]),
+        };
+
+        store.write_initial_epoch(&old).unwrap();
+        store.compare_and_swap_epoch(&old, &stale_current).unwrap();
+
+        let err = ensure_private_hnsw_commit_current_epoch(&store, old.index_epoch, &old.root_hash)
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("commit current epoch/root does not match active session")
+        );
     }
 
     #[test]

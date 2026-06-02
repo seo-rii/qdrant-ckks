@@ -552,7 +552,9 @@ range before shard restore proceeds.
 The live REST and gRPC fixtures also exercise adversarial commit handling: a
 commit with a non-increasing new epoch is rejected, a validly-shaped but wrong
 Ed25519 signature is rejected, and replaying a previous old epoch/root after a
-successful commit is rejected against the active session state.
+successful commit is rejected against the active session state. The commit path
+also preflights the store's current epoch/root against the active session before
+bucket or Merkle writeback starts.
 They also reject opening a second session for the same private index while the
 first session is active, exercising the MVP single-writer lock at the route
 layer. Session open requests with `fixed_budget=false` in strict mode, a
