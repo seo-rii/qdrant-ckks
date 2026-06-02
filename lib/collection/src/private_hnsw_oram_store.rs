@@ -1032,6 +1032,18 @@ mod tests {
     }
 
     #[test]
+    fn missing_layout_reads_fail_as_not_found() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+
+        let err = store.read_manifest().unwrap_err();
+        assert!(matches!(err, CollectionError::NotFound { .. }));
+
+        let err = store.read_current_epoch().unwrap_err();
+        assert!(matches!(err, CollectionError::NotFound { .. }));
+    }
+
+    #[test]
     fn manifest_roundtrip_writes_private_files() {
         let temp = TempDir::new().unwrap();
         let store = fixture_store(&temp);
