@@ -578,13 +578,21 @@ fn validate_private_hnsw_oram_vector_snapshot(
     }
 
     let max_bucket_ciphertext_bytes = private_hnsw_restore_max_bucket_ciphertext_bytes(&manifest)?;
+    let mut bucket_commitments = Vec::new();
     for bucket_id in 0..manifest.bucket_count {
-        store.read_bucket(
+        let bucket = store.read_bucket(
             bucket_id,
             manifest.index_epoch,
             manifest.bucket_count,
             max_bucket_ciphertext_bytes,
         )?;
+        bucket_commitments.push(bucket.bucket_commitment);
+    }
+    let bucket_root = PrivateHnswOramStore::merkle_root_for_commitments(&bucket_commitments)?;
+    if bucket_root != manifest.root_hash {
+        return Err(CollectionError::bad_request(format!(
+            "private HNSW ORAM snapshot vector '{vector_name}' bucket commitments do not match manifest root_hash",
+        )));
     }
     let last_bucket_id = manifest.bucket_count.saturating_sub(1);
     let bucket_ids = if last_bucket_id == 0 {
@@ -1198,6 +1206,45 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("current epoch/root"));
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_bucket_commitment_root_mismatch() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-bad-bucket-commitment")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+
+        let store = PrivateHnswOramStore::new(temp_dir.path(), "text").unwrap();
+        let mut bucket = store
+            .read_bucket(
+                1,
+                manifest.index_epoch,
+                manifest.bucket_count,
+                private_hnsw_restore_max_bucket_ciphertext_bytes(&manifest).unwrap(),
+            )
+            .unwrap();
+        bucket.bucket_commitment = BASE64URL_NOPAD.encode(&[99; 32]);
+        store
+            .write_bucket(
+                &bucket,
+                manifest.index_epoch,
+                manifest.bucket_count,
+                private_hnsw_restore_max_bucket_ciphertext_bytes(&manifest).unwrap(),
+            )
+            .unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("bucket commitments"));
     }
 
     #[test]
