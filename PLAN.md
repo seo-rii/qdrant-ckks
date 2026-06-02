@@ -375,7 +375,7 @@
 - normal `upsert`/`update_vectors` plaintext write와 server-side search/scoring은 private ORAM session API 안내 메시지로 fail closed 된다. 실제 `do_upsert_points`/`do_update_vectors`, root `do_query_points`, 그리고 universal query prefetch/fusion 경계도 같은 fail-closed 메시지로 고정했다.
 - private ORAM bucket store는 symlink bucket과 Unix group/world-accessible bucket directory/file을 fail-closed로 거부한다.
 - crash window에서 bucket/Merkle writeback이 epoch CAS보다 먼저 보이더라도 old current epoch와 new bucket/root를 섞어 serving하지 않고 fail closed 한다.
-- collection snapshot은 client-sealed private HNSW bucket ciphertext를 포함하되 bucket plaintext sentinel bytes를 archive/restore 파일에 노출하지 않고, restore preflight는 result privacy, manifest context, manifest signature key id, bucket presence mismatch를 fail-closed로 거부한다.
+- collection snapshot은 client-sealed private HNSW bucket ciphertext를 포함하되 bucket plaintext sentinel bytes를 archive/restore 파일에 노출하지 않고, restore preflight는 result privacy, collection/vector context, vector dim/distance, manifest signature key id, bucket presence mismatch를 fail-closed로 거부한다.
 - REST/gRPC ORAM commit fixture는 invalid Ed25519 commit signature와 successful commit 이후 stale old_epoch replay를 모두 fail-closed로 검증한다.
 - REST/gRPC ORAM session fixture는 strict mode `fixed_budget=false`, non-current desired epoch, reserved `private_payload_oram_required` result privacy를 session open에서 거부한다.
 - REST/gRPC ORAM session fixture는 active session이 있는 같은 private index에 대해 두 번째 session open을 `ConcurrentWriter`로 거부한다.

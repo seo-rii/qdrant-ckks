@@ -946,6 +946,57 @@ mod tests {
     }
 
     #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_vector_metadata_mismatch() {
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-bad-vector-name")
+            .tempdir()
+            .unwrap();
+        let mut manifest = private_hnsw_manifest(uuid.to_string());
+        manifest.vector_name = "title".to_string();
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("vector_name mismatch"));
+
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-bad-dim")
+            .tempdir()
+            .unwrap();
+        let mut manifest = private_hnsw_manifest(uuid.to_string());
+        manifest.dim = 768;
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("dim mismatch"));
+
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-bad-distance")
+            .tempdir()
+            .unwrap();
+        let mut manifest = private_hnsw_manifest(uuid.to_string());
+        manifest.distance = DistanceKind::Dot;
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("distance mismatch"));
+    }
+
+    #[test]
     fn private_hnsw_oram_restore_preflight_rejects_missing_bucket_zero() {
         let temp_dir = tempfile::Builder::new()
             .prefix("private-hnsw-restore-missing-bucket")
