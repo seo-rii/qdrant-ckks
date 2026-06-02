@@ -2986,11 +2986,12 @@ mod tests {
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_sec::{
         CLIENT_CKKS_VECTOR_MARKER, CLIENT_ENCRYPTED_PAYLOAD_MARKER, ENCRYPTED_CKKS_VECTOR_MARKER,
-        ENCRYPTED_VECTOR_SIDECAR_FIELD, METADATA_AES_GCM_PROVIDER, VECTOR_CLIENT_CKKS_PROVIDER,
-        VECTOR_ENVELOPE_BINDING, ckks_vector_sidecar_envelope_key,
-        client_ckks_vector_signature_message, client_payload_signature_message,
-        is_client_encrypted_payload_value, is_encrypted_ckks_vector_payload_value,
-        is_encrypted_payload_value, server_payload_envelope_key,
+        ENCRYPTED_VECTOR_SIDECAR_FIELD, METADATA_AES_GCM_PROVIDER, PRIVATE_HNSW_ORAM_BINDING,
+        VECTOR_CLIENT_CKKS_PROVIDER, VECTOR_ENVELOPE_BINDING, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+        ckks_vector_sidecar_envelope_key, client_ckks_vector_signature_message,
+        client_payload_signature_message, is_client_encrypted_payload_value,
+        is_encrypted_ckks_vector_payload_value, is_encrypted_payload_value,
+        server_payload_envelope_key,
     };
     use ring::rand::SystemRandom;
     use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -3022,6 +3023,66 @@ mod tests {
     };
 
     const TEST_VECTOR_COLLECTION_CRYPTO_ID: &str = "32345678-90ab-cdef-1234-567890abcdef";
+
+    fn update_test_storage_config(storage_path: &std::path::Path) -> StorageConfig {
+        StorageConfig {
+            storage_path: storage_path.to_path_buf(),
+            snapshots_path: storage_path.join("snapshots"),
+            snapshots_config: Default::default(),
+            temp_path: None,
+            on_disk_payload: false,
+            optimizers: OptimizersConfig {
+                deleted_threshold: 0.5,
+                vacuum_min_vector_number: 100,
+                default_segment_number: 1,
+                max_segment_size: None,
+                #[expect(deprecated)]
+                memmap_threshold: Some(100),
+                indexing_threshold: Some(100),
+                flush_interval_sec: 2,
+                max_optimization_threads: Some(1),
+                prevent_unoptimized: None,
+            },
+            optimizers_overwrite: None,
+            wal: Default::default(),
+            performance: PerformanceConfig {
+                max_search_threads: 1,
+                max_optimization_runtime_threads: 1,
+                optimizer_cpu_budget: 0,
+                optimizer_io_budget: 0,
+                update_rate_limit: None,
+                search_timeout_sec: None,
+                incoming_shard_transfers_limit: Some(1),
+                outgoing_shard_transfers_limit: Some(1),
+                async_scorer: None,
+                load_concurrency: LoadConcurrencyConfig::default(),
+            },
+            hnsw_index: Default::default(),
+            hnsw_global_config: Default::default(),
+            mmap_advice: mmap::Advice::Random,
+            node_type: Default::default(),
+            update_queue_size: Default::default(),
+            handle_collection_load_errors: false,
+            recovery_mode: None,
+            update_concurrency: Some(NonZeroUsize::new(1).unwrap()),
+            shard_transfer_method: None,
+            collection: None,
+            max_collections: None,
+        }
+    }
+
+    fn update_test_toc(storage_config: &StorageConfig) -> Arc<TableOfContent> {
+        Arc::new(TableOfContent::new(
+            storage_config,
+            Runtime::new().unwrap(),
+            Runtime::new().unwrap(),
+            Runtime::new().unwrap(),
+            ResourceBudget::default(),
+            ChannelService::new(6333, false, None, None),
+            0,
+            None,
+        ))
+    }
 
     fn fake_ckks_query_signing_key_pair() -> Ed25519KeyPair {
         static PKCS8: OnceLock<Vec<u8>> = OnceLock::new();
@@ -3301,6 +3362,61 @@ esac
             materials: HashMap::new(),
             backends: HashMap::new(),
         };
+        settings
+    }
+
+    fn private_hnsw_runtime_settings() -> Settings {
+        let mut settings = Settings::new(None).unwrap();
+        settings.crypto.zero_trust_profile =
+            Some(crate::settings::ZERO_TRUST_PROFILE_STRICT.to_string());
+        settings.crypto.allow_inline_key_material = false;
+        settings.crypto.instances = HashMap::from([(
+            "docs_private_hnsw_v1".to_string(),
+            CryptoInstanceConfig {
+                provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                materials: HashMap::new(),
+                backend_ref: None,
+                options: json!({
+                    "key_id": "tenant-a/vector-private-rk",
+                    "expected_rk_id": "tenant-a/vector-private-rk",
+                    "min_rk_epoch": 7,
+                    "max_rk_epoch": 7,
+                    "search_execution": "client_led",
+                    "search_mode": "private_hnsw_oram",
+                    "result_privacy": "ids_visible",
+                    "distance": "dot",
+                    "dim": 2,
+                    "hnsw": {
+                        "m": 2,
+                        "ef_construction": 4,
+                        "max_layers": 3,
+                        "fixed_neighbor_slots": 4
+                    },
+                    "oram": {
+                        "kind": "path_oram",
+                        "bucket_size": 2,
+                        "block_size_bytes": 4096,
+                        "tree_height": 2,
+                        "path_batch_size": 1
+                    },
+                    "fixed_budget": {
+                        "enabled": true,
+                        "upper_layer_steps": 1,
+                        "base_layer_steps": 3,
+                        "paths_per_round": 1,
+                        "fixed_result_k": 1
+                    },
+                    "integrity": {
+                        "manifest_signature_required": true,
+                        "commit_signature_required": true,
+                        "merkle_root_required": true
+                    },
+                    "signature_public_keys": {
+                        "tenant-a/private-hnsw-signing-v1": BASE64URL_NOPAD.encode(&[11_u8; 32])
+                    }
+                }),
+            },
+        )]);
         settings
     }
 
@@ -3595,6 +3711,142 @@ esac
             upsert_inference_inputs_touch_encrypted_config(&operation, &params),
             None,
         );
+    }
+
+    #[test]
+    fn private_hnsw_oram_update_paths_reject_plaintext_dense_vectors() {
+        let runtime = Runtime::new().unwrap();
+        let storage_dir = Builder::new()
+            .prefix("private-hnsw-update-guard")
+            .tempdir()
+            .unwrap();
+        let storage_config = update_test_storage_config(storage_dir.path());
+        let toc = update_test_toc(&storage_config);
+        let dispatcher = Dispatcher::new(toc.clone());
+        let auth = Auth::new_internal(Access::full("For test"));
+        let settings = private_hnsw_runtime_settings();
+
+        runtime.block_on(async {
+            dispatcher
+                .submit_collection_meta_op(
+                    CollectionMetaOperations::CreateCollection(
+                        CreateCollectionOperation::new(
+                            "private_hnsw_docs".to_string(),
+                            CreateCollection {
+                                vectors: collection::operations::types::VectorsConfig::Multi(
+                                    BTreeMap::from([(
+                                        "embedding".to_string(),
+                                        VectorParamsBuilder::new(2, Distance::Dot).build(),
+                                    )]),
+                                ),
+                                sparse_vectors: None,
+                                hnsw_config: None,
+                                wal_config: None,
+                                optimizers_config: None,
+                                shard_number: Some(1),
+                                on_disk_payload: None,
+                                replication_factor: None,
+                                write_consistency_factor: None,
+                                quantization_config: None,
+                                sharding_method: None,
+                                encryption: Some(CollectionEncryptionConfig {
+                                    version: 1,
+                                    key_id: Some("tenant-a/vector-private-rk".to_string()),
+                                    crypto_schema_version: 1,
+                                    encryption_epoch: 7,
+                                    migration_state: CryptoMigrationState::Active,
+                                    rules: vec![EncryptionRuleRef {
+                                        id: "embedding_private_hnsw".to_string(),
+                                        selector: EncryptionSelector::VectorNames {
+                                            names: vec!["embedding".to_string()],
+                                        },
+                                        instance: "docs_private_hnsw_v1".to_string(),
+                                        binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                                    }],
+                                }),
+                                strict_mode_config: None,
+                                uuid: Some(Uuid::from_u128(0x3234567890abcdef1234567890abcdef)),
+                                metadata: None,
+                            },
+                        )
+                        .unwrap(),
+                    ),
+                    auth.clone(),
+                    None,
+                )
+                .await
+                .unwrap();
+
+            let err = do_upsert_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "private_hnsw_docs".to_string(),
+                PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                    points: vec![api::rest::PointStruct {
+                        id: 1.into(),
+                        vector: api::rest::VectorStruct::Named(HashMap::from([(
+                            "embedding".to_string(),
+                            api::rest::Vector::Dense(vec![0.1, 0.2]),
+                        )])),
+                        payload: None,
+                    }],
+                    shard_key: None,
+                    update_filter: None,
+                    update_mode: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/embedding/session")
+            ));
+
+            let err = do_update_vectors(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "private_hnsw_docs".to_string(),
+                UpdateVectors {
+                    points: vec![api::rest::PointVectors {
+                        id: 1.into(),
+                        vector: api::rest::VectorStruct::Named(HashMap::from([(
+                            "embedding".to_string(),
+                            api::rest::Vector::Dense(vec![0.1, 0.2]),
+                        )])),
+                    }],
+                    shard_key: None,
+                    update_filter: None,
+                },
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/embedding/session")
+            ));
+        });
     }
 
     #[test]
