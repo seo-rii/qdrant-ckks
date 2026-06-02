@@ -9196,6 +9196,75 @@ mod tests {
                 if reason.contains("must not configure server materials or backend")),
             "unexpected error: {err:?}",
         );
+
+        let mut with_backend_ref = settings.clone();
+        with_backend_ref.zero_trust_profile = None;
+        with_backend_ref
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["fixed_budget"]["enabled"] = json!(true);
+        with_backend_ref
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .backend_ref = Some("openfhe_local".to_string());
+        let err = validate_crypto_settings(&with_backend_ref)
+            .expect_err("private HNSW ORAM must not accept backend_ref outside strict mode");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref reason, .. }
+                if reason.contains("must not configure server materials or backend")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
+    fn validate_crypto_settings_rejects_private_hnsw_key_lineage_drift() {
+        let mut settings = CryptoSettings {
+            zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+            allow_inline_key_material: false,
+            instances: HashMap::from([(
+                "docs_private_hnsw_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                    materials: HashMap::new(),
+                    backend_ref: None,
+                    options: private_hnsw_oram_options(),
+                },
+            )]),
+            ..CryptoSettings::default()
+        };
+
+        settings
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["expected_rk_id"] = json!("tenant-a:other-private-rk");
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private HNSW ORAM must pin expected_rk_id to key_id");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "expected_rk_id" && reason.contains("must match key_id")),
+            "unexpected error: {err:?}",
+        );
+
+        settings
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["expected_rk_id"] = json!("tenant-a:docs-private-rk");
+        settings
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["max_rk_epoch"] = json!(8);
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private HNSW ORAM must pin one active rk_epoch");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "max_rk_epoch" && reason.contains("pin one active rk_epoch")),
+            "unexpected error: {err:?}",
+        );
     }
 
     #[test]
