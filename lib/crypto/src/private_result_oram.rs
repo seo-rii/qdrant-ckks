@@ -332,6 +332,11 @@ pub fn validate_private_result_oram_manifest_shape(
     if manifest.bucket_count == 0 {
         return Err(PrivateResultOramError::InvalidManifestField("bucket_count"));
     }
+    let expected_bucket_count = path_oram_bucket_count(manifest.oram.tree_height)
+        .ok_or(PrivateResultOramError::InvalidManifestField("oram"))?;
+    if manifest.bucket_count != expected_bucket_count {
+        return Err(PrivateResultOramError::InvalidManifestField("bucket_count"));
+    }
     let capacity = manifest
         .bucket_count
         .checked_mul(u64::from(manifest.oram.bucket_size))
@@ -345,6 +350,15 @@ pub fn validate_private_result_oram_manifest_shape(
     }
     decode_base64url_32(&manifest.root_hash, "root_hash")?;
     Ok(())
+}
+
+fn path_oram_bucket_count(tree_height: u32) -> Option<u64> {
+    if tree_height >= 63 {
+        return None;
+    }
+    (1u64 << tree_height)
+        .checked_mul(2)
+        .and_then(|count| count.checked_sub(1))
 }
 
 pub fn validate_private_result_oram_bucket_shape(
@@ -960,7 +974,7 @@ mod tests {
             },
             index_epoch: 42,
             root_hash: BASE64URL_NOPAD.encode(&[42; 32]),
-            bucket_count: 1024,
+            bucket_count: (1 << 25) - 1,
             logical_result_count: 700,
             dummy_result_count: 324,
             owner_signing_key_id: "tenant-a/private-result-signing-v1".to_string(),
@@ -1034,7 +1048,7 @@ mod tests {
     }
 
     fn fixture_bucket_set() -> Vec<PrivateResultOramBucket> {
-        (0..4)
+        (0..3)
             .map(|bucket_id| fixture_commit_bucket(bucket_id, 42, bucket_id as u8 + 1))
             .collect()
     }
@@ -1046,7 +1060,7 @@ mod tests {
         ));
         assert_eq!(
             BASE64URL_NOPAD.encode(digest.as_ref()),
-            "nqKPgk8p_NH8xwO78a9YnTapaKCdqFK8Lqhe18Rg9Oc"
+            "mOy8vej616osyutILgm6MwoTDwZhq7tau_9wyHgaYGA"
         );
     }
 
@@ -1102,13 +1116,21 @@ mod tests {
         );
 
         manifest = fixture_manifest();
-        manifest.bucket_count = 1;
+        manifest.oram.tree_height = 1;
+        manifest.bucket_count = 3;
         manifest.oram.bucket_size = 1;
-        manifest.logical_result_count = 2;
+        manifest.logical_result_count = 4;
         manifest.dummy_result_count = 0;
         assert_eq!(
             validate_private_result_oram_manifest_shape(&manifest),
             Err(PrivateResultOramError::InvalidManifestField("result_count"))
+        );
+
+        manifest = fixture_manifest();
+        manifest.bucket_count -= 1;
+        assert_eq!(
+            validate_private_result_oram_manifest_shape(&manifest),
+            Err(PrivateResultOramError::InvalidManifestField("bucket_count"))
         );
     }
 
@@ -1518,7 +1540,11 @@ mod tests {
             root_hash: root_hash.clone(),
             bucket_count: buckets.len() as u64,
             logical_result_count: 3,
-            dummy_result_count: 1,
+            dummy_result_count: 0,
+            oram: OramParams {
+                tree_height: 1,
+                ..fixture_manifest().oram
+            },
             ..fixture_manifest()
         };
 
@@ -1528,7 +1554,7 @@ mod tests {
 
         assert_eq!(bundle.index_epoch(), 42);
         assert_eq!(bundle.root_hash(), root_hash);
-        assert_eq!(bundle.bucket_count(), 4);
+        assert_eq!(bundle.bucket_count(), 3);
         assert_eq!(bundle.buckets, buckets);
         assert_eq!(
             private_result_oram_merkle_root_for_commitments(&bundle.bucket_commitments()).unwrap(),

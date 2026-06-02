@@ -603,8 +603,9 @@ provider version.
 The crypto crate reserves the future payload/result ORAM manifest shape through
 `PrivateResultOramManifest`, `PrivateResultOramBucket`, and
 `private_result_oram_manifest_signature_message`. It can validate manifest
-shape, including logical plus dummy count against ORAM bucket capacity, Ed25519
-signatures, collection/key/epoch context, and root hash pinning;
+shape, including canonical Path ORAM tree_height/bucket_count consistency,
+logical plus dummy count against ORAM bucket capacity, Ed25519 signatures,
+collection/key/epoch context, and root hash pinning;
 `private_result_oram_commit_signature_message` also fixes the future bucket
 writeback CAS signature input. `validate_private_result_oram_bucket_shape`
 checks bucket version, epoch, range, ciphertext size, ciphertext SHA-256, and
