@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use common::fs::read_json;
 use common::storage_version::StorageVersion as _;
@@ -166,8 +166,9 @@ impl Collection {
             .save_to_tar(&tar, Path::new(PAYLOAD_INDEX_CONFIG_FILE))
             .await?;
 
-        let private_hnsw_oram_path = self.path.join(PRIVATE_HNSW_ORAM_DIR);
-        if private_hnsw_oram_path.exists() {
+        if let Some(private_hnsw_oram_path) =
+            private_oram_snapshot_source_dir(&self.path, PRIVATE_HNSW_ORAM_DIR)?
+        {
             let tar = tar.clone();
             tokio::task::spawn_blocking(move || {
                 tar.blocking_append_dir_all(
@@ -179,8 +180,9 @@ impl Collection {
             .map_err(CollectionError::from)??;
         }
 
-        let private_result_oram_path = self.path.join(PRIVATE_RESULT_ORAM_DIR);
-        if private_result_oram_path.exists() {
+        if let Some(private_result_oram_path) =
+            private_oram_snapshot_source_dir(&self.path, PRIVATE_RESULT_ORAM_DIR)?
+        {
             let tar = tar.clone();
             tokio::task::spawn_blocking(move || {
                 tar.blocking_append_dir_all(
@@ -479,6 +481,25 @@ impl Collection {
             .ok_or_else(|| shard_not_found_error(shard_id))?
             .get_partial_snapshot_manifest()
             .await
+    }
+}
+
+fn private_oram_snapshot_source_dir(
+    collection_dir: &Path,
+    dir_name: &str,
+) -> CollectionResult<Option<PathBuf>> {
+    let source_dir = collection_dir.join(dir_name);
+    match std::fs::symlink_metadata(&source_dir) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() => {
+            Err(CollectionError::service_error(format!(
+                "{dir_name} snapshot source must be a non-symlink directory",
+            )))
+        }
+        Ok(_) => Ok(Some(source_dir)),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(CollectionError::service_error(format!(
+            "failed to inspect {dir_name} snapshot source: {err}"
+        ))),
     }
 }
 
@@ -859,6 +880,48 @@ mod tests {
                 "unexpected error for {migration_state:?}: {err}",
             );
         }
+    }
+
+    #[test]
+    fn private_oram_snapshot_source_dir_accepts_only_present_directories() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-oram-snapshot-source")
+            .tempdir()
+            .unwrap();
+
+        assert!(
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_HNSW_ORAM_DIR)
+                .unwrap()
+                .is_none()
+        );
+
+        fs::create_dir(temp_dir.path().join(PRIVATE_HNSW_ORAM_DIR)).unwrap();
+        assert!(
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_HNSW_ORAM_DIR)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_oram_snapshot_source_dir_rejects_symlink() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-oram-snapshot-source-symlink")
+            .tempdir()
+            .unwrap();
+
+        std::os::unix::fs::symlink(
+            temp_dir.path().join("outside-private-hnsw-oram"),
+            temp_dir.path().join(PRIVATE_HNSW_ORAM_DIR),
+        )
+        .unwrap();
+
+        let err =
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_HNSW_ORAM_DIR).unwrap_err();
+
+        assert!(err.to_string().contains("non-symlink directory"));
+        assert!(!err.to_string().contains("outside-private-hnsw-oram"));
     }
 
     #[test]

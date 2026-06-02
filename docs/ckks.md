@@ -541,9 +541,10 @@ If a process crashes after bucket or Merkle writeback but before the epoch CAS,
 recovery continues to report the old current epoch and rejects mixed old-root /
 new-bucket reads rather than serving an inconsistent ORAM view.
 Collection snapshots include private HNSW ORAM bucket files as ciphertext-only
-JSON artifacts; snapshot tests seal a plaintext sentinel into a client bucket
-and assert that the raw snapshot archive and restored bucket file do not contain
-the sentinel bytes.
+JSON artifacts after rejecting non-directory or symlinked private ORAM snapshot
+sources; snapshot tests seal a plaintext sentinel into a client bucket and
+assert that the raw snapshot archive and restored bucket file do not contain the
+sentinel bytes.
 Restore preflight rejects result-private manifests, collection/vector context
 mismatches, vector dimension/distance mismatches, manifest signature key-id
 mismatches, Path ORAM tree_height/bucket_count mismatches, current epoch/root
