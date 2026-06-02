@@ -650,6 +650,25 @@ mod private_hnsw_rest_tests {
                 "manifest result_privacy does not match runtime instance"
             );
 
+            let manifest_signature_alg_sentinel = "manifest-signature-alg-sentinel";
+            let malformed_manifest_alg_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: fixture.manifest.clone(),
+                    signature: qdrant_sec::PrivateHnswOramSignature {
+                        alg: manifest_signature_alg_sentinel.to_string(),
+                        key_id: SIGNING_KEY_ID.to_string(),
+                        sig: fixture.manifest_signature.sig.clone(),
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "signature algorithm must be ed25519"
+            );
+            assert!(
+                !malformed_manifest_alg_error.contains(manifest_signature_alg_sentinel),
+                "{malformed_manifest_alg_error}"
+            );
+
             let manifest_signature_sentinel = "manifest-signature!sentinel";
             let malformed_manifest_signature_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",

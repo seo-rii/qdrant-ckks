@@ -999,6 +999,33 @@ mod private_hnsw_grpc_tests {
                     .contains("manifest result_privacy does not match runtime instance")
             );
 
+            let manifest_signature_alg_sentinel = "manifest-signature-alg-sentinel";
+            let err = PrivateHnswOram::upload_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                    signature: Some(grpc::PrivateHnswSignature {
+                        alg: manifest_signature_alg_sentinel.to_string(),
+                        key_id: SIGNING_KEY_ID.to_string(),
+                        sig: fixture.manifest_signature.sig.clone(),
+                    }),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("signature algorithm must be ed25519")
+            );
+            assert!(
+                !err.message().contains(manifest_signature_alg_sentinel),
+                "{}",
+                err.message()
+            );
+
             let manifest_signature_sentinel = "manifest-signature!sentinel";
             let err = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,

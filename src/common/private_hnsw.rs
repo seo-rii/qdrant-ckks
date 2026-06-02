@@ -1087,7 +1087,12 @@ fn distance_kind(distance: Distance) -> DistanceKind {
 }
 
 fn private_hnsw_error(err: qdrant_sec::PrivateHnswOramError) -> StorageError {
-    StorageError::bad_request(err.to_string())
+    match err {
+        qdrant_sec::PrivateHnswOramError::UnsupportedSignatureAlgorithm(_) => {
+            StorageError::bad_request("private HNSW ORAM signature algorithm must be ed25519")
+        }
+        err => StorageError::bad_request(err.to_string()),
+    }
 }
 
 fn is_strict(settings: &Settings) -> bool {
