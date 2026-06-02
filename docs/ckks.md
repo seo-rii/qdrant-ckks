@@ -588,8 +588,9 @@ epoch/root mismatches and malformed path labels fail without echoing the
 submitted root hash, submitted path label, or any stored bucket ciphertext into
 the response body/status message.
 Commit error handling follows the same boundary: malformed updated bucket
-ciphertext is rejected without echoing the submitted ciphertext into the REST
-body or gRPC status message.
+ciphertext and old epoch/root mismatches are rejected without echoing the
+submitted ciphertext or old root hash into the REST body or gRPC status
+message.
 The same live fixtures reject `read_paths` calls whose path count, requested
 path count, or dummy padding flag does not match the configured fixed path
 budget, before bucket reads are served. Valid `read_paths` calls must carry an

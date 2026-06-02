@@ -1004,6 +1004,30 @@ mod private_hnsw_rest_tests {
             assert!(!opened_buckets.is_empty());
 
             let search_run = fixture.run_single_search_collect_writeback();
+            let commit_old_root_sentinel = "commit-old-root-sentinel";
+            let commit_old_root_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/commit",
+                OramCommitRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: commit_old_root_sentinel.to_string(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run.updated_buckets.clone(),
+                    commit_signature: PrivateHnswClientSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: SIGNING_KEY_ID.to_string(),
+                        sig: fixture.client_signature().sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "commit old epoch/root does not match active session"
+            );
+            assert!(
+                !commit_old_root_error.contains(commit_old_root_sentinel),
+                "{commit_old_root_error}"
+            );
+
             post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
