@@ -544,6 +544,42 @@ mod private_hnsw_rest_tests {
                 "{missing_manifest_session_error}"
             );
 
+            let auth = Auth::new_internal(Access::full("private HNSW ORAM manifest route test"));
+            let collection_pass = auth
+                .check_collection_access(
+                    "docs",
+                    AccessRequirements::new(),
+                    "private_hnsw_manifest_upload_layout_test",
+                )
+                .unwrap();
+            let pass = new_unchecked_verification_pass();
+            let collection = dispatcher
+                .toc(&auth, &pass)
+                .get_collection(&collection_pass)
+                .await
+                .unwrap();
+            let manifest_store = PrivateHnswOramStore::new(collection.path(), "text").unwrap();
+            std::fs::create_dir_all(manifest_store.root_path().parent().unwrap()).unwrap();
+            std::fs::write(manifest_store.root_path(), b"not-a-directory").unwrap();
+            let malformed_manifest_layout_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: fixture.manifest.clone(),
+                    signature: fixture.manifest_signature.clone(),
+                },
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "manifest store validation failed"
+            );
+            assert!(
+                !malformed_manifest_layout_error.contains("private_hnsw_oram"),
+                "{malformed_manifest_layout_error}"
+            );
+            assert!(
+                !malformed_manifest_layout_error.contains("/tmp"),
+                "{malformed_manifest_layout_error}"
+            );
+            std::fs::remove_file(manifest_store.root_path()).unwrap();
+
             let mut mismatched_collection_manifest = fixture.manifest.clone();
             mismatched_collection_manifest.collection_id = "other-collection".to_string();
             let mismatched_collection_signature =

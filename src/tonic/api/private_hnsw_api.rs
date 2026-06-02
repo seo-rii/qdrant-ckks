@@ -874,6 +874,40 @@ mod private_hnsw_grpc_tests {
             assert!(!err.message().contains("private_hnsw_oram"));
             assert!(!err.message().contains("/tmp"));
 
+            let auth = Auth::new_internal(Access::full("private HNSW ORAM manifest grpc test"));
+            let collection_pass = auth
+                .check_collection_access(
+                    COLLECTION_NAME,
+                    AccessRequirements::new(),
+                    "private_hnsw_manifest_upload_layout_test",
+                )
+                .unwrap();
+            let pass = new_unchecked_verification_pass();
+            let collection = dispatcher
+                .toc(&auth, &pass)
+                .get_collection(&collection_pass)
+                .await
+                .unwrap();
+            let manifest_store = PrivateHnswOramStore::new(collection.path(), VECTOR_NAME).unwrap();
+            std::fs::create_dir_all(manifest_store.root_path().parent().unwrap()).unwrap();
+            std::fs::write(manifest_store.root_path(), b"not-a-directory").unwrap();
+            let err = PrivateHnswOram::upload_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                    signature: Some(signature_to_proto(fixture.manifest_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::Internal);
+            assert!(err.message().contains("manifest store validation failed"));
+            assert!(!err.message().contains("private_hnsw_oram"));
+            assert!(!err.message().contains("/tmp"));
+            std::fs::remove_file(manifest_store.root_path()).unwrap();
+
             let mut mismatched_collection_manifest = fixture.manifest.clone();
             mismatched_collection_manifest.collection_id = "other-collection".to_string();
             let mismatched_collection_signature =

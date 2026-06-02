@@ -314,8 +314,12 @@ pub async fn do_upload_private_hnsw_manifest(
         root_hash: manifest.root_hash.clone(),
     };
     let store = PrivateHnswOramStore::new(resolved.collection_path, vector_name)?;
-    store.write_initial_epoch_if_absent_or_matching(&epoch_state)?;
-    store.write_manifest(&manifest, &signature)?;
+    store
+        .write_initial_epoch_if_absent_or_matching(&epoch_state)
+        .map_err(private_hnsw_manifest_store_error)?;
+    store
+        .write_manifest(&manifest, &signature)
+        .map_err(private_hnsw_manifest_store_error)?;
     Ok(epoch_state)
 }
 
@@ -936,6 +940,18 @@ fn private_hnsw_read_store_error(err: CollectionError) -> StorageError {
         CollectionError::ServiceError { .. } => StorageError::service_error(
             "private HNSW ORAM encrypted bucket store validation failed",
         ),
+        other => StorageError::from(other),
+    }
+}
+
+fn private_hnsw_manifest_store_error(err: CollectionError) -> StorageError {
+    match err {
+        CollectionError::NotFound { .. } => {
+            StorageError::not_found("private HNSW ORAM manifest store is unavailable")
+        }
+        CollectionError::ServiceError { .. } => {
+            StorageError::service_error("private HNSW ORAM manifest store validation failed")
+        }
         other => StorageError::from(other),
     }
 }
