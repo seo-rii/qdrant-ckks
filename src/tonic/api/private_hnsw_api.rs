@@ -588,6 +588,22 @@ mod private_hnsw_grpc_tests {
         let err = manifest_from_proto(proto).unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
         assert!(err.message().contains("manifest.oram"));
+
+        let err = required::<grpc::PrivateHnswManifest>(None, "manifest").unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("manifest"));
+
+        let err = required::<grpc::OramReadPadding>(None, "padding").unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("padding"));
+
+        let err = required::<grpc::PrivateHnswSignature>(None, "client_signature").unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("client_signature"));
+
+        let err = required::<grpc::PrivateHnswSignature>(None, "commit_signature").unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("commit_signature"));
     }
 
     #[test]
