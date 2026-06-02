@@ -923,6 +923,24 @@ mod private_hnsw_rest_tests {
                 OramCommitRequest {
                     session_id: session_id.clone(),
                     old_epoch: BASE_EPOCH,
+                    new_epoch: BASE_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run.updated_buckets.clone(),
+                    commit_signature: PrivateHnswClientSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: SIGNING_KEY_ID.to_string(),
+                        sig: fixture.client_signature().sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "new_epoch must be greater than old_epoch"
+            );
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/commit",
+                OramCommitRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
                     new_epoch: NEXT_EPOCH,
                     old_root_hash: search_run.commit_plan.old_root_hash.clone(),
                     new_root_hash: search_run.commit_plan.new_root_hash.clone(),

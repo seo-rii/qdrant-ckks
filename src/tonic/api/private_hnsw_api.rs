@@ -1365,6 +1365,33 @@ mod private_hnsw_grpc_tests {
                     vector_name: VECTOR_NAME.to_string(),
                     session_id: session.session_id.clone(),
                     old_epoch: BASE_EPOCH,
+                    new_epoch: BASE_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run
+                        .updated_buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                    commit_signature: Some(signature_to_proto(fixture.client_signature())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("new_epoch must be greater than old_epoch")
+            );
+
+            let err = PrivateHnswOram::commit_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramCommitRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
                     new_epoch: NEXT_EPOCH,
                     old_root_hash: search_run.commit_plan.old_root_hash.clone(),
                     new_root_hash: search_run.commit_plan.new_root_hash.clone(),
