@@ -1207,6 +1207,40 @@ mod private_hnsw_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("ciphertext_sha256 mismatch"));
 
+            let mut merkle_mismatch_buckets = fixture.encrypted_build.buckets.clone();
+            merkle_mismatch_buckets[0].bucket_commitment =
+                data_encoding::BASE64URL_NOPAD.encode(&[9; 32]);
+            let computed_mismatch_root = qdrant_sec::private_hnsw_oram_merkle_root_for_commitments(
+                &merkle_mismatch_buckets
+                    .iter()
+                    .map(|bucket| bucket.bucket_commitment.clone())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+            assert_ne!(computed_mismatch_root, fixture.encrypted_build.root_hash);
+            let err = PrivateHnswOram::upload_private_hnsw_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateHnswBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: merkle_mismatch_buckets
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("Merkle root mismatch"));
+            assert!(
+                !err.message().contains(&computed_mismatch_root),
+                "{}",
+                err.message()
+            );
+
             let upload_ciphertext_sentinel = "bucket-upload-ciphertext-sentinel";
             let mut malformed_upload_buckets = fixture.encrypted_build.buckets.clone();
             malformed_upload_buckets[0].ciphertext = upload_ciphertext_sentinel.to_string();

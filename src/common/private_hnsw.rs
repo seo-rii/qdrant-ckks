@@ -1163,9 +1163,9 @@ fn validate_initial_private_hnsw_upload_bundle(
         ordered_initial_bucket_commitments(buckets, index_epoch, manifest.bucket_count)?;
     let computed_root = PrivateHnswOramStore::merkle_root_for_commitments(&leaf_commitments)?;
     if computed_root != root_hash {
-        return Err(StorageError::bad_request(format!(
-            "private HNSW ORAM bucket upload Merkle root mismatch: computed {computed_root}",
-        )));
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM bucket upload Merkle root mismatch",
+        ));
     }
     Ok(leaf_commitments)
 }

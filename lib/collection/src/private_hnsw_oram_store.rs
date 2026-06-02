@@ -362,9 +362,9 @@ impl PrivateHnswOramStore {
         }
         let computed_root = Self::merkle_root_for_commitments(&tree.leaf_hashes)?;
         if computed_root != new_root_hash {
-            return Err(CollectionError::bad_request(format!(
-                "private HNSW ORAM Merkle commit new_root_hash mismatch: computed {computed_root}",
-            )));
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM Merkle commit new_root_hash mismatch",
+            ));
         }
         tree.index_epoch = new_epoch;
         tree.root_hash = new_root_hash.to_string();
@@ -459,9 +459,9 @@ fn validate_merkle_tree(tree: &PrivateHnswOramMerkleTree) -> CollectionResult<()
     }
     let computed_root = PrivateHnswOramStore::merkle_root_for_commitments(&tree.leaf_hashes)?;
     if computed_root != tree.root_hash {
-        return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM Merkle tree root_hash mismatch: computed {computed_root}",
-        )));
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM Merkle tree root_hash mismatch",
+        ));
     }
     Ok(())
 }
