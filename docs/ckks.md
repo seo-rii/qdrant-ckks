@@ -569,6 +569,8 @@ plan's old epoch/root before a new manifest is signed.
 Before the first signed manifest upload, REST and gRPC manifest read, bucket
 upload, and session open calls fail closed with a sanitized `NotFound`
 response; they do not surface collection-local private ORAM paths.
+Signed manifest uploads whose collection/vector context does not match the
+route and runtime context fail closed before manifest persistence.
 Initial bucket upload also rejects incomplete bucket sets, duplicated bucket
 ids, and ciphertext hash mismatches before encrypted bucket files are written.
 REST and gRPC `read_paths` error handling is checked for non-reflection:

@@ -542,6 +542,33 @@ mod private_hnsw_rest_tests {
                 "{missing_manifest_session_error}"
             );
 
+            let mut mismatched_collection_manifest = fixture.manifest.clone();
+            mismatched_collection_manifest.collection_id = "other-collection".to_string();
+            let mismatched_collection_signature =
+                fixture.sign_manifest(&mismatched_collection_manifest);
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: mismatched_collection_manifest,
+                    signature: mismatched_collection_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "collection_id"
+            );
+
+            let mut mismatched_vector_manifest = fixture.manifest.clone();
+            mismatched_vector_manifest.vector_name = "title".to_string();
+            let mismatched_vector_signature = fixture.sign_manifest(&mismatched_vector_manifest);
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: mismatched_vector_manifest,
+                    signature: mismatched_vector_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "vector_name"
+            );
+
             let mut mismatched_privacy_manifest = fixture.manifest.clone();
             mismatched_privacy_manifest.result_privacy =
                 qdrant_sec::ResultPrivacyMode::PrivatePayloadOramRequired;

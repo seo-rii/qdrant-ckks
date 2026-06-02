@@ -856,6 +856,41 @@ mod private_hnsw_grpc_tests {
             assert!(!err.message().contains("private_hnsw_oram"));
             assert!(!err.message().contains("/tmp"));
 
+            let mut mismatched_collection_manifest = fixture.manifest.clone();
+            mismatched_collection_manifest.collection_id = "other-collection".to_string();
+            let mismatched_collection_signature =
+                fixture.sign_manifest(&mismatched_collection_manifest);
+            let err = PrivateHnswOram::upload_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(mismatched_collection_manifest)),
+                    signature: Some(signature_to_proto(mismatched_collection_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("collection_id"));
+
+            let mut mismatched_vector_manifest = fixture.manifest.clone();
+            mismatched_vector_manifest.vector_name = "title".to_string();
+            let mismatched_vector_signature = fixture.sign_manifest(&mismatched_vector_manifest);
+            let err = PrivateHnswOram::upload_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(mismatched_vector_manifest)),
+                    signature: Some(signature_to_proto(mismatched_vector_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("vector_name"));
+
             let mut mismatched_privacy_manifest = fixture.manifest.clone();
             mismatched_privacy_manifest.result_privacy =
                 ResultPrivacyMode::PrivatePayloadOramRequired;
