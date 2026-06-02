@@ -593,7 +593,9 @@ handling does not echo the submitted root hash.
 REST and gRPC `read_paths` error handling is checked for non-reflection:
 epoch/root mismatches and malformed path labels fail without echoing the
 submitted root hash, submitted path label, or any stored bucket ciphertext into
-the response body/status message.
+the response body/status message. Missing encrypted bucket/proof data is
+reported as sanitized unavailable bucket data without exposing collection-local
+`private_hnsw_oram` filesystem paths.
 Malformed client signature shape errors for `read_paths` and `commit` are also
 sanitized so submitted signature bodies are not echoed.
 Commit error handling follows the same boundary: malformed updated bucket

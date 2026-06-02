@@ -320,8 +320,10 @@ mod private_hnsw_rest_tests {
 
     use actix_web::http::StatusCode;
     use actix_web::{App, test as actix_test, web};
+    use collection::private_hnsw_oram_store::PrivateHnswOramStore;
     use serde::de::DeserializeOwned;
     use serde_json::Value;
+    use storage::rbac::{Access, AccessRequirements, Auth};
 
     use super::*;
     use crate::common::private_hnsw_wire_fixture::{
@@ -1181,6 +1183,61 @@ mod private_hnsw_rest_tests {
             )
             .unwrap();
             assert!(!opened_buckets.is_empty());
+
+            let auth = Auth::new_internal(Access::full("private HNSW ORAM route test"));
+            let collection_pass = auth
+                .check_collection_access(
+                    "docs",
+                    AccessRequirements::new(),
+                    "private_hnsw_missing_bucket_test",
+                )
+                .unwrap();
+            let pass = new_unchecked_verification_pass();
+            let collection = dispatcher
+                .toc(&auth, &pass)
+                .get_collection(&collection_pass)
+                .await
+                .unwrap();
+            let uploaded_store = PrivateHnswOramStore::new(collection.path(), "text").unwrap();
+            let missing_bucket_id = read_response.buckets[0].bucket_id;
+            std::fs::remove_file(
+                uploaded_store
+                    .root_path()
+                    .join("buckets")
+                    .join(format!("{missing_bucket_id:08}.bucket")),
+            )
+            .unwrap();
+
+            let missing_bucket_paths = vec![fixture.entry_leaf_label()];
+            let missing_bucket_signature = fixture.sign_read_paths(&missing_bucket_paths, 1, true);
+            let missing_bucket_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/read_paths",
+                OramReadPathsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: missing_bucket_paths,
+                    padding: OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    },
+                    client_signature: PrivateHnswClientSignature {
+                        alg: missing_bucket_signature.alg,
+                        key_id: missing_bucket_signature.key_id,
+                        sig: missing_bucket_signature.sig,
+                    },
+                },
+                StatusCode::NOT_FOUND,
+                "encrypted bucket data is unavailable"
+            );
+            assert!(
+                !missing_bucket_error.contains("private_hnsw_oram"),
+                "{missing_bucket_error}"
+            );
+            assert!(
+                !missing_bucket_error.contains("/tmp"),
+                "{missing_bucket_error}"
+            );
 
             let search_run = fixture.run_single_search_collect_writeback();
             let unknown_commit_key_error = post_json_error_contains!(

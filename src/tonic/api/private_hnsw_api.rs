@@ -507,12 +507,14 @@ mod private_hnsw_grpc_tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
+    use collection::private_hnsw_oram_store::PrivateHnswOramStore;
     use qdrant_sec::{
         DistanceKind, PrivateHnswClientError, PrivateHnswEncryptedPathBatch,
         PrivateHnswSearchParams, ResultPrivacyMode, encode_private_hnsw_oram_leaf_label,
         open_private_hnsw_oram_verified_path_batch, plan_private_hnsw_oram_commit,
         search_private_hnsw_oram_encrypted_verified,
     };
+    use storage::rbac::{Access, AccessRequirements, Auth};
     use tonic::Code;
 
     use super::*;
@@ -1705,6 +1707,58 @@ mod private_hnsw_grpc_tests {
             )
             .unwrap();
             assert!(!opened_buckets.is_empty());
+
+            let auth = Auth::new_internal(Access::full("private HNSW ORAM grpc test"));
+            let collection_pass = auth
+                .check_collection_access(
+                    COLLECTION_NAME,
+                    AccessRequirements::new(),
+                    "private_hnsw_missing_bucket_test",
+                )
+                .unwrap();
+            let pass = new_unchecked_verification_pass();
+            let collection = dispatcher
+                .toc(&auth, &pass)
+                .get_collection(&collection_pass)
+                .await
+                .unwrap();
+            let uploaded_store = PrivateHnswOramStore::new(collection.path(), VECTOR_NAME).unwrap();
+            let missing_bucket_id = read_buckets[0].bucket_id;
+            std::fs::remove_file(
+                uploaded_store
+                    .root_path()
+                    .join("buckets")
+                    .join(format!("{missing_bucket_id:08}.bucket")),
+            )
+            .unwrap();
+
+            let missing_bucket_paths = vec![fixture.entry_leaf_label()];
+            let missing_bucket_signature = fixture.sign_read_paths(&missing_bucket_paths, 1, true);
+            let err = PrivateHnswOram::read_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramReadPathsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: missing_bucket_paths,
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    }),
+                    client_signature: Some(signature_to_proto(missing_bucket_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::NotFound);
+            assert!(
+                err.message()
+                    .contains("encrypted bucket data is unavailable")
+            );
+            assert!(!err.message().contains("private_hnsw_oram"));
+            assert!(!err.message().contains("/tmp"));
 
             let search_run = fixture.run_single_search_collect_writeback();
             let err = PrivateHnswOram::commit_private_hnsw_paths(

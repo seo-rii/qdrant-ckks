@@ -640,22 +640,28 @@ pub async fn do_read_private_hnsw_paths(
             let store = PrivateHnswOramStore::new(&session.collection_path, vector_name)?;
             let mut buckets = Vec::with_capacity(bucket_ids.len());
             for bucket_id in bucket_ids {
-                buckets.push(store.read_bucket(
-                    bucket_id,
-                    session.index_epoch,
-                    session.bucket_count,
-                    session.max_bucket_ciphertext_bytes,
-                )?);
+                buckets.push(
+                    store
+                        .read_bucket(
+                            bucket_id,
+                            session.index_epoch,
+                            session.bucket_count,
+                            session.max_bucket_ciphertext_bytes,
+                        )
+                        .map_err(private_hnsw_read_store_error)?,
+                );
             }
-            let proof = store.read_merkle_path_batch(
-                &buckets
-                    .iter()
-                    .map(|bucket| bucket.bucket_id)
-                    .collect::<Vec<_>>(),
-                session.index_epoch,
-                &session.root_hash,
-                session.bucket_count,
-            )?;
+            let proof = store
+                .read_merkle_path_batch(
+                    &buckets
+                        .iter()
+                        .map(|bucket| bucket.bucket_id)
+                        .collect::<Vec<_>>(),
+                    session.index_epoch,
+                    &session.root_hash,
+                    session.bucket_count,
+                )
+                .map_err(private_hnsw_read_store_error)?;
             let proof_value = serde_json::to_string(&proof).map_err(|err| {
                 StorageError::service_error(format!(
                     "failed to serialize private HNSW ORAM Merkle proof: {err}",
@@ -909,6 +915,21 @@ fn read_uploaded_manifest(
         }
         other => StorageError::from(other),
     })
+}
+
+fn private_hnsw_read_store_error(err: CollectionError) -> StorageError {
+    match err {
+        CollectionError::NotFound { .. } => {
+            StorageError::not_found("private HNSW ORAM encrypted bucket data is unavailable")
+        }
+        CollectionError::BadRequest { .. } => {
+            StorageError::bad_request("private HNSW ORAM encrypted bucket store validation failed")
+        }
+        CollectionError::ServiceError { .. } => StorageError::service_error(
+            "private HNSW ORAM encrypted bucket store validation failed",
+        ),
+        other => StorageError::from(other),
+    }
 }
 
 fn manifest_context_from_runtime(
