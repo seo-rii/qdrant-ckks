@@ -8540,7 +8540,7 @@ mod tests {
     }
 
     #[test]
-    fn private_hnsw_oram_query_points_requires_client_led_session() {
+    fn private_hnsw_oram_query_paths_require_client_led_session() {
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
         let settings = fixture.route_settings();
         let (_temp, dispatcher) = test_dispatcher();
@@ -8559,6 +8559,50 @@ mod tests {
                         VectorInputInternal::Vector(VectorInternal::Dense(vec![1.0, 0.0])),
                     ))),
                     using: VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/text/session")
+            ));
+
+            let err = do_query_points(
+                &toc,
+                COLLECTION_NAME,
+                CollectionQueryRequest {
+                    prefetch: vec![CollectionPrefetch {
+                        prefetch: Vec::new(),
+                        query: Some(Query::Vector(VectorQuery::Nearest(
+                            VectorInputInternal::Vector(VectorInternal::Dense(vec![1.0, 0.0])),
+                        ))),
+                        using: VECTOR_NAME.to_string(),
+                        filter: None,
+                        score_threshold: None,
+                        limit: 1,
+                        params: None,
+                        lookup_from: None,
+                    }],
+                    query: Some(Query::Fusion(FusionInternal::Dbsf)),
+                    using: "plain".to_string(),
                     filter: None,
                     score_threshold: None,
                     limit: 1,
