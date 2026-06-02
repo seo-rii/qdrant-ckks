@@ -634,6 +634,7 @@ pub async fn do_read_private_hnsw_paths(
                     "private HNSW ORAM read_paths request must match fixed path budget",
                 ));
             }
+            validate_unique_path_labels(&paths)?;
             let bucket_ids =
                 bucket_ids_for_path_batch(&paths, session.tree_height, session.bucket_count)?;
             let path_refs = paths.iter().map(String::as_str).collect::<Vec<_>>();
@@ -1382,6 +1383,18 @@ fn ordered_initial_bucket_commitments(
         .collect()
 }
 
+fn validate_unique_path_labels(paths: &[String]) -> StorageResult<()> {
+    let mut seen_paths = HashSet::new();
+    for path in paths {
+        if !seen_paths.insert(path.as_str()) {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM read_paths request contains duplicate path label",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn bucket_ids_for_path_batch(
     paths: &[String],
     tree_height: u32,
@@ -1436,6 +1449,13 @@ mod private_hnsw_tests {
         let right = BASE64URL_NOPAD.encode(&5u64.to_be_bytes());
         let bucket_ids = bucket_ids_for_path_batch(&[left, right], 3, 15).unwrap();
         assert_eq!(bucket_ids, vec![0, 2, 5, 11, 12]);
+    }
+
+    #[test]
+    fn read_path_budget_rejects_duplicate_path_labels() {
+        let leaf = BASE64URL_NOPAD.encode(&5u64.to_be_bytes());
+        let err = validate_unique_path_labels(&[leaf.clone(), leaf]).unwrap_err();
+        assert!(err.to_string().contains("duplicate path label"));
     }
 
     #[test]
