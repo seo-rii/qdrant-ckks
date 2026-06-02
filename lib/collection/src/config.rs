@@ -1625,6 +1625,55 @@ mod ckks_tests {
                 .contains("private_hnsw_oram_single_vector_selector")
         );
     }
+
+    #[test]
+    fn encryption_config_rejects_private_hnsw_oram_vector_overlap() {
+        let params = CollectionParams {
+            vectors: VectorsConfig::Multi(BTreeMap::from([(
+                "embedding".into(),
+                VectorParams {
+                    size: std::num::NonZeroU64::new(2).unwrap(),
+                    distance: Distance::Cosine,
+                    hnsw_config: None,
+                    quantization_config: None,
+                    on_disk: None,
+                    datatype: None,
+                    multivector_config: None,
+                },
+            )])),
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![
+                    EncryptionRuleRef {
+                        id: "embedding_private_hnsw".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec!["embedding".into()],
+                        },
+                        instance: "docs_private_hnsw_v1".to_string(),
+                        binding: Some("private-hnsw-oram/v1".to_string()),
+                    },
+                    EncryptionRuleRef {
+                        id: "embedding_client_ckks".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec!["embedding".into()],
+                        },
+                        instance: "docs_client_ckks_v1".to_string(),
+                        binding: Some("vector-envelope/v1".to_string()),
+                    },
+                ],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = params
+            .validate()
+            .expect_err("private HNSW ORAM vector must not overlap another vector binding");
+        assert!(err.to_string().contains("overlapping_encryption_selector"));
+    }
 }
 
 impl Default for WalConfig {
