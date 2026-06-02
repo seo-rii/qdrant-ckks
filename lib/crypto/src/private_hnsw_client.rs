@@ -3297,7 +3297,7 @@ mod tests {
             },
             index_epoch: 42,
             root_hash: BASE64URL_NOPAD.encode(&[42; 32]),
-            bucket_count: 1 << 20,
+            bucket_count: (1 << 25) - 1,
             logical_node_count: 500_000,
             dummy_node_count: 24_288,
             result_privacy: ResultPrivacyMode::IdsVisible,
