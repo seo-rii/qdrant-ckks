@@ -628,8 +628,9 @@ during the private session, but a later ordinary retrieve leaks the retrieved
 point ids to Qdrant. The enum and wire schema reserve
 `private_payload_oram_required` for future `payload/private-result-oram@v1`
 with binding `private-result-oram/v1`, but runtime validation and
-manifest/session policy reject that mode and reject the reserved payload
-provider ID until the payload ORAM layer exists. Do not advertise
+collection rule validation reject that binding; manifest/session policy also
+rejects that mode and the reserved payload provider ID until the payload ORAM
+layer exists. Do not advertise
 `private_payload_oram_required` as a working result-private fetch mode for this
 provider version.
 The crypto crate reserves the future payload/result ORAM manifest shape through

@@ -32,6 +32,7 @@ use crate::optimizers_builder::OptimizersConfig;
 pub const COLLECTION_CONFIG_FILE: &str = "config.json";
 const PAYLOAD_FIELD_BINDING: &str = "payload-field/v1";
 const CLIENT_PAYLOAD_ENVELOPE_BINDING: &str = "client-payload-envelope/v1";
+const PRIVATE_RESULT_ORAM_BINDING: &str = "private-result-oram/v1";
 const VECTOR_ENVELOPE_BINDING: &str = "vector-envelope/v1";
 const PRIVATE_HNSW_ORAM_BINDING: &str = "private-hnsw-oram/v1";
 const METADATA_VALUE_BINDING: &str = "metadata-value/v1";
@@ -1560,6 +1561,36 @@ mod ckks_tests {
     }
 
     #[test]
+    fn encryption_config_rejects_reserved_private_result_oram_binding() {
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_private_result".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_private_result_oram_v1".to_string(),
+                    binding: Some("private-result-oram/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = params
+            .validate()
+            .expect_err("private result ORAM binding is reserved until runtime support exists");
+        assert!(
+            err.to_string()
+                .contains("reserved_private_result_oram_binding")
+        );
+    }
+
+    #[test]
     fn encryption_config_accepts_private_hnsw_oram_vector_binding() {
         let params = CollectionParams {
             vectors: VectorsConfig::Multi(BTreeMap::from([(
@@ -2370,6 +2401,11 @@ fn validate_encryption_rules(
     let mut vector_names = HashSet::new();
     let mut metadata_keys = Vec::<&str>::new();
     for rule in rules {
+        if rule.binding.as_deref() == Some(PRIVATE_RESULT_ORAM_BINDING) {
+            return Err(validator::ValidationError::new(
+                "reserved_private_result_oram_binding",
+            ));
+        }
         if !ids.insert(rule.id.as_str()) {
             return Err(validator::ValidationError::new(
                 "duplicate_encryption_rule_id",
