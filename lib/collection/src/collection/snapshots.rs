@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::io::ErrorKind;
 use std::path::Path;
 
 use common::fs::read_json;
@@ -505,14 +506,16 @@ fn ensure_private_result_oram_snapshot_restore_not_present(
     collection_dir: &Path,
 ) -> CollectionResult<()> {
     let private_result_oram_path = collection_dir.join(PRIVATE_RESULT_ORAM_DIR);
-    if private_result_oram_path.exists() {
-        return Err(CollectionError::bad_request(format!(
+    match std::fs::symlink_metadata(&private_result_oram_path) {
+        Ok(_) => Err(CollectionError::bad_request(format!(
             "private result ORAM snapshot restore requires {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}, \
              which is reserved until the payload ORAM provider runtime is implemented"
-        )));
+        ))),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(CollectionError::service_error(format!(
+            "failed to inspect private result ORAM snapshot restore guard: {err}"
+        ))),
     }
-
-    Ok(())
 }
 
 fn validate_private_hnsw_oram_vector_snapshot(
@@ -870,6 +873,29 @@ mod tests {
         fs::create_dir(temp_dir.path().join(PRIVATE_RESULT_ORAM_DIR)).unwrap();
         let err =
             ensure_private_result_oram_snapshot_restore_not_present(temp_dir.path()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains(PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_result_oram_restore_guard_rejects_reserved_symlink() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-symlink")
+            .tempdir()
+            .unwrap();
+
+        std::os::unix::fs::symlink(
+            temp_dir.path().join("missing-result-oram-target"),
+            temp_dir.path().join(PRIVATE_RESULT_ORAM_DIR),
+        )
+        .unwrap();
+
+        let err =
+            ensure_private_result_oram_snapshot_restore_not_present(temp_dir.path()).unwrap_err();
+
         assert!(
             err.to_string()
                 .contains(PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
