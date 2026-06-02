@@ -801,6 +801,27 @@ mod private_hnsw_grpc_tests {
             let service =
                 PrivateHnswOramService::new(Arc::new(dispatcher.clone()), settings.clone());
 
+            let mut mismatched_privacy_manifest = fixture.manifest.clone();
+            mismatched_privacy_manifest.result_privacy =
+                ResultPrivacyMode::PrivatePayloadOramRequired;
+            let mismatched_privacy_signature = fixture.sign_manifest(&mismatched_privacy_manifest);
+            let err = PrivateHnswOram::upload_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(mismatched_privacy_manifest)),
+                    signature: Some(signature_to_proto(mismatched_privacy_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("manifest result_privacy does not match runtime instance")
+            );
+
             let manifest_epoch = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,
                 Request::new(grpc::UploadPrivateHnswManifestRequest {

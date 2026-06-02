@@ -460,6 +460,20 @@ mod private_hnsw_rest_tests {
                 }};
             }
 
+            let mut mismatched_privacy_manifest = fixture.manifest.clone();
+            mismatched_privacy_manifest.result_privacy =
+                qdrant_sec::ResultPrivacyMode::PrivatePayloadOramRequired;
+            let mismatched_privacy_signature = fixture.sign_manifest(&mismatched_privacy_manifest);
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: mismatched_privacy_manifest,
+                    signature: mismatched_privacy_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "manifest result_privacy does not match runtime instance"
+            );
+
             let manifest_result = post_json_ok!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {

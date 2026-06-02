@@ -352,6 +352,13 @@ impl PrivateHnswRouteWireFixture {
         .unwrap()
     }
 
+    pub(crate) fn sign_manifest(
+        &self,
+        manifest: &PrivateHnswOramManifest,
+    ) -> PrivateHnswOramSignature {
+        sign_private_hnsw_oram_manifest(&self.signing_key, manifest).unwrap()
+    }
+
     pub(crate) fn sign_manifest_refresh(
         &self,
         plan: &PrivateHnswClientCommitPlan,
