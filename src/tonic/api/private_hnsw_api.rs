@@ -1321,6 +1321,29 @@ mod private_hnsw_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("fixed path budget"));
 
+            let missing_dummy_paths = vec![fixture.entry_leaf_label()];
+            let missing_dummy_signature = fixture.sign_read_paths(&missing_dummy_paths, 1, false);
+            let err = PrivateHnswOram::read_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramReadPathsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: missing_dummy_paths,
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: false,
+                    }),
+                    client_signature: Some(signature_to_proto(missing_dummy_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("fixed path budget"));
+
             let err = PrivateHnswOram::read_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramReadPathsRequest {

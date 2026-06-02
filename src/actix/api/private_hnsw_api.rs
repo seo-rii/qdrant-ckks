@@ -888,6 +888,29 @@ mod private_hnsw_rest_tests {
                 "fixed path budget"
             );
 
+            let missing_dummy_paths = vec![fixture.entry_leaf_label()];
+            let missing_dummy_signature = fixture.sign_read_paths(&missing_dummy_paths, 1, false);
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/read_paths",
+                OramReadPathsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: missing_dummy_paths,
+                    padding: OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: false,
+                    },
+                    client_signature: PrivateHnswClientSignature {
+                        alg: missing_dummy_signature.alg,
+                        key_id: missing_dummy_signature.key_id,
+                        sig: missing_dummy_signature.sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "fixed path budget"
+            );
+
             let invalid_signature_paths = vec![fixture.entry_leaf_label()];
             post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",

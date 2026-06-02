@@ -586,9 +586,10 @@ the response body/status message.
 Commit error handling follows the same boundary: malformed updated bucket
 ciphertext is rejected without echoing the submitted ciphertext into the REST
 body or gRPC status message.
-The same live fixtures reject `read_paths` calls whose path count or padding
-metadata does not match the configured fixed path budget, before bucket reads
-are served. Valid `read_paths` calls must carry an Ed25519 client signature over
+The same live fixtures reject `read_paths` calls whose path count, requested
+path count, or dummy padding flag does not match the configured fixed path
+budget, before bucket reads are served. Valid `read_paths` calls must carry an
+Ed25519 client signature over
 collection/vector identity, key lineage, epoch/root, path labels, and padding
 metadata before encrypted buckets are returned.
 Snapshot restore preflight follows the same MVP result-privacy boundary:

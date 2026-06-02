@@ -386,7 +386,7 @@
 - private result ORAM skeleton도 동일하게 commit plan의 old epoch/root와 현재 manifest를 묶어 refreshed manifest/signature를 만들고 stale old root를 거부한다.
 - REST/gRPC `read_paths` 오류 응답은 mismatched root hash sentinel, malformed path label sentinel, stored bucket ciphertext를 반사하지 않는다.
 - REST/gRPC `commit` 오류 응답은 malformed updated bucket ciphertext sentinel을 반사하지 않는다.
-- REST/gRPC `read_paths` fixture는 path count 또는 padding metadata가 fixed path budget과 다르면 bucket read 전에 fail-closed로 거부한다.
+- REST/gRPC `read_paths` fixture는 path count, requested path count, dummy padding flag가 fixed path budget과 다르면 bucket read 전에 fail-closed로 거부한다.
 - REST/gRPC `read_paths` 성공 경로는 collection/vector, key lineage, epoch/root, path labels, padding metadata에 대한 Ed25519 client signature를 검증한 뒤 encrypted buckets를 반환하고, invalid read signature는 fail-closed로 거부한다.
 - snapshot restore preflight는 `private_payload_oram_required` manifest를 payload ORAM provider 구현 전까지 거부하고 `ids_visible`만 허용한다.
 - manifest signature, manifest ORAM capacity, bucket hash, stale epoch, invalid commit signature, symlink/permission hardening, snapshot leakage, crash recovery는 현재 provider/store/API fixture에 추가되어 있다.
