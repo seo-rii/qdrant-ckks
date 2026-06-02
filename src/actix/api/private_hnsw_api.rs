@@ -650,6 +650,25 @@ mod private_hnsw_rest_tests {
                 "manifest result_privacy does not match runtime instance"
             );
 
+            let manifest_signature_sentinel = "manifest-signature!sentinel";
+            let malformed_manifest_signature_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: fixture.manifest.clone(),
+                    signature: qdrant_sec::PrivateHnswOramSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: SIGNING_KEY_ID.to_string(),
+                        sig: manifest_signature_sentinel.to_string(),
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "manifest signature is malformed"
+            );
+            assert!(
+                !malformed_manifest_signature_error.contains(manifest_signature_sentinel),
+                "{malformed_manifest_signature_error}"
+            );
+
             let mut bad_manifest_signature = fixture.manifest_signature.clone();
             let replacement = if bad_manifest_signature.sig.starts_with('A') {
                 "B"

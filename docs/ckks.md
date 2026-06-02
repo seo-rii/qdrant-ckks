@@ -575,7 +575,8 @@ upload, and session open calls fail closed with a sanitized `NotFound`
 response; they do not surface collection-local private ORAM paths.
 Signed manifest uploads whose collection/vector, key lineage, or vector
 metadata context does not match the route and runtime context fail closed
-before manifest persistence.
+before manifest persistence. Malformed manifest signature errors are sanitized
+without echoing the submitted signature body.
 Path ORAM manifests must also bind `bucket_count` to the canonical full binary
 tree size implied by `tree_height`, so malformed layouts are rejected before a
 session can reach `read_paths`.
