@@ -553,21 +553,21 @@ fn validate_private_hnsw_oram_vector_snapshot(
         )));
     }
 
+    let max_bucket_ciphertext_bytes = private_hnsw_restore_max_bucket_ciphertext_bytes(&manifest)?;
+    for bucket_id in 0..manifest.bucket_count {
+        store.read_bucket(
+            bucket_id,
+            manifest.index_epoch,
+            manifest.bucket_count,
+            max_bucket_ciphertext_bytes,
+        )?;
+    }
     let last_bucket_id = manifest.bucket_count.saturating_sub(1);
     let bucket_ids = if last_bucket_id == 0 {
         vec![0]
     } else {
         vec![0, last_bucket_id]
     };
-    let max_bucket_ciphertext_bytes = private_hnsw_restore_max_bucket_ciphertext_bytes(&manifest)?;
-    for bucket_id in &bucket_ids {
-        store.read_bucket(
-            *bucket_id,
-            manifest.index_epoch,
-            manifest.bucket_count,
-            max_bucket_ciphertext_bytes,
-        )?;
-    }
     store.read_merkle_path_batch(
         &bucket_ids,
         manifest.index_epoch,
@@ -1131,6 +1131,79 @@ mod tests {
                 manifest.index_epoch,
                 manifest.root_hash.clone(),
                 vec![leaf0, leaf1],
+            )
+            .unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("00000001.bucket"));
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_missing_middle_bucket() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-missing-middle-bucket")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let mut manifest = private_hnsw_manifest(uuid.to_string());
+        manifest.bucket_count = 3;
+        let leaf0 = BASE64URL_NOPAD.encode(&[9; 32]);
+        let leaf1 = BASE64URL_NOPAD.encode(&[10; 32]);
+        let leaf2 = BASE64URL_NOPAD.encode(&[11; 32]);
+        manifest.root_hash = PrivateHnswOramStore::merkle_root_for_commitments(&[
+            leaf0.clone(),
+            leaf1.clone(),
+            leaf2.clone(),
+        ])
+        .unwrap();
+
+        let store = PrivateHnswOramStore::new(temp_dir.path(), "text").unwrap();
+        let signature = PrivateHnswOramSignature {
+            alg: "ed25519".to_string(),
+            key_id: manifest.owner_signing_key_id.clone(),
+            sig: BASE64URL_NOPAD.encode(&[7; 64]),
+        };
+        store.write_manifest(&manifest, &signature).unwrap();
+        store
+            .write_initial_epoch(&crate::private_hnsw_oram_store::PrivateHnswOramEpochState {
+                index_epoch: manifest.index_epoch,
+                root_hash: manifest.root_hash.clone(),
+            })
+            .unwrap();
+
+        for (bucket_id, leaf, plaintext) in [
+            (0, leaf0.clone(), b"encrypted bucket 0".as_slice()),
+            (2, leaf2.clone(), b"encrypted bucket 2".as_slice()),
+        ] {
+            let ciphertext = BASE64URL_NOPAD.encode(plaintext);
+            let ciphertext_sha256 = BASE64URL_NOPAD.encode(Sha256::digest(plaintext).as_ref());
+            store
+                .write_bucket(
+                    &PrivateHnswOramBucket {
+                        version: 1,
+                        bucket_id,
+                        index_epoch: manifest.index_epoch,
+                        ciphertext,
+                        ciphertext_sha256,
+                        bucket_commitment: leaf,
+                    },
+                    manifest.index_epoch,
+                    manifest.bucket_count,
+                    private_hnsw_restore_max_bucket_ciphertext_bytes(&manifest).unwrap(),
+                )
+                .unwrap();
+        }
+        store
+            .write_merkle_tree_from_commitments(
+                manifest.index_epoch,
+                manifest.root_hash.clone(),
+                vec![leaf0, leaf1, leaf2],
             )
             .unwrap();
 
