@@ -496,6 +496,18 @@ mod private_hnsw_rest_tests {
             assert_eq!(session_result["collection_id"], COLLECTION_ID);
             assert_eq!(session_result["index_epoch"], BASE_EPOCH);
 
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/session",
+                OpenPrivateHnswSessionRequest {
+                    client_id: "tenant-a/sdk-instance-2".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
+                },
+                StatusCode::BAD_REQUEST,
+                "ConcurrentWriter"
+            );
+
             let path_label_sentinel = "qdrant-sec-private-hnsw-path-label-sentinel";
             let sentinel_paths = vec![path_label_sentinel.to_string()];
             let sentinel_signature = fixture.sign_read_paths(&sentinel_paths, 1, true);
