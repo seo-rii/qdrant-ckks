@@ -162,6 +162,8 @@ pub enum PrivateHnswClientError {
     InvalidCommitSignatureContext(&'static str),
     #[error("private HNSW ORAM manifest signature context field {0} is invalid")]
     InvalidManifestSignatureContext(&'static str),
+    #[error("private HNSW ORAM manifest epoch/root does not match commit old epoch/root")]
+    ManifestCommitMismatch,
     #[error("private HNSW ORAM Merkle proof is malformed")]
     InvalidMerkleProof,
     #[error("private HNSW ORAM Merkle proof JSON is malformed")]
@@ -1660,6 +1662,34 @@ pub fn package_private_hnsw_oram_upload_bundle(
         manifest_signature,
         buckets: build.buckets.clone(),
     })
+}
+
+pub fn refresh_private_hnsw_oram_manifest_for_commit(
+    manifest: &PrivateHnswOramManifest,
+    plan: &PrivateHnswClientCommitPlan,
+) -> Result<PrivateHnswOramManifest, PrivateHnswClientError> {
+    if manifest.index_epoch != plan.old_epoch || manifest.root_hash != plan.old_root_hash {
+        return Err(PrivateHnswClientError::ManifestCommitMismatch);
+    }
+    if plan.new_epoch <= plan.old_epoch {
+        return Err(PrivateHnswClientError::InvalidCommitEpoch);
+    }
+    decode_merkle_root(&plan.new_root_hash)?;
+
+    let mut refreshed = manifest.clone();
+    refreshed.index_epoch = plan.new_epoch;
+    refreshed.root_hash = plan.new_root_hash.clone();
+    Ok(refreshed)
+}
+
+pub fn sign_private_hnsw_oram_manifest_refresh(
+    key_pair: &Ed25519KeyPair,
+    manifest: &PrivateHnswOramManifest,
+    plan: &PrivateHnswClientCommitPlan,
+) -> Result<(PrivateHnswOramManifest, PrivateHnswOramSignature), PrivateHnswClientError> {
+    let refreshed = refresh_private_hnsw_oram_manifest_for_commit(manifest, plan)?;
+    let signature = sign_private_hnsw_oram_manifest(key_pair, &refreshed)?;
+    Ok((refreshed, signature))
 }
 
 pub fn access_private_hnsw_oram_path(
@@ -3929,6 +3959,72 @@ mod tests {
         assert_eq!(signature.key_id, manifest.owner_signing_key_id);
         assert_eq!(epoch.epoch, manifest.index_epoch);
         assert_eq!(epoch.root_hash, [42; 32]);
+    }
+
+    #[test]
+    fn manifest_refresh_for_commit_advances_epoch_root_and_resigns() {
+        use ring::signature::{Ed25519KeyPair, KeyPair};
+
+        use crate::private_hnsw_oram::{
+            PrivateHnswManifestValidationContext, PrivateHnswSignatureVerification,
+            validate_private_hnsw_oram_manifest,
+        };
+
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[7; 32]).unwrap();
+        let manifest = fixture_manifest();
+        let plan = PrivateHnswClientCommitPlan {
+            old_epoch: manifest.index_epoch,
+            new_epoch: manifest.index_epoch + 1,
+            old_root_hash: manifest.root_hash.clone(),
+            new_root_hash: commitment(43),
+            leaf_commitments: vec![commitment(1), commitment(2)],
+            updated_buckets: vec![PrivateHnswClientCommitBucketRef {
+                bucket_id: 1,
+                ciphertext_sha256: commitment(9),
+            }],
+        };
+
+        let refreshed = refresh_private_hnsw_oram_manifest_for_commit(&manifest, &plan).unwrap();
+        assert_eq!(refreshed.index_epoch, plan.new_epoch);
+        assert_eq!(refreshed.root_hash, plan.new_root_hash);
+        assert_eq!(refreshed.collection_id, manifest.collection_id);
+        assert_eq!(refreshed.vector_name, manifest.vector_name);
+        assert_eq!(refreshed.bucket_count, manifest.bucket_count);
+        assert_eq!(refreshed.fixed_budget, manifest.fixed_budget);
+
+        let (signed_manifest, signature) =
+            sign_private_hnsw_oram_manifest_refresh(&key_pair, &manifest, &plan).unwrap();
+        assert_eq!(signed_manifest, refreshed);
+        assert_eq!(signature.key_id, signed_manifest.owner_signing_key_id);
+
+        let epoch = validate_private_hnsw_oram_manifest(
+            &signed_manifest,
+            Some(&signature),
+            PrivateHnswManifestValidationContext {
+                expected_collection_id: "collection-uuid-1",
+                expected_vector_name: "text",
+                expected_key_id: "tenant-a/vector-private-rk",
+                expected_rk_id: "tenant-a/vector-private-rk",
+                min_rk_epoch: 7,
+                max_rk_epoch: 7,
+                expected_dim: 1536,
+                expected_distance: DistanceKind::Cosine,
+                signature_verification: PrivateHnswSignatureVerification {
+                    expected_key_id: "tenant-a/private-hnsw-signing-v1",
+                    public_key: key_pair.public_key().as_ref(),
+                },
+            },
+        )
+        .unwrap();
+        assert_eq!(epoch.epoch, 43);
+        assert_eq!(epoch.root_hash, [43; 32]);
+
+        let mut stale_plan = plan.clone();
+        stale_plan.old_root_hash = commitment(99);
+        assert_eq!(
+            refresh_private_hnsw_oram_manifest_for_commit(&manifest, &stale_plan),
+            Err(PrivateHnswClientError::ManifestCommitMismatch)
+        );
     }
 
     #[test]

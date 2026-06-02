@@ -553,6 +553,9 @@ that advances epoch/root must be followed by a freshly signed manifest upload
 before a later session can open at that new epoch. REST and gRPC live fixtures
 now close the committed session, verify that re-open fails against the stale
 manifest, upload a refreshed signed manifest, and then re-open successfully.
+SDKs should use `refresh_private_hnsw_oram_manifest_for_commit` or
+`sign_private_hnsw_oram_manifest_refresh` so the refresh is bound to the commit
+plan's old epoch/root before a new manifest is signed.
 REST and gRPC `read_paths` error handling is checked for non-reflection:
 malformed path labels fail without echoing the submitted path label or any
 stored bucket ciphertext into the response body/status message.
@@ -650,8 +653,13 @@ copies the encrypted build metadata into a signed manifest-ready
 upload without recomputing server-visible index metadata.
 `package_private_hnsw_oram_upload_bundle` wraps that manifest, its Ed25519
 signature, and the sealed buckets into a serde-compatible upload bundle for
-REST/gRPC SDK distribution. The server-side private HNSW tests now package a
-tiny SDK-built encrypted index, sign its manifest, and verify that the initial
+REST/gRPC SDK distribution. After ORAM writeback, clients can call
+`refresh_private_hnsw_oram_manifest_for_commit` to derive the next signed
+manifest body from the commit plan, or
+`sign_private_hnsw_oram_manifest_refresh` to derive and sign it in one step;
+both reject a plan whose old epoch/root does not match the current manifest.
+The server-side private HNSW tests now package a tiny SDK-built encrypted index,
+sign its manifest, and verify that the initial
 bucket upload bundle satisfies the same manifest epoch/root and Merkle
 commitment contract used by REST/gRPC bucket upload. The collection store tests
 also exercise a packaged
