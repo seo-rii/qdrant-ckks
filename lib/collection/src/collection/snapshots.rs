@@ -997,6 +997,40 @@ mod tests {
     }
 
     #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_current_epoch_mismatch() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-bad-current-epoch")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+
+        let store = PrivateHnswOramStore::new(temp_dir.path(), "text").unwrap();
+        store
+            .compare_and_swap_epoch(
+                &crate::private_hnsw_oram_store::PrivateHnswOramEpochState {
+                    index_epoch: manifest.index_epoch,
+                    root_hash: manifest.root_hash.clone(),
+                },
+                &crate::private_hnsw_oram_store::PrivateHnswOramEpochState {
+                    index_epoch: manifest.index_epoch + 1,
+                    root_hash: BASE64URL_NOPAD.encode(&[8; 32]),
+                },
+            )
+            .unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("current epoch/root"));
+    }
+
+    #[test]
     fn private_hnsw_oram_restore_preflight_rejects_missing_bucket_zero() {
         let temp_dir = tempfile::Builder::new()
             .prefix("private-hnsw-restore-missing-bucket")

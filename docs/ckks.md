@@ -546,7 +546,8 @@ and assert that the raw snapshot archive and restored bucket file do not contain
 the sentinel bytes.
 Restore preflight rejects result-private manifests, collection/vector context
 mismatches, vector dimension/distance mismatches, manifest signature key-id
-mismatches, and missing encrypted bucket files before shard restore proceeds.
+mismatches, current epoch/root mismatches, and missing encrypted bucket files
+before shard restore proceeds.
 The live REST and gRPC fixtures also exercise adversarial commit handling: a
 commit with a validly-shaped but wrong Ed25519 signature is rejected, and
 replaying a previous old epoch/root after a successful commit is rejected
