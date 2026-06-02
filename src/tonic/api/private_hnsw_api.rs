@@ -822,6 +822,30 @@ mod private_hnsw_grpc_tests {
                     .contains("manifest result_privacy does not match runtime instance")
             );
 
+            let mut bad_manifest_signature = fixture.manifest_signature.clone();
+            let replacement = if bad_manifest_signature.sig.starts_with('A') {
+                "B"
+            } else {
+                "A"
+            };
+            bad_manifest_signature.sig.replace_range(0..1, replacement);
+            let err = PrivateHnswOram::upload_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                    signature: Some(signature_to_proto(bad_manifest_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("manifest signature verification failed")
+            );
+
             let manifest_epoch = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,
                 Request::new(grpc::UploadPrivateHnswManifestRequest {

@@ -474,6 +474,23 @@ mod private_hnsw_rest_tests {
                 "manifest result_privacy does not match runtime instance"
             );
 
+            let mut bad_manifest_signature = fixture.manifest_signature.clone();
+            let replacement = if bad_manifest_signature.sig.starts_with('A') {
+                "B"
+            } else {
+                "A"
+            };
+            bad_manifest_signature.sig.replace_range(0..1, replacement);
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: fixture.manifest.clone(),
+                    signature: bad_manifest_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "manifest signature verification failed"
+            );
+
             let manifest_result = post_json_ok!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {
