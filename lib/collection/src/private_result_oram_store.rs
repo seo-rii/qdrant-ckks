@@ -1122,6 +1122,45 @@ mod tests {
         assert!(err.to_string().contains("non-symlink regular file"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn bucket_directory_group_world_accessible_rejects() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        store.ensure_layout().unwrap();
+        fs::set_permissions(
+            store.root_path().join(BUCKETS_DIR),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+
+        let err = store.read_bucket(0, 42, 1, 128).unwrap_err();
+
+        assert!(err.to_string().contains("group/world accessible"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bucket_file_group_world_accessible_rejects() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let bucket = fixture_bucket(0, 42, b"encrypted result bucket");
+        store.write_bucket(&bucket, 42, 1, 128).unwrap();
+        fs::set_permissions(
+            store.root_path().join(BUCKETS_DIR).join("00000000.bucket"),
+            fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+
+        let err = store.read_bucket(0, 42, 1, 128).unwrap_err();
+
+        assert!(err.to_string().contains("group/world accessible"));
+    }
+
     #[test]
     fn initial_upload_bundle_writes_manifest_buckets_merkle_and_epoch() {
         let temp = TempDir::new().unwrap();
