@@ -522,6 +522,26 @@ mod private_hnsw_rest_tests {
                 "{missing_manifest_bucket_error}"
             );
 
+            let missing_manifest_session_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/session",
+                OpenPrivateHnswSessionRequest {
+                    client_id: "tenant-a/sdk-instance-before-manifest".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
+                },
+                StatusCode::NOT_FOUND,
+                "manifest"
+            );
+            assert!(
+                !missing_manifest_session_error.contains("private_hnsw_oram"),
+                "{missing_manifest_session_error}"
+            );
+            assert!(
+                !missing_manifest_session_error.contains("/tmp"),
+                "{missing_manifest_session_error}"
+            );
+
             let mut mismatched_privacy_manifest = fixture.manifest.clone();
             mismatched_privacy_manifest.result_privacy =
                 qdrant_sec::ResultPrivacyMode::PrivatePayloadOramRequired;
