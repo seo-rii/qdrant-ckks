@@ -569,6 +569,59 @@ mod private_hnsw_rest_tests {
                 "vector_name"
             );
 
+            let mut mismatched_key_manifest = fixture.manifest.clone();
+            mismatched_key_manifest.key_id = "tenant-b/vector-private-rk".to_string();
+            let mismatched_key_signature = fixture.sign_manifest(&mismatched_key_manifest);
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: mismatched_key_manifest,
+                    signature: mismatched_key_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "key_id"
+            );
+
+            let mut mismatched_epoch_manifest = fixture.manifest.clone();
+            mismatched_epoch_manifest.rk_epoch += 1;
+            let mismatched_epoch_signature = fixture.sign_manifest(&mismatched_epoch_manifest);
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: mismatched_epoch_manifest,
+                    signature: mismatched_epoch_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "rk_epoch"
+            );
+
+            let mut mismatched_dim_manifest = fixture.manifest.clone();
+            mismatched_dim_manifest.dim += 1;
+            let mismatched_dim_signature = fixture.sign_manifest(&mismatched_dim_manifest);
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: mismatched_dim_manifest,
+                    signature: mismatched_dim_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "dim"
+            );
+
+            let mut mismatched_distance_manifest = fixture.manifest.clone();
+            mismatched_distance_manifest.distance = qdrant_sec::DistanceKind::Cosine;
+            let mismatched_distance_signature =
+                fixture.sign_manifest(&mismatched_distance_manifest);
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: mismatched_distance_manifest,
+                    signature: mismatched_distance_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "distance"
+            );
+
             let mut mismatched_bucket_count_manifest = fixture.manifest.clone();
             mismatched_bucket_count_manifest.bucket_count -= 1;
             let mismatched_bucket_count_signature =

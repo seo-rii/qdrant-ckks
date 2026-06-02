@@ -891,6 +891,75 @@ mod private_hnsw_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("vector_name"));
 
+            let mut mismatched_key_manifest = fixture.manifest.clone();
+            mismatched_key_manifest.key_id = "tenant-b/vector-private-rk".to_string();
+            let mismatched_key_signature = fixture.sign_manifest(&mismatched_key_manifest);
+            let err = PrivateHnswOram::upload_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(mismatched_key_manifest)),
+                    signature: Some(signature_to_proto(mismatched_key_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("key_id"));
+
+            let mut mismatched_epoch_manifest = fixture.manifest.clone();
+            mismatched_epoch_manifest.rk_epoch += 1;
+            let mismatched_epoch_signature = fixture.sign_manifest(&mismatched_epoch_manifest);
+            let err = PrivateHnswOram::upload_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(mismatched_epoch_manifest)),
+                    signature: Some(signature_to_proto(mismatched_epoch_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("rk_epoch"));
+
+            let mut mismatched_dim_manifest = fixture.manifest.clone();
+            mismatched_dim_manifest.dim += 1;
+            let mismatched_dim_signature = fixture.sign_manifest(&mismatched_dim_manifest);
+            let err = PrivateHnswOram::upload_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(mismatched_dim_manifest)),
+                    signature: Some(signature_to_proto(mismatched_dim_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("dim"));
+
+            let mut mismatched_distance_manifest = fixture.manifest.clone();
+            mismatched_distance_manifest.distance = DistanceKind::Cosine;
+            let mismatched_distance_signature =
+                fixture.sign_manifest(&mismatched_distance_manifest);
+            let err = PrivateHnswOram::upload_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(mismatched_distance_manifest)),
+                    signature: Some(signature_to_proto(mismatched_distance_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("distance"));
+
             let mut mismatched_bucket_count_manifest = fixture.manifest.clone();
             mismatched_bucket_count_manifest.bucket_count -= 1;
             let mismatched_bucket_count_signature =
