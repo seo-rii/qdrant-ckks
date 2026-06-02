@@ -999,6 +999,30 @@ mod private_hnsw_grpc_tests {
                     .contains("manifest result_privacy does not match runtime instance")
             );
 
+            let signature_key_id_sentinel = "signature-key-id-sentinel";
+            let err = PrivateHnswOram::upload_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                    signature: Some(grpc::PrivateHnswSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: signature_key_id_sentinel.to_string(),
+                        sig: fixture.manifest_signature.sig.clone(),
+                    }),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("signature key id is not configured"));
+            assert!(
+                !err.message().contains(signature_key_id_sentinel),
+                "{}",
+                err.message()
+            );
+
             let manifest_signature_alg_sentinel = "manifest-signature-alg-sentinel";
             let err = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,
@@ -1500,6 +1524,36 @@ mod private_hnsw_grpc_tests {
                     .contains("read_paths signature verification failed")
             );
 
+            let err = PrivateHnswOram::read_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramReadPathsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: vec![fixture.entry_leaf_label()],
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    }),
+                    client_signature: Some(grpc::PrivateHnswSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: signature_key_id_sentinel.to_string(),
+                        sig: fixture.client_signature().sig,
+                    }),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("signature key id is not configured"));
+            assert!(
+                !err.message().contains(signature_key_id_sentinel),
+                "{}",
+                err.message()
+            );
+
             let signature_body_sentinel = "signature!sentinel";
             let err = PrivateHnswOram::read_private_hnsw_paths(
                 &service,
@@ -1603,6 +1657,39 @@ mod private_hnsw_grpc_tests {
             assert!(!opened_buckets.is_empty());
 
             let search_run = fixture.run_single_search_collect_writeback();
+            let err = PrivateHnswOram::commit_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramCommitRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run
+                        .updated_buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                    commit_signature: Some(grpc::PrivateHnswSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: signature_key_id_sentinel.to_string(),
+                        sig: fixture.client_signature().sig,
+                    }),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("signature key id is not configured"));
+            assert!(
+                !err.message().contains(signature_key_id_sentinel),
+                "{}",
+                err.message()
+            );
+
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {

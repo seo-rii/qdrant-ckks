@@ -979,9 +979,7 @@ fn signature_public_key(
         .get(signature_key_id)
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| {
-            StorageError::bad_request(format!(
-                "private HNSW ORAM signature key id {signature_key_id} is not configured",
-            ))
+            StorageError::bad_request("private HNSW ORAM signature key id is not configured")
         })?;
     let public_key = BASE64URL_NOPAD
         .decode(public_key_b64.as_bytes())

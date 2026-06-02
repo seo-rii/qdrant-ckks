@@ -650,6 +650,25 @@ mod private_hnsw_rest_tests {
                 "manifest result_privacy does not match runtime instance"
             );
 
+            let signature_key_id_sentinel = "signature-key-id-sentinel";
+            let unknown_manifest_key_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: fixture.manifest.clone(),
+                    signature: qdrant_sec::PrivateHnswOramSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: signature_key_id_sentinel.to_string(),
+                        sig: fixture.manifest_signature.sig.clone(),
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "signature key id is not configured"
+            );
+            assert!(
+                !unknown_manifest_key_error.contains(signature_key_id_sentinel),
+                "{unknown_manifest_key_error}"
+            );
+
             let manifest_signature_alg_sentinel = "manifest-signature-alg-sentinel";
             let malformed_manifest_alg_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
@@ -1022,6 +1041,31 @@ mod private_hnsw_rest_tests {
                 "read_paths signature verification failed"
             );
 
+            let unknown_read_key_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/read_paths",
+                OramReadPathsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: vec![fixture.entry_leaf_label()],
+                    padding: OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    },
+                    client_signature: PrivateHnswClientSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: signature_key_id_sentinel.to_string(),
+                        sig: fixture.client_signature().sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "signature key id is not configured"
+            );
+            assert!(
+                !unknown_read_key_error.contains(signature_key_id_sentinel),
+                "{unknown_read_key_error}"
+            );
+
             let signature_body_sentinel = "signature!sentinel";
             let malformed_read_signature_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",
@@ -1113,6 +1157,29 @@ mod private_hnsw_rest_tests {
             assert!(!opened_buckets.is_empty());
 
             let search_run = fixture.run_single_search_collect_writeback();
+            let unknown_commit_key_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/commit",
+                OramCommitRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run.updated_buckets.clone(),
+                    commit_signature: PrivateHnswClientSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: signature_key_id_sentinel.to_string(),
+                        sig: fixture.client_signature().sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "signature key id is not configured"
+            );
+            assert!(
+                !unknown_commit_key_error.contains(signature_key_id_sentinel),
+                "{unknown_commit_key_error}"
+            );
+
             let malformed_commit_signature_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
