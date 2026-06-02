@@ -709,6 +709,24 @@ mod private_hnsw_rest_tests {
                 "ciphertext_sha256 mismatch"
             );
 
+            let upload_ciphertext_sentinel = "bucket-upload-ciphertext-sentinel";
+            let mut malformed_upload_buckets = fixture.encrypted_build.buckets.clone();
+            malformed_upload_buckets[0].ciphertext = upload_ciphertext_sentinel.to_string();
+            let malformed_upload_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/buckets",
+                UploadPrivateHnswBucketsRequest {
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: malformed_upload_buckets,
+                },
+                StatusCode::BAD_REQUEST,
+                "ciphertext"
+            );
+            assert!(
+                !malformed_upload_error.contains(upload_ciphertext_sentinel),
+                "{malformed_upload_error}"
+            );
+
             let mut missing_bucket_set = fixture.encrypted_build.buckets.clone();
             missing_bucket_set.pop();
             post_json_error_contains!(

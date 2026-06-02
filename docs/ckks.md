@@ -578,7 +578,10 @@ Path ORAM manifests must also bind `bucket_count` to the canonical full binary
 tree size implied by `tree_height`, so malformed layouts are rejected before a
 session can reach `read_paths`.
 Initial bucket upload also rejects incomplete bucket sets, duplicated bucket
-ids, and ciphertext hash mismatches before encrypted bucket files are written.
+ids, malformed bucket ciphertext, and ciphertext hash mismatches before
+encrypted bucket files are written. The malformed ciphertext error path does
+not echo the submitted ciphertext into REST response bodies or gRPC status
+messages.
 REST and gRPC `read_paths` error handling is checked for non-reflection:
 epoch/root mismatches and malformed path labels fail without echoing the
 submitted root hash, submitted path label, or any stored bucket ciphertext into
