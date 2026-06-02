@@ -1515,6 +1515,44 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "updated_buckets must contain"
             );
+            let duplicate_commit_bucket = search_run.updated_buckets[0].clone();
+            let duplicate_commit_buckets = vec![
+                duplicate_commit_bucket.clone(),
+                duplicate_commit_bucket.clone(),
+            ];
+            let duplicate_commit_plan = qdrant_sec::PrivateHnswClientCommitPlan {
+                old_epoch: BASE_EPOCH,
+                new_epoch: NEXT_EPOCH,
+                old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                leaf_commitments: search_run.commit_plan.leaf_commitments.clone(),
+                updated_buckets: duplicate_commit_buckets
+                    .iter()
+                    .map(|bucket| qdrant_sec::PrivateHnswClientCommitBucketRef {
+                        bucket_id: bucket.bucket_id,
+                        ciphertext_sha256: bucket.ciphertext_sha256.clone(),
+                    })
+                    .collect(),
+            };
+            let duplicate_commit_signature = fixture.sign_commit(&duplicate_commit_plan);
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/commit",
+                OramCommitRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: duplicate_commit_plan.old_root_hash,
+                    new_root_hash: duplicate_commit_plan.new_root_hash,
+                    updated_buckets: duplicate_commit_buckets,
+                    commit_signature: PrivateHnswClientSignature {
+                        alg: duplicate_commit_signature.alg,
+                        key_id: duplicate_commit_signature.key_id,
+                        sig: duplicate_commit_signature.sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "duplicate bucket id"
+            );
             let mut oversized_writeback_buckets = search_run.updated_buckets.clone();
             while oversized_writeback_buckets.len() <= 3 {
                 oversized_writeback_buckets.push(search_run.updated_buckets[0].clone());

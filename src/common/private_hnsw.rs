@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -738,6 +738,14 @@ pub async fn do_commit_private_hnsw_paths(
             return Err(StorageError::bad_request(format!(
                 "private HNSW ORAM commit updated_buckets must contain 1..={max_updated_buckets} buckets",
             )));
+        }
+        let mut seen_bucket_ids = HashSet::new();
+        for bucket in &updated_buckets {
+            if !seen_bucket_ids.insert(bucket.bucket_id) {
+                return Err(StorageError::bad_request(
+                    "private HNSW ORAM commit updated_buckets contains duplicate bucket id",
+                ));
+            }
         }
         let commit_bucket_refs = updated_buckets
             .iter()
