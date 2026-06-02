@@ -872,6 +872,27 @@ mod private_hnsw_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("requested epoch"));
 
+            let err = PrivateHnswOram::open_private_hnsw_session(
+                &service,
+                Request::new(grpc::OpenPrivateHnswSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    client_id: "tenant-a/sdk-instance-private-result".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: result_privacy_to_proto(
+                        ResultPrivacyMode::PrivatePayloadOramRequired,
+                    ),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("requested result_privacy does not match manifest")
+            );
+
             let session = PrivateHnswOram::open_private_hnsw_session(
                 &service,
                 Request::new(grpc::OpenPrivateHnswSessionRequest {

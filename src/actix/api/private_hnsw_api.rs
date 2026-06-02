@@ -505,6 +505,17 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "requested epoch"
             );
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/session",
+                OpenPrivateHnswSessionRequest {
+                    client_id: "tenant-a/sdk-instance-private-result".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: qdrant_sec::ResultPrivacyMode::PrivatePayloadOramRequired,
+                },
+                StatusCode::BAD_REQUEST,
+                "requested result_privacy does not match manifest"
+            );
 
             let session_result = post_json_ok!(
                 "/collections/docs/private-hnsw/text/session",

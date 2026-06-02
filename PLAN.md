@@ -377,7 +377,7 @@
 - crash window에서 bucket/Merkle writeback이 epoch CAS보다 먼저 보이더라도 old current epoch와 new bucket/root를 섞어 serving하지 않고 fail closed 한다.
 - collection snapshot은 client-sealed private HNSW bucket ciphertext를 포함하되 bucket plaintext sentinel bytes를 archive/restore 파일에 노출하지 않는다.
 - REST/gRPC ORAM commit fixture는 invalid Ed25519 commit signature와 successful commit 이후 stale old_epoch replay를 모두 fail-closed로 검증한다.
-- REST/gRPC ORAM session fixture는 strict mode `fixed_budget=false`와 non-current desired epoch를 session open에서 거부한다.
+- REST/gRPC ORAM session fixture는 strict mode `fixed_budget=false`, non-current desired epoch, reserved `private_payload_oram_required` result privacy를 session open에서 거부한다.
 - REST/gRPC ORAM session fixture는 active session이 있는 같은 private index에 대해 두 번째 session open을 `ConcurrentWriter`로 거부한다.
 - REST/gRPC ORAM session fixture는 writeback commit 이후 stale signed manifest로는 새 epoch session을 열 수 없고, closed session id는 `read_paths`에 재사용할 수 없으며, refreshed signed manifest upload 뒤에는 같은 epoch session을 열 수 있음을 검증한다.
 - SDK helper는 commit plan의 old epoch/root가 현재 manifest와 맞을 때만 refreshed manifest/signature를 만들고, stale old root는 client-side에서 거부한다.
