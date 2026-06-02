@@ -372,7 +372,7 @@
 
 - runtime strict mode에서 private provider는 허용되고 server materials/backend, unsupported options, non-client-led search, loose fixed budget은 거부된다.
 - collection config는 `private-hnsw-oram/v1` binding과 rule당 단일 vector name만 허용하고, vector dim/distance와 runtime options mismatch를 거부한다.
-- normal `upsert`/`update_vectors` plaintext write와 server-side search/scoring은 private ORAM session API 안내 메시지로 fail closed 된다.
+- normal `upsert`/`update_vectors` plaintext write와 server-side search/scoring은 private ORAM session API 안내 메시지로 fail closed 된다. 실제 `do_upsert_points`/`do_update_vectors`, root `do_query_points`, 그리고 universal query prefetch/fusion 경계도 같은 fail-closed 메시지로 고정했다.
 - private ORAM bucket store는 symlink bucket과 Unix group/world-accessible bucket directory/file을 fail-closed로 거부한다.
 - crash window에서 bucket/Merkle writeback이 epoch CAS보다 먼저 보이더라도 old current epoch와 new bucket/root를 섞어 serving하지 않고 fail closed 한다.
 - collection snapshot은 client-sealed private HNSW bucket ciphertext를 포함하되 bucket plaintext sentinel bytes를 archive/restore 파일에 노출하지 않는다.
