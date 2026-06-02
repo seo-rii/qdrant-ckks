@@ -459,6 +459,23 @@ mod private_hnsw_rest_tests {
                     body.to_string()
                 }};
             }
+            macro_rules! get_json_ok {
+                ($uri:expr) => {{
+                    let request = actix_test::TestRequest::get().uri($uri).to_request();
+                    let response = actix_test::call_service(&app, request).await;
+                    let status = response.status();
+                    let body_bytes = actix_test::read_body(response).await;
+                    let body: Value = serde_json::from_slice(&body_bytes).unwrap_or_else(|err| {
+                        panic!(
+                            "failed to parse response body for {status}: {err}: {}",
+                            String::from_utf8_lossy(&body_bytes)
+                        )
+                    });
+                    assert_eq!(status, StatusCode::OK, "{body}");
+                    assert_eq!(body["status"], "ok");
+                    body["result"].clone()
+                }};
+            }
 
             let mut mismatched_privacy_manifest = fixture.manifest.clone();
             mismatched_privacy_manifest.result_privacy =
@@ -502,6 +519,15 @@ mod private_hnsw_rest_tests {
             assert_eq!(
                 manifest_result["root_hash"].as_str().unwrap(),
                 fixture.encrypted_build.root_hash.as_str(),
+            );
+            let manifest_read = get_json_ok!("/collections/docs/private-hnsw/text/manifest");
+            assert_eq!(
+                manifest_read["manifest"]["root_hash"].as_str().unwrap(),
+                fixture.encrypted_build.root_hash.as_str(),
+            );
+            assert_eq!(
+                manifest_read["signature"]["sig"].as_str().unwrap(),
+                fixture.manifest_signature.sig.as_str(),
             );
 
             let mut hash_mismatch_buckets = fixture.encrypted_build.buckets.clone();

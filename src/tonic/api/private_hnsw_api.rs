@@ -860,6 +860,27 @@ mod private_hnsw_grpc_tests {
             .into_inner();
             assert_eq!(manifest_epoch.index_epoch, BASE_EPOCH);
             assert_eq!(manifest_epoch.root_hash, fixture.encrypted_build.root_hash);
+            let manifest_read = PrivateHnswOram::get_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::GetPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                }),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            assert_eq!(
+                manifest_from_proto(required(manifest_read.manifest, "manifest").unwrap()).unwrap(),
+                fixture.manifest,
+            );
+            assert_eq!(
+                common_signature_from_proto(
+                    required(manifest_read.signature, "signature").unwrap()
+                )
+                .sig,
+                fixture.manifest_signature.sig,
+            );
 
             let mut hash_mismatch_buckets = fixture.encrypted_build.buckets.clone();
             let replacement = if hash_mismatch_buckets[0].ciphertext_sha256.starts_with('A') {
