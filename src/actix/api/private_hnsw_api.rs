@@ -476,6 +476,51 @@ mod private_hnsw_rest_tests {
                     body["result"].clone()
                 }};
             }
+            macro_rules! get_json_error_contains {
+                ($uri:expr, $status:expr, $needle:expr) => {{
+                    let request = actix_test::TestRequest::get().uri($uri).to_request();
+                    let response = actix_test::call_service(&app, request).await;
+                    let status = response.status();
+                    let body_bytes = actix_test::read_body(response).await;
+                    let body = String::from_utf8_lossy(&body_bytes);
+                    assert_eq!(status, $status, "{body}");
+                    assert!(body.contains($needle), "{body}");
+                    body.to_string()
+                }};
+            }
+
+            let missing_manifest_read_error = get_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                StatusCode::NOT_FOUND,
+                "manifest"
+            );
+            assert!(
+                !missing_manifest_read_error.contains("private_hnsw_oram"),
+                "{missing_manifest_read_error}"
+            );
+            assert!(
+                !missing_manifest_read_error.contains("/tmp"),
+                "{missing_manifest_read_error}"
+            );
+
+            let missing_manifest_bucket_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/buckets",
+                UploadPrivateHnswBucketsRequest {
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: fixture.encrypted_build.buckets.clone(),
+                },
+                StatusCode::NOT_FOUND,
+                "manifest"
+            );
+            assert!(
+                !missing_manifest_bucket_error.contains("private_hnsw_oram"),
+                "{missing_manifest_bucket_error}"
+            );
+            assert!(
+                !missing_manifest_bucket_error.contains("/tmp"),
+                "{missing_manifest_bucket_error}"
+            );
 
             let mut mismatched_privacy_manifest = fixture.manifest.clone();
             mismatched_privacy_manifest.result_privacy =

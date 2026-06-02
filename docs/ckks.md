@@ -562,6 +562,9 @@ upload a refreshed signed manifest, and then re-open successfully.
 SDKs should use `refresh_private_hnsw_oram_manifest_for_commit` or
 `sign_private_hnsw_oram_manifest_refresh` so the refresh is bound to the commit
 plan's old epoch/root before a new manifest is signed.
+Before the first signed manifest upload, REST and gRPC manifest read and bucket
+upload calls fail closed with a sanitized `NotFound` response; they do not
+surface collection-local private ORAM paths.
 REST and gRPC `read_paths` error handling is checked for non-reflection:
 malformed path labels fail without echoing the submitted path label or any
 stored bucket ciphertext into the response body/status message.

@@ -349,7 +349,7 @@ pub async fn do_get_private_hnsw_manifest(
     let rule = private_hnsw_rule(&encryption, vector_name)?;
     let instance = private_hnsw_instance(settings, rule)?;
     let store = PrivateHnswOramStore::new(collection.path(), vector_name)?;
-    let (manifest, signature) = store.read_manifest()?;
+    let (manifest, signature) = read_uploaded_manifest(&store)?;
     let runtime_context = manifest_context_from_runtime(
         &config.params,
         &collection_crypto_id,
@@ -408,7 +408,7 @@ pub async fn do_upload_private_hnsw_buckets(
     let rule = private_hnsw_rule(&encryption, vector_name)?;
     let instance = private_hnsw_instance(settings, rule)?;
     let store = PrivateHnswOramStore::new(collection.path(), vector_name)?;
-    let (manifest, signature) = store.read_manifest()?;
+    let (manifest, signature) = read_uploaded_manifest(&store)?;
     let runtime_context = manifest_context_from_runtime(
         &config.params,
         &collection_crypto_id,
@@ -498,7 +498,7 @@ pub async fn do_open_private_hnsw_session(
     let rule = private_hnsw_rule(&encryption, vector_name)?;
     let instance = private_hnsw_instance(settings, rule)?;
     let store = PrivateHnswOramStore::new(collection.path(), vector_name)?;
-    let (manifest, signature) = store.read_manifest()?;
+    let (manifest, signature) = read_uploaded_manifest(&store)?;
     let runtime_context = manifest_context_from_runtime(
         &config.params,
         &collection_crypto_id,
@@ -898,6 +898,17 @@ fn private_hnsw_instance<'a>(
         )));
     }
     Ok(instance)
+}
+
+fn read_uploaded_manifest(
+    store: &PrivateHnswOramStore,
+) -> StorageResult<(PrivateHnswOramManifest, PrivateHnswOramSignature)> {
+    store.read_manifest().map_err(|err| match err {
+        CollectionError::NotFound { .. } => {
+            StorageError::not_found("private HNSW ORAM manifest has not been uploaded")
+        }
+        other => StorageError::from(other),
+    })
 }
 
 fn manifest_context_from_runtime(

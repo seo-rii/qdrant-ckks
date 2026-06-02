@@ -696,6 +696,9 @@ fn create_private_dir(path: &Path) -> CollectionResult<()> {
 
 fn validate_private_dir(path: &Path) -> CollectionResult<()> {
     let metadata = fs::symlink_metadata(path).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            return CollectionError::not_found(format!("private HNSW ORAM directory {path:?}"));
+        }
         CollectionError::service_error(format!(
             "failed to inspect private HNSW ORAM directory {path:?}: {err}",
         ))
