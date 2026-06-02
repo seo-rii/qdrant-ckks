@@ -550,7 +550,8 @@ sentinel bytes.
 Restore preflight rejects result-private manifests, collection/vector context
 mismatches, vector dimension/distance mismatches, manifest signature key-id
 mismatches, Path ORAM tree_height/bucket_count mismatches, current epoch/root
-mismatches, and missing encrypted bucket files anywhere in the manifest bucket
+mismatches, bucket commitment roots that do not reconstruct the manifest
+`root_hash`, and missing encrypted bucket files anywhere in the manifest bucket
 range before shard restore proceeds. Symlinked vector directories and bucket
 files are rejected by the same restore preflight.
 The live REST and gRPC fixtures also exercise adversarial commit handling: a
