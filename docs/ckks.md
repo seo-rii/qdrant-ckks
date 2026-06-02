@@ -658,7 +658,8 @@ collection crate also has a `PrivateResultOramStore` skeleton for the future
 payload/result layer. It writes `private_result_oram/manifest.json`,
 `manifest.sig`, encrypted bucket files, Merkle commitment metadata, and
 `epochs/current.json` with the same private directory hardening and epoch CAS
-contract used by private HNSW ORAM. It also exposes
+contract used by private HNSW ORAM. Its upload bundle, commit, and stored
+Merkle-tree root mismatch errors do not reflect computed Merkle roots. It also exposes
 `read_merkle_path_batch` with the canonical qdrant-sec
 `merkle_path_batch/v1` proof DTO so a future result ORAM read API can return
 server-verifiable bucket commitment proofs without opening ciphertexts. The

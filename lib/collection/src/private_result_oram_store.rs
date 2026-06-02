@@ -405,9 +405,9 @@ impl PrivateResultOramStore {
         }
         let computed_root = Self::merkle_root_for_commitments(&tree.leaf_hashes)?;
         if computed_root != new_root_hash {
-            return Err(CollectionError::bad_request(format!(
-                "private result ORAM Merkle commit new_root_hash mismatch: computed {computed_root}",
-            )));
+            return Err(CollectionError::bad_request(
+                "private result ORAM Merkle commit new_root_hash mismatch",
+            ));
         }
         tree.index_epoch = new_epoch;
         tree.root_hash = new_root_hash.to_string();
@@ -502,9 +502,9 @@ fn validate_merkle_tree(tree: &PrivateResultOramMerkleTree) -> CollectionResult<
     }
     let computed_root = PrivateResultOramStore::merkle_root_for_commitments(&tree.leaf_hashes)?;
     if computed_root != tree.root_hash {
-        return Err(CollectionError::bad_request(format!(
-            "private result ORAM Merkle tree root_hash mismatch: computed {computed_root}",
-        )));
+        return Err(CollectionError::bad_request(
+            "private result ORAM Merkle tree root_hash mismatch",
+        ));
     }
     Ok(())
 }
@@ -684,9 +684,9 @@ fn validate_upload_bundle(
 
     let computed_root = PrivateResultOramStore::merkle_root_for_commitments(&leaf_commitments)?;
     if computed_root != bundle.manifest.root_hash {
-        return Err(CollectionError::bad_request(format!(
-            "private result ORAM upload bundle root_hash mismatch: computed {computed_root}",
-        )));
+        return Err(CollectionError::bad_request(
+            "private result ORAM upload bundle root_hash mismatch",
+        ));
     }
 
     Ok(leaf_commitments)
@@ -1175,11 +1175,21 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let store = fixture_store(&temp);
         let mut bundle = fixture_upload_bundle();
+        let computed_root = PrivateResultOramStore::merkle_root_for_commitments(
+            &bundle
+                .buckets
+                .iter()
+                .map(|bucket| bucket.bucket_commitment.clone())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
         bundle.manifest.root_hash = root_hash(99);
+        assert_ne!(computed_root, bundle.manifest.root_hash);
 
         let err = store.write_initial_upload_bundle(&bundle, 128).unwrap_err();
 
         assert!(err.to_string().contains("root_hash mismatch"));
+        assert!(!err.to_string().contains(&computed_root));
     }
 
     #[test]
@@ -1304,6 +1314,21 @@ mod tests {
         let new_root =
             PrivateResultOramStore::merkle_root_for_commitments(&next_commitments).unwrap();
 
+        let wrong_new_root = root_hash(99);
+        assert_ne!(wrong_new_root, new_root);
+        let err = store
+            .prepare_merkle_commit(
+                42,
+                &old_root,
+                43,
+                &wrong_new_root,
+                4,
+                &[updated_bucket.clone()],
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("new_root_hash mismatch"));
+        assert!(!err.to_string().contains(&new_root));
+
         store
             .prepare_merkle_commit(42, &old_root, 43, &new_root, 4, &[updated_bucket])
             .unwrap()
@@ -1369,6 +1394,25 @@ mod tests {
             .read_merkle_path_batch(&[3], 42, &root, 3)
             .unwrap_err();
         assert!(err.to_string().contains("out of range"));
+    }
+
+    #[test]
+    fn merkle_tree_validation_rejects_root_mismatch_without_computed_root() {
+        let tree = PrivateResultOramMerkleTree {
+            version: 1,
+            index_epoch: 42,
+            root_hash: root_hash(99),
+            bucket_count: 2,
+            leaf_hashes: vec![root_hash(1), root_hash(2)],
+        };
+        let computed_root =
+            PrivateResultOramStore::merkle_root_for_commitments(&tree.leaf_hashes).unwrap();
+        assert_ne!(computed_root, tree.root_hash);
+
+        let err = validate_merkle_tree(&tree).unwrap_err();
+
+        assert!(err.to_string().contains("root_hash mismatch"));
+        assert!(!err.to_string().contains(&computed_root));
     }
 
     #[test]
