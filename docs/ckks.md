@@ -535,8 +535,10 @@ session APIs. Phase 11 implements the encrypted bucket store and session
 read/commit APIs behind this validated control-plane contract.
 The private ORAM bucket store is canonical encrypted index data, not an
 untrusted acceleration hint: manifests, epoch files, Merkle metadata, and
-buckets must live under private non-symlink directories, and Unix group/world
-access on bucket directories or files is rejected fail closed.
+buckets must live under private non-symlink directories. Directory creation
+checks symlink/type before chmod so symlink targets are not hardened by mistake,
+and Unix group/world access on bucket directories or files is rejected fail
+closed.
 If a process crashes after bucket or Merkle writeback but before the epoch CAS,
 recovery continues to report the old current epoch and rejects mixed old-root /
 new-bucket reads rather than serving an inconsistent ORAM view.
@@ -665,7 +667,8 @@ payload/result layer. It writes `private_result_oram/manifest.json`,
 `epochs/current.json` with the same private directory hardening and epoch CAS
 contract used by private HNSW ORAM. Its upload bundle, commit, and stored
 Merkle-tree root mismatch errors do not reflect computed Merkle roots, and its
-writeback helper preflights stale current epochs before bucket/Merkle writes. It also exposes
+writeback helper preflights stale current epochs before bucket/Merkle writes.
+Directory hardening also checks symlink/type before chmod. It also exposes
 `read_merkle_path_batch` with the canonical qdrant-sec
 `merkle_path_batch/v1` proof DTO so a future result ORAM read API can return
 server-verifiable bucket commitment proofs without opening ciphertexts. The

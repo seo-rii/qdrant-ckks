@@ -734,12 +734,35 @@ fn decode_base64url_32(value: &str, field: &str) -> CollectionResult<[u8; 32]> {
 }
 
 fn create_private_dir(path: &Path) -> CollectionResult<()> {
-    if !path.exists() {
-        fs::create_dir_all(path).map_err(|err| {
-            CollectionError::service_error(format!(
-                "failed to create private result ORAM directory {path:?}: {err}",
-            ))
-        })?;
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() => {
+            return Err(CollectionError::service_error(format!(
+                "private result ORAM path {path:?} must be a non-symlink directory",
+            )));
+        }
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(path).map_err(|err| {
+                CollectionError::service_error(format!(
+                    "failed to create private result ORAM directory {path:?}: {err}",
+                ))
+            })?;
+            let metadata = fs::symlink_metadata(path).map_err(|err| {
+                CollectionError::service_error(format!(
+                    "failed to inspect private result ORAM directory {path:?}: {err}",
+                ))
+            })?;
+            if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+                return Err(CollectionError::service_error(format!(
+                    "private result ORAM path {path:?} must be a non-symlink directory",
+                )));
+            }
+        }
+        Err(err) => {
+            return Err(CollectionError::service_error(format!(
+                "failed to inspect private result ORAM directory {path:?}: {err}",
+            )));
+        }
     }
     #[cfg(unix)]
     {
@@ -1138,6 +1161,25 @@ mod tests {
         let err = store.read_bucket(0, 42, 1, 128).unwrap_err();
 
         assert!(err.to_string().contains("non-symlink regular file"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_layout_rejects_root_symlink_without_chmod_target() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let temp = TempDir::new().unwrap();
+        let outside_dir = temp.path().join("outside-private-result");
+        fs::create_dir(&outside_dir).unwrap();
+        fs::set_permissions(&outside_dir, fs::Permissions::from_mode(0o755)).unwrap();
+        symlink(&outside_dir, temp.path().join(PRIVATE_RESULT_ORAM_DIR)).unwrap();
+        let store = fixture_store(&temp);
+
+        let err = store.ensure_layout().unwrap_err();
+
+        assert!(err.to_string().contains("non-symlink directory"));
+        let outside_mode = fs::metadata(&outside_dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(outside_mode, 0o755);
     }
 
     #[cfg(unix)]
