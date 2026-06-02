@@ -504,6 +504,26 @@ mod private_hnsw_rest_tests {
                 fixture.encrypted_build.root_hash.as_str(),
             );
 
+            let mut hash_mismatch_buckets = fixture.encrypted_build.buckets.clone();
+            let replacement = if hash_mismatch_buckets[0].ciphertext_sha256.starts_with('A') {
+                "B"
+            } else {
+                "A"
+            };
+            hash_mismatch_buckets[0]
+                .ciphertext_sha256
+                .replace_range(0..1, replacement);
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/buckets",
+                UploadPrivateHnswBucketsRequest {
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: hash_mismatch_buckets,
+                },
+                StatusCode::BAD_REQUEST,
+                "ciphertext_sha256 mismatch"
+            );
+
             let bucket_result = post_json_ok!(
                 "/collections/docs/private-hnsw/text/buckets",
                 UploadPrivateHnswBucketsRequest {

@@ -861,6 +861,33 @@ mod private_hnsw_grpc_tests {
             assert_eq!(manifest_epoch.index_epoch, BASE_EPOCH);
             assert_eq!(manifest_epoch.root_hash, fixture.encrypted_build.root_hash);
 
+            let mut hash_mismatch_buckets = fixture.encrypted_build.buckets.clone();
+            let replacement = if hash_mismatch_buckets[0].ciphertext_sha256.starts_with('A') {
+                "B"
+            } else {
+                "A"
+            };
+            hash_mismatch_buckets[0]
+                .ciphertext_sha256
+                .replace_range(0..1, replacement);
+            let err = PrivateHnswOram::upload_private_hnsw_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateHnswBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: hash_mismatch_buckets
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("ciphertext_sha256 mismatch"));
+
             let bucket_epoch = PrivateHnswOram::upload_private_hnsw_buckets(
                 &service,
                 Request::new(grpc::UploadPrivateHnswBucketsRequest {
