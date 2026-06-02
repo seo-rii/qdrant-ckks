@@ -595,6 +595,36 @@ mod private_hnsw_rest_tests {
                 "ciphertext_sha256 mismatch"
             );
 
+            let mut missing_bucket_set = fixture.encrypted_build.buckets.clone();
+            missing_bucket_set.pop();
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/buckets",
+                UploadPrivateHnswBucketsRequest {
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: missing_bucket_set,
+                },
+                StatusCode::BAD_REQUEST,
+                "exactly"
+            );
+
+            let mut duplicate_bucket_set = fixture.encrypted_build.buckets.clone();
+            assert!(
+                duplicate_bucket_set.len() >= 2,
+                "route fixture must contain at least two ORAM buckets"
+            );
+            duplicate_bucket_set[1] = duplicate_bucket_set[0].clone();
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/buckets",
+                UploadPrivateHnswBucketsRequest {
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: duplicate_bucket_set,
+                },
+                StatusCode::BAD_REQUEST,
+                "duplicated"
+            );
+
             let bucket_result = post_json_ok!(
                 "/collections/docs/private-hnsw/text/buckets",
                 UploadPrivateHnswBucketsRequest {
