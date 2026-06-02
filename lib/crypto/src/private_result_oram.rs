@@ -61,6 +61,8 @@ pub enum PrivateResultOramError {
     EmptyMerkleTree,
     #[error("private result ORAM Merkle root does not match current commitments")]
     MerkleRootMismatch,
+    #[error("private result ORAM manifest epoch/root does not match commit old epoch/root")]
+    ManifestCommitMismatch,
     #[error(
         "private result ORAM bucket {bucket_id} has stale epoch {actual_epoch}; expected {expected_epoch}"
     )]
@@ -496,6 +498,34 @@ pub fn package_private_result_oram_upload_bundle(
         manifest_signature,
         buckets,
     })
+}
+
+pub fn refresh_private_result_oram_manifest_for_commit(
+    manifest: &PrivateResultOramManifest,
+    plan: &PrivateResultOramCommitPlan,
+) -> Result<PrivateResultOramManifest, PrivateResultOramError> {
+    if manifest.index_epoch != plan.old_epoch || manifest.root_hash != plan.old_root_hash {
+        return Err(PrivateResultOramError::ManifestCommitMismatch);
+    }
+    if plan.new_epoch <= plan.old_epoch {
+        return Err(PrivateResultOramError::InvalidManifestField("new_epoch"));
+    }
+    decode_base64url_32(&plan.new_root_hash, "root_hash")?;
+
+    let mut refreshed = manifest.clone();
+    refreshed.index_epoch = plan.new_epoch;
+    refreshed.root_hash = plan.new_root_hash.clone();
+    Ok(refreshed)
+}
+
+pub fn sign_private_result_oram_manifest_refresh(
+    key_pair: &Ed25519KeyPair,
+    manifest: &PrivateResultOramManifest,
+    plan: &PrivateResultOramCommitPlan,
+) -> Result<(PrivateResultOramManifest, PrivateResultOramSignature), PrivateResultOramError> {
+    let refreshed = refresh_private_result_oram_manifest_for_commit(manifest, plan)?;
+    let signature = sign_private_result_oram_manifest(key_pair, &refreshed)?;
+    Ok((refreshed, signature))
 }
 
 pub fn private_result_oram_manifest_signature_message(
@@ -1423,6 +1453,54 @@ mod tests {
 
         assert_eq!(epoch.epoch, 42);
         assert_eq!(epoch.root_hash, [42; 32]);
+    }
+
+    #[test]
+    fn manifest_refresh_for_commit_advances_epoch_root_and_resigns() {
+        let key_pair = deterministic_key_pair();
+        let manifest = fixture_manifest();
+        let plan = PrivateResultOramCommitPlan {
+            old_epoch: manifest.index_epoch,
+            new_epoch: manifest.index_epoch + 1,
+            old_root_hash: manifest.root_hash.clone(),
+            new_root_hash: commitment(43),
+            leaf_commitments: vec![commitment(1), commitment(2)],
+            updated_buckets: vec![PrivateResultOramClientCommitBucketRef {
+                bucket_id: 1,
+                ciphertext_sha256: commitment(9),
+            }],
+        };
+
+        let refreshed = refresh_private_result_oram_manifest_for_commit(&manifest, &plan).unwrap();
+        assert_eq!(refreshed.index_epoch, plan.new_epoch);
+        assert_eq!(refreshed.root_hash, plan.new_root_hash);
+        assert_eq!(refreshed.collection_id, manifest.collection_id);
+        assert_eq!(refreshed.bucket_count, manifest.bucket_count);
+        assert_eq!(
+            refreshed.logical_result_count,
+            manifest.logical_result_count
+        );
+        assert_eq!(refreshed.dummy_result_count, manifest.dummy_result_count);
+
+        let (signed_manifest, signature) =
+            sign_private_result_oram_manifest_refresh(&key_pair, &manifest, &plan).unwrap();
+        assert_eq!(signed_manifest, refreshed);
+        assert_eq!(signature.key_id, signed_manifest.owner_signing_key_id);
+        let epoch = validate_private_result_oram_manifest(
+            &signed_manifest,
+            Some(&signature),
+            fixture_context(key_pair.public_key().as_ref(), &signature.key_id),
+        )
+        .unwrap();
+        assert_eq!(epoch.epoch, 43);
+        assert_eq!(epoch.root_hash, [43; 32]);
+
+        let mut stale_plan = plan.clone();
+        stale_plan.old_root_hash = commitment(99);
+        assert_eq!(
+            refresh_private_result_oram_manifest_for_commit(&manifest, &stale_plan),
+            Err(PrivateResultOramError::ManifestCommitMismatch)
+        );
     }
 
     #[test]

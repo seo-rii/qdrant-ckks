@@ -595,7 +595,11 @@ signature bucket refs. `sign_private_result_oram_manifest` and
 `sign_private_result_oram_commit` provide the matching SDK-side Ed25519 signing
 helpers. `PrivateResultOramUploadBundle` and
 `package_private_result_oram_upload_bundle` package a signed manifest with a
-complete ordered bucket set whose commitments match the manifest root. The
+complete ordered bucket set whose commitments match the manifest root.
+`refresh_private_result_oram_manifest_for_commit` and
+`sign_private_result_oram_manifest_refresh` mirror the private HNSW helper by
+deriving the next signed manifest only when a commit plan's old epoch/root
+matches the current result ORAM manifest. The
 collection crate also has a `PrivateResultOramStore` skeleton for the future
 payload/result layer. It writes `private_result_oram/manifest.json`,
 `manifest.sig`, encrypted bucket files, Merkle commitment metadata, and
