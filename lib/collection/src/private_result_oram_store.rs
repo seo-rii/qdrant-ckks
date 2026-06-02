@@ -279,6 +279,10 @@ impl PrivateResultOramStore {
             bucket_count,
             updated_buckets,
         )?;
+        self.ensure_current_epoch_matches(old)?;
+        for bucket in updated_buckets {
+            validate_bucket(bucket, new.index_epoch, bucket_count, max_ciphertext_bytes)?;
+        }
         for bucket in updated_buckets {
             self.write_bucket(bucket, new.index_epoch, bucket_count, max_ciphertext_bytes)?;
         }
@@ -474,6 +478,20 @@ impl PrivateResultOramStore {
 
     fn bucket_path(&self, bucket_id: u64) -> PathBuf {
         self.buckets_dir().join(format!("{bucket_id:08}.bucket"))
+    }
+
+    fn ensure_current_epoch_matches(
+        &self,
+        expected: &PrivateResultOramEpochState,
+    ) -> CollectionResult<()> {
+        let current = self.read_current_epoch()?;
+        if &current != expected {
+            return Err(CollectionError::bad_request(format!(
+                "private result ORAM RootHashMismatch: current epoch/root does not match old epoch {}",
+                expected.index_epoch,
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -1330,6 +1348,55 @@ mod tests {
             .commit_writeback(&old, &new, bundle.bucket_count(), &[], 128)
             .unwrap_err();
         assert!(err.to_string().contains("epoch mismatch"));
+    }
+
+    #[test]
+    fn writeback_commit_preflights_stale_current_epoch_before_writes() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let bundle = fixture_upload_bundle();
+        let old = store.write_initial_upload_bundle(&bundle, 128).unwrap();
+
+        let stale_current = PrivateResultOramEpochState {
+            index_epoch: 43,
+            root_hash: root_hash(43),
+        };
+        store.compare_and_swap_epoch(&old, &stale_current).unwrap();
+
+        let mut updated_bucket = fixture_bucket(0, 43, b"stale writeback bucket");
+        updated_bucket.bucket_commitment = root_hash(88);
+        let mut next_commitments = bundle.bucket_commitments();
+        next_commitments[0] = updated_bucket.bucket_commitment.clone();
+        let attempted_new = PrivateResultOramEpochState {
+            index_epoch: 43,
+            root_hash: PrivateResultOramStore::merkle_root_for_commitments(&next_commitments)
+                .unwrap(),
+        };
+
+        let err = store
+            .commit_writeback(
+                &old,
+                &attempted_new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&updated_bucket),
+                128,
+            )
+            .unwrap_err();
+
+        assert!(err.to_string().contains("RootHashMismatch"));
+        assert_eq!(
+            store
+                .read_bucket(0, old.index_epoch, bundle.bucket_count(), 128)
+                .unwrap(),
+            bundle.buckets[0],
+        );
+        let proof = store
+            .read_merkle_path_batch(&[0], old.index_epoch, &old.root_hash, bundle.bucket_count())
+            .unwrap();
+        assert_eq!(
+            proof.leaves[0].leaf_hash,
+            bundle.buckets[0].bucket_commitment
+        );
     }
 
     #[test]
