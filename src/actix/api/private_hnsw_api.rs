@@ -606,6 +606,7 @@ mod private_hnsw_rest_tests {
             assert!(!opened_buckets.is_empty());
 
             let search_run = fixture.run_single_search_collect_writeback();
+            let committed_root_hash = search_run.commit_plan.new_root_hash.clone();
             post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
@@ -669,6 +670,50 @@ mod private_hnsw_rest_tests {
             assert_eq!(close_response.status(), StatusCode::OK);
             let close_body: Value = actix_test::read_body_json(close_response).await;
             assert_eq!(close_body["result"], true);
+
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/session",
+                OpenPrivateHnswSessionRequest {
+                    client_id: "tenant-a/sdk-instance-2".to_string(),
+                    desired_epoch: NEXT_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
+                },
+                StatusCode::BAD_REQUEST,
+                "manifest epoch/root does not match current epoch"
+            );
+
+            let mut refreshed_manifest = fixture.manifest.clone();
+            refreshed_manifest.index_epoch = NEXT_EPOCH;
+            refreshed_manifest.root_hash = committed_root_hash;
+            let refreshed_signature = fixture.sign_manifest(&refreshed_manifest);
+            let refreshed_epoch = post_json_ok!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: refreshed_manifest,
+                    signature: refreshed_signature,
+                }
+            );
+            assert_eq!(refreshed_epoch["index_epoch"], NEXT_EPOCH);
+
+            let reopened_session = post_json_ok!(
+                "/collections/docs/private-hnsw/text/session",
+                OpenPrivateHnswSessionRequest {
+                    client_id: "tenant-a/sdk-instance-2".to_string(),
+                    desired_epoch: NEXT_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
+                }
+            );
+            assert_eq!(reopened_session["index_epoch"], NEXT_EPOCH);
+            let reopened_session_id = reopened_session["session_id"].as_str().unwrap();
+            let close_request = actix_test::TestRequest::post()
+                .uri(&format!(
+                    "/collections/docs/private-hnsw/text/session/{reopened_session_id}/close"
+                ))
+                .to_request();
+            let close_response = actix_test::call_service(&app, close_request).await;
+            assert_eq!(close_response.status(), StatusCode::OK);
         });
     }
 }

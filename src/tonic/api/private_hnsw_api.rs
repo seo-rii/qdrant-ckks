@@ -972,6 +972,7 @@ mod private_hnsw_grpc_tests {
             assert!(!opened_buckets.is_empty());
 
             let search_run = fixture.run_single_search_collect_writeback();
+            let committed_root_hash = search_run.commit_plan.new_root_hash.clone();
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
@@ -1054,6 +1055,71 @@ mod private_hnsw_grpc_tests {
                     collection_name: COLLECTION_NAME.to_string(),
                     vector_name: VECTOR_NAME.to_string(),
                     session_id: session.session_id,
+                }),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            assert!(closed.closed);
+
+            let err = PrivateHnswOram::open_private_hnsw_session(
+                &service,
+                Request::new(grpc::OpenPrivateHnswSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    client_id: "tenant-a/sdk-instance-2".to_string(),
+                    desired_epoch: NEXT_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: result_privacy_to_proto(ResultPrivacyMode::IdsVisible),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("manifest epoch/root does not match current epoch")
+            );
+
+            let mut refreshed_manifest = fixture.manifest.clone();
+            refreshed_manifest.index_epoch = NEXT_EPOCH;
+            refreshed_manifest.root_hash = committed_root_hash;
+            let refreshed_signature = fixture.sign_manifest(&refreshed_manifest);
+            let refreshed_epoch = PrivateHnswOram::upload_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(refreshed_manifest)),
+                    signature: Some(signature_to_proto(refreshed_signature)),
+                }),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            assert_eq!(refreshed_epoch.index_epoch, NEXT_EPOCH);
+
+            let reopened = PrivateHnswOram::open_private_hnsw_session(
+                &service,
+                Request::new(grpc::OpenPrivateHnswSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    client_id: "tenant-a/sdk-instance-2".to_string(),
+                    desired_epoch: NEXT_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: result_privacy_to_proto(ResultPrivacyMode::IdsVisible),
+                }),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            assert_eq!(reopened.index_epoch, NEXT_EPOCH);
+            let closed = PrivateHnswOram::close_private_hnsw_session(
+                &service,
+                Request::new(grpc::ClosePrivateHnswSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: reopened.session_id,
                 }),
             )
             .await

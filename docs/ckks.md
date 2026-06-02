@@ -548,6 +548,11 @@ The live REST and gRPC fixtures also exercise adversarial commit handling: a
 commit with a validly-shaped but wrong Ed25519 signature is rejected, and
 replaying a previous old epoch/root after a successful commit is rejected
 against the active session state.
+Because the manifest signs the current index epoch/root, a writeback commit
+that advances epoch/root must be followed by a freshly signed manifest upload
+before a later session can open at that new epoch. REST and gRPC live fixtures
+now close the committed session, verify that re-open fails against the stale
+manifest, upload a refreshed signed manifest, and then re-open successfully.
 REST and gRPC `read_paths` error handling is checked for non-reflection:
 malformed path labels fail without echoing the submitted path label or any
 stored bucket ciphertext into the response body/status message.
@@ -660,9 +665,10 @@ wire responses are checked before bucket decryption. Dispatcher-backed REST and
 gRPC live route tests now create encrypted collections with stable UUIDs, upload
 the SDK manifest and bucket bundle through the private HNSW APIs, open sessions,
 sign live `read_paths` requests, verify responses with the SDK Merkle verifier, commit
-writeback buckets, and close the sessions. Initial manifest upload creates the
-private epoch layout when no current epoch exists; repeated uploads still
-require the current epoch/root to match. ORAM commits may carry unchanged
+writeback buckets, close the sessions, refresh the signed manifest at the
+committed epoch/root, and re-open at the new epoch. Initial manifest upload
+creates the private epoch layout when no current epoch exists; repeated uploads
+still require the current epoch/root to match. ORAM commits may carry unchanged
 buckets forward from an older bucket epoch; the current Merkle root commits to
 each bucket commitment, and clients open each bucket with the epoch recorded in
 that bucket while rejecting buckets newer than the requested index epoch. Search

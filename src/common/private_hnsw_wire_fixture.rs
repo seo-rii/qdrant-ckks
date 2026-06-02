@@ -351,6 +351,13 @@ impl PrivateHnswRouteWireFixture {
         .unwrap()
     }
 
+    pub(crate) fn sign_manifest(
+        &self,
+        manifest: &PrivateHnswOramManifest,
+    ) -> PrivateHnswOramSignature {
+        sign_private_hnsw_oram_manifest(&self.signing_key, manifest).unwrap()
+    }
+
     pub(crate) fn run_single_search_collect_writeback(&self) -> PrivateHnswRouteWireSearchRun {
         let updated_by_bucket = RefCell::new(BTreeMap::new());
         let mut state = self.plaintext_build.state.clone();
