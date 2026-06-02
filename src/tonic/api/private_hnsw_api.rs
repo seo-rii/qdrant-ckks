@@ -1231,6 +1231,31 @@ mod private_hnsw_grpc_tests {
             .into_inner();
             assert_eq!(bucket_epoch.index_epoch, BASE_EPOCH);
 
+            let client_id_sentinel = "session-client-id-sentinel";
+            let err = PrivateHnswOram::open_private_hnsw_session(
+                &service,
+                Request::new(grpc::OpenPrivateHnswSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    client_id: format!("{client_id_sentinel}{}", "x".repeat(260)),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: result_privacy_to_proto(ResultPrivacyMode::IdsVisible),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("client_id must be non-empty and at most 256 bytes")
+            );
+            assert!(
+                !err.message().contains(client_id_sentinel),
+                "{}",
+                err.message()
+            );
+
             let err = PrivateHnswOram::open_private_hnsw_session(
                 &service,
                 Request::new(grpc::OpenPrivateHnswSessionRequest {

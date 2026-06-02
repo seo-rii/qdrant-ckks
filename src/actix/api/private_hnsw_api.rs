@@ -802,6 +802,23 @@ mod private_hnsw_rest_tests {
             );
             assert_eq!(bucket_result["index_epoch"], BASE_EPOCH);
 
+            let client_id_sentinel = "session-client-id-sentinel";
+            let oversized_client_id_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/session",
+                OpenPrivateHnswSessionRequest {
+                    client_id: format!("{client_id_sentinel}{}", "x".repeat(260)),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
+                },
+                StatusCode::BAD_REQUEST,
+                "client_id must be non-empty and at most 256 bytes"
+            );
+            assert!(
+                !oversized_client_id_error.contains(client_id_sentinel),
+                "{oversized_client_id_error}"
+            );
+
             post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/session",
                 OpenPrivateHnswSessionRequest {

@@ -557,7 +557,8 @@ They also reject opening a second session for the same private index while the
 first session is active, exercising the MVP single-writer lock at the route
 layer. Session open requests with `fixed_budget=false` in strict mode, a
 non-current desired epoch, or the reserved `private_payload_oram_required`
-result privacy mode are rejected before any ORAM path reads are served.
+result privacy mode are rejected before any ORAM path reads are served. Client
+id shape errors are sanitized without echoing the submitted client id.
 Because the manifest signs the current index epoch/root, a writeback commit
 that advances epoch/root must be followed by a freshly signed manifest upload
 before a later session can open at that new epoch. REST and gRPC live fixtures
