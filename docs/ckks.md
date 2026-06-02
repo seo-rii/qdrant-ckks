@@ -589,6 +589,8 @@ REST and gRPC `read_paths` error handling is checked for non-reflection:
 epoch/root mismatches and malformed path labels fail without echoing the
 submitted root hash, submitted path label, or any stored bucket ciphertext into
 the response body/status message.
+Malformed client signature shape errors for `read_paths` and `commit` are also
+sanitized so submitted signature bodies are not echoed.
 Commit error handling follows the same boundary: malformed updated bucket
 ciphertext and old epoch/root mismatches are rejected without echoing the
 submitted ciphertext or old root hash into the REST body or gRPC status

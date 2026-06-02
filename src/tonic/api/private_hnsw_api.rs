@@ -1424,6 +1424,37 @@ mod private_hnsw_grpc_tests {
                     .contains("read_paths signature verification failed")
             );
 
+            let signature_body_sentinel = "signature!sentinel";
+            let err = PrivateHnswOram::read_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramReadPathsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: vec![fixture.entry_leaf_label()],
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    }),
+                    client_signature: Some(grpc::PrivateHnswSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: SIGNING_KEY_ID.to_string(),
+                        sig: signature_body_sentinel.to_string(),
+                    }),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("signature is not base64url"));
+            assert!(
+                !err.message().contains(signature_body_sentinel),
+                "{}",
+                err.message()
+            );
+
             let unknown_read_session_sentinel = "read-session-id-sentinel";
             let unknown_read_paths = vec![fixture.entry_leaf_label()];
             let unknown_read_signature = fixture.sign_read_paths(&unknown_read_paths, 1, true);
@@ -1496,6 +1527,39 @@ mod private_hnsw_grpc_tests {
             assert!(!opened_buckets.is_empty());
 
             let search_run = fixture.run_single_search_collect_writeback();
+            let err = PrivateHnswOram::commit_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramCommitRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run
+                        .updated_buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                    commit_signature: Some(grpc::PrivateHnswSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: SIGNING_KEY_ID.to_string(),
+                        sig: signature_body_sentinel.to_string(),
+                    }),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("signature is not base64url"));
+            assert!(
+                !err.message().contains(signature_body_sentinel),
+                "{}",
+                err.message()
+            );
+
             let unknown_commit_session_sentinel = "commit-session-id-sentinel";
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
