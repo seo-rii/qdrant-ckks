@@ -589,7 +589,9 @@ ids, malformed bucket ciphertext, and ciphertext hash mismatches before
 encrypted bucket files are written. The malformed ciphertext and Merkle root
 mismatch error paths do not echo the submitted ciphertext or computed Merkle
 root into REST response bodies or gRPC status messages, and epoch/root mismatch
-handling does not echo the submitted root hash.
+handling does not echo the submitted root hash. Bucket-store layout failures
+during upload are sanitized without exposing collection-local
+`private_hnsw_oram` filesystem paths.
 REST and gRPC `read_paths` error handling is checked for non-reflection:
 epoch/root mismatches and malformed path labels fail without echoing the
 submitted root hash, submitted path label, or any stored bucket ciphertext into

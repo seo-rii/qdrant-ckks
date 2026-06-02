@@ -1313,6 +1313,52 @@ mod private_hnsw_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("duplicated"));
 
+            let auth = Auth::new_internal(Access::full("private HNSW ORAM upload grpc test"));
+            let collection_pass = auth
+                .check_collection_access(
+                    COLLECTION_NAME,
+                    AccessRequirements::new(),
+                    "private_hnsw_bucket_upload_layout_test",
+                )
+                .unwrap();
+            let pass = new_unchecked_verification_pass();
+            let collection = dispatcher
+                .toc(&auth, &pass)
+                .get_collection(&collection_pass)
+                .await
+                .unwrap();
+            let upload_store = PrivateHnswOramStore::new(collection.path(), VECTOR_NAME).unwrap();
+            let upload_buckets_path = upload_store.root_path().join("buckets");
+            std::fs::remove_dir_all(&upload_buckets_path).unwrap();
+            std::fs::write(&upload_buckets_path, b"not-a-directory").unwrap();
+            let err = PrivateHnswOram::upload_private_hnsw_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateHnswBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: fixture
+                        .encrypted_build
+                        .buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::Internal);
+            assert!(
+                err.message()
+                    .contains("encrypted bucket store validation failed")
+            );
+            assert!(!err.message().contains("private_hnsw_oram"));
+            assert!(!err.message().contains("/tmp"));
+            std::fs::remove_file(&upload_buckets_path).unwrap();
+            upload_store.ensure_layout().unwrap();
+
             let bucket_epoch = PrivateHnswOram::upload_private_hnsw_buckets(
                 &service,
                 Request::new(grpc::UploadPrivateHnswBucketsRequest {

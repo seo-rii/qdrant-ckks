@@ -438,14 +438,18 @@ pub async fn do_upload_private_hnsw_buckets(
         validate_initial_private_hnsw_upload_bundle(&manifest, index_epoch, &root_hash, &buckets)?;
     let max_ciphertext_bytes = max_bucket_ciphertext_bytes(&manifest)?;
     for bucket in &buckets {
-        store.write_bucket(
-            bucket,
-            index_epoch,
-            manifest.bucket_count,
-            max_ciphertext_bytes,
-        )?;
+        store
+            .write_bucket(
+                bucket,
+                index_epoch,
+                manifest.bucket_count,
+                max_ciphertext_bytes,
+            )
+            .map_err(private_hnsw_upload_store_error)?;
     }
-    store.write_merkle_tree_from_commitments(index_epoch, root_hash.clone(), leaf_commitments)?;
+    store
+        .write_merkle_tree_from_commitments(index_epoch, root_hash.clone(), leaf_commitments)
+        .map_err(private_hnsw_upload_store_error)?;
     Ok(PrivateHnswOramEpochState {
         index_epoch,
         root_hash,
@@ -928,6 +932,18 @@ fn private_hnsw_read_store_error(err: CollectionError) -> StorageError {
         }
         CollectionError::BadRequest { .. } => {
             StorageError::bad_request("private HNSW ORAM encrypted bucket store validation failed")
+        }
+        CollectionError::ServiceError { .. } => StorageError::service_error(
+            "private HNSW ORAM encrypted bucket store validation failed",
+        ),
+        other => StorageError::from(other),
+    }
+}
+
+fn private_hnsw_upload_store_error(err: CollectionError) -> StorageError {
+    match err {
+        CollectionError::NotFound { .. } => {
+            StorageError::not_found("private HNSW ORAM encrypted bucket store is unavailable")
         }
         CollectionError::ServiceError { .. } => StorageError::service_error(
             "private HNSW ORAM encrypted bucket store validation failed",

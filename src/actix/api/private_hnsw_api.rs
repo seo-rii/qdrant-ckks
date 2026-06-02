@@ -858,6 +858,45 @@ mod private_hnsw_rest_tests {
                 "duplicated"
             );
 
+            let auth = Auth::new_internal(Access::full("private HNSW ORAM upload route test"));
+            let collection_pass = auth
+                .check_collection_access(
+                    "docs",
+                    AccessRequirements::new(),
+                    "private_hnsw_bucket_upload_layout_test",
+                )
+                .unwrap();
+            let pass = new_unchecked_verification_pass();
+            let collection = dispatcher
+                .toc(&auth, &pass)
+                .get_collection(&collection_pass)
+                .await
+                .unwrap();
+            let upload_store = PrivateHnswOramStore::new(collection.path(), "text").unwrap();
+            let upload_buckets_path = upload_store.root_path().join("buckets");
+            std::fs::remove_dir_all(&upload_buckets_path).unwrap();
+            std::fs::write(&upload_buckets_path, b"not-a-directory").unwrap();
+            let malformed_upload_layout_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/buckets",
+                UploadPrivateHnswBucketsRequest {
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: fixture.encrypted_build.buckets.clone(),
+                },
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "encrypted bucket store validation failed"
+            );
+            assert!(
+                !malformed_upload_layout_error.contains("private_hnsw_oram"),
+                "{malformed_upload_layout_error}"
+            );
+            assert!(
+                !malformed_upload_layout_error.contains("/tmp"),
+                "{malformed_upload_layout_error}"
+            );
+            std::fs::remove_file(&upload_buckets_path).unwrap();
+            upload_store.ensure_layout().unwrap();
+
             let bucket_result = post_json_ok!(
                 "/collections/docs/private-hnsw/text/buckets",
                 UploadPrivateHnswBucketsRequest {
