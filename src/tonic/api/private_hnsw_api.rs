@@ -2088,6 +2088,48 @@ mod private_hnsw_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("updated_buckets must contain"));
 
+            let duplicate_commit_bucket = search_run.updated_buckets[0].clone();
+            let duplicate_commit_buckets = vec![
+                duplicate_commit_bucket.clone(),
+                duplicate_commit_bucket.clone(),
+            ];
+            let duplicate_commit_plan = qdrant_sec::PrivateHnswClientCommitPlan {
+                old_epoch: BASE_EPOCH,
+                new_epoch: NEXT_EPOCH,
+                old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                leaf_commitments: search_run.commit_plan.leaf_commitments.clone(),
+                updated_buckets: duplicate_commit_buckets
+                    .iter()
+                    .map(|bucket| qdrant_sec::PrivateHnswClientCommitBucketRef {
+                        bucket_id: bucket.bucket_id,
+                        ciphertext_sha256: bucket.ciphertext_sha256.clone(),
+                    })
+                    .collect(),
+            };
+            let duplicate_commit_signature = fixture.sign_commit(&duplicate_commit_plan);
+            let err = PrivateHnswOram::commit_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramCommitRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: duplicate_commit_plan.old_root_hash,
+                    new_root_hash: duplicate_commit_plan.new_root_hash,
+                    updated_buckets: duplicate_commit_buckets
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                    commit_signature: Some(signature_to_proto(duplicate_commit_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("duplicate bucket id"));
+
             let mut oversized_writeback_buckets = search_run.updated_buckets.clone();
             while oversized_writeback_buckets.len() <= 3 {
                 oversized_writeback_buckets.push(search_run.updated_buckets[0].clone());
