@@ -1424,6 +1424,35 @@ mod private_hnsw_grpc_tests {
                     .contains("read_paths signature verification failed")
             );
 
+            let unknown_read_session_sentinel = "read-session-id-sentinel";
+            let unknown_read_paths = vec![fixture.entry_leaf_label()];
+            let unknown_read_signature = fixture.sign_read_paths(&unknown_read_paths, 1, true);
+            let err = PrivateHnswOram::read_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramReadPathsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: unknown_read_session_sentinel.to_string(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: unknown_read_paths,
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    }),
+                    client_signature: Some(signature_to_proto(unknown_read_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("session is missing or expired"));
+            assert!(
+                !err.message().contains(unknown_read_session_sentinel),
+                "{}",
+                err.message()
+            );
+
             let read_paths = vec![fixture.entry_leaf_label()];
             let read_signature = fixture.sign_read_paths(&read_paths, 1, true);
             let read_response = PrivateHnswOram::read_private_hnsw_paths(
@@ -1467,6 +1496,36 @@ mod private_hnsw_grpc_tests {
             assert!(!opened_buckets.is_empty());
 
             let search_run = fixture.run_single_search_collect_writeback();
+            let unknown_commit_session_sentinel = "commit-session-id-sentinel";
+            let err = PrivateHnswOram::commit_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramCommitRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: unknown_commit_session_sentinel.to_string(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run
+                        .updated_buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                    commit_signature: Some(signature_to_proto(search_run.commit_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("session is missing or expired"));
+            assert!(
+                !err.message().contains(unknown_commit_session_sentinel),
+                "{}",
+                err.message()
+            );
+
             let commit_old_root_sentinel = "commit-old-root-sentinel";
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,

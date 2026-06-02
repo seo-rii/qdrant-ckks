@@ -967,6 +967,34 @@ mod private_hnsw_rest_tests {
                 "read_paths signature verification failed"
             );
 
+            let unknown_read_session_sentinel = "read-session-id-sentinel";
+            let unknown_read_paths = vec![fixture.entry_leaf_label()];
+            let unknown_read_signature = fixture.sign_read_paths(&unknown_read_paths, 1, true);
+            let unknown_read_session_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/read_paths",
+                OramReadPathsRequest {
+                    session_id: unknown_read_session_sentinel.to_string(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: unknown_read_paths,
+                    padding: OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    },
+                    client_signature: PrivateHnswClientSignature {
+                        alg: unknown_read_signature.alg,
+                        key_id: unknown_read_signature.key_id,
+                        sig: unknown_read_signature.sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "session is missing or expired"
+            );
+            assert!(
+                !unknown_read_session_error.contains(unknown_read_session_sentinel),
+                "{unknown_read_session_error}"
+            );
+
             let ok_read_paths = vec![fixture.entry_leaf_label()];
             let read_signature = fixture.sign_read_paths(&ok_read_paths, 1, true);
             let read_result = post_json_ok!(
@@ -1004,6 +1032,30 @@ mod private_hnsw_rest_tests {
             assert!(!opened_buckets.is_empty());
 
             let search_run = fixture.run_single_search_collect_writeback();
+            let unknown_commit_session_sentinel = "commit-session-id-sentinel";
+            let unknown_commit_session_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/commit",
+                OramCommitRequest {
+                    session_id: unknown_commit_session_sentinel.to_string(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run.updated_buckets.clone(),
+                    commit_signature: PrivateHnswClientSignature {
+                        alg: search_run.commit_signature.alg.clone(),
+                        key_id: search_run.commit_signature.key_id.clone(),
+                        sig: search_run.commit_signature.sig.clone(),
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "session is missing or expired"
+            );
+            assert!(
+                !unknown_commit_session_error.contains(unknown_commit_session_sentinel),
+                "{unknown_commit_session_error}"
+            );
+
             let commit_old_root_sentinel = "commit-old-root-sentinel";
             let commit_old_root_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
