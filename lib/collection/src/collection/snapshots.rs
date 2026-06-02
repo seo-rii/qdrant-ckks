@@ -921,6 +921,36 @@ mod tests {
         .unwrap();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_bucket_symlink() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-bucket-symlink")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+        let bucket_path = temp_dir
+            .path()
+            .join(PRIVATE_HNSW_ORAM_DIR)
+            .join("text")
+            .join("buckets")
+            .join("00000000.bucket");
+        fs::remove_file(&bucket_path).unwrap();
+        std::os::unix::fs::symlink(temp_dir.path().join("outside.bucket"), &bucket_path).unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("non-symlink regular file"));
+    }
+
     #[test]
     fn private_hnsw_oram_restore_preflight_rejects_result_private_manifest() {
         let temp_dir = tempfile::Builder::new()
