@@ -606,7 +606,6 @@ mod private_hnsw_rest_tests {
             assert!(!opened_buckets.is_empty());
 
             let search_run = fixture.run_single_search_collect_writeback();
-            let committed_root_hash = search_run.commit_plan.new_root_hash.clone();
             post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
@@ -642,6 +641,8 @@ mod private_hnsw_rest_tests {
                 }
             );
             assert_eq!(commit_result["index_epoch"], NEXT_EPOCH);
+            let (refreshed_manifest, refreshed_signature) =
+                fixture.sign_manifest_refresh(&search_run.commit_plan);
             post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
@@ -683,10 +684,6 @@ mod private_hnsw_rest_tests {
                 "manifest epoch/root does not match current epoch"
             );
 
-            let mut refreshed_manifest = fixture.manifest.clone();
-            refreshed_manifest.index_epoch = NEXT_EPOCH;
-            refreshed_manifest.root_hash = committed_root_hash;
-            let refreshed_signature = fixture.sign_manifest(&refreshed_manifest);
             let refreshed_epoch = post_json_ok!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {

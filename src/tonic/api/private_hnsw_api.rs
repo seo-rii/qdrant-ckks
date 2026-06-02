@@ -972,7 +972,6 @@ mod private_hnsw_grpc_tests {
             assert!(!opened_buckets.is_empty());
 
             let search_run = fixture.run_single_search_collect_writeback();
-            let committed_root_hash = search_run.commit_plan.new_root_hash.clone();
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
@@ -1023,6 +1022,8 @@ mod private_hnsw_grpc_tests {
             .unwrap()
             .into_inner();
             assert_eq!(commit_epoch.index_epoch, NEXT_EPOCH);
+            let (refreshed_manifest, refreshed_signature) =
+                fixture.sign_manifest_refresh(&search_run.commit_plan);
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
@@ -1081,10 +1082,6 @@ mod private_hnsw_grpc_tests {
                     .contains("manifest epoch/root does not match current epoch")
             );
 
-            let mut refreshed_manifest = fixture.manifest.clone();
-            refreshed_manifest.index_epoch = NEXT_EPOCH;
-            refreshed_manifest.root_hash = committed_root_hash;
-            let refreshed_signature = fixture.sign_manifest(&refreshed_manifest);
             let refreshed_epoch = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,
                 Request::new(grpc::UploadPrivateHnswManifestRequest {

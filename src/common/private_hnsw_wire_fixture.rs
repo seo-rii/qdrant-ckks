@@ -23,7 +23,8 @@ use qdrant_sec::{
     encode_private_hnsw_oram_leaf_label, plan_private_hnsw_oram_commit,
     private_hnsw_oram_bucket_ids_for_leaf, seal_private_hnsw_oram_plaintext_index,
     search_private_hnsw_oram_encrypted_verified, sign_private_hnsw_oram_commit,
-    sign_private_hnsw_oram_manifest, sign_private_hnsw_oram_read_paths,
+    sign_private_hnsw_oram_manifest, sign_private_hnsw_oram_manifest_refresh,
+    sign_private_hnsw_oram_read_paths,
 };
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::json;
@@ -351,11 +352,11 @@ impl PrivateHnswRouteWireFixture {
         .unwrap()
     }
 
-    pub(crate) fn sign_manifest(
+    pub(crate) fn sign_manifest_refresh(
         &self,
-        manifest: &PrivateHnswOramManifest,
-    ) -> PrivateHnswOramSignature {
-        sign_private_hnsw_oram_manifest(&self.signing_key, manifest).unwrap()
+        plan: &PrivateHnswClientCommitPlan,
+    ) -> (PrivateHnswOramManifest, PrivateHnswOramSignature) {
+        sign_private_hnsw_oram_manifest_refresh(&self.signing_key, &self.manifest, plan).unwrap()
     }
 
     pub(crate) fn run_single_search_collect_writeback(&self) -> PrivateHnswRouteWireSearchRun {
