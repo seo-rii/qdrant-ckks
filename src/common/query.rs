@@ -8494,13 +8494,19 @@ mod tests {
         EncryptionSelector,
     };
     use collection::operations::vector_params_builder::VectorParamsBuilder;
+    use collection::operations::verification::new_unchecked_verification_pass;
     use common::types::PointOffsetType;
     use ring::rand::SystemRandom;
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use segment::types::Distance;
     use serde_json::json;
+    use storage::rbac::Access;
 
     use super::*;
+    use crate::common::private_hnsw_wire_fixture::{
+        COLLECTION_NAME, PrivateHnswRouteWireFixture, VECTOR_NAME, create_private_hnsw_collection,
+        test_dispatcher,
+    };
     use crate::settings::{
         CryptoBackendConfig, CryptoInstanceConfig, CryptoMaterialConfig, CryptoSettings,
     };
@@ -8531,6 +8537,54 @@ mod tests {
 
     fn valid_query_nonce_b64() -> String {
         BASE64URL_NOPAD.encode(&[7_u8; 12])
+    }
+
+    #[test]
+    fn private_hnsw_oram_query_points_requires_client_led_session() {
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let (_temp, dispatcher) = test_dispatcher();
+        let auth = Auth::new_internal(Access::full("For test"));
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+            let pass = new_unchecked_verification_pass();
+            let toc = dispatcher.toc(&auth, &pass).clone();
+
+            let err = do_query_points(
+                &toc,
+                COLLECTION_NAME,
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::Vector(VectorInternal::Dense(vec![1.0, 0.0])),
+                    ))),
+                    using: VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/text/session")
+            ));
+        });
     }
 
     #[test]
