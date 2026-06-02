@@ -1176,14 +1176,15 @@ mod private_hnsw_grpc_tests {
                     session_id: session.session_id.clone(),
                     old_epoch: BASE_EPOCH,
                     new_epoch: NEXT_EPOCH,
-                    old_root_hash: search_run.commit_plan.old_root_hash,
-                    new_root_hash: search_run.commit_plan.new_root_hash,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
                     updated_buckets: search_run
                         .updated_buckets
+                        .clone()
                         .into_iter()
                         .map(bucket_to_proto)
                         .collect(),
-                    commit_signature: Some(signature_to_proto(search_run.commit_signature)),
+                    commit_signature: Some(signature_to_proto(search_run.commit_signature.clone())),
                 }),
             )
             .await
@@ -1215,7 +1216,7 @@ mod private_hnsw_grpc_tests {
                 Request::new(grpc::OramReadPathsRequest {
                     collection_name: COLLECTION_NAME.to_string(),
                     vector_name: VECTOR_NAME.to_string(),
-                    session_id: closed_session_id,
+                    session_id: closed_session_id.clone(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
                     paths: closed_read_paths,
@@ -1224,6 +1225,30 @@ mod private_hnsw_grpc_tests {
                         dummy_paths_included: true,
                     }),
                     client_signature: Some(signature_to_proto(closed_read_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("session is missing or expired"));
+
+            let err = PrivateHnswOram::commit_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramCommitRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: closed_session_id,
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run
+                        .updated_buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                    commit_signature: Some(signature_to_proto(search_run.commit_signature.clone())),
                 }),
             )
             .await

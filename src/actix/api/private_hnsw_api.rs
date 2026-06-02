@@ -746,13 +746,13 @@ mod private_hnsw_rest_tests {
                     session_id: session_id.clone(),
                     old_epoch: BASE_EPOCH,
                     new_epoch: NEXT_EPOCH,
-                    old_root_hash: search_run.commit_plan.old_root_hash,
-                    new_root_hash: search_run.commit_plan.new_root_hash,
-                    updated_buckets: search_run.updated_buckets,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run.updated_buckets.clone(),
                     commit_signature: PrivateHnswClientSignature {
-                        alg: search_run.commit_signature.alg,
-                        key_id: search_run.commit_signature.key_id,
-                        sig: search_run.commit_signature.sig,
+                        alg: search_run.commit_signature.alg.clone(),
+                        key_id: search_run.commit_signature.key_id.clone(),
+                        sig: search_run.commit_signature.sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
@@ -786,6 +786,25 @@ mod private_hnsw_rest_tests {
                         alg: closed_read_signature.alg,
                         key_id: closed_read_signature.key_id,
                         sig: closed_read_signature.sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "session is missing or expired"
+            );
+
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/commit",
+                OramCommitRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run.updated_buckets.clone(),
+                    commit_signature: PrivateHnswClientSignature {
+                        alg: search_run.commit_signature.alg.clone(),
+                        key_id: search_run.commit_signature.key_id.clone(),
+                        sig: search_run.commit_signature.sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
