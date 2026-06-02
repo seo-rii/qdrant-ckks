@@ -672,6 +672,29 @@ mod private_hnsw_rest_tests {
             let close_body: Value = actix_test::read_body_json(close_response).await;
             assert_eq!(close_body["result"], true);
 
+            let closed_read_paths = vec![fixture.entry_leaf_label()];
+            let closed_read_signature = fixture.sign_read_paths(&closed_read_paths, 1, true);
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/read_paths",
+                OramReadPathsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: closed_read_paths,
+                    padding: OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    },
+                    client_signature: PrivateHnswClientSignature {
+                        alg: closed_read_signature.alg,
+                        key_id: closed_read_signature.key_id,
+                        sig: closed_read_signature.sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "session is missing or expired"
+            );
+
             post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/session",
                 OpenPrivateHnswSessionRequest {

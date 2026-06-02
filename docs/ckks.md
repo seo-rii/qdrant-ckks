@@ -552,7 +552,8 @@ Because the manifest signs the current index epoch/root, a writeback commit
 that advances epoch/root must be followed by a freshly signed manifest upload
 before a later session can open at that new epoch. REST and gRPC live fixtures
 now close the committed session, verify that re-open fails against the stale
-manifest, upload a refreshed signed manifest, and then re-open successfully.
+manifest, verify that the closed session id cannot be reused for `read_paths`,
+upload a refreshed signed manifest, and then re-open successfully.
 SDKs should use `refresh_private_hnsw_oram_manifest_for_commit` or
 `sign_private_hnsw_oram_manifest_refresh` so the refresh is bound to the commit
 plan's old epoch/root before a new manifest is signed.

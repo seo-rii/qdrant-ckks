@@ -1050,18 +1050,42 @@ mod private_hnsw_grpc_tests {
                     .contains("old epoch/root does not match active session")
             );
 
+            let closed_session_id = session.session_id.clone();
             let closed = PrivateHnswOram::close_private_hnsw_session(
                 &service,
                 Request::new(grpc::ClosePrivateHnswSessionRequest {
                     collection_name: COLLECTION_NAME.to_string(),
                     vector_name: VECTOR_NAME.to_string(),
-                    session_id: session.session_id,
+                    session_id: closed_session_id.clone(),
                 }),
             )
             .await
             .unwrap()
             .into_inner();
             assert!(closed.closed);
+
+            let closed_read_paths = vec![fixture.entry_leaf_label()];
+            let closed_read_signature = fixture.sign_read_paths(&closed_read_paths, 1, true);
+            let err = PrivateHnswOram::read_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramReadPathsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: closed_session_id,
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: closed_read_paths,
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    }),
+                    client_signature: Some(signature_to_proto(closed_read_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("session is missing or expired"));
 
             let err = PrivateHnswOram::open_private_hnsw_session(
                 &service,
