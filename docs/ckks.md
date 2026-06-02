@@ -596,7 +596,8 @@ sanitized so submitted signature bodies are not echoed.
 Commit error handling follows the same boundary: malformed updated bucket
 ciphertext and old epoch/root mismatches are rejected without echoing the
 submitted ciphertext or old root hash into the REST body or gRPC status
-message.
+message. Empty `updated_buckets` commits are rejected by fixed writeback
+request-size validation before bucket writes are attempted.
 The same live fixtures reject `read_paths` calls whose path count, requested
 path count, or dummy padding flag does not match the configured fixed path
 budget, before bucket reads are served. Valid `read_paths` calls must carry an
