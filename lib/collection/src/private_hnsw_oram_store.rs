@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -339,7 +340,14 @@ impl PrivateHnswOramStore {
         }
         let mut tree = self.read_merkle_tree()?;
         validate_merkle_tree_context(&tree, old_epoch, old_root_hash, bucket_count)?;
+        let mut seen_bucket_ids = BTreeSet::new();
         for bucket in updated_buckets {
+            if !seen_bucket_ids.insert(bucket.bucket_id) {
+                return Err(CollectionError::bad_request(format!(
+                    "private HNSW ORAM Merkle commit repeats bucket {}",
+                    bucket.bucket_id,
+                )));
+            }
             if bucket.index_epoch != new_epoch {
                 return Err(CollectionError::bad_request(format!(
                     "private HNSW ORAM Merkle commit bucket {} has stale epoch {}",
@@ -1790,5 +1798,35 @@ mod tests {
             .unwrap();
         assert_eq!(proof.root_hash, new_root);
         assert_eq!(proof.leaves[0].leaf_hash, updated_commitments[2]);
+    }
+
+    #[test]
+    fn merkle_commit_rejects_duplicate_updated_bucket() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let leaf_commitments = vec![root_hash(1), root_hash(2), root_hash(3), root_hash(4)];
+        let old_root =
+            PrivateHnswOramStore::merkle_root_for_commitments(&leaf_commitments).unwrap();
+        store
+            .write_merkle_tree_from_commitments(42, old_root.clone(), leaf_commitments.clone())
+            .unwrap();
+
+        let updated_bucket = fixture_bucket(2, 43, b"updated bucket");
+        let mut updated_commitments = leaf_commitments;
+        updated_commitments[2] = updated_bucket.bucket_commitment.clone();
+        let new_root =
+            PrivateHnswOramStore::merkle_root_for_commitments(&updated_commitments).unwrap();
+
+        let err = store
+            .prepare_merkle_commit(
+                42,
+                &old_root,
+                43,
+                &new_root,
+                4,
+                &[updated_bucket.clone(), updated_bucket],
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("repeats bucket 2"));
     }
 }
