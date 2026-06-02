@@ -1035,6 +1035,34 @@ mod tests {
         assert!(err.to_string().contains("result_privacy=ids_visible"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_vector_dir_symlink() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-vector-dir-symlink")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let private_hnsw_root = temp_dir.path().join(PRIVATE_HNSW_ORAM_DIR);
+        fs::create_dir(&private_hnsw_root).unwrap();
+        std::os::unix::fs::symlink(
+            temp_dir.path().join("outside-private-hnsw-vector"),
+            private_hnsw_root.join("text"),
+        )
+        .unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("non-symlink directory"));
+        assert!(!err.to_string().contains("outside-private-hnsw-vector"));
+    }
+
     #[test]
     fn private_hnsw_oram_restore_preflight_rejects_signature_key_mismatch() {
         let temp_dir = tempfile::Builder::new()
