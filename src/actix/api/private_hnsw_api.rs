@@ -320,7 +320,7 @@ mod private_hnsw_rest_tests {
 
     use actix_web::http::StatusCode;
     use actix_web::{App, test as actix_test, web};
-    use collection::private_hnsw_oram_store::PrivateHnswOramStore;
+    use collection::private_hnsw_oram_store::{PrivateHnswOramEpochState, PrivateHnswOramStore};
     use serde::de::DeserializeOwned;
     use serde_json::Value;
     use storage::rbac::{Access, AccessRequirements, Auth};
@@ -802,6 +802,36 @@ mod private_hnsw_rest_tests {
                 .write_manifest(&fixture.manifest, &fixture.manifest_signature)
                 .unwrap();
 
+            let current_epoch_path = manifest_store
+                .root_path()
+                .join("epochs")
+                .join("current.json");
+            let current_epoch_json = serde_json::to_vec_pretty(&PrivateHnswOramEpochState {
+                index_epoch: BASE_EPOCH,
+                root_hash: fixture.encrypted_build.root_hash.clone(),
+            })
+            .unwrap();
+            std::fs::write(&current_epoch_path, b"{").unwrap();
+            let malformed_upload_epoch_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/buckets",
+                UploadPrivateHnswBucketsRequest {
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: fixture.encrypted_build.buckets.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "current epoch validation failed"
+            );
+            assert!(
+                !malformed_upload_epoch_error.contains("private_hnsw_oram"),
+                "{malformed_upload_epoch_error}"
+            );
+            assert!(
+                !malformed_upload_epoch_error.contains("/tmp"),
+                "{malformed_upload_epoch_error}"
+            );
+            std::fs::write(&current_epoch_path, &current_epoch_json).unwrap();
+
             let bucket_upload_root_sentinel = "bucket-upload-root-sentinel";
             let bucket_upload_epoch_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/buckets",
@@ -960,6 +990,28 @@ mod private_hnsw_rest_tests {
                 }
             );
             assert_eq!(bucket_result["index_epoch"], BASE_EPOCH);
+
+            std::fs::write(&current_epoch_path, b"{").unwrap();
+            let malformed_session_epoch_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/session",
+                OpenPrivateHnswSessionRequest {
+                    client_id: "tenant-a/sdk-instance-corrupt-epoch".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
+                },
+                StatusCode::BAD_REQUEST,
+                "current epoch validation failed"
+            );
+            assert!(
+                !malformed_session_epoch_error.contains("private_hnsw_oram"),
+                "{malformed_session_epoch_error}"
+            );
+            assert!(
+                !malformed_session_epoch_error.contains("/tmp"),
+                "{malformed_session_epoch_error}"
+            );
+            std::fs::write(&current_epoch_path, &current_epoch_json).unwrap();
 
             let client_id_sentinel = "session-client-id-sentinel";
             let oversized_client_id_error = post_json_error_contains!(

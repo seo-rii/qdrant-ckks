@@ -392,6 +392,7 @@
 - REST/gRPC bucket upload Merkle root mismatch 오류 응답은 computed Merkle root를 반사하지 않는다.
 - REST/gRPC bucket upload 오류 응답은 malformed bucket ciphertext sentinel을 반사하지 않는다.
 - REST/gRPC bucket upload store layout 오류 응답은 collection-local `private_hnsw_oram` filesystem path를 반사하지 않는다.
+- REST/gRPC bucket upload/session open current epoch store 오류 응답은 collection-local `private_hnsw_oram` filesystem path를 반사하지 않는다.
 - REST/gRPC session open client_id shape 오류 응답은 submitted client id sentinel을 반사하지 않는다.
 - SDK helper는 commit plan의 old epoch/root가 현재 manifest와 맞을 때만 refreshed manifest/signature를 만들고, stale old root는 client-side에서 거부한다.
 - private result ORAM skeleton도 동일하게 commit plan의 old epoch/root와 현재 manifest를 묶어 refreshed manifest/signature를 만들고 stale old root를 거부한다.

@@ -507,7 +507,7 @@ mod private_hnsw_grpc_tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
-    use collection::private_hnsw_oram_store::PrivateHnswOramStore;
+    use collection::private_hnsw_oram_store::{PrivateHnswOramEpochState, PrivateHnswOramStore};
     use qdrant_sec::{
         DistanceKind, PrivateHnswClientError, PrivateHnswEncryptedPathBatch,
         PrivateHnswSearchParams, ResultPrivacyMode, encode_private_hnsw_oram_leaf_label,
@@ -1204,6 +1204,40 @@ mod private_hnsw_grpc_tests {
                 .write_manifest(&fixture.manifest, &fixture.manifest_signature)
                 .unwrap();
 
+            let current_epoch_path = manifest_store
+                .root_path()
+                .join("epochs")
+                .join("current.json");
+            let current_epoch_json = serde_json::to_vec_pretty(&PrivateHnswOramEpochState {
+                index_epoch: BASE_EPOCH,
+                root_hash: fixture.encrypted_build.root_hash.clone(),
+            })
+            .unwrap();
+            std::fs::write(&current_epoch_path, b"{").unwrap();
+            let err = PrivateHnswOram::upload_private_hnsw_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateHnswBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: fixture
+                        .encrypted_build
+                        .buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("current epoch validation failed"));
+            assert!(!err.message().contains("private_hnsw_oram"));
+            assert!(!err.message().contains("/tmp"));
+            std::fs::write(&current_epoch_path, &current_epoch_json).unwrap();
+
             let bucket_upload_root_sentinel = "bucket-upload-root-sentinel";
             let err = PrivateHnswOram::upload_private_hnsw_buckets(
                 &service,
@@ -1431,6 +1465,26 @@ mod private_hnsw_grpc_tests {
             .unwrap()
             .into_inner();
             assert_eq!(bucket_epoch.index_epoch, BASE_EPOCH);
+
+            std::fs::write(&current_epoch_path, b"{").unwrap();
+            let err = PrivateHnswOram::open_private_hnsw_session(
+                &service,
+                Request::new(grpc::OpenPrivateHnswSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    client_id: "tenant-a/sdk-instance-corrupt-epoch".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: result_privacy_to_proto(ResultPrivacyMode::IdsVisible),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("current epoch validation failed"));
+            assert!(!err.message().contains("private_hnsw_oram"));
+            assert!(!err.message().contains("/tmp"));
+            std::fs::write(&current_epoch_path, &current_epoch_json).unwrap();
 
             let client_id_sentinel = "session-client-id-sentinel";
             let err = PrivateHnswOram::open_private_hnsw_session(

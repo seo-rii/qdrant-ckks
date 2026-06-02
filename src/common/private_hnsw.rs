@@ -432,7 +432,9 @@ pub async fn do_upload_private_hnsw_buckets(
     )
     .map_err(private_hnsw_error)?;
     resolved.validate_manifest_runtime_policy(&manifest)?;
-    let current_epoch = store.read_current_epoch()?;
+    let current_epoch = store
+        .read_current_epoch()
+        .map_err(private_hnsw_epoch_store_error)?;
     if current_epoch.index_epoch != index_epoch || current_epoch.root_hash != root_hash {
         return Err(StorageError::bad_request(
             "private HNSW ORAM bucket upload epoch/root does not match current manifest epoch",
@@ -526,7 +528,9 @@ pub async fn do_open_private_hnsw_session(
     )
     .map_err(private_hnsw_error)?;
     resolved.validate_manifest_runtime_policy(&manifest)?;
-    let current_epoch = store.read_current_epoch()?;
+    let current_epoch = store
+        .read_current_epoch()
+        .map_err(private_hnsw_epoch_store_error)?;
     if current_epoch.index_epoch != manifest_epoch.epoch
         || current_epoch.root_hash != manifest.root_hash
     {
@@ -963,6 +967,21 @@ fn private_hnsw_manifest_store_error(err: CollectionError) -> StorageError {
         }
         CollectionError::ServiceError { .. } => {
             StorageError::service_error("private HNSW ORAM manifest store validation failed")
+        }
+        other => StorageError::from(other),
+    }
+}
+
+fn private_hnsw_epoch_store_error(err: CollectionError) -> StorageError {
+    match err {
+        CollectionError::NotFound { .. } => {
+            StorageError::not_found("private HNSW ORAM current epoch is unavailable")
+        }
+        CollectionError::BadRequest { .. } => {
+            StorageError::bad_request("private HNSW ORAM current epoch validation failed")
+        }
+        CollectionError::ServiceError { .. } => {
+            StorageError::service_error("private HNSW ORAM current epoch validation failed")
         }
         other => StorageError::from(other),
     }

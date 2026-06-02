@@ -594,7 +594,8 @@ mismatch error paths do not echo the submitted ciphertext or computed Merkle
 root into REST response bodies or gRPC status messages, and epoch/root mismatch
 handling does not echo the submitted root hash. Bucket-store layout failures
 during upload are sanitized without exposing collection-local
-`private_hnsw_oram` filesystem paths.
+`private_hnsw_oram` filesystem paths. Corrupt current-epoch metadata observed
+during bucket upload or session open is sanitized the same way.
 REST and gRPC `read_paths` error handling is checked for non-reflection:
 epoch/root mismatches and malformed path labels fail without echoing the
 submitted root hash, submitted path label, or any stored bucket ciphertext into
