@@ -5689,6 +5689,81 @@ mod tests {
     }
 
     #[test]
+    fn client_state_snapshot_ciphertext_does_not_expose_position_map_or_stash() {
+        fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+            !needle.is_empty()
+                && haystack
+                    .windows(needle.len())
+                    .any(|window| window == needle)
+        }
+
+        let keys = test_keys();
+        let config = oram_config();
+        let entry = node_block_with_vector(1, &[1.0, 0.0], vec![]);
+        let mut stash = node_block_with_vector(2, &[2.0, 0.0], vec![[1; 32]]);
+        stash.payload_fetch_token = Some([77; 32]);
+        let mut state = PrivateHnswOramClientState::with_position_map(
+            [(entry.node_id, 0), (stash.node_id, 1)],
+            config.tree_height,
+        )
+        .unwrap();
+        state.stash.insert(stash.node_id, stash.clone());
+        let snapshot = state.to_snapshot(config.tree_height).unwrap();
+        let plaintext_json = serde_json::to_string(&snapshot).unwrap();
+        let context = PrivateHnswClientStateAeadContext {
+            collection_id: "collection-uuid-1",
+            vector_name: "text",
+            key_id: "tenant-a/vector-private-rk",
+            rk_id: "tenant-a/vector-private-rk",
+            rk_epoch: 7,
+            index_epoch: 42,
+            root_hash: &BASE64URL_NOPAD.encode(&[42; 32]),
+        };
+
+        assert!(plaintext_json.contains("positions"));
+        assert!(plaintext_json.contains("stash"));
+        assert!(plaintext_json.contains("payload_fetch_token"));
+        for position in &snapshot.positions {
+            assert!(plaintext_json.contains(&position.node_id));
+            assert!(plaintext_json.contains(&position.leaf_label));
+        }
+
+        let encrypted =
+            seal_private_hnsw_oram_client_state_snapshot(&keys, context, &snapshot).unwrap();
+        let encrypted_json = serde_json::to_string(&encrypted).unwrap();
+        let raw_ciphertext = BASE64URL_NOPAD
+            .decode(encrypted.ciphertext.as_bytes())
+            .unwrap();
+
+        for plaintext_marker in [
+            "positions",
+            "stash",
+            "node_id",
+            "leaf_label",
+            "point_token",
+            "payload_fetch_token",
+        ] {
+            assert!(!encrypted_json.contains(plaintext_marker));
+            assert!(!contains_bytes(
+                &raw_ciphertext,
+                plaintext_marker.as_bytes()
+            ));
+        }
+        for position in &snapshot.positions {
+            assert!(!encrypted_json.contains(&position.node_id));
+            assert!(!encrypted_json.contains(&position.leaf_label));
+            assert!(!contains_bytes(
+                &raw_ciphertext,
+                position.node_id.as_bytes()
+            ));
+            assert!(!contains_bytes(
+                &raw_ciphertext,
+                position.leaf_label.as_bytes()
+            ));
+        }
+    }
+
+    #[test]
     fn plaintext_oram_hnsw_search_walks_graph_and_ranks_top_k() {
         use std::cell::RefCell;
 
