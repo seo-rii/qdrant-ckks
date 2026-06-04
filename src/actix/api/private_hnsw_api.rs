@@ -1182,18 +1182,6 @@ mod private_hnsw_rest_tests {
                 "requested result_privacy does not match manifest"
             );
 
-            let session_result = post_json_ok!(
-                "/collections/docs/private-hnsw/text/session",
-                OpenPrivateHnswSessionRequest {
-                    client_id: "tenant-a/sdk-instance-1".to_string(),
-                    desired_epoch: BASE_EPOCH,
-                    fixed_budget: true,
-                    result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
-                }
-            );
-            let session_id = session_result["session_id"].as_str().unwrap().to_string();
-            assert_eq!(session_result["collection_id"], COLLECTION_ID);
-            assert_eq!(session_result["index_epoch"], BASE_EPOCH);
             let auth = Auth::new_internal(Access::full("private HNSW ORAM route test"));
             let collection_pass = auth
                 .check_collection_access(
@@ -1208,6 +1196,47 @@ mod private_hnsw_rest_tests {
                 .get_collection(&collection_pass)
                 .await
                 .unwrap();
+            let config = collection.config_snapshot().await;
+            let snapshot_guard =
+                crate::common::private_hnsw::begin_private_hnsw_collection_snapshot(
+                    collection.name(),
+                    &config,
+                )
+                .unwrap()
+                .unwrap();
+            let active_snapshot_session_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/session",
+                OpenPrivateHnswSessionRequest {
+                    client_id: "tenant-a/sdk-instance-active-snapshot".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
+                },
+                StatusCode::BAD_REQUEST,
+                "active collection snapshot"
+            );
+            assert!(
+                !active_snapshot_session_error.contains(&fixture.encrypted_build.root_hash),
+                "{active_snapshot_session_error}"
+            );
+            assert!(
+                !active_snapshot_session_error.contains("private_hnsw_oram"),
+                "{active_snapshot_session_error}"
+            );
+            drop(snapshot_guard);
+
+            let session_result = post_json_ok!(
+                "/collections/docs/private-hnsw/text/session",
+                OpenPrivateHnswSessionRequest {
+                    client_id: "tenant-a/sdk-instance-1".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
+                }
+            );
+            let session_id = session_result["session_id"].as_str().unwrap().to_string();
+            assert_eq!(session_result["collection_id"], COLLECTION_ID);
+            assert_eq!(session_result["index_epoch"], BASE_EPOCH);
             let uploaded_store = PrivateHnswOramStore::new(collection.path(), "text").unwrap();
             let search_run = fixture.run_single_search_collect_writeback();
 

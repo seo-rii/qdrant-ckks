@@ -580,8 +580,10 @@ assert that the raw snapshot archive and restored bucket file do not contain the
 sentinel bytes.
 Collection and full snapshot creation also fail closed while any active private
 HNSW ORAM session exists for the collection, because a session may be remapping
-paths and writing back buckets. The error is sanitized and does not include
-collection-local `private_hnsw_oram` filesystem paths or bucket roots.
+paths and writing back buckets. While a private HNSW ORAM collection/full
+snapshot guard is active, new session opens fail closed for the same reason. The
+error is sanitized and does not include collection-local `private_hnsw_oram`
+filesystem paths or bucket roots.
 Snapshot creation also refuses to archive orphan private HNSW ORAM vector stores
 whose on-disk store does not match a configured private HNSW ORAM encryption
 rule, or configured private HNSW ORAM vector rules whose on-disk store is

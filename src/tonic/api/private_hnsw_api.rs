@@ -1730,6 +1730,47 @@ mod private_hnsw_grpc_tests {
                     .contains("requested result_privacy does not match manifest")
             );
 
+            let auth = Auth::new_internal(Access::full("private HNSW ORAM grpc test"));
+            let collection_pass = auth
+                .check_collection_access(
+                    COLLECTION_NAME,
+                    AccessRequirements::new(),
+                    "private_hnsw_active_session_upload_guard_test",
+                )
+                .unwrap();
+            let pass = new_unchecked_verification_pass();
+            let collection = dispatcher
+                .toc(&auth, &pass)
+                .get_collection(&collection_pass)
+                .await
+                .unwrap();
+            let config = collection.config_snapshot().await;
+            let snapshot_guard =
+                crate::common::private_hnsw::begin_private_hnsw_collection_snapshot(
+                    collection.name(),
+                    &config,
+                )
+                .unwrap()
+                .unwrap();
+            let err = PrivateHnswOram::open_private_hnsw_session(
+                &service,
+                Request::new(grpc::OpenPrivateHnswSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    client_id: "tenant-a/sdk-instance-active-snapshot".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: result_privacy_to_proto(ResultPrivacyMode::IdsVisible),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("active collection snapshot"));
+            assert!(!err.message().contains(&fixture.encrypted_build.root_hash));
+            assert!(!err.message().contains("private_hnsw_oram"));
+            drop(snapshot_guard);
+
             let session = PrivateHnswOram::open_private_hnsw_session(
                 &service,
                 Request::new(grpc::OpenPrivateHnswSessionRequest {
@@ -1746,20 +1787,6 @@ mod private_hnsw_grpc_tests {
             .into_inner();
             assert_eq!(session.collection_id, COLLECTION_ID);
             assert_eq!(session.index_epoch, BASE_EPOCH);
-            let auth = Auth::new_internal(Access::full("private HNSW ORAM grpc test"));
-            let collection_pass = auth
-                .check_collection_access(
-                    COLLECTION_NAME,
-                    AccessRequirements::new(),
-                    "private_hnsw_active_session_upload_guard_test",
-                )
-                .unwrap();
-            let pass = new_unchecked_verification_pass();
-            let collection = dispatcher
-                .toc(&auth, &pass)
-                .get_collection(&collection_pass)
-                .await
-                .unwrap();
             let uploaded_store = PrivateHnswOramStore::new(collection.path(), VECTOR_NAME).unwrap();
             let search_run = fixture.run_single_search_collect_writeback();
 

@@ -111,6 +111,7 @@ struct PrivateHnswSession {
 struct PrivateHnswSessionRegistry {
     sessions: HashMap<String, PrivateHnswSession>,
     active_writer_by_index: HashMap<String, String>,
+    active_snapshot_by_collection: HashMap<String, usize>,
 }
 
 impl PrivateHnswSessionRegistry {
@@ -123,6 +124,14 @@ impl PrivateHnswSessionRegistry {
         if self.sessions.len() >= MAX_SESSION_COUNT {
             return Err(StorageError::bad_request(
                 "private HNSW ORAM session registry is full",
+            ));
+        }
+        if self
+            .active_snapshot_by_collection
+            .contains_key(&session.collection_id)
+        {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM session open requires no active collection snapshot",
             ));
         }
 
@@ -173,6 +182,33 @@ impl PrivateHnswSessionRegistry {
         self.expire(now_unix);
         self.active_writer_by_index
             .contains_key(&session_index_key(collection_id, vector_name))
+    }
+
+    fn begin_collection_snapshot(
+        &mut self,
+        collection_id: &str,
+        now_unix: u64,
+    ) -> StorageResult<()> {
+        ensure_no_active_private_hnsw_collection_session_in_registry(
+            self,
+            collection_id,
+            now_unix,
+        )?;
+        *self
+            .active_snapshot_by_collection
+            .entry(collection_id.to_string())
+            .or_insert(0) += 1;
+        Ok(())
+    }
+
+    fn release_collection_snapshot(&mut self, collection_id: &str) {
+        let Some(count) = self.active_snapshot_by_collection.get_mut(collection_id) else {
+            return;
+        };
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            self.active_snapshot_by_collection.remove(collection_id);
+        }
     }
 
     fn with_session_mut<T>(
@@ -258,6 +294,18 @@ struct ResolvedPrivateHnswContext {
 fn session_registry() -> &'static Mutex<PrivateHnswSessionRegistry> {
     static REGISTRY: OnceLock<Mutex<PrivateHnswSessionRegistry>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(PrivateHnswSessionRegistry::default()))
+}
+
+pub(crate) struct PrivateHnswCollectionSnapshotGuard {
+    collection_id: String,
+}
+
+impl Drop for PrivateHnswCollectionSnapshotGuard {
+    fn drop(&mut self) {
+        if let Ok(mut registry) = session_registry().lock() {
+            registry.release_collection_snapshot(&self.collection_id);
+        }
+    }
 }
 
 impl ResolvedPrivateHnswContext {
@@ -410,12 +458,12 @@ pub async fn do_upload_private_hnsw_manifest(
     Ok(epoch_state)
 }
 
-pub(crate) fn ensure_no_active_private_hnsw_collection_snapshot_session(
+pub(crate) fn begin_private_hnsw_collection_snapshot(
     collection_name: &str,
     config: &CollectionConfigInternal,
-) -> StorageResult<()> {
+) -> StorageResult<Option<PrivateHnswCollectionSnapshotGuard>> {
     if !collection_uses_private_hnsw_oram(config) {
-        return Ok(());
+        return Ok(None);
     }
 
     let collection_crypto_id = config.stable_crypto_id(collection_name)?;
@@ -423,11 +471,10 @@ pub(crate) fn ensure_no_active_private_hnsw_collection_snapshot_session(
     let mut registry = session_registry()
         .lock()
         .map_err(|_| StorageError::service_error("private HNSW ORAM session registry poisoned"))?;
-    ensure_no_active_private_hnsw_collection_session_in_registry(
-        &mut registry,
-        &collection_crypto_id,
-        now_unix,
-    )
+    registry.begin_collection_snapshot(&collection_crypto_id, now_unix)?;
+    Ok(Some(PrivateHnswCollectionSnapshotGuard {
+        collection_id: collection_crypto_id,
+    }))
 }
 
 pub async fn do_get_private_hnsw_manifest(
@@ -2082,6 +2129,28 @@ mod private_hnsw_tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn session_registry_rejects_session_open_during_collection_snapshot() {
+        let now = 10;
+        let mut registry = PrivateHnswSessionRegistry::default();
+        registry
+            .begin_collection_snapshot("collection-uuid-1", now)
+            .unwrap();
+
+        let err = registry
+            .open(fixture_session("session-1", 20), now)
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("session open requires no active collection snapshot")
+        );
+
+        registry.release_collection_snapshot("collection-uuid-1");
+        registry
+            .open(fixture_session("session-1", 20), now)
+            .unwrap();
     }
 
     #[test]
