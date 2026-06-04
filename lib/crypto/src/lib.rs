@@ -93,8 +93,8 @@ pub use private_hnsw_client::{
     search_private_hnsw_oram_encrypted_with_cache, search_private_hnsw_oram_plaintext,
     search_private_hnsw_oram_plaintext_with_cache, sign_private_hnsw_oram_commit,
     sign_private_hnsw_oram_manifest, sign_private_hnsw_oram_manifest_refresh,
-    sign_private_hnsw_oram_read_paths, verify_private_hnsw_oram_merkle_proof,
-    verify_private_hnsw_oram_merkle_proof_json,
+    sign_private_hnsw_oram_read_paths, validate_private_hnsw_oram_upload_bundle,
+    verify_private_hnsw_oram_merkle_proof, verify_private_hnsw_oram_merkle_proof_json,
 };
 pub use private_hnsw_oram::{
     DistanceKind, FixedBudgetParams, OramKind, OramParams,

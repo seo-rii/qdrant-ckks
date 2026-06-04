@@ -741,7 +741,12 @@ copies the encrypted build metadata into a signed manifest-ready
 upload without recomputing server-visible index metadata.
 `package_private_hnsw_oram_upload_bundle` wraps that manifest, its Ed25519
 signature, and the sealed buckets into a serde-compatible upload bundle for
-REST/gRPC SDK distribution. After ORAM writeback, clients can call
+REST/gRPC SDK distribution. `validate_private_hnsw_oram_upload_bundle` and the
+bundle's `validate_initial_upload_contract` method let SDKs preflight decoded
+upload bundles before calling Qdrant: they require a complete bucket set, reject
+duplicate or missing bucket ids, verify bucket ciphertext SHA-256 and bucket
+commitments against the manifest context, and recompute the manifest Merkle
+root. After ORAM writeback, clients can call
 `refresh_private_hnsw_oram_manifest_for_commit` to derive the next signed
 manifest body from the commit plan, or
 `sign_private_hnsw_oram_manifest_refresh` to derive and sign it in one step;

@@ -146,6 +146,10 @@ pub enum PrivateHnswClientError {
         "private HNSW ORAM commit bucket {bucket_id} is out of range for {bucket_count} buckets"
     )]
     BucketOutOfRange { bucket_id: u64, bucket_count: u64 },
+    #[error("private HNSW ORAM upload bucket {bucket_id} appears more than once")]
+    DuplicateBucket { bucket_id: u64 },
+    #[error("private HNSW ORAM upload is missing bucket {bucket_id}")]
+    MissingBucket { bucket_id: u64 },
     #[error("private HNSW ORAM commit bucket {bucket_id} appears more than once")]
     DuplicateUpdatedBucket { bucket_id: u64 },
     #[error(
@@ -586,6 +590,10 @@ impl PrivateHnswOramUploadBundle {
             .iter()
             .map(|bucket| bucket.bucket_commitment.clone())
             .collect()
+    }
+
+    pub fn validate_initial_upload_contract(&self) -> Result<Vec<String>, PrivateHnswClientError> {
+        validate_private_hnsw_oram_upload_bundle(self)
     }
 }
 
@@ -1657,11 +1665,115 @@ pub fn package_private_hnsw_oram_upload_bundle(
 ) -> Result<PrivateHnswOramUploadBundle, PrivateHnswClientError> {
     let manifest = build_private_hnsw_oram_manifest_from_encrypted_index(context, build)?;
     let manifest_signature = sign_private_hnsw_oram_manifest(key_pair, &manifest)?;
-    Ok(PrivateHnswOramUploadBundle {
+    let bundle = PrivateHnswOramUploadBundle {
         manifest,
         manifest_signature,
         buckets: build.buckets.clone(),
-    })
+    };
+    validate_private_hnsw_oram_upload_bundle(&bundle)?;
+    Ok(bundle)
+}
+
+pub fn validate_private_hnsw_oram_upload_bundle(
+    bundle: &PrivateHnswOramUploadBundle,
+) -> Result<Vec<String>, PrivateHnswClientError> {
+    let manifest = &bundle.manifest;
+    let expected_bucket_count = private_hnsw_oram_bucket_count(manifest.oram.tree_height)?;
+    if manifest.bucket_count != expected_bucket_count {
+        return Err(PrivateHnswClientError::BucketCountMismatch);
+    }
+    let bucket_count = usize::try_from(manifest.bucket_count)
+        .map_err(|_| PrivateHnswClientError::BucketCountMismatch)?;
+    decode_merkle_root(&manifest.root_hash)?;
+
+    let base_context = PrivateHnswBucketAeadBaseContext {
+        collection_id: &manifest.collection_id,
+        vector_name: &manifest.vector_name,
+        key_id: &manifest.key_id,
+        rk_id: &manifest.rk_id,
+        rk_epoch: manifest.rk_epoch,
+    };
+    let mut commitments = vec![None; bucket_count];
+    for bucket in &bundle.buckets {
+        validate_private_hnsw_upload_bucket(
+            base_context,
+            bucket,
+            manifest.index_epoch,
+            manifest.bucket_count,
+        )?;
+        let bucket_index = usize::try_from(bucket.bucket_id)
+            .map_err(|_| PrivateHnswClientError::BucketCountMismatch)?;
+        if commitments[bucket_index]
+            .replace(bucket.bucket_commitment.clone())
+            .is_some()
+        {
+            return Err(PrivateHnswClientError::DuplicateBucket {
+                bucket_id: bucket.bucket_id,
+            });
+        }
+    }
+    let commitments = commitments
+        .into_iter()
+        .enumerate()
+        .map(|(bucket_id, commitment)| {
+            commitment.ok_or(PrivateHnswClientError::MissingBucket {
+                bucket_id: bucket_id as u64,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if private_hnsw_oram_merkle_root_for_commitments(&commitments)? != manifest.root_hash {
+        return Err(PrivateHnswClientError::MerkleRootMismatch);
+    }
+    Ok(commitments)
+}
+
+fn validate_private_hnsw_upload_bucket(
+    base_context: PrivateHnswBucketAeadBaseContext<'_>,
+    bucket: &PrivateHnswOramBucket,
+    expected_epoch: u64,
+    bucket_count: u64,
+) -> Result<(), PrivateHnswClientError> {
+    if bucket.version != 1 {
+        return Err(PrivateHnswClientError::UnsupportedBucketVersion(
+            bucket.version,
+        ));
+    }
+    if bucket.index_epoch != expected_epoch {
+        return Err(PrivateHnswClientError::StaleBucketEpoch {
+            bucket_id: bucket.bucket_id,
+            expected_epoch,
+            actual_epoch: bucket.index_epoch,
+        });
+    }
+    if bucket.bucket_id >= bucket_count {
+        return Err(PrivateHnswClientError::BucketOutOfRange {
+            bucket_id: bucket.bucket_id,
+            bucket_count,
+        });
+    }
+
+    let raw_ciphertext = BASE64URL_NOPAD
+        .decode(bucket.ciphertext.as_bytes())
+        .map_err(|_| PrivateHnswClientError::InvalidBucketCiphertextEncoding)?;
+    if raw_ciphertext.len() < 1 + BUCKET_AEAD_NONCE_LEN + BUCKET_AEAD_TAG_LEN {
+        return Err(PrivateHnswClientError::InvalidBucketCiphertextEncoding);
+    }
+    if raw_ciphertext[0] != BUCKET_AEAD_VERSION {
+        return Err(PrivateHnswClientError::UnsupportedBucketCiphertextVersion(
+            raw_ciphertext[0],
+        ));
+    }
+    if base64url_sha256(&raw_ciphertext) != bucket.ciphertext_sha256 {
+        return Err(PrivateHnswClientError::InvalidBucketCiphertextHash);
+    }
+    let expected_commitment = private_hnsw_bucket_commitment(
+        base_context.for_bucket(bucket.bucket_id, bucket.index_epoch),
+        &bucket.ciphertext_sha256,
+    )?;
+    if expected_commitment != bucket.bucket_commitment {
+        return Err(PrivateHnswClientError::InvalidBucketCommitment);
+    }
+    Ok(())
 }
 
 pub fn refresh_private_hnsw_oram_manifest_for_commit(
@@ -5065,10 +5177,16 @@ mod tests {
             private_hnsw_oram_merkle_root_for_commitments(&bundle.bucket_commitments()).unwrap(),
             encrypted_build.root_hash
         );
+        let ordered_commitments = bundle.validate_initial_upload_contract().unwrap();
+        assert_eq!(ordered_commitments, bundle.bucket_commitments());
 
         let encoded = serde_json::to_string(&bundle).unwrap();
         let decoded: PrivateHnswOramUploadBundle = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, bundle);
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle(&decoded).unwrap(),
+            ordered_commitments
+        );
 
         let epoch = validate_private_hnsw_oram_manifest(
             &decoded.manifest,
@@ -5094,6 +5212,44 @@ mod tests {
         assert_eq!(
             epoch.root_hash,
             decode_merkle_root(&encrypted_build.root_hash).unwrap()
+        );
+
+        let mut incomplete = decoded.clone();
+        incomplete.buckets.pop();
+        let missing_bucket_id = incomplete.manifest.bucket_count - 1;
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle(&incomplete),
+            Err(PrivateHnswClientError::MissingBucket {
+                bucket_id: missing_bucket_id
+            })
+        );
+
+        let mut duplicate = decoded.clone();
+        duplicate.buckets[1] = duplicate.buckets[0].clone();
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle(&duplicate),
+            Err(PrivateHnswClientError::DuplicateBucket { bucket_id: 0 })
+        );
+
+        let mut wrong_hash = decoded.clone();
+        wrong_hash.buckets[0].ciphertext_sha256 = commitment(99);
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle(&wrong_hash),
+            Err(PrivateHnswClientError::InvalidBucketCiphertextHash)
+        );
+
+        let mut wrong_commitment = decoded.clone();
+        wrong_commitment.buckets[0].bucket_commitment = commitment(99);
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle(&wrong_commitment),
+            Err(PrivateHnswClientError::InvalidBucketCommitment)
+        );
+
+        let mut wrong_root = decoded;
+        wrong_root.manifest.root_hash = commitment(99);
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle(&wrong_root),
+            Err(PrivateHnswClientError::MerkleRootMismatch)
         );
     }
 
