@@ -509,10 +509,11 @@ pub async fn do_upload_private_hnsw_manifest(
     };
     let store = PrivateHnswOramStore::new(resolved.collection_path, vector_name)?;
     store
-        .write_initial_epoch_if_absent_or_matching(&epoch_state)
-        .map_err(private_hnsw_manifest_store_error)?;
-    store
-        .write_manifest(&manifest, &signature)
+        .write_manifest_with_initial_epoch_if_absent_or_matching(
+            &manifest,
+            &signature,
+            &epoch_state,
+        )
         .map_err(private_hnsw_manifest_store_error)?;
     Ok(epoch_state)
 }

@@ -218,6 +218,27 @@ impl PrivateHnswOramStore {
         }
     }
 
+    pub fn write_manifest_with_initial_epoch_if_absent_or_matching(
+        &self,
+        manifest: &PrivateHnswOramManifest,
+        signature: &PrivateHnswOramSignature,
+        epoch: &PrivateHnswOramEpochState,
+    ) -> CollectionResult<()> {
+        self.ensure_layout()?;
+        match self.read_current_epoch() {
+            Ok(current) if current == *epoch => self.write_manifest(manifest, signature),
+            Ok(current) => Err(CollectionError::bad_request(format!(
+                "private HNSW ORAM current epoch/root does not match uploaded manifest epoch {}",
+                current.index_epoch,
+            ))),
+            Err(CollectionError::NotFound { .. }) => {
+                self.write_manifest(manifest, signature)?;
+                self.write_initial_epoch(epoch)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     pub fn read_current_epoch(&self) -> CollectionResult<PrivateHnswOramEpochState> {
         validate_private_dir(&self.epochs_dir())?;
         let epoch = read_json_private_file(&self.current_epoch_path(), MAX_EPOCH_BYTES)?;
@@ -1158,6 +1179,32 @@ mod tests {
                 .contains("current epoch/root does not match uploaded manifest")
         );
         assert_eq!(store.read_current_epoch().unwrap(), epoch);
+    }
+
+    #[test]
+    fn manifest_initial_epoch_publish_requires_manifest_write_success() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let manifest = fixture_manifest();
+        let signature = fixture_signature();
+        let epoch = PrivateHnswOramEpochState {
+            index_epoch: manifest.index_epoch,
+            root_hash: manifest.root_hash.clone(),
+        };
+        store.ensure_layout().unwrap();
+        fs::create_dir(store.root_path().join(MANIFEST_SIGNATURE_FILE)).unwrap();
+
+        store
+            .write_manifest_with_initial_epoch_if_absent_or_matching(&manifest, &signature, &epoch)
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                store.read_current_epoch().unwrap_err(),
+                CollectionError::NotFound { .. }
+            ),
+            "failed initial manifest upload must not publish current epoch"
+        );
     }
 
     #[test]

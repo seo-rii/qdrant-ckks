@@ -636,6 +636,9 @@ now close the committed session, verify that re-open fails against the stale
 manifest, verify that the closed session id cannot be reused for `read_paths`,
 verify that unknown close-session ids are not reflected in error responses,
 upload a refreshed signed manifest, and then re-open successfully.
+For initial signed manifest upload, Qdrant writes the manifest/signature before
+publishing `epochs/current.json`, so a manifest-store write failure does not
+leave a current epoch without a corresponding signed manifest.
 Unknown session id handling for `read_paths`, `commit`, and `close` returns
 sanitized errors without echoing the submitted session id.
 SDKs should use `refresh_private_hnsw_oram_manifest_for_commit` or
