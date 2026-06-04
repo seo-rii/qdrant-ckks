@@ -548,8 +548,9 @@ and reject overlap with `vector/client-ckks@v1` or `vector/openfhe-ckks@v1`
 bindings for the same vector name.
 The same private-session guidance is returned even when runtime crypto settings
 are absent, so private HNSW ORAM vectors do not fall through to CKKS/OpenFHE
-runtime fallback messages on ordinary query/search/recommend/discover/group/
-matrix APIs.
+runtime fallback messages on ordinary vector upsert/update, inference-derived
+vector writes, query/search/recommend/discover/group/matrix APIs, or lower-level
+collection peer/internal write guards.
 Collection-internal direct query/search/search-matrix entrypoints make the same
 binding distinction: `private-hnsw-oram/v1` returns private ORAM session
 guidance, while other encrypted vector bindings keep the CKKS sidecar runtime

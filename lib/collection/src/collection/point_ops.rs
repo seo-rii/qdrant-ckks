@@ -36,7 +36,8 @@ use shard::scroll::ScrollRequestInternal;
 use super::Collection;
 use crate::config::{
     CryptoMigrationCheckpoint, CryptoMigrationCheckpointStatus, CryptoMigrationState,
-    EncryptionSelector, encrypted_vector_return_request,
+    EncryptionRuleRef, EncryptionSelector, encrypted_vector_return_request,
+    encryption_rule_uses_private_hnsw_oram, private_hnsw_oram_api_required_message,
 };
 use crate::operations::consistency_params::ReadConsistency;
 use crate::operations::loggable::Loggable;
@@ -79,6 +80,36 @@ fn ensure_crypto_migration_state_allows_regular_operation(
         ));
     }
     Ok(())
+}
+
+fn plaintext_vector_write_error_for_encryption_rule(
+    encrypted_name: &str,
+    rule: &EncryptionRuleRef,
+    peer_update: bool,
+) -> CollectionError {
+    if encryption_rule_uses_private_hnsw_oram(rule) {
+        let prefix = if peer_update {
+            format!(
+                "peer update cannot write plaintext vector '{encrypted_name}' for encrypted vector rule"
+            )
+        } else {
+            format!("cannot write plaintext vector '{encrypted_name}' for encrypted vector rule")
+        };
+        return CollectionError::bad_input(format!(
+            "{prefix}; {}",
+            private_hnsw_oram_api_required_message(encrypted_name),
+        ));
+    }
+
+    if peer_update {
+        CollectionError::bad_input(format!(
+            "peer update cannot write plaintext vector '{encrypted_name}' for encrypted vector rule",
+        ))
+    } else {
+        CollectionError::bad_input(format!(
+            "cannot write plaintext vector '{encrypted_name}' for encrypted vector rule; configure runtime CKKS vector encryption before writing this vector",
+        ))
+    }
 }
 
 impl Collection {
@@ -1201,9 +1232,11 @@ impl Collection {
                             CollectionUpdateOperations::StagingOperation(_) => false,
                         };
                         if touches_encrypted_vector {
-                            return Err(CollectionError::bad_input(format!(
-                                "peer update cannot write plaintext vector '{encrypted_name}' for encrypted vector rule",
-                            )));
+                            return Err(plaintext_vector_write_error_for_encryption_rule(
+                                encrypted_name,
+                                rule,
+                                true,
+                            ));
                         }
                     }
                 }
@@ -2158,9 +2191,11 @@ impl Collection {
                             };
 
                             if touches_encrypted_vector {
-                                return Err(CollectionError::bad_input(format!(
-                                    "cannot write plaintext vector '{encrypted_name}' for encrypted vector rule; configure runtime CKKS vector encryption before writing this vector",
-                                )));
+                                return Err(plaintext_vector_write_error_for_encryption_rule(
+                                    encrypted_name,
+                                    rule,
+                                    false,
+                                ));
                             }
                         }
                     }
@@ -3820,6 +3855,35 @@ mod tests {
                 binding: Some("vector-envelope/v1".to_string()),
             }],
         }
+    }
+
+    fn private_hnsw_vector_rule(name: &str) -> EncryptionRuleRef {
+        EncryptionRuleRef {
+            id: "private_hnsw_vector".to_string(),
+            selector: EncryptionSelector::VectorNames {
+                names: vec![name.to_string()],
+            },
+            instance: "docs_private_hnsw_v1".to_string(),
+            binding: Some(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING.to_string()),
+        }
+    }
+
+    #[test]
+    fn private_hnsw_plaintext_vector_write_error_uses_session_api() {
+        let rule = private_hnsw_vector_rule("embedding");
+
+        let err = plaintext_vector_write_error_for_encryption_rule("embedding", &rule, false);
+        let message = format!("{err}");
+        assert!(message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
+        assert!(message.contains("/private-hnsw/embedding/session"));
+        assert!(!message.contains("CKKS vector encryption"));
+
+        let peer_err = plaintext_vector_write_error_for_encryption_rule("embedding", &rule, true);
+        let peer_message = format!("{peer_err}");
+        assert!(peer_message.contains("peer update"));
+        assert!(peer_message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
+        assert!(peer_message.contains("/private-hnsw/embedding/session"));
+        assert!(!peer_message.contains("CKKS vector encryption"));
     }
 
     #[test]

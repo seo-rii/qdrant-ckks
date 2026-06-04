@@ -8,7 +8,10 @@ use collection::collection::Collection;
 use collection::collection::payload_index_schema::{
     validate_payload_index_entry_for_encryption, validate_payload_index_paths_for_encrypted_paths,
 };
-use collection::config::{CollectionParams, CryptoMigrationCheckpoint, CryptoMigrationState};
+use collection::config::{
+    CollectionParams, CryptoMigrationCheckpoint, CryptoMigrationState,
+    private_hnsw_oram_api_required_message,
+};
 use collection::operations::conversions::write_ordering_from_proto;
 use collection::operations::point_ops::*;
 use collection::operations::shard_selector_internal::ShardSelectorInternal;
@@ -24,7 +27,7 @@ use qdrant_sec::{
     CLIENT_CKKS_VECTOR_MARKER, CkksVectorSidecarDeleteTarget, CkksVectorVerifiedSidecarKey,
     ClientCkksVectorVerifiedSidecarKey, ClientPayloadNonceReplayKey,
     ClientPayloadVerifiedEnvelopeKey, ENCRYPTED_VECTOR_SIDECAR_FIELD, METADATA_VALUE_BINDING,
-    PayloadEncryptionError, ServerPayloadVerifiedEnvelopeKey,
+    PRIVATE_HNSW_ORAM_BINDING, PayloadEncryptionError, ServerPayloadVerifiedEnvelopeKey,
 };
 use schemars::JsonSchema;
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
@@ -1872,6 +1875,11 @@ async fn maybe_encrypt_upsert_vectors(
         .map_err(|err| StorageError::bad_input(err.to_string()))?;
 
     let Some(runtime_settings) = runtime_settings else {
+        if let Some(vector_name) =
+            upsert_vectors_touch_private_hnsw_oram_config(operation, &collection_config.params)
+        {
+            return Err(private_hnsw_oram_api_required_error(&vector_name));
+        }
         if upsert_vectors_touch_encrypted_config(operation, &collection_config.params)? {
             return Err(StorageError::bad_input(format!(
                 "CKKS vector encryption runtime for collection {collection_name} is required before writing encrypted vectors",
@@ -1958,6 +1966,11 @@ async fn maybe_encrypt_update_vectors(
         .map_err(|err| StorageError::bad_input(err.to_string()))?;
 
     let Some(runtime_settings) = runtime_settings else {
+        if let Some(vector_name) =
+            point_vectors_touch_private_hnsw_oram_config(points, &collection_config.params)
+        {
+            return Err(private_hnsw_oram_api_required_error(&vector_name));
+        }
         if point_vectors_touch_encrypted_config(points, &collection_config.params)? {
             return Err(StorageError::bad_input(format!(
                 "CKKS vector encryption runtime for collection {collection_name} is required before writing encrypted vectors",
@@ -2045,6 +2058,7 @@ async fn ensure_upsert_inference_inputs_do_not_touch_encrypted_vectors(
         return Err(encrypted_vector_inference_write_error(
             collection_name,
             &vector_name,
+            &collection_config.params,
         ));
     }
 
@@ -2067,6 +2081,7 @@ async fn ensure_point_vectors_inference_inputs_do_not_touch_encrypted_vectors(
         return Err(encrypted_vector_inference_write_error(
             collection_name,
             &vector_name,
+            &collection_config.params,
         ));
     }
 
@@ -2076,7 +2091,12 @@ async fn ensure_point_vectors_inference_inputs_do_not_touch_encrypted_vectors(
 fn encrypted_vector_inference_write_error(
     collection_name: &str,
     vector_name: &str,
+    params: &CollectionParams,
 ) -> StorageError {
+    if private_hnsw_oram_vector_in_config(params, vector_name) {
+        return private_hnsw_oram_api_required_error(vector_name);
+    }
+
     StorageError::bad_input(format!(
         "encrypted vector '{vector_name}' in collection {collection_name} does not allow \
          inference-derived update vectors; provide precomputed dense values or use an explicit \
@@ -2274,6 +2294,103 @@ fn batch_vectors_touch_encrypted_config(
         }
     }
     Ok(false)
+}
+
+fn private_hnsw_oram_api_required_error(vector_name: &str) -> StorageError {
+    StorageError::bad_input(private_hnsw_oram_api_required_message(vector_name))
+}
+
+fn private_hnsw_oram_vector_in_config(params: &CollectionParams, vector_name: &str) -> bool {
+    let Some(encryption) = params.effective_encryption() else {
+        return false;
+    };
+
+    encryption.rules.iter().any(|rule| {
+        rule.binding.as_deref() == Some(PRIVATE_HNSW_ORAM_BINDING)
+            && matches!(
+                &rule.selector,
+                collection::config::EncryptionSelector::VectorNames { names }
+                    if names.iter().any(|name| name == vector_name)
+            )
+    })
+}
+
+fn upsert_vectors_touch_private_hnsw_oram_config(
+    operation: &PointInsertOperationsInternal,
+    params: &CollectionParams,
+) -> Option<String> {
+    match operation {
+        PointInsertOperationsInternal::PointsList(points) => points.iter().find_map(|point| {
+            vector_struct_touches_private_hnsw_oram_config(&point.vector, params)
+        }),
+        PointInsertOperationsInternal::PointsBatch(batch) => {
+            batch_vectors_touch_private_hnsw_oram_config(&batch.vectors, params)
+        }
+    }
+}
+
+fn point_vectors_touch_private_hnsw_oram_config(
+    points: &[collection::operations::vector_ops::PointVectorsPersisted],
+    params: &CollectionParams,
+) -> Option<String> {
+    points
+        .iter()
+        .find_map(|point| vector_struct_touches_private_hnsw_oram_config(&point.vector, params))
+}
+
+fn vector_struct_touches_private_hnsw_oram_config(
+    vector: &VectorStructPersisted,
+    params: &CollectionParams,
+) -> Option<String> {
+    let encryption = params.effective_encryption()?;
+    for rule in &encryption.rules {
+        if rule.binding.as_deref() != Some(PRIVATE_HNSW_ORAM_BINDING) {
+            continue;
+        }
+        let collection::config::EncryptionSelector::VectorNames { names } = &rule.selector else {
+            continue;
+        };
+        for private_name in names {
+            let touches = match vector {
+                VectorStructPersisted::Single(_) | VectorStructPersisted::MultiDense(_) => {
+                    private_name == DEFAULT_VECTOR_NAME
+                }
+                VectorStructPersisted::Named(vectors) => vectors.contains_key(private_name),
+            };
+            if touches {
+                return Some(private_name.clone());
+            }
+        }
+    }
+
+    None
+}
+
+fn batch_vectors_touch_private_hnsw_oram_config(
+    vectors: &BatchVectorStructPersisted,
+    params: &CollectionParams,
+) -> Option<String> {
+    let encryption = params.effective_encryption()?;
+    for rule in &encryption.rules {
+        if rule.binding.as_deref() != Some(PRIVATE_HNSW_ORAM_BINDING) {
+            continue;
+        }
+        let collection::config::EncryptionSelector::VectorNames { names } = &rule.selector else {
+            continue;
+        };
+        for private_name in names {
+            let touches = match vectors {
+                BatchVectorStructPersisted::Single(_)
+                | BatchVectorStructPersisted::MultiDense(_) => private_name == DEFAULT_VECTOR_NAME,
+                BatchVectorStructPersisted::Named(vectors) => vectors.contains_key(private_name),
+            };
+            if touches {
+                return Some(private_name.clone());
+            }
+        }
+    }
+
+    None
 }
 
 fn encrypt_vectors_for_point(
@@ -3574,6 +3691,18 @@ esac
         }
     }
 
+    fn private_hnsw_vector_params() -> CollectionParams {
+        let mut params = encrypted_vector_params();
+        if let Some(encryption) = params.encryption.as_mut() {
+            encryption.key_id = Some("tenant-a/vector-private-rk".to_string());
+            encryption.encryption_epoch = 7;
+            encryption.rules[0].id = "embedding_private_hnsw".to_string();
+            encryption.rules[0].instance = "docs_private_hnsw_v1".to_string();
+            encryption.rules[0].binding = Some(PRIVATE_HNSW_ORAM_BINDING.to_string());
+        }
+        params
+    }
+
     fn test_document(text: &str) -> api::rest::Document {
         api::rest::Document {
             text: text.to_string(),
@@ -3714,6 +3843,20 @@ esac
     }
 
     #[test]
+    fn private_hnsw_oram_inference_write_error_uses_session_api() {
+        let params = private_hnsw_vector_params();
+        let err = encrypted_vector_inference_write_error("docs", "embedding", &params);
+
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                    && description.contains("/private-hnsw/embedding/session")
+                    && !description.contains("client-side encrypted vector envelope")
+        ));
+    }
+
+    #[test]
     fn private_hnsw_oram_update_paths_reject_plaintext_dense_vectors() {
         let runtime = Runtime::new().unwrap();
         let storage_dir = Builder::new()
@@ -3776,6 +3919,78 @@ esac
                 )
                 .await
                 .unwrap();
+
+            let err = do_upsert_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "private_hnsw_docs".to_string(),
+                PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                    points: vec![api::rest::PointStruct {
+                        id: 1.into(),
+                        vector: api::rest::VectorStruct::Named(HashMap::from([(
+                            "embedding".to_string(),
+                            api::rest::Vector::Dense(vec![0.1, 0.2]),
+                        )])),
+                        payload: None,
+                    }],
+                    shard_key: None,
+                    update_filter: None,
+                    update_mode: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/embedding/session")
+                        && !description.contains("CKKS vector encryption runtime")
+            ));
+
+            let err = do_update_vectors(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "private_hnsw_docs".to_string(),
+                UpdateVectors {
+                    points: vec![api::rest::PointVectors {
+                        id: 1.into(),
+                        vector: api::rest::VectorStruct::Named(HashMap::from([(
+                            "embedding".to_string(),
+                            api::rest::Vector::Dense(vec![0.1, 0.2]),
+                        )])),
+                    }],
+                    shard_key: None,
+                    update_filter: None,
+                },
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/embedding/session")
+                        && !description.contains("CKKS vector encryption runtime")
+            ));
 
             let err = do_upsert_points(
                 UncheckedTocProvider::new_unchecked(&toc),
