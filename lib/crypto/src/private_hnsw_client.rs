@@ -3811,7 +3811,12 @@ mod tests {
             &sparse_state,
             config,
             &current,
-            &[forward_far, backward, sideways, forward_near],
+            &[
+                forward_far.clone(),
+                backward.clone(),
+                sideways.clone(),
+                forward_near.clone(),
+            ],
             &[10.0, 0.0],
             DistanceKind::Euclid,
             3,
@@ -3826,6 +3831,42 @@ mod tests {
         assert_eq!(sparse_plan.retained_neighbor_count, 2);
         assert_eq!(sparse_plan.real_path_count, 1);
         assert_eq!(sparse_leaves, vec![2, 7, 0]);
+        assert_eq!(
+            sparse_leaves.iter().collect::<BTreeSet<_>>().len(),
+            sparse_leaves.len()
+        );
+
+        let duplicate_position_state = PrivateHnswOramClientState::with_position_map(
+            [(forward_near.node_id, 2), (forward_far.node_id, 2)],
+            config.tree_height,
+        )
+        .unwrap();
+        let duplicate_position_plan = plan_private_hnsw_oram_graph_traversal_path_batch_with_stats(
+            &duplicate_position_state,
+            config,
+            &current,
+            &[forward_far, backward, sideways, forward_near],
+            &[10.0, 0.0],
+            DistanceKind::Euclid,
+            3,
+            7,
+        )
+        .unwrap();
+        let duplicate_position_leaves = duplicate_position_plan
+            .leaf_labels
+            .iter()
+            .map(|label| decode_private_hnsw_oram_leaf_label(label, config.tree_height).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(duplicate_position_plan.retained_neighbor_count, 2);
+        assert_eq!(duplicate_position_plan.real_path_count, 1);
+        assert_eq!(duplicate_position_leaves, vec![2, 7, 0]);
+        assert_eq!(
+            duplicate_position_leaves
+                .iter()
+                .collect::<BTreeSet<_>>()
+                .len(),
+            duplicate_position_leaves.len()
+        );
     }
 
     #[test]
