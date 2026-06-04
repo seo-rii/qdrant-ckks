@@ -1504,6 +1504,68 @@ mod tests {
     }
 
     #[test]
+    fn initial_upload_bundle_matching_epoch_requires_existing_manifest_to_match() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let original = fixture_upload_bundle();
+        store.write_initial_upload_bundle(&original, 128).unwrap();
+
+        let mut tampered_signature = original.manifest_signature.clone();
+        tampered_signature.sig = BASE64URL_NOPAD.encode(&[8; 64]);
+        store
+            .write_manifest(&original.manifest, &tampered_signature)
+            .unwrap();
+
+        let err = store
+            .write_initial_upload_bundle(&original, 128)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("existing manifest"));
+        assert_eq!(store.read_manifest().unwrap().1, tampered_signature);
+        assert_eq!(
+            store.read_current_epoch().unwrap().root_hash,
+            original.manifest.root_hash
+        );
+    }
+
+    #[test]
+    fn initial_upload_bundle_matching_epoch_requires_existing_merkle_tree_to_match() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let original = fixture_upload_bundle();
+        store.write_initial_upload_bundle(&original, 128).unwrap();
+
+        let tampered_bucket = fixture_bucket(
+            1,
+            original.manifest.index_epoch,
+            b"tampered result bucket for merkle tree",
+        );
+        let mut tampered_commitments = original.bucket_commitments();
+        tampered_commitments[1] = tampered_bucket.bucket_commitment.clone();
+        let tampered_root =
+            PrivateResultOramStore::merkle_root_for_commitments(&tampered_commitments).unwrap();
+        assert_ne!(tampered_root, original.manifest.root_hash);
+        store
+            .write_merkle_tree_from_commitments(
+                original.manifest.index_epoch,
+                tampered_root.clone(),
+                tampered_commitments,
+            )
+            .unwrap();
+
+        let err = store
+            .write_initial_upload_bundle(&original, 128)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("existing Merkle tree"));
+        assert_eq!(
+            store.read_current_epoch().unwrap().root_hash,
+            original.manifest.root_hash
+        );
+        assert_eq!(store.read_merkle_tree().unwrap().root_hash, tampered_root);
+    }
+
+    #[test]
     fn writeback_commit_updates_bucket_merkle_and_epoch() {
         let temp = TempDir::new().unwrap();
         let store = fixture_store(&temp);
