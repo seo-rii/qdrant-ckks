@@ -1716,6 +1716,45 @@ mod private_hnsw_rest_tests {
                 .unwrap(),
             )
             .unwrap();
+            let stale_current_read_paths = vec![fixture.entry_leaf_label()];
+            let stale_current_read_signature =
+                fixture.sign_read_paths(&stale_current_read_paths, 1, true);
+            let stale_current_read_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/read_paths",
+                OramReadPathsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: stale_current_read_paths,
+                    padding: OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    },
+                    client_signature: PrivateHnswClientSignature {
+                        alg: stale_current_read_signature.alg,
+                        key_id: stale_current_read_signature.key_id,
+                        sig: stale_current_read_signature.sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "read_paths current epoch/root does not match active session"
+            );
+            assert!(
+                !stale_current_read_error.contains(&stale_current_root),
+                "{stale_current_read_error}"
+            );
+            assert!(
+                !stale_current_read_error.contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{stale_current_read_error}"
+            );
+            assert!(
+                !stale_current_read_error.contains("private_hnsw_oram"),
+                "{stale_current_read_error}"
+            );
+            assert!(
+                !stale_current_read_error.contains("/tmp"),
+                "{stale_current_read_error}"
+            );
             let stale_current_commit_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {

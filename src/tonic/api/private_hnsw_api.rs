@@ -2346,6 +2346,45 @@ mod private_hnsw_grpc_tests {
                 .unwrap(),
             )
             .unwrap();
+            let stale_current_read_paths = vec![fixture.entry_leaf_label()];
+            let stale_current_read_signature =
+                fixture.sign_read_paths(&stale_current_read_paths, 1, true);
+            let err = PrivateHnswOram::read_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramReadPathsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: stale_current_read_paths,
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    }),
+                    client_signature: Some(signature_to_proto(stale_current_read_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("read_paths current epoch/root does not match active session")
+            );
+            assert!(
+                !err.message().contains(&stale_current_root),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{}",
+                err.message()
+            );
+            assert!(!err.message().contains("private_hnsw_oram"));
+            assert!(!err.message().contains("/tmp"));
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {

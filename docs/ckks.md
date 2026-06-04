@@ -604,7 +604,9 @@ commit with a non-increasing new epoch is rejected, a validly-shaped but wrong
 Ed25519 signature is rejected, and replaying a previous old epoch/root after a
 successful commit is rejected against the active session state. The commit path
 also preflights the store's current epoch/root against the active session before
-bucket or Merkle writeback starts.
+bucket or Merkle writeback starts. The `read_paths` path performs the same
+current epoch/root preflight before returning encrypted buckets, so a rolled
+back or mixed current epoch fails closed before bucket ciphertexts are served.
 They also reject opening a second session for the same private index while the
 first session is active, exercising the MVP single-writer lock at the route
 layer. Session open requests with `fixed_budget=false` in strict mode, a

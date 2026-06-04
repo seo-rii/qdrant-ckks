@@ -819,6 +819,12 @@ pub async fn do_read_private_hnsw_paths(
             let bucket_ids =
                 bucket_ids_for_path_batch(&paths, session.tree_height, session.bucket_count)?;
             let store = PrivateHnswOramStore::new(&session.collection_path, vector_name)?;
+            ensure_private_hnsw_active_session_current_epoch(
+                &store,
+                session.index_epoch,
+                &session.root_hash,
+                "read_paths",
+            )?;
             let mut buckets = Vec::with_capacity(bucket_ids.len());
             for bucket_id in bucket_ids {
                 buckets.push(
@@ -950,7 +956,12 @@ pub async fn do_commit_private_hnsw_paths(
         validate_root_hash_string(&new_root_hash, "new_root_hash")?;
 
         let store = PrivateHnswOramStore::new(&session.collection_path, vector_name)?;
-        ensure_private_hnsw_commit_current_epoch(&store, old_epoch, &old_root_hash)?;
+        ensure_private_hnsw_active_session_current_epoch(
+            &store,
+            old_epoch,
+            &old_root_hash,
+            "commit",
+        )?;
         for bucket in &updated_buckets {
             store
                 .validate_bucket_for_write(
@@ -1538,18 +1549,19 @@ fn collection_uses_private_hnsw_oram(config: &CollectionConfigInternal) -> bool 
         })
 }
 
-fn ensure_private_hnsw_commit_current_epoch(
+fn ensure_private_hnsw_active_session_current_epoch(
     store: &PrivateHnswOramStore,
-    old_epoch: u64,
-    old_root_hash: &str,
+    expected_epoch: u64,
+    expected_root_hash: &str,
+    operation: &str,
 ) -> StorageResult<()> {
     let current = store
         .read_current_epoch()
-        .map_err(private_hnsw_commit_metadata_store_error)?;
-    if current.index_epoch != old_epoch || current.root_hash != old_root_hash {
-        return Err(StorageError::bad_request(
-            "private HNSW ORAM commit current epoch/root does not match active session",
-        ));
+        .map_err(private_hnsw_epoch_store_error)?;
+    if current.index_epoch != expected_epoch || current.root_hash != expected_root_hash {
+        return Err(StorageError::bad_request(format!(
+            "private HNSW ORAM {operation} current epoch/root does not match active session"
+        )));
     }
     Ok(())
 }
@@ -2019,7 +2031,7 @@ mod private_hnsw_tests {
     }
 
     #[test]
-    fn commit_current_epoch_preflight_rejects_stale_store_epoch() {
+    fn active_session_current_epoch_preflight_rejects_stale_store_epoch() {
         let temp = tempfile::TempDir::new().unwrap();
         let store = PrivateHnswOramStore::new(temp.path(), "text").unwrap();
         let old_root_hash = BASE64URL_NOPAD.encode(&[42; 32]);
@@ -2035,12 +2047,29 @@ mod private_hnsw_tests {
         store.write_initial_epoch(&old).unwrap();
         store.compare_and_swap_epoch(&old, &stale_current).unwrap();
 
-        let err = ensure_private_hnsw_commit_current_epoch(&store, old.index_epoch, &old.root_hash)
-            .unwrap_err();
+        let err = ensure_private_hnsw_active_session_current_epoch(
+            &store,
+            old.index_epoch,
+            &old.root_hash,
+            "commit",
+        )
+        .unwrap_err();
 
         assert!(
             err.to_string()
                 .contains("commit current epoch/root does not match active session")
+        );
+        let err = ensure_private_hnsw_active_session_current_epoch(
+            &store,
+            old.index_epoch,
+            &old.root_hash,
+            "read_paths",
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("read_paths current epoch/root does not match active session")
         );
     }
 

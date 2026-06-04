@@ -384,7 +384,7 @@
 - private ORAM initial epoch upload는 같은 epoch/root 재업로드만 idempotent하게 허용하고, mismatched manifest epoch/root 재업로드는 기존 `current.json`을 덮지 않고 fail closed 한다.
 - crash window에서 bucket/Merkle writeback이 epoch CAS보다 먼저 보이더라도 old current epoch와 new bucket/root를 섞어 serving하지 않고 fail closed 한다.
 - collection snapshot은 client-sealed private HNSW bucket ciphertext를 포함하되 private ORAM snapshot source symlink와 bucket plaintext sentinel bytes를 archive에 허용하지 않고, restore preflight는 result privacy, collection/vector context, vector dim/distance, manifest signature key id, Path ORAM tree_height/bucket_count mismatch, current epoch/root, bucket commitments로 재계산한 manifest root mismatch, manifest bucket range 전체의 bucket presence mismatch, bucket symlink, weak bucket file mode를 fail-closed로 거부한다.
-- REST/gRPC ORAM commit fixture는 non-increasing new_epoch, invalid Ed25519 commit signature, successful commit 이후 stale old_epoch replay를 모두 fail-closed로 검증한다. Commit path는 bucket/Merkle writeback 전에 store current epoch/root도 active session의 old epoch/root와 일치하는지 preflight한다.
+- REST/gRPC ORAM commit fixture는 non-increasing new_epoch, invalid Ed25519 commit signature, successful commit 이후 stale old_epoch replay를 모두 fail-closed로 검증한다. Read path와 commit path는 bucket read 또는 bucket/Merkle writeback 전에 store current epoch/root도 active session의 epoch/root와 일치하는지 preflight한다.
 - REST/gRPC ORAM commit path는 updated bucket writeback도 bucket `ciphertext_sha256`와 collection/vector/key lineage/bucket epoch context에 묶인 commitment인지 Merkle prepare/write 전에 검증한다.
 - REST/gRPC ORAM session fixture는 strict mode `fixed_budget=false`, non-current desired epoch, reserved `private_payload_oram_required` result privacy를 session open에서 거부한다.
 - REST/gRPC manifest upload fixture는 route settings가 reserved `private_payload_oram_required` runtime mode로 drift되어도 runtime option validation에서 fail closed 되는지 검증한다.
@@ -423,6 +423,7 @@
 - private result ORAM Merkle proof verifier는 fixed-size path batch를 위해 반복 bucket/proof entry가 byte-identical인 경우만 허용하고, conflicting duplicate는 fail-closed로 거부한다.
 - REST/gRPC `read_paths` 오류 응답은 mismatched root hash sentinel, malformed path label sentinel, stored bucket ciphertext를 반사하지 않는다.
 - REST/gRPC `read_paths` missing encrypted bucket/proof 오류 응답은 collection-local `private_hnsw_oram` filesystem path를 반사하지 않는다.
+- REST/gRPC `read_paths`는 store current epoch/root가 active session과 맞지 않으면 bucket을 읽기 전에 fail closed 하고 stale root, stored bucket ciphertext, collection-local `private_hnsw_oram` path를 반사하지 않는다.
 - REST/gRPC `read_paths`와 `commit` malformed client signature shape 오류 응답은 submitted signature sentinel을 반사하지 않는다.
 - REST/gRPC `read_paths` 성공 응답은 bucket id를 unique set으로 축약하지 않고 요청된 ORAM path별 bucket sequence를 보존해 `requested_paths * (tree_height + 1)` 크기를 유지하며, SDK verifier는 반복 bucket/proof가 byte-identical일 때만 허용한다.
 - REST/gRPC `commit` old epoch/root mismatch 오류 응답은 submitted old root hash sentinel을 반사하지 않는다.
