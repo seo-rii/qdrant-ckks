@@ -779,16 +779,19 @@ pub async fn do_open_private_hnsw_session(
             "private HNSW ORAM sessions require fixed_budget=true",
         ));
     }
+    let expected_open_epoch = current_epoch.clone();
+    let expected_open_manifest = manifest.clone();
+    let expected_open_signature = signature.clone();
 
     let now_unix = current_unix_secs()?;
     let session = PrivateHnswSession {
         session_id: new_session_id(),
         _client_id: client_id,
-        collection_id: collection_crypto_id,
+        collection_id: collection_crypto_id.clone(),
         collection_path: collection.path().to_path_buf(),
         vector_name: vector_name.to_string(),
         index_epoch: current_epoch.index_epoch,
-        root_hash: current_epoch.root_hash,
+        root_hash: current_epoch.root_hash.clone(),
         lease_expires_unix: now_unix.saturating_add(SESSION_LEASE_SECS),
         bucket_count: manifest.bucket_count,
         tree_height: manifest.oram.tree_height,
@@ -796,10 +799,27 @@ pub async fn do_open_private_hnsw_session(
         max_bucket_ciphertext_bytes: max_bucket_ciphertext_bytes(&manifest)?,
         manifest,
     };
-    session_registry()
+    let response = session_registry()
         .lock()
         .map_err(|_| StorageError::service_error("private HNSW ORAM session registry poisoned"))?
-        .open(session, now_unix)
+        .open(session, now_unix)?;
+    if let Err(err) = ensure_private_hnsw_session_open_storage_matches(
+        &store,
+        &expected_open_epoch,
+        &expected_open_manifest,
+        &expected_open_signature,
+    ) {
+        if let Ok(mut registry) = session_registry().lock() {
+            registry.close(
+                &collection_crypto_id,
+                vector_name,
+                &response.session_id,
+                now_unix,
+            );
+        }
+        return Err(err);
+    }
+    Ok(response)
 }
 
 pub async fn do_read_private_hnsw_paths(
@@ -1202,6 +1222,27 @@ fn read_uploaded_manifest(
     store
         .read_manifest()
         .map_err(private_hnsw_manifest_read_store_error)
+}
+
+fn ensure_private_hnsw_session_open_storage_matches(
+    store: &PrivateHnswOramStore,
+    expected_epoch: &PrivateHnswOramEpochState,
+    expected_manifest: &PrivateHnswOramManifest,
+    expected_signature: &PrivateHnswOramSignature,
+) -> StorageResult<()> {
+    let current_epoch = store
+        .read_current_epoch()
+        .map_err(private_hnsw_epoch_store_error)?;
+    let (stored_manifest, stored_signature) = read_uploaded_manifest(store)?;
+    if current_epoch != *expected_epoch
+        || stored_manifest != *expected_manifest
+        || stored_signature != *expected_signature
+    {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM session open observed concurrent manifest or epoch update",
+        ));
+    }
+    Ok(())
 }
 
 fn private_hnsw_manifest_read_store_error(err: CollectionError) -> StorageError {
@@ -2145,6 +2186,75 @@ mod private_hnsw_tests {
             err.to_string()
                 .contains("read_paths current epoch/root does not match active session")
         );
+    }
+
+    #[test]
+    fn session_open_storage_recheck_rejects_manifest_or_epoch_drift() {
+        let session = fixture_session("session-1", 20);
+        let signature = fixture_signature();
+        let expected_epoch = PrivateHnswOramEpochState {
+            index_epoch: session.index_epoch,
+            root_hash: session.root_hash.clone(),
+        };
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let store = PrivateHnswOramStore::new(temp.path(), "text").unwrap();
+        store.write_initial_epoch(&expected_epoch).unwrap();
+        store.write_manifest(&session.manifest, &signature).unwrap();
+        ensure_private_hnsw_session_open_storage_matches(
+            &store,
+            &expected_epoch,
+            &session.manifest,
+            &signature,
+        )
+        .unwrap();
+
+        let stale_epoch = PrivateHnswOramEpochState {
+            index_epoch: session.index_epoch + 1,
+            root_hash: BASE64URL_NOPAD.encode(&[43; 32]),
+        };
+        store
+            .compare_and_swap_epoch(&expected_epoch, &stale_epoch)
+            .unwrap();
+        let err = ensure_private_hnsw_session_open_storage_matches(
+            &store,
+            &expected_epoch,
+            &session.manifest,
+            &signature,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("session open observed concurrent manifest or epoch update")
+        );
+        assert!(!err.to_string().contains(&stale_epoch.root_hash));
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let store = PrivateHnswOramStore::new(temp.path(), "text").unwrap();
+        store.write_initial_epoch(&expected_epoch).unwrap();
+        store.write_manifest(&session.manifest, &signature).unwrap();
+        let mut changed_manifest = session.manifest.clone();
+        changed_manifest.logical_node_count += 1;
+        store.write_manifest(&changed_manifest, &signature).unwrap();
+        let err = ensure_private_hnsw_session_open_storage_matches(
+            &store,
+            &expected_epoch,
+            &session.manifest,
+            &signature,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("session open observed concurrent manifest or epoch update")
+        );
+    }
+
+    fn fixture_signature() -> PrivateHnswOramSignature {
+        PrivateHnswOramSignature {
+            alg: "ed25519".to_string(),
+            key_id: "tenant-a/private-hnsw-signing-v1".to_string(),
+            sig: BASE64URL_NOPAD.encode(&[7; 64]),
+        }
     }
 
     fn fixture_session(session_id: &str, lease_expires_unix: u64) -> PrivateHnswSession {

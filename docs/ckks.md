@@ -612,10 +612,14 @@ current epoch/root preflight before returning encrypted buckets, so a rolled
 back or mixed current epoch fails closed before bucket ciphertexts are served.
 They also reject opening a second session for the same private index while the
 first session is active, exercising the MVP single-writer lock at the route
-layer. Session open requests with `fixed_budget=false` in strict mode, a
-non-current desired epoch, or the reserved `private_payload_oram_required`
-result privacy mode are rejected before any ORAM path reads are served. Client
-id shape errors are sanitized without echoing the submitted client id.
+layer. After registering a session, session open rechecks the stored
+manifest/signature/current epoch; if a concurrent manifest or epoch update was
+observed during open, the new session is closed and the request fails before any
+ORAM path reads are served. Session open requests with `fixed_budget=false` in
+strict mode, a non-current desired epoch, or the reserved
+`private_payload_oram_required` result privacy mode are rejected before any ORAM
+path reads are served. Client id shape errors are sanitized without echoing the
+submitted client id.
 Expired sessions are purged from the registry before use and release the
 single-writer lock for that private index; using an expired session id for
 `read_paths`, `commit`, or `close` fails closed.
