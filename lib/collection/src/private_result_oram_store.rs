@@ -6,10 +6,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND, PrivateResultOramBucket,
-    PrivateResultOramBucketValidationContext, PrivateResultOramManifest,
-    PrivateResultOramMerkleProof, PrivateResultOramMerkleProofLeaf, PrivateResultOramMerkleSibling,
-    PrivateResultOramMerkleSiblingPosition, PrivateResultOramSignature,
-    PrivateResultOramUploadBundle, validate_private_result_oram_bucket_shape,
+    PrivateResultOramBucketCommitmentContext, PrivateResultOramBucketValidationContext,
+    PrivateResultOramManifest, PrivateResultOramMerkleProof, PrivateResultOramMerkleProofLeaf,
+    PrivateResultOramMerkleSibling, PrivateResultOramMerkleSiblingPosition,
+    PrivateResultOramSignature, PrivateResultOramUploadBundle,
+    private_result_oram_bucket_commitment, validate_private_result_oram_bucket_shape,
     validate_private_result_oram_upload_bundle,
 };
 use serde::{Deserialize, Serialize};
@@ -329,6 +330,13 @@ impl PrivateResultOramStore {
         updated_buckets: &[PrivateResultOramBucket],
         max_ciphertext_bytes: usize,
     ) -> CollectionResult<PrivateResultOramEpochState> {
+        self.ensure_current_epoch_matches(old)?;
+        let (manifest, _) = self.read_manifest()?;
+        validate_commit_manifest_context(&manifest, old, bucket_count)?;
+        for bucket in updated_buckets {
+            validate_bucket(bucket, new.index_epoch, bucket_count, max_ciphertext_bytes)?;
+        }
+        validate_bucket_commitment_context(&manifest, new.index_epoch, updated_buckets)?;
         let prepared_merkle_commit = self.prepare_merkle_commit(
             old.index_epoch,
             &old.root_hash,
@@ -337,10 +345,6 @@ impl PrivateResultOramStore {
             bucket_count,
             updated_buckets,
         )?;
-        self.ensure_current_epoch_matches(old)?;
-        for bucket in updated_buckets {
-            validate_bucket(bucket, new.index_epoch, bucket_count, max_ciphertext_bytes)?;
-        }
         for bucket in updated_buckets {
             self.write_bucket(bucket, new.index_epoch, bucket_count, max_ciphertext_bytes)?;
         }
@@ -695,6 +699,55 @@ fn validate_bucket(
             "private result ORAM bucket {} has stale epoch {}",
             bucket.bucket_id, bucket.index_epoch,
         )));
+    }
+    Ok(())
+}
+
+fn validate_commit_manifest_context(
+    manifest: &PrivateResultOramManifest,
+    old: &PrivateResultOramEpochState,
+    bucket_count: u64,
+) -> CollectionResult<()> {
+    if manifest.index_epoch != old.index_epoch || manifest.root_hash != old.root_hash {
+        return Err(CollectionError::bad_request(
+            "private result ORAM manifest epoch/root does not match commit old epoch/root",
+        ));
+    }
+    if manifest.bucket_count != bucket_count {
+        return Err(CollectionError::bad_request(
+            "private result ORAM manifest bucket_count does not match commit bucket_count",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_bucket_commitment_context(
+    manifest: &PrivateResultOramManifest,
+    index_epoch: u64,
+    buckets: &[PrivateResultOramBucket],
+) -> CollectionResult<()> {
+    for bucket in buckets {
+        let expected_commitment = private_result_oram_bucket_commitment(
+            PrivateResultOramBucketCommitmentContext {
+                collection_id: &manifest.collection_id,
+                key_id: &manifest.key_id,
+                rk_id: &manifest.rk_id,
+                rk_epoch: manifest.rk_epoch,
+                bucket_id: bucket.bucket_id,
+                index_epoch,
+            },
+            &bucket.ciphertext_sha256,
+        )
+        .map_err(|_| {
+            CollectionError::bad_request(
+                "private result ORAM commit bucket commitment context mismatch",
+            )
+        })?;
+        if expected_commitment != bucket.bucket_commitment {
+            return Err(CollectionError::bad_request(
+                "private result ORAM commit bucket commitment context mismatch",
+            ));
+        }
     }
     Ok(())
 }
@@ -1457,8 +1510,7 @@ mod tests {
         let bundle = fixture_upload_bundle();
         let old = store.write_initial_upload_bundle(&bundle, 128).unwrap();
 
-        let mut updated_bucket = fixture_bucket(1, 43, b"updated result bucket 1");
-        updated_bucket.bucket_commitment = root_hash(88);
+        let updated_bucket = fixture_bucket(1, 43, b"updated result bucket 1");
         let mut next_commitments = bundle.bucket_commitments();
         next_commitments[1] = updated_bucket.bucket_commitment.clone();
         let new = PrivateResultOramEpochState {
@@ -1499,12 +1551,12 @@ mod tests {
         let proof = store
             .read_merkle_path_batch(&[1], new.index_epoch, &new.root_hash, bundle.bucket_count())
             .unwrap();
-        assert_eq!(proof.leaves[0].leaf_hash, root_hash(88));
+        assert_eq!(proof.leaves[0].leaf_hash, updated_bucket.bucket_commitment);
 
         let err = store
             .commit_writeback(&old, &new, bundle.bucket_count(), &[], 128)
             .unwrap_err();
-        assert!(err.to_string().contains("epoch mismatch"));
+        assert!(err.to_string().contains("RootHashMismatch"));
     }
 
     #[test]
@@ -1520,8 +1572,7 @@ mod tests {
         };
         store.compare_and_swap_epoch(&old, &stale_current).unwrap();
 
-        let mut updated_bucket = fixture_bucket(0, 43, b"stale writeback bucket");
-        updated_bucket.bucket_commitment = root_hash(88);
+        let updated_bucket = fixture_bucket(0, 43, b"stale writeback bucket");
         let mut next_commitments = bundle.bucket_commitments();
         next_commitments[0] = updated_bucket.bucket_commitment.clone();
         let attempted_new = PrivateResultOramEpochState {
@@ -1553,6 +1604,53 @@ mod tests {
         assert_eq!(
             proof.leaves[0].leaf_hash,
             bundle.buckets[0].bucket_commitment
+        );
+    }
+
+    #[test]
+    fn writeback_commit_rejects_bucket_commitment_context_mismatch() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let bundle = fixture_upload_bundle();
+        let old = store.write_initial_upload_bundle(&bundle, 128).unwrap();
+
+        let valid_bucket = fixture_bucket(1, 43, b"updated result bucket 1");
+        let mut invalid_bucket = valid_bucket.clone();
+        invalid_bucket.bucket_commitment = root_hash(88);
+        let mut next_commitments = bundle.bucket_commitments();
+        next_commitments[1] = invalid_bucket.bucket_commitment.clone();
+        let new = PrivateResultOramEpochState {
+            index_epoch: 43,
+            root_hash: PrivateResultOramStore::merkle_root_for_commitments(&next_commitments)
+                .unwrap(),
+        };
+
+        let err = store
+            .commit_writeback(
+                &old,
+                &new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&invalid_bucket),
+                128,
+            )
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("commit bucket commitment context mismatch")
+        );
+        assert_eq!(
+            store
+                .read_bucket(1, old.index_epoch, bundle.bucket_count(), 128)
+                .unwrap(),
+            bundle.buckets[1]
+        );
+        let proof = store
+            .read_merkle_path_batch(&[1], old.index_epoch, &old.root_hash, bundle.bucket_count())
+            .unwrap();
+        assert_eq!(
+            proof.leaves[0].leaf_hash,
+            bundle.buckets[1].bucket_commitment
         );
     }
 

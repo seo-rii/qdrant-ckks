@@ -766,7 +766,10 @@ payload/result layer. It writes `private_result_oram/manifest.json`,
 `epochs/current.json` with the same private directory hardening and epoch CAS
 contract used by private HNSW ORAM. Its upload bundle, commit, and stored
 Merkle-tree root mismatch errors do not reflect computed Merkle roots, and its
-writeback helper preflights stale current epochs before bucket/Merkle writes.
+writeback helper preflights stale current epochs and manifest epoch/root
+context before bucket/Merkle writes. It also validates each updated bucket
+commitment against the bucket ciphertext hash plus collection/key lineage and
+the proposed bucket epoch before preparing Merkle metadata.
 Directory hardening also checks symlink/type before chmod. It also exposes
 `read_merkle_path_batch` with the canonical qdrant-sec
 `merkle_path_batch/v1` proof DTO so a future result ORAM read API can return
@@ -784,11 +787,12 @@ same epoch/root and leave the stored current epoch untouched on mismatch.
 Repeated initial upload bundles with that same epoch/root are accepted as no-op
 only when the stored manifest/signature, Merkle tree, and bucket set already
 match the incoming bundle.
-`commit_writeback` mirrors
-the private HNSW ORAM commit order by preparing the Merkle update, writing
-updated encrypted buckets, writing Merkle metadata, then applying epoch/root
-CAS. These types and storage primitives are contract scaffolding only and are
-not wired into runtime upload/session APIs yet.
+`commit_writeback` mirrors the private HNSW ORAM commit order by preflighting
+current epoch/root and stored manifest context, validating updated bucket
+ciphertext/hash plus context-bound commitments, preparing the Merkle update,
+writing updated encrypted buckets, writing Merkle metadata, then applying
+epoch/root CAS. These types and storage primitives are contract scaffolding
+only and are not wired into runtime upload/session APIs yet.
 Collection snapshots include the `private_result_oram/` directory if it is
 present, but current restore fail-closes when that directory or a symlink at
 that path appears because `payload/private-result-oram@v1` is still reserved.
