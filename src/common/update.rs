@@ -2651,6 +2651,9 @@ async fn split_encrypted_vector_delete_names(
     let mut encrypted_sidecar_keys = Vec::new();
     let mut encrypted_sidecar_vector_names = Vec::new();
     for vector_name in vector_names {
+        if private_hnsw_oram_vector_in_config(&collection_config.params, &vector_name) {
+            return Err(private_hnsw_oram_api_required_error(&vector_name));
+        }
         if encrypted_names.contains(&vector_name) {
             if delete_target.is_none() {
                 return Err(StorageError::bad_request("No filter or points provided"));
@@ -3990,6 +3993,62 @@ esac
                     if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
                         && description.contains("/private-hnsw/embedding/session")
                         && !description.contains("CKKS vector encryption runtime")
+            ));
+
+            let err = do_delete_vectors(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "private_hnsw_docs".to_string(),
+                DeleteVectors {
+                    points: Some(vec![1.into()]),
+                    filter: None,
+                    vector: std::iter::once("embedding".to_string()).collect(),
+                    shard_key: None,
+                },
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/embedding/session")
+                        && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+            ));
+
+            let err = do_delete_vectors(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "private_hnsw_docs".to_string(),
+                DeleteVectors {
+                    points: None,
+                    filter: Some(Filter::new()),
+                    vector: std::iter::once("embedding".to_string()).collect(),
+                    shard_key: None,
+                },
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/embedding/session")
+                        && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
             ));
 
             let err = do_upsert_points(

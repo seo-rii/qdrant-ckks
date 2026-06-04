@@ -550,12 +550,13 @@ configured Ed25519 signing public keys, `search_execution: client_led`,
 search in strict mode. Runtime validation also rejects unknown top-level and
 nested private HNSW ORAM options instead of silently accepting secret-like policy
 drift. Qdrant does not store point-level dense vectors for this provider and
-does not score or traverse HNSW server-side; normal vector writes
-and server scoring, including legacy search/batch search, ordinary
-query/fusion/context/MMR, recommend/discover, grouped search/query, and search
-matrix paths, fail closed and direct clients to the private HNSW ORAM session
-APIs. Phase 11 implements the encrypted bucket store and session read/commit
-APIs behind this validated control-plane contract.
+does not score, traverse HNSW, or delete point-level CKKS sidecar vectors
+server-side; normal vector writes, `delete_vectors`, and server scoring,
+including legacy search/batch search, ordinary query/fusion/context/MMR,
+recommend/discover, grouped search/query, and search matrix paths, fail closed
+and direct clients to the private HNSW ORAM session APIs. Phase 11 implements
+the encrypted bucket store and session read/commit APIs behind this validated
+control-plane contract.
 Collection config and runtime validation require `vector/private-hnsw-oram@v1`
 and `private-hnsw-oram/v1` to be paired exactly, reject multi-vector v1 rules,
 and reject overlap with `vector/client-ckks@v1` or `vector/openfhe-ckks@v1`
@@ -563,8 +564,8 @@ bindings for the same vector name.
 The same private-session guidance is returned even when runtime crypto settings
 are absent, so private HNSW ORAM vectors do not fall through to CKKS/OpenFHE
 runtime fallback messages on ordinary vector upsert/update, inference-derived
-vector writes, query/search/recommend/discover/group/matrix APIs, or lower-level
-collection peer/internal write guards.
+vector writes, `delete_vectors`, query/search/recommend/discover/group/matrix
+APIs, or lower-level collection peer/internal write guards.
 Collection-internal direct query/search/search-matrix entrypoints make the same
 binding distinction: `private-hnsw-oram/v1` returns private ORAM session
 guidance, while other encrypted vector bindings keep the CKKS sidecar runtime
