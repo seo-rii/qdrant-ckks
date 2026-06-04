@@ -688,6 +688,46 @@ mod private_hnsw_rest_tests {
                 "manifest result_privacy does not match runtime instance"
             );
 
+            let mut mismatched_hnsw_manifest = fixture.manifest.clone();
+            mismatched_hnsw_manifest.hnsw.m = 3;
+            let mismatched_hnsw_signature = fixture.sign_manifest(&mismatched_hnsw_manifest);
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: mismatched_hnsw_manifest,
+                    signature: mismatched_hnsw_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "manifest hnsw does not match runtime instance"
+            );
+
+            let mut mismatched_oram_manifest = fixture.manifest.clone();
+            mismatched_oram_manifest.oram.bucket_size = 4;
+            let mismatched_oram_signature = fixture.sign_manifest(&mismatched_oram_manifest);
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: mismatched_oram_manifest,
+                    signature: mismatched_oram_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "manifest oram does not match runtime instance"
+            );
+
+            let mut mismatched_fixed_budget_manifest = fixture.manifest.clone();
+            mismatched_fixed_budget_manifest.fixed_budget.fixed_result_k = 2;
+            let mismatched_fixed_budget_signature =
+                fixture.sign_manifest(&mismatched_fixed_budget_manifest);
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: mismatched_fixed_budget_manifest,
+                    signature: mismatched_fixed_budget_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "manifest fixed_budget does not match runtime instance"
+            );
+
             let signature_key_id_sentinel = "signature-key-id-sentinel";
             let unknown_manifest_key_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",

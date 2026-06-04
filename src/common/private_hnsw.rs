@@ -12,16 +12,17 @@ use collection::private_hnsw_oram_store::{
 };
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
-    DistanceKind, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_HNSW_ORAM_BINDING,
-    PrivateHnswManifestValidationContext, PrivateHnswOramBucket, PrivateHnswOramCommitBucketRef,
-    PrivateHnswOramCommitSignatureInput, PrivateHnswOramManifest,
-    PrivateHnswOramReadPathsSignatureInput, PrivateHnswOramSignature,
+    DistanceKind, FixedBudgetParams, OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+    PRIVATE_HNSW_ORAM_BINDING, PrivateHnswManifestValidationContext, PrivateHnswOramBucket,
+    PrivateHnswOramCommitBucketRef, PrivateHnswOramCommitSignatureInput, PrivateHnswOramManifest,
+    PrivateHnswOramReadPathsSignatureInput, PrivateHnswOramSignature, PrivateHnswParams,
     PrivateHnswSignatureVerification, ResultPrivacyMode, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
     decode_private_hnsw_oram_leaf_label, private_hnsw_oram_bucket_count,
     private_hnsw_oram_bucket_ids_for_leaf, validate_private_hnsw_oram_commit_signature,
     validate_private_hnsw_oram_manifest, validate_private_hnsw_oram_read_paths_signature,
 };
 use segment::types::Distance;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use storage::content_manager::errors::{StorageError, StorageResult};
 use storage::content_manager::toc::TableOfContent;
@@ -36,6 +37,9 @@ const EXPECTED_RK_ID_OPTION: &str = "expected_rk_id";
 const MIN_RK_EPOCH_OPTION: &str = "min_rk_epoch";
 const MAX_RK_EPOCH_OPTION: &str = "max_rk_epoch";
 const RESULT_PRIVACY_OPTION: &str = "result_privacy";
+const HNSW_OPTION: &str = "hnsw";
+const ORAM_OPTION: &str = "oram";
+const FIXED_BUDGET_OPTION: &str = "fixed_budget";
 const ZERO_TRUST_PROFILE_STRICT: &str = "strict";
 const SESSION_LEASE_SECS: u64 = 300;
 const MAX_SESSION_COUNT: usize = 1024;
@@ -242,6 +246,9 @@ struct ResolvedPrivateHnswContext {
     expected_dim: u32,
     expected_distance: DistanceKind,
     expected_result_privacy: ResultPrivacyMode,
+    expected_hnsw: PrivateHnswParams,
+    expected_oram: OramParams,
+    expected_fixed_budget: FixedBudgetParams,
     public_key: Vec<u8>,
 }
 
@@ -284,6 +291,21 @@ impl ResolvedPrivateHnswContext {
             return Err(StorageError::bad_request(format!(
                 "private HNSW ORAM result_privacy=private_payload_oram_required requires {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}, which is not implemented in this MVP"
             )));
+        }
+        if manifest.hnsw != self.expected_hnsw {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM manifest hnsw does not match runtime instance",
+            ));
+        }
+        if manifest.oram != self.expected_oram {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM manifest oram does not match runtime instance",
+            ));
+        }
+        if manifest.fixed_budget != self.expected_fixed_budget {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM manifest fixed_budget does not match runtime instance",
+            ));
         }
         Ok(())
     }
@@ -1081,6 +1103,9 @@ fn manifest_context_from_runtime(
     let min_rk_epoch = required_option_u64(instance, MIN_RK_EPOCH_OPTION)?;
     let max_rk_epoch = required_option_u64(instance, MAX_RK_EPOCH_OPTION)?;
     let expected_result_privacy = result_privacy_from_runtime(instance)?;
+    let expected_hnsw = required_option_struct(instance, HNSW_OPTION)?;
+    let expected_oram = required_option_struct(instance, ORAM_OPTION)?;
+    let expected_fixed_budget = required_option_struct(instance, FIXED_BUDGET_OPTION)?;
     let expected_distance = distance_kind(vector_params.distance);
     let expected_dim = u32::try_from(vector_params.size.get()).map_err(|_| {
         StorageError::bad_request(format!(
@@ -1098,6 +1123,9 @@ fn manifest_context_from_runtime(
         expected_dim,
         expected_distance,
         expected_result_privacy,
+        expected_hnsw,
+        expected_oram,
+        expected_fixed_budget,
         public_key: Vec::new(),
     })
 }
@@ -1227,6 +1255,18 @@ fn required_option_u64(instance: &CryptoInstanceConfig, key: &str) -> StorageRes
         .get(key)
         .and_then(serde_json::Value::as_u64)
         .ok_or_else(|| StorageError::bad_request(format!("private HNSW ORAM option {key} missing")))
+}
+
+fn required_option_struct<T>(instance: &CryptoInstanceConfig, key: &str) -> StorageResult<T>
+where
+    T: DeserializeOwned,
+{
+    let value = instance.options.get(key).ok_or_else(|| {
+        StorageError::bad_request(format!("private HNSW ORAM option {key} missing"))
+    })?;
+    serde_json::from_value(value.clone()).map_err(|_| {
+        StorageError::bad_request(format!("private HNSW ORAM option {key} is invalid"))
+    })
 }
 
 fn distance_kind(distance: Distance) -> DistanceKind {
