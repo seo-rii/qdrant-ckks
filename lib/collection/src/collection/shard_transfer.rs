@@ -8,7 +8,7 @@ use fs_err::tokio as tokio_fs;
 use parking_lot::Mutex;
 use tokio_util::task::AbortOnDropHandle;
 
-use super::Collection;
+use super::{Collection, collection_encryption_uses_private_hnsw_oram};
 use crate::operations::cluster_ops::ReshardingDirection;
 use crate::operations::types::{CollectionError, CollectionResult};
 use crate::shards::local_shard::LocalShard;
@@ -20,6 +20,21 @@ use crate::shards::transfer::{
     ShardTransfer, ShardTransferConsensus, ShardTransferKey, ShardTransferMethod,
 };
 use crate::shards::{shard_initializing_flag_path, transfer};
+
+fn validate_private_hnsw_transfer_task_start_until_supported(
+    collection_name: &str,
+    private_hnsw_oram_collection: bool,
+) -> CollectionResult<()> {
+    if !private_hnsw_oram_collection {
+        return Ok(());
+    }
+
+    Err(CollectionError::bad_input(format!(
+        "cannot start shard transfer task for private HNSW ORAM collection {collection_name}: \
+         encrypted ORAM bucket transfer and consensus-backed epoch/root ownership are not \
+         implemented for shard transfer",
+    )))
+}
 
 impl Collection {
     pub async fn get_related_transfers(&self, current_peer_id: PeerId) -> Vec<ShardTransfer> {
@@ -74,6 +89,18 @@ impl Collection {
             log::warn!("No shard transfer method selected, defaulting to {default_method:?}");
             shard_transfer.method.replace(default_method);
         }
+        let private_hnsw_oram_collection = {
+            let config = self.collection_config.read().await;
+            config
+                .params
+                .effective_encryption()
+                .as_ref()
+                .is_some_and(collection_encryption_uses_private_hnsw_oram)
+        };
+        validate_private_hnsw_transfer_task_start_until_supported(
+            self.name(),
+            private_hnsw_oram_collection,
+        )?;
 
         let do_transfer = {
             let this_peer_id = consensus.this_peer_id();
@@ -568,5 +595,23 @@ impl Collection {
             .is_some_and(|limit| outgoing >= limit);
 
         incoming_shard_transfer_limit_reached || outgoing_shard_transfer_limit_reached
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn private_hnsw_transfer_task_start_fails_closed_until_bucket_transfer_supported() {
+        validate_private_hnsw_transfer_task_start_until_supported("docs", false).unwrap();
+
+        let err =
+            validate_private_hnsw_transfer_task_start_until_supported("docs", true).unwrap_err();
+        let rendered = format!("{err:?}");
+        assert!(rendered.contains("private HNSW ORAM collection docs"));
+        assert!(rendered.contains("encrypted ORAM bucket transfer"));
+        assert!(rendered.contains("consensus-backed epoch/root"));
+        assert!(!rendered.contains("private_hnsw_oram"));
     }
 }

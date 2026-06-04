@@ -65,6 +65,11 @@ implementation.
 | Shard transfer / replication | Encrypted collection data-movement operations require matching non-secret crypto runtime capability fingerprints in peer metadata. Operations fail closed if any involved peer has missing or mismatched metadata. Automatic dead-replica recovery only proposes encrypted shard transfers from source peers with matching parity metadata. | Same policy; client-envelope verifier policy must match across nodes before encrypted transfers are allowed. | Same policy; matching OpenFHE context and metadata AEAD material must be enforced before encrypted transfers are allowed. |
 | Metadata encryption | `metadata/aes-256-gcm@v1` supports selected JSON string metadata values with `metadata-value/v1`; these values use the same server-side AEAD envelope, fail closed for plaintext indexing/filtering, and participate in `encrypted_payload:"decrypted"` reads under the same `payload_decrypt` access policy. `metadata_keys` selectors also support client-generated exact-match blind-index token fields with `metadata-exact-match-token/v1`. | Client-side metadata value encryption should use `payload/client-aead@v1` on the metadata field plus a separate blind-index token field for exact match. Qdrant stores opaque blind-index tokens and never computes them. | CKKS vector metadata sealing is separate from payload metadata value encryption. |
 
+`vector/private-hnsw-oram@v1` is stricter than the generic encrypted
+data-movement policy above: manual shard transfer starts and automatic
+dead-replica shard transfer recovery both fail closed until encrypted ORAM
+bucket movement and epoch/root ownership are consensus-backed.
+
 ## Payload text
 
 Selected JSON string fields are replaced with a single marker object:
@@ -726,7 +731,9 @@ move epoch/root ownership through consensus, so transfer start operations fail
 closed instead of producing a partial private index on the receiver.
 Automatic dead-replica shard transfer recovery also skips private HNSW ORAM
 collections for the same reason; parity alone is insufficient until bucket
-movement and epoch/root ownership are consensus-backed.
+movement and epoch/root ownership are consensus-backed. As a final guard,
+existing consensus transfer records for private HNSW ORAM collections are
+rejected before the local transfer task starts moving shard data.
 Distributed private HNSW ORAM sessions themselves fail closed in this MVP until
 epoch/root CAS is backed by consensus rather than node-local files.
 
