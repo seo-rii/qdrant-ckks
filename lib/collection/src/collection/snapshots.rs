@@ -373,6 +373,13 @@ impl Collection {
         shard_id: ShardId,
         temp_dir: &Path,
     ) -> CollectionResult<SnapshotDescription> {
+        let params = self.collection_config.read().await.params.clone();
+        validate_private_hnsw_oram_shard_snapshot_operation(
+            self.name(),
+            &params,
+            "shard snapshot creation",
+        )?;
+
         let snapshot_creator = self
             .shards_holder
             .read()
@@ -392,6 +399,13 @@ impl Collection {
         manifest: Option<SnapshotManifest>,
         temp_dir: &Path,
     ) -> CollectionResult<SnapshotStream> {
+        let params = self.collection_config.read().await.params.clone();
+        validate_private_hnsw_oram_shard_snapshot_operation(
+            self.name(),
+            &params,
+            "shard snapshot streaming",
+        )?;
+
         let shard = OwnedRwLockReadGuard::try_map(
             self.shards_holder.clone().read_owned().await,
             |shard_holder| shard_holder.get_shard(shard_id),
@@ -422,6 +436,11 @@ impl Collection {
         let collection_path = self.path.clone();
         let collection_name = self.name().to_string();
         let collection_params = self.collection_config.read().await.params.clone();
+        validate_private_hnsw_oram_shard_snapshot_operation(
+            &collection_name,
+            &collection_params,
+            "shard snapshot recovery",
+        )?;
 
         let temp_dir = temp_dir.to_path_buf();
 
@@ -540,6 +559,22 @@ fn ensure_private_result_oram_snapshot_restore_not_present(
             "failed to inspect private result ORAM snapshot restore guard: {err}"
         ))),
     }
+}
+
+fn validate_private_hnsw_oram_shard_snapshot_operation(
+    collection_name: &str,
+    params: &CollectionParams,
+    operation_name: &str,
+) -> CollectionResult<()> {
+    if private_hnsw_oram_configured_vectors(params)?.is_empty() {
+        return Ok(());
+    }
+
+    Err(CollectionError::bad_request(format!(
+        "{operation_name} for private HNSW ORAM collection {collection_name} is disabled until \
+         shard snapshots include collection-local encrypted ORAM buckets with epoch/root parity; \
+         use collection snapshot/restore preflight",
+    )))
 }
 
 fn validate_private_hnsw_oram_vector_snapshot(
@@ -1018,6 +1053,47 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[test]
+    fn private_hnsw_oram_shard_snapshot_operations_fail_closed_until_bucket_parity_supported() {
+        let empty_params = CollectionParams::empty();
+        validate_private_hnsw_oram_shard_snapshot_operation(
+            "docs",
+            &empty_params,
+            "shard snapshot creation",
+        )
+        .unwrap();
+
+        let config = private_hnsw_config(Uuid::from_u128(7));
+        for operation_name in [
+            "shard snapshot creation",
+            "shard snapshot streaming",
+            "shard snapshot recovery",
+        ] {
+            let err = validate_private_hnsw_oram_shard_snapshot_operation(
+                "docs",
+                &config.params,
+                operation_name,
+            )
+            .expect_err("private HNSW ORAM shard snapshots must fail closed");
+            let rendered = err.to_string();
+            assert!(
+                rendered.contains(&format!(
+                    "{operation_name} for private HNSW ORAM collection docs"
+                )),
+                "unexpected error: {rendered}",
+            );
+            assert!(
+                rendered.contains("collection-local encrypted ORAM buckets"),
+                "unexpected error: {rendered}",
+            );
+            assert!(
+                rendered.contains("collection snapshot/restore preflight"),
+                "unexpected error: {rendered}",
+            );
+            assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        }
     }
 
     #[cfg(unix)]
