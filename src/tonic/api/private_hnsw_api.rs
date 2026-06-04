@@ -520,9 +520,10 @@ mod private_hnsw_grpc_tests {
 
     use super::*;
     use crate::common::private_hnsw_wire_fixture::{
-        BASE_EPOCH, COLLECTION_ID, COLLECTION_NAME, NEXT_EPOCH, PrivateHnswRouteWireFixture,
-        SESSION_ID, SIGNING_KEY_ID, VECTOR_NAME, create_private_hnsw_collection, route_e2e_guard,
-        test_dispatcher, test_distributed_dispatcher,
+        BASE_EPOCH, COLLECTION_ID, COLLECTION_NAME, MAX_CIPHERTEXT_BYTES, NEXT_EPOCH,
+        PrivateHnswRouteWireFixture, SESSION_ID, SIGNING_KEY_ID, VECTOR_NAME,
+        create_private_hnsw_collection, route_e2e_guard, test_dispatcher,
+        test_distributed_dispatcher,
     };
 
     fn sample_manifest() -> PrivateHnswOramManifest {
@@ -2196,6 +2197,72 @@ mod private_hnsw_grpc_tests {
             assert!(!err.message().contains("private_hnsw_oram"));
             std::fs::write(&bucket_path, original_bucket_bytes).unwrap();
 
+            let search_run = fixture.run_single_search_collect_writeback();
+            let current_epoch_path = uploaded_store
+                .root_path()
+                .join("epochs")
+                .join("current.json");
+            let original_current_epoch_bytes = std::fs::read(&current_epoch_path).unwrap();
+            let stale_current_root = data_encoding::BASE64URL_NOPAD.encode(&[88; 32]);
+            std::fs::write(
+                &current_epoch_path,
+                serde_json::to_vec_pretty(&PrivateHnswOramEpochState {
+                    index_epoch: BASE_EPOCH,
+                    root_hash: stale_current_root.clone(),
+                })
+                .unwrap(),
+            )
+            .unwrap();
+            let err = PrivateHnswOram::commit_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramCommitRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run
+                        .updated_buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                    commit_signature: Some(signature_to_proto(search_run.commit_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("commit current epoch/root does not match active session")
+            );
+            assert!(
+                !err.message().contains(&stale_current_root),
+                "{}",
+                err.message()
+            );
+            assert!(!err.message().contains("private_hnsw_oram"));
+            assert!(!err.message().contains("/tmp"));
+            std::fs::write(&current_epoch_path, original_current_epoch_bytes).unwrap();
+            let original_writeback_bucket = fixture
+                .encrypted_build
+                .buckets
+                .iter()
+                .find(|bucket| bucket.bucket_id == search_run.updated_buckets[0].bucket_id)
+                .unwrap();
+            let stored_writeback_bucket = uploaded_store
+                .read_bucket(
+                    search_run.updated_buckets[0].bucket_id,
+                    BASE_EPOCH,
+                    fixture.encrypted_build.bucket_count,
+                    MAX_CIPHERTEXT_BYTES,
+                )
+                .unwrap();
+            assert_eq!(&stored_writeback_bucket, original_writeback_bucket);
+
             std::fs::remove_file(&bucket_path).unwrap();
 
             let missing_bucket_paths = vec![fixture.entry_leaf_label()];
@@ -2226,7 +2293,6 @@ mod private_hnsw_grpc_tests {
             assert!(!err.message().contains("private_hnsw_oram"));
             assert!(!err.message().contains("/tmp"));
 
-            let search_run = fixture.run_single_search_collect_writeback();
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {

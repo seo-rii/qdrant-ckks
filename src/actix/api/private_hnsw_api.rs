@@ -327,9 +327,9 @@ mod private_hnsw_rest_tests {
 
     use super::*;
     use crate::common::private_hnsw_wire_fixture::{
-        BASE_EPOCH, COLLECTION_ID, NEXT_EPOCH, PrivateHnswRouteWireFixture, SESSION_ID,
-        SIGNING_KEY_ID, create_private_hnsw_collection, route_e2e_guard, test_dispatcher,
-        test_distributed_dispatcher,
+        BASE_EPOCH, COLLECTION_ID, MAX_CIPHERTEXT_BYTES, NEXT_EPOCH, PrivateHnswRouteWireFixture,
+        SESSION_ID, SIGNING_KEY_ID, create_private_hnsw_collection, route_e2e_guard,
+        test_dispatcher, test_distributed_dispatcher,
     };
 
     fn json_roundtrip<T>(value: &T) -> T
@@ -1564,6 +1564,69 @@ mod private_hnsw_rest_tests {
             );
             std::fs::write(&bucket_path, original_bucket_bytes).unwrap();
 
+            let search_run = fixture.run_single_search_collect_writeback();
+            let current_epoch_path = uploaded_store
+                .root_path()
+                .join("epochs")
+                .join("current.json");
+            let original_current_epoch_bytes = std::fs::read(&current_epoch_path).unwrap();
+            let stale_current_root = data_encoding::BASE64URL_NOPAD.encode(&[88; 32]);
+            std::fs::write(
+                &current_epoch_path,
+                serde_json::to_vec_pretty(&PrivateHnswOramEpochState {
+                    index_epoch: BASE_EPOCH,
+                    root_hash: stale_current_root.clone(),
+                })
+                .unwrap(),
+            )
+            .unwrap();
+            let stale_current_commit_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/commit",
+                OramCommitRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run.updated_buckets.clone(),
+                    commit_signature: PrivateHnswClientSignature {
+                        alg: search_run.commit_signature.alg.clone(),
+                        key_id: search_run.commit_signature.key_id.clone(),
+                        sig: search_run.commit_signature.sig.clone(),
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "commit current epoch/root does not match active session"
+            );
+            assert!(
+                !stale_current_commit_error.contains(&stale_current_root),
+                "{stale_current_commit_error}"
+            );
+            assert!(
+                !stale_current_commit_error.contains("private_hnsw_oram"),
+                "{stale_current_commit_error}"
+            );
+            assert!(
+                !stale_current_commit_error.contains("/tmp"),
+                "{stale_current_commit_error}"
+            );
+            std::fs::write(&current_epoch_path, original_current_epoch_bytes).unwrap();
+            let original_writeback_bucket = fixture
+                .encrypted_build
+                .buckets
+                .iter()
+                .find(|bucket| bucket.bucket_id == search_run.updated_buckets[0].bucket_id)
+                .unwrap();
+            let stored_writeback_bucket = uploaded_store
+                .read_bucket(
+                    search_run.updated_buckets[0].bucket_id,
+                    BASE_EPOCH,
+                    fixture.encrypted_build.bucket_count,
+                    MAX_CIPHERTEXT_BYTES,
+                )
+                .unwrap();
+            assert_eq!(&stored_writeback_bucket, original_writeback_bucket);
+
             std::fs::remove_file(&bucket_path).unwrap();
 
             let missing_bucket_paths = vec![fixture.entry_leaf_label()];
@@ -1597,7 +1660,6 @@ mod private_hnsw_rest_tests {
                 "{missing_bucket_error}"
             );
 
-            let search_run = fixture.run_single_search_collect_writeback();
             let unknown_commit_key_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
