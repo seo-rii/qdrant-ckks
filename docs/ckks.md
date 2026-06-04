@@ -744,7 +744,11 @@ bucket commitment to collection/key lineage, bucket id, index epoch, and
 fixes the root hash calculation over those commitments.
 `plan_private_result_oram_commit` prepares the future writeback plan by checking
 old-root consistency, bucket epoch/range uniqueness, the next root, and commit
-signature bucket refs. `sign_private_result_oram_manifest` and
+signature bucket refs. `plan_private_result_oram_commit_for_manifest` uses the
+signed manifest epoch/root/bucket_count as the old commit context and rejects
+updated bucket commitments that are not bound to the bucket ciphertext hash
+plus collection/key lineage and the proposed bucket epoch.
+`sign_private_result_oram_manifest` and
 `sign_private_result_oram_commit` provide the matching SDK-side Ed25519 signing
 helpers. `PrivateResultOramUploadBundle` and
 `package_private_result_oram_upload_bundle` package a signed manifest with a
@@ -843,7 +847,11 @@ bundle's `validate_initial_upload_contract` method let SDKs preflight decoded
 upload bundles before calling Qdrant: they require a complete bucket set, reject
 duplicate or missing bucket ids, verify bucket ciphertext SHA-256 and bucket
 commitments against the manifest context, and recompute the manifest Merkle
-root. After ORAM writeback, clients can call
+root. Before submitting an ORAM writeback, clients can call
+`plan_private_hnsw_oram_commit_for_manifest` to bind commit planning to the
+current signed manifest, updated bucket ciphertext hashes,
+collection/vector/key lineage, and proposed bucket epoch before producing
+signature bucket refs. After the writeback commit succeeds, clients can call
 `refresh_private_hnsw_oram_manifest_for_commit` to derive the next signed
 manifest body from the commit plan, or
 `sign_private_hnsw_oram_manifest_refresh` to derive and sign it in one step;

@@ -872,6 +872,43 @@ pub fn plan_private_result_oram_commit(
     })
 }
 
+pub fn plan_private_result_oram_commit_for_manifest(
+    manifest: &PrivateResultOramManifest,
+    new_epoch: u64,
+    current_leaf_commitments: &[String],
+    updated_buckets: &[PrivateResultOramBucket],
+) -> Result<PrivateResultOramCommitPlan, PrivateResultOramError> {
+    let manifest_bucket_count = usize::try_from(manifest.bucket_count)
+        .map_err(|_| PrivateResultOramError::InvalidManifestField("bucket_count"))?;
+    if current_leaf_commitments.len() != manifest_bucket_count {
+        return Err(PrivateResultOramError::InvalidManifestField("bucket_count"));
+    }
+    let plan = plan_private_result_oram_commit(
+        manifest.index_epoch,
+        new_epoch,
+        &manifest.root_hash,
+        current_leaf_commitments,
+        updated_buckets,
+    )?;
+    for bucket in updated_buckets {
+        let expected_commitment = private_result_oram_bucket_commitment(
+            PrivateResultOramBucketCommitmentContext {
+                collection_id: &manifest.collection_id,
+                key_id: &manifest.key_id,
+                rk_id: &manifest.rk_id,
+                rk_epoch: manifest.rk_epoch,
+                bucket_id: bucket.bucket_id,
+                index_epoch: new_epoch,
+            },
+            &bucket.ciphertext_sha256,
+        )?;
+        if expected_commitment != bucket.bucket_commitment {
+            return Err(PrivateResultOramError::InvalidBucketCommitment);
+        }
+    }
+    Ok(plan)
+}
+
 fn validate_id(value: &str, field: &'static str) -> Result<(), PrivateResultOramError> {
     if value.is_empty()
         || value.len() > 255
@@ -1463,6 +1500,55 @@ mod tests {
                 bucket_id: updated_bucket.bucket_id,
                 ciphertext_sha256: updated_bucket.ciphertext_sha256.as_str(),
             }]
+        );
+    }
+
+    #[test]
+    fn commit_plan_for_manifest_rejects_bucket_commitment_context_mismatch() {
+        let leaf_commitments = vec![commitment(1), commitment(2), commitment(3), commitment(4)];
+        let old_root = private_result_oram_merkle_root_for_commitments(&leaf_commitments).unwrap();
+        let manifest = PrivateResultOramManifest {
+            root_hash: old_root.clone(),
+            bucket_count: leaf_commitments.len() as u64,
+            ..fixture_manifest()
+        };
+        let updated_bucket = fixture_commit_bucket(2, 43, 9);
+
+        let plan = plan_private_result_oram_commit_for_manifest(
+            &manifest,
+            43,
+            &leaf_commitments,
+            std::slice::from_ref(&updated_bucket),
+        )
+        .unwrap();
+        assert_eq!(plan.old_epoch, manifest.index_epoch);
+        assert_eq!(plan.old_root_hash, old_root);
+        assert_eq!(plan.leaf_commitments[2], updated_bucket.bucket_commitment);
+
+        let mut wrong_commitment = updated_bucket;
+        wrong_commitment.bucket_commitment = commitment(99);
+        assert_eq!(
+            plan_private_result_oram_commit_for_manifest(
+                &manifest,
+                43,
+                &leaf_commitments,
+                std::slice::from_ref(&wrong_commitment),
+            ),
+            Err(PrivateResultOramError::InvalidBucketCommitment)
+        );
+
+        let wrong_bucket_count = PrivateResultOramManifest {
+            bucket_count: 3,
+            ..manifest
+        };
+        assert_eq!(
+            plan_private_result_oram_commit_for_manifest(
+                &wrong_bucket_count,
+                43,
+                &leaf_commitments,
+                std::slice::from_ref(&wrong_commitment),
+            ),
+            Err(PrivateResultOramError::InvalidManifestField("bucket_count",))
         );
     }
 

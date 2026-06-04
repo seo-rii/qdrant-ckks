@@ -20,7 +20,7 @@ use qdrant_sec::{
     PrivateHnswSearchParams, PrivateHnswSearchResult, ResultPrivacyMode, SecretKey,
     build_private_hnsw_oram_manifest_from_encrypted_index,
     build_private_hnsw_oram_plaintext_index_from_auto_layered_f32_points,
-    encode_private_hnsw_oram_leaf_label, plan_private_hnsw_oram_commit,
+    encode_private_hnsw_oram_leaf_label, plan_private_hnsw_oram_commit_for_manifest,
     private_hnsw_oram_bucket_ids_for_leaf, seal_private_hnsw_oram_plaintext_index,
     search_private_hnsw_oram_encrypted_verified, sign_private_hnsw_oram_commit,
     sign_private_hnsw_oram_manifest, sign_private_hnsw_oram_manifest_refresh,
@@ -407,10 +407,9 @@ impl PrivateHnswRouteWireFixture {
             .into_inner()
             .into_values()
             .collect::<Vec<_>>();
-        let commit_plan = plan_private_hnsw_oram_commit(
-            BASE_EPOCH,
+        let commit_plan = plan_private_hnsw_oram_commit_for_manifest(
+            &self.manifest,
             NEXT_EPOCH,
-            &self.encrypted_build.root_hash,
             &self.leaf_commitments,
             &updated_buckets,
         )
