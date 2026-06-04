@@ -712,6 +712,7 @@ pub async fn do_read_private_hnsw_paths(
             validate_unique_path_labels(&paths)?;
             let bucket_ids =
                 bucket_ids_for_path_batch(&paths, session.tree_height, session.bucket_count)?;
+            validate_session_signature_owner_key(session, &client_signature.key_id)?;
             let path_refs = paths.iter().map(String::as_str).collect::<Vec<_>>();
             validate_private_hnsw_oram_read_paths_signature(
                 PrivateHnswOramReadPathsSignatureInput {
@@ -841,6 +842,7 @@ pub async fn do_commit_private_hnsw_paths(
                 ciphertext_sha256: bucket.ciphertext_sha256.as_str(),
             })
             .collect::<Vec<_>>();
+        validate_session_signature_owner_key(session, &commit_signature.key_id)?;
         validate_private_hnsw_oram_commit_signature(
             PrivateHnswOramCommitSignatureInput {
                 collection_id: &session.collection_id,
@@ -1379,6 +1381,18 @@ fn ensure_private_hnsw_commit_current_epoch(
     if current.index_epoch != old_epoch || current.root_hash != old_root_hash {
         return Err(StorageError::bad_request(
             "private HNSW ORAM commit current epoch/root does not match active session",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_session_signature_owner_key(
+    session: &PrivateHnswSession,
+    signature_key_id: &str,
+) -> StorageResult<()> {
+    if signature_key_id != session.manifest.owner_signing_key_id {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM request signature key_id does not match manifest owner_signing_key_id",
         ));
     }
     Ok(())
