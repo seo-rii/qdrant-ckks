@@ -1041,6 +1041,27 @@ mod tests {
         assert!(!err.to_string().contains("outside-private-hnsw-oram"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn private_result_oram_snapshot_source_dir_rejects_symlink_without_target_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-snapshot-source-symlink")
+            .tempdir()
+            .unwrap();
+
+        std::os::unix::fs::symlink(
+            temp_dir.path().join("outside-private-result-oram"),
+            temp_dir.path().join(PRIVATE_RESULT_ORAM_DIR),
+        )
+        .unwrap();
+
+        let err =
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_RESULT_ORAM_DIR).unwrap_err();
+
+        assert!(err.to_string().contains("non-symlink directory"));
+        assert!(!err.to_string().contains("outside-private-result-oram"));
+    }
+
     #[test]
     fn private_result_oram_restore_guard_rejects_reserved_directory() {
         let temp_dir = tempfile::Builder::new()
@@ -1080,6 +1101,7 @@ mod tests {
             err.to_string()
                 .contains(PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
         );
+        assert!(!err.to_string().contains("missing-result-oram-target"));
     }
 
     #[test]
