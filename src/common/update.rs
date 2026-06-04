@@ -492,6 +492,8 @@ pub async fn do_delete_points(
         .check_strict_mode(&points, &collection_name, params.timeout_as_secs(), &auth)
         .await?;
 
+    fail_if_collection_has_private_hnsw_oram_vectors(toc, &collection_name, &auth).await?;
+
     let (operation, shard_key) = match points {
         PointsSelector::PointIdsSelector(PointIdsList { points, shard_key }) => {
             (PointOperations::DeletePoints { ids: points }, shard_key)
@@ -2315,6 +2317,34 @@ fn private_hnsw_oram_vector_in_config(params: &CollectionParams, vector_name: &s
     })
 }
 
+async fn fail_if_collection_has_private_hnsw_oram_vectors(
+    toc: &Arc<TableOfContent>,
+    collection_name: &str,
+    auth: &Auth,
+) -> Result<(), StorageError> {
+    let collection_pass =
+        auth.check_collection_access(collection_name, AccessRequirements::new(), "delete_points")?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let collection_config = collection.config_snapshot().await;
+    if let Some(vector_name) = first_private_hnsw_oram_vector_in_config(&collection_config.params) {
+        return Err(private_hnsw_oram_api_required_error(&vector_name));
+    }
+    Ok(())
+}
+
+fn first_private_hnsw_oram_vector_in_config(params: &CollectionParams) -> Option<String> {
+    let encryption = params.effective_encryption()?;
+    encryption.rules.iter().find_map(|rule| {
+        if rule.binding.as_deref() != Some(PRIVATE_HNSW_ORAM_BINDING) {
+            return None;
+        }
+        let collection::config::EncryptionSelector::VectorNames { names } = &rule.selector else {
+            return None;
+        };
+        names.first().cloned()
+    })
+}
+
 fn upsert_vectors_touch_private_hnsw_oram_config(
     operation: &PointInsertOperationsInternal,
     params: &CollectionParams,
@@ -4032,6 +4062,58 @@ esac
                     vector: std::iter::once("embedding".to_string()).collect(),
                     shard_key: None,
                 },
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/embedding/session")
+                        && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+            ));
+
+            let err = do_delete_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "private_hnsw_docs".to_string(),
+                PointsSelector::PointIdsSelector(PointIdsList {
+                    points: vec![1.into()],
+                    shard_key: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/embedding/session")
+                        && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+            ));
+
+            let err = do_delete_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "private_hnsw_docs".to_string(),
+                PointsSelector::FilterSelector(FilterSelector {
+                    filter: Filter::new(),
+                    shard_key: None,
+                }),
                 InternalUpdateParams::default(),
                 UpdateParams {
                     wait: true,

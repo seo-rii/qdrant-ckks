@@ -551,8 +551,8 @@ search in strict mode. Runtime validation also rejects unknown top-level and
 nested private HNSW ORAM options instead of silently accepting secret-like policy
 drift. Qdrant does not store point-level dense vectors for this provider and
 does not score, traverse HNSW, or delete point-level CKKS sidecar vectors
-server-side; normal vector writes, `delete_vectors`, and server scoring,
-including legacy search/batch search, ordinary query/fusion/context/MMR,
+server-side; normal vector writes, `delete_points`, `delete_vectors`, and
+server scoring, including legacy search/batch search, ordinary query/fusion/context/MMR,
 recommend/discover, grouped search/query, and search matrix paths, fail closed
 and direct clients to the private HNSW ORAM session APIs. Phase 11 implements
 the encrypted bucket store and session read/commit APIs behind this validated
@@ -564,8 +564,9 @@ bindings for the same vector name.
 The same private-session guidance is returned even when runtime crypto settings
 are absent, so private HNSW ORAM vectors do not fall through to CKKS/OpenFHE
 runtime fallback messages on ordinary vector upsert/update, inference-derived
-vector writes, `delete_vectors`, query/search/recommend/discover/group/matrix
-APIs, or lower-level collection peer/internal write guards.
+vector writes, point delete, `delete_vectors`,
+query/search/recommend/discover/group/matrix APIs, or lower-level collection
+peer/internal write guards.
 Collection-internal direct query/search/search-matrix entrypoints make the same
 binding distinction: `private-hnsw-oram/v1` returns private ORAM session
 guidance, while other encrypted vector bindings keep the CKKS sidecar runtime
