@@ -614,8 +614,8 @@ non-current desired epoch, or the reserved `private_payload_oram_required`
 result privacy mode are rejected before any ORAM path reads are served. Client
 id shape errors are sanitized without echoing the submitted client id.
 Expired sessions are purged from the registry before use and release the
-single-writer lock for that private index; using an expired session id fails
-closed.
+single-writer lock for that private index; using an expired session id for
+`read_paths`, `commit`, or `close` fails closed.
 Signed manifest upload and initial encrypted bucket upload are also rejected
 while an active session holds the same private index, so a bulk upload cannot
 race a client-led traversal/writeback session.

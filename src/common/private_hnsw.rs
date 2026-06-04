@@ -152,7 +152,14 @@ impl PrivateHnswSessionRegistry {
         Ok(response)
     }
 
-    fn close(&mut self, collection_id: &str, vector_name: &str, session_id: &str) -> bool {
+    fn close(
+        &mut self,
+        collection_id: &str,
+        vector_name: &str,
+        session_id: &str,
+        now_unix: u64,
+    ) -> bool {
+        self.expire(now_unix);
         let removed = self.sessions.remove(session_id);
         if let Some(session) = removed {
             if session.collection_id == collection_id && session.vector_name == vector_name {
@@ -1033,6 +1040,7 @@ pub async fn do_close_private_hnsw_session(
         "private_hnsw_session_close",
     )
     .await?;
+    let now_unix = current_unix_secs()?;
     let closed = session_registry()
         .lock()
         .map_err(|_| StorageError::service_error("private HNSW ORAM session registry poisoned"))?
@@ -1040,6 +1048,7 @@ pub async fn do_close_private_hnsw_session(
             &request_context.collection_crypto_id,
             vector_name,
             session_id,
+            now_unix,
         );
     if !closed {
         return Err(StorageError::bad_request(
@@ -2149,7 +2158,7 @@ mod private_hnsw_tests {
             now,
         );
         assert!(err.unwrap_err().to_string().contains("ConcurrentWriter"));
-        assert!(registry.close("collection-uuid-1", "text", "session-1"));
+        assert!(registry.close("collection-uuid-1", "text", "session-1", now));
         assert!(!registry.has_active_collection("collection-uuid-1", now));
         assert!(!registry.has_active_index("collection-uuid-1", "text", now));
     }
@@ -2251,6 +2260,7 @@ mod private_hnsw_tests {
         assert!(err.to_string().contains("session is missing or expired"));
         assert!(!registry.has_active_collection("collection-uuid-1", expired_at));
         assert!(!registry.has_active_index("collection-uuid-1", "text", expired_at));
+        assert!(!registry.close("collection-uuid-1", "text", "session-1", expired_at));
 
         registry
             .open(fixture_session("session-2", expired_at + 10), expired_at)
