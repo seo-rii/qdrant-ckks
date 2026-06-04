@@ -75,12 +75,12 @@ impl Collection {
                 &collection_config.params,
             )?;
             let collection_config = collection_config.clone();
-            let configured_private_hnsw_vectors =
-                private_hnsw_oram_configured_vectors(&collection_config.params)?;
-            validate_private_hnsw_oram_snapshot_store_matches_config(
+            Self::validate_private_hnsw_oram_snapshot_restore_layout(
+                self.name(),
+                &collection_config,
                 &self.path,
-                &configured_private_hnsw_vectors,
-            )?;
+            )
+            .map_err(|err| sanitize_private_hnsw_snapshot_layout_error(&self.path, err))?;
             collection_config
         };
 

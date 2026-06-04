@@ -591,6 +591,10 @@ Snapshot creation also refuses to archive orphan private HNSW ORAM vector stores
 whose on-disk store does not match a configured private HNSW ORAM encryption
 rule, or configured private HNSW ORAM vector rules whose on-disk store is
 missing.
+Before writing an archive, collection snapshot creation also runs the same
+private HNSW ORAM manifest/current epoch/bucket/Merkle layout parity preflight
+used by restore. Missing bucket files or root mismatches fail closed without
+reflecting collection-local paths, root hashes, or bucket ciphertexts.
 Restore preflight rejects result-private manifests, collection/vector context
 mismatches, vector dimension/distance mismatches, manifest signature key-id
 mismatches, Path ORAM tree_height/bucket_count mismatches, current epoch/root

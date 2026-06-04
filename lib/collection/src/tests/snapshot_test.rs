@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
@@ -6,20 +6,28 @@ use ahash::AHashMap;
 use common::budget::ResourceBudget;
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
-    PrivateHnswBucketAeadBaseContext, PrivateHnswClientKeys, SecretKey,
-    seal_private_hnsw_oram_bucket,
+    DistanceKind, FixedBudgetParams, OramKind, OramParams, PRIVATE_HNSW_ORAM_BINDING,
+    PrivateHnswBucketAeadBaseContext, PrivateHnswClientKeys, PrivateHnswOramManifest,
+    PrivateHnswOramSignature, PrivateHnswParams, ResultPrivacyMode, SecretKey,
+    VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, seal_private_hnsw_oram_bucket,
 };
 use segment::types::Distance;
 use sha2::{Digest, Sha256};
 use shard::snapshots::snapshot_data::SnapshotData;
 use tempfile::Builder;
+use uuid::Uuid;
 
 use crate::collection::{Collection, RequestShardTransfer};
-use crate::config::{CollectionConfigInternal, CollectionParams, WalConfig};
+use crate::config::{
+    CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams, CryptoMigrationState,
+    EncryptionRuleRef, EncryptionSelector, WalConfig,
+};
 use crate::operations::shared_storage_config::SharedStorageConfig;
 use crate::operations::types::{NodeType, VectorsConfig};
 use crate::operations::vector_params_builder::VectorParamsBuilder;
-use crate::private_hnsw_oram_store::PRIVATE_HNSW_ORAM_DIR;
+use crate::private_hnsw_oram_store::{
+    PRIVATE_HNSW_ORAM_DIR, PrivateHnswOramEpochState, PrivateHnswOramStore,
+};
 use crate::private_result_oram_store::PRIVATE_RESULT_ORAM_DIR;
 use crate::shards::channel_service::ChannelService;
 use crate::shards::collection_shard_distribution::CollectionShardDistribution;
@@ -339,6 +347,164 @@ async fn test_snapshot_private_result_oram_is_included_but_restore_fails_closed(
     assert!(!err.contains(recover_dir.path().to_string_lossy().as_ref()));
     assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
     assert!(!err.contains(&ciphertext));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_snapshot_private_hnsw_missing_bucket_fails_before_archive() {
+    init_logger();
+
+    let collection_uuid = Uuid::from_u128(7);
+    let collection_name = "test_private_hnsw_snapshot".to_string();
+    let vector_name = "text".to_string();
+    let key_id = "tenant-a/vector-private-rk".to_string();
+    let signing_key_id = "tenant-a/private-hnsw-signing-v1".to_string();
+    let leaf_commitments = vec![
+        BASE64URL_NOPAD.encode(&[7; 32]),
+        BASE64URL_NOPAD.encode(&[8; 32]),
+        BASE64URL_NOPAD.encode(&[9; 32]),
+    ];
+    let root_hash = PrivateHnswOramStore::merkle_root_for_commitments(&leaf_commitments).unwrap();
+    let config = CollectionConfigInternal {
+        params: CollectionParams {
+            vectors: VectorsConfig::Multi(BTreeMap::from([(
+                vector_name.clone(),
+                VectorParamsBuilder::new(2, Distance::Euclid).build(),
+            )])),
+            shard_number: NonZeroU32::new(1).unwrap(),
+            replication_factor: NonZeroU32::new(1).unwrap(),
+            write_consistency_factor: NonZeroU32::new(1).unwrap(),
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some(key_id.clone()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "text_private_hnsw".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec![vector_name.clone()],
+                    },
+                    instance: "docs_private_hnsw_v1".to_string(),
+                    binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        },
+        optimizer_config: TEST_OPTIMIZERS_CONFIG.clone(),
+        wal_config: WalConfig {
+            wal_capacity_mb: 1,
+            wal_segments_ahead: 0,
+            wal_retain_closed: 1,
+        },
+        hnsw_config: Default::default(),
+        quantization_config: Default::default(),
+        strict_mode_config: Default::default(),
+        uuid: Some(collection_uuid),
+        metadata: None,
+    };
+    let snapshots_path = Builder::new()
+        .prefix("test_private_hnsw_missing_bucket_snapshots")
+        .tempdir()
+        .unwrap();
+    let collection_dir = Builder::new()
+        .prefix("test_private_hnsw_missing_bucket_collection")
+        .tempdir()
+        .unwrap();
+    let mut shards = AHashMap::new();
+    shards.insert(0, HashSet::from([1]));
+    let collection = Collection::new(
+        collection_name,
+        1,
+        collection_dir.path(),
+        snapshots_path.path(),
+        &config,
+        Arc::new(SharedStorageConfig::default()),
+        CollectionShardDistribution { shards },
+        None,
+        ChannelService::default(),
+        dummy_on_replica_failure(),
+        dummy_request_shard_transfer(),
+        dummy_abort_shard_transfer(),
+        None,
+        None,
+        ResourceBudget::default(),
+        None,
+    )
+    .await
+    .unwrap();
+    let store = PrivateHnswOramStore::new(collection_dir.path(), &vector_name).unwrap();
+    let manifest = PrivateHnswOramManifest {
+        version: 1,
+        provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+        binding: PRIVATE_HNSW_ORAM_BINDING.to_string(),
+        collection_id: collection_uuid.to_string(),
+        vector_name: vector_name.clone(),
+        key_id: key_id.clone(),
+        rk_id: key_id,
+        rk_epoch: 7,
+        dim: 2,
+        distance: DistanceKind::Euclid,
+        hnsw: PrivateHnswParams {
+            m: 2,
+            ef_construction: 4,
+            max_layers: 2,
+            fixed_neighbor_slots: 4,
+        },
+        oram: OramParams {
+            kind: OramKind::PathOram,
+            bucket_size: 2,
+            block_size_bytes: 512,
+            tree_height: 1,
+            path_batch_size: 1,
+        },
+        fixed_budget: FixedBudgetParams {
+            enabled: true,
+            upper_layer_steps: 1,
+            base_layer_steps: 1,
+            paths_per_round: 1,
+            fixed_result_k: 1,
+        },
+        index_epoch: 42,
+        root_hash: root_hash.clone(),
+        bucket_count: 3,
+        logical_node_count: 1,
+        dummy_node_count: 2,
+        result_privacy: ResultPrivacyMode::IdsVisible,
+        owner_signing_key_id: signing_key_id.clone(),
+        created_at_unix: 1,
+    };
+    store
+        .write_manifest(
+            &manifest,
+            &PrivateHnswOramSignature {
+                alg: "ed25519".to_string(),
+                key_id: signing_key_id,
+                sig: BASE64URL_NOPAD.encode(&[7; 64]),
+            },
+        )
+        .unwrap();
+    store
+        .write_initial_epoch(&PrivateHnswOramEpochState {
+            index_epoch: 42,
+            root_hash,
+        })
+        .unwrap();
+    store
+        .write_merkle_tree_from_commitments(42, manifest.root_hash.clone(), leaf_commitments)
+        .unwrap();
+
+    let snapshots_temp_dir = Builder::new().prefix("temp_dir").tempdir().unwrap();
+    let err = collection
+        .create_snapshot(snapshots_temp_dir.path(), 0)
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert!(err.contains("private HNSW ORAM snapshot layout validation failed"));
+    assert!(!err.contains(collection_dir.path().to_string_lossy().as_ref()));
+    assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
+    assert!(!err.contains("00000000.bucket"));
+    assert!(!err.contains(&manifest.root_hash));
 }
 
 #[tokio::test(flavor = "multi_thread")]
