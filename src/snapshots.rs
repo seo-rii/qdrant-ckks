@@ -278,6 +278,51 @@ mod tests {
         }
     }
 
+    fn write_recovered_private_hnsw_snapshot_fixture(
+        collection_dir: &Path,
+        fixture: &PrivateHnswRouteWireFixture,
+        corrupt_first_bucket_commitment: bool,
+    ) {
+        let config = recovered_private_hnsw_config();
+        fs::write(
+            collection_dir.join(COLLECTION_CONFIG_FILE),
+            config.to_bytes().unwrap(),
+        )
+        .unwrap();
+
+        let store = PrivateHnswOramStore::new(collection_dir, VECTOR_NAME).unwrap();
+        store
+            .write_manifest(&fixture.manifest, &fixture.manifest_signature)
+            .unwrap();
+        store
+            .write_initial_epoch(&PrivateHnswOramEpochState {
+                index_epoch: fixture.encrypted_build.index_epoch,
+                root_hash: fixture.encrypted_build.root_hash.clone(),
+            })
+            .unwrap();
+        store
+            .write_merkle_tree_from_commitments(
+                fixture.encrypted_build.index_epoch,
+                fixture.encrypted_build.root_hash.clone(),
+                fixture.leaf_commitments.clone(),
+            )
+            .unwrap();
+        for bucket in &fixture.encrypted_build.buckets {
+            let mut bucket = bucket.clone();
+            if corrupt_first_bucket_commitment && bucket.bucket_id == 0 {
+                bucket.bucket_commitment = BASE64URL_NOPAD.encode(&[99; 32]);
+            }
+            store
+                .write_bucket(
+                    &bucket,
+                    fixture.encrypted_build.index_epoch,
+                    fixture.encrypted_build.bucket_count,
+                    crate::common::private_hnsw_wire_fixture::MAX_CIPHERTEXT_BYTES,
+                )
+                .unwrap();
+        }
+    }
+
     #[test]
     fn cli_snapshot_crypto_preflight_rejects_missing_runtime_instance() {
         let settings = Settings::new(None).unwrap();
@@ -312,44 +357,7 @@ mod tests {
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
         let settings = fixture.route_settings();
         let collection_dir = TempDir::new().unwrap();
-        let config = recovered_private_hnsw_config();
-        fs::write(
-            collection_dir.path().join(COLLECTION_CONFIG_FILE),
-            config.to_bytes().unwrap(),
-        )
-        .unwrap();
-
-        let store = PrivateHnswOramStore::new(collection_dir.path(), VECTOR_NAME).unwrap();
-        store
-            .write_manifest(&fixture.manifest, &fixture.manifest_signature)
-            .unwrap();
-        store
-            .write_initial_epoch(&PrivateHnswOramEpochState {
-                index_epoch: fixture.encrypted_build.index_epoch,
-                root_hash: fixture.encrypted_build.root_hash.clone(),
-            })
-            .unwrap();
-        store
-            .write_merkle_tree_from_commitments(
-                fixture.encrypted_build.index_epoch,
-                fixture.encrypted_build.root_hash.clone(),
-                fixture.leaf_commitments.clone(),
-            )
-            .unwrap();
-        for bucket in &fixture.encrypted_build.buckets {
-            let mut bucket = bucket.clone();
-            if bucket.bucket_id == 0 {
-                bucket.bucket_commitment = BASE64URL_NOPAD.encode(&[99; 32]);
-            }
-            store
-                .write_bucket(
-                    &bucket,
-                    fixture.encrypted_build.index_epoch,
-                    fixture.encrypted_build.bucket_count,
-                    crate::common::private_hnsw_wire_fixture::MAX_CIPHERTEXT_BYTES,
-                )
-                .unwrap();
-        }
+        write_recovered_private_hnsw_snapshot_fixture(collection_dir.path(), &fixture, true);
 
         let err =
             validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
@@ -371,6 +379,17 @@ mod tests {
             "{err}"
         );
         assert!(!err.contains(SIGNING_KEY_ID), "{err}");
+    }
+
+    #[test]
+    fn cli_snapshot_crypto_preflight_accepts_private_hnsw_restore_layout() {
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let collection_dir = TempDir::new().unwrap();
+        write_recovered_private_hnsw_snapshot_fixture(collection_dir.path(), &fixture, false);
+
+        validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
+            .expect("valid private HNSW ORAM snapshot layout must pass CLI preflight");
     }
 
     #[test]
