@@ -112,6 +112,7 @@ struct PrivateHnswSessionRegistry {
     sessions: HashMap<String, PrivateHnswSession>,
     active_writer_by_index: HashMap<String, String>,
     active_snapshot_by_collection: HashMap<String, usize>,
+    active_upload_by_index: HashMap<String, usize>,
 }
 
 impl PrivateHnswSessionRegistry {
@@ -136,6 +137,11 @@ impl PrivateHnswSessionRegistry {
         }
 
         let index_key = session_index_key(&session.collection_id, &session.vector_name);
+        if self.active_upload_by_index.contains_key(&index_key) {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM session open requires no active upload for this index",
+            ));
+        }
         if self.active_writer_by_index.contains_key(&index_key) {
             return Err(StorageError::bad_request(
                 "private HNSW ORAM ConcurrentWriter: an active session already holds this index",
@@ -215,6 +221,31 @@ impl PrivateHnswSessionRegistry {
         *count = count.saturating_sub(1);
         if *count == 0 {
             self.active_snapshot_by_collection.remove(collection_id);
+        }
+    }
+
+    fn begin_upload(
+        &mut self,
+        collection_id: &str,
+        vector_name: &str,
+        now_unix: u64,
+    ) -> StorageResult<()> {
+        ensure_private_hnsw_write_window_in_registry(self, collection_id, vector_name, now_unix)?;
+        *self
+            .active_upload_by_index
+            .entry(session_index_key(collection_id, vector_name))
+            .or_insert(0) += 1;
+        Ok(())
+    }
+
+    fn release_upload(&mut self, collection_id: &str, vector_name: &str) {
+        let index_key = session_index_key(collection_id, vector_name);
+        let Some(count) = self.active_upload_by_index.get_mut(&index_key) else {
+            return;
+        };
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            self.active_upload_by_index.remove(&index_key);
         }
     }
 
@@ -307,10 +338,23 @@ pub(crate) struct PrivateHnswCollectionSnapshotGuard {
     collection_id: String,
 }
 
+struct PrivateHnswUploadGuard {
+    collection_id: String,
+    vector_name: String,
+}
+
 impl Drop for PrivateHnswCollectionSnapshotGuard {
     fn drop(&mut self) {
         if let Ok(mut registry) = session_registry().lock() {
             registry.release_collection_snapshot(&self.collection_id);
+        }
+    }
+}
+
+impl Drop for PrivateHnswUploadGuard {
+    fn drop(&mut self) {
+        if let Ok(mut registry) = session_registry().lock() {
+            registry.release_upload(&self.collection_id, &self.vector_name);
         }
     }
 }
@@ -449,7 +493,8 @@ pub async fn do_upload_private_hnsw_manifest(
     )
     .map_err(private_hnsw_error)?;
     resolved.validate_manifest_runtime_policy(&manifest)?;
-    ensure_no_active_private_hnsw_session(&resolved.collection_crypto_id, vector_name)?;
+    let _upload_guard =
+        begin_private_hnsw_upload_write_window(&resolved.collection_crypto_id, vector_name)?;
 
     let epoch_state = PrivateHnswOramEpochState {
         index_epoch: epoch.epoch,
@@ -601,7 +646,8 @@ pub async fn do_upload_private_hnsw_buckets(
             "private HNSW ORAM bucket upload epoch/root does not match current manifest epoch",
         ));
     }
-    ensure_no_active_private_hnsw_session(&resolved.collection_crypto_id, vector_name)?;
+    let _upload_guard =
+        begin_private_hnsw_upload_write_window(&resolved.collection_crypto_id, vector_name)?;
     let max_ciphertext_bytes = max_bucket_ciphertext_bytes(&manifest)?;
     for bucket in &buckets {
         store
@@ -1495,20 +1541,19 @@ fn validate_private_hnsw_session_cluster_epoch_mode(distributed: bool) -> Storag
     Ok(())
 }
 
-fn ensure_no_active_private_hnsw_session(
+fn begin_private_hnsw_upload_write_window(
     collection_id: &str,
     vector_name: &str,
-) -> StorageResult<()> {
+) -> StorageResult<PrivateHnswUploadGuard> {
     let now_unix = current_unix_secs()?;
     let mut registry = session_registry()
         .lock()
         .map_err(|_| StorageError::service_error("private HNSW ORAM session registry poisoned"))?;
-    ensure_private_hnsw_write_window_in_registry(
-        &mut registry,
-        collection_id,
-        vector_name,
-        now_unix,
-    )
+    registry.begin_upload(collection_id, vector_name, now_unix)?;
+    Ok(PrivateHnswUploadGuard {
+        collection_id: collection_id.to_string(),
+        vector_name: vector_name.to_string(),
+    })
 }
 
 fn ensure_private_hnsw_write_window_in_registry(
@@ -1528,6 +1573,14 @@ fn ensure_private_hnsw_write_window_in_registry(
     if registry.has_active_index(collection_id, vector_name, now_unix) {
         return Err(StorageError::bad_request(
             "private HNSW ORAM upload requires no active session for this index",
+        ));
+    }
+    if registry
+        .active_upload_by_index
+        .contains_key(&session_index_key(collection_id, vector_name))
+    {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM upload requires no active upload for this index",
         ));
     }
     Ok(())
@@ -2241,6 +2294,33 @@ mod private_hnsw_tests {
             now,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn upload_write_window_rejects_concurrent_session_and_upload() {
+        let now = 10;
+        let mut registry = PrivateHnswSessionRegistry::default();
+        registry
+            .begin_upload("collection-uuid-1", "text", now)
+            .unwrap();
+
+        let err = registry
+            .open(fixture_session("session-1", 20), now)
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("session open requires no active upload")
+        );
+
+        let err = registry
+            .begin_upload("collection-uuid-1", "text", now)
+            .unwrap_err();
+        assert!(err.to_string().contains("upload requires no active upload"));
+
+        registry.release_upload("collection-uuid-1", "text");
+        registry
+            .open(fixture_session("session-1", 20), now)
+            .unwrap();
     }
 
     #[test]

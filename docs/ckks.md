@@ -618,7 +618,10 @@ single-writer lock for that private index; using an expired session id for
 `read_paths`, `commit`, or `close` fails closed.
 Signed manifest upload and initial encrypted bucket upload are also rejected
 while an active session holds the same private index, so a bulk upload cannot
-race a client-led traversal/writeback session.
+race a client-led traversal/writeback session. The upload path also holds a
+registry write-window guard while manifest or bucket files are being written;
+same-index session opens and duplicate uploads fail closed until that guard is
+released.
 Because the manifest signs the current index epoch/root, a writeback commit
 that advances epoch/root must be followed by a freshly signed manifest upload
 before a later session can open at that new epoch. REST and gRPC live fixtures
