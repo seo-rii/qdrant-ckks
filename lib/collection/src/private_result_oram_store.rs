@@ -1717,6 +1717,105 @@ mod tests {
     }
 
     #[test]
+    fn writeback_commit_preflights_manifest_epoch_root_before_writes() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let bundle = fixture_upload_bundle();
+        let old = store.write_initial_upload_bundle(&bundle, 128).unwrap();
+
+        let mut tampered_manifest = bundle.manifest.clone();
+        tampered_manifest.root_hash = root_hash(99);
+        assert_ne!(tampered_manifest.root_hash, old.root_hash);
+        store
+            .write_manifest(&tampered_manifest, &bundle.manifest_signature)
+            .unwrap();
+
+        let updated_bucket = fixture_bucket(1, 43, b"manifest drift result bucket");
+        let mut next_commitments = bundle.bucket_commitments();
+        next_commitments[1] = updated_bucket.bucket_commitment.clone();
+        let attempted_new = PrivateResultOramEpochState {
+            index_epoch: 43,
+            root_hash: PrivateResultOramStore::merkle_root_for_commitments(&next_commitments)
+                .unwrap(),
+        };
+
+        let err = store
+            .commit_writeback(
+                &old,
+                &attempted_new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&updated_bucket),
+                128,
+            )
+            .unwrap_err();
+
+        assert!(err.to_string().contains("manifest epoch/root"));
+        assert_eq!(store.read_current_epoch().unwrap(), old);
+        assert_eq!(
+            store
+                .read_bucket(1, old.index_epoch, bundle.bucket_count(), 128)
+                .unwrap(),
+            bundle.buckets[1]
+        );
+        let proof = store
+            .read_merkle_path_batch(&[1], old.index_epoch, &old.root_hash, bundle.bucket_count())
+            .unwrap();
+        assert_eq!(
+            proof.leaves[0].leaf_hash,
+            bundle.buckets[1].bucket_commitment
+        );
+    }
+
+    #[test]
+    fn writeback_commit_preflights_manifest_bucket_count_before_writes() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let bundle = fixture_upload_bundle();
+        let old = store.write_initial_upload_bundle(&bundle, 128).unwrap();
+
+        let mut tampered_manifest = bundle.manifest.clone();
+        tampered_manifest.bucket_count += 1;
+        store
+            .write_manifest(&tampered_manifest, &bundle.manifest_signature)
+            .unwrap();
+
+        let updated_bucket = fixture_bucket(2, 43, b"manifest bucket count drift");
+        let mut next_commitments = bundle.bucket_commitments();
+        next_commitments[2] = updated_bucket.bucket_commitment.clone();
+        let attempted_new = PrivateResultOramEpochState {
+            index_epoch: 43,
+            root_hash: PrivateResultOramStore::merkle_root_for_commitments(&next_commitments)
+                .unwrap(),
+        };
+
+        let err = store
+            .commit_writeback(
+                &old,
+                &attempted_new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&updated_bucket),
+                128,
+            )
+            .unwrap_err();
+
+        assert!(err.to_string().contains("manifest bucket_count"));
+        assert_eq!(store.read_current_epoch().unwrap(), old);
+        assert_eq!(
+            store
+                .read_bucket(2, old.index_epoch, bundle.bucket_count(), 128)
+                .unwrap(),
+            bundle.buckets[2]
+        );
+        let proof = store
+            .read_merkle_path_batch(&[2], old.index_epoch, &old.root_hash, bundle.bucket_count())
+            .unwrap();
+        assert_eq!(
+            proof.leaves[0].leaf_hash,
+            bundle.buckets[2].bucket_commitment
+        );
+    }
+
+    #[test]
     fn merkle_commit_updates_root_consistently() {
         let temp = TempDir::new().unwrap();
         let store = fixture_store(&temp);
