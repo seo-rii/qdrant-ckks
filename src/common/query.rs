@@ -58,7 +58,7 @@ use segment::types::{
     WithPayloadInterface, WithVector,
 };
 use segment::utils::scored_point_ties::ScoredPointTies;
-use segment::vector_storage::query::ContextPair;
+use segment::vector_storage::query::{ContextPair, ContextQuery};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use shard::query::query_enum::QueryEnum;
@@ -8615,6 +8615,100 @@ mod tests {
                 None,
                 ShardSelectorInternal::All,
                 auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/text/session")
+            ));
+        });
+    }
+
+    #[test]
+    fn private_hnsw_oram_context_and_mmr_require_client_led_session() {
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let (_temp, dispatcher) = test_dispatcher();
+        let auth = Auth::new_internal(Access::full("For test"));
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+            let pass = new_unchecked_verification_pass();
+            let toc = dispatcher.toc(&auth, &pass).clone();
+
+            let err = do_query_points(
+                &toc,
+                COLLECTION_NAME,
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Context(ContextQuery::new(
+                        vec![ContextPair {
+                            positive: VectorInputInternal::Vector(VectorInternal::Dense(vec![
+                                1.0, 0.0,
+                            ])),
+                            negative: VectorInputInternal::Vector(VectorInternal::Dense(vec![
+                                0.0, 1.0,
+                            ])),
+                        }],
+                    )))),
+                    using: VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/text/session")
+            ));
+
+            let err = do_query_points(
+                &toc,
+                COLLECTION_NAME,
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::NearestWithMmr(NearestWithMmr {
+                        nearest: VectorInputInternal::Vector(VectorInternal::Dense(vec![1.0, 0.0])),
+                        mmr: Mmr {
+                            diversity: Some(0.25),
+                            candidates_limit: Some(8),
+                        },
+                    }))),
+                    using: VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth,
                 None,
                 HwMeasurementAcc::disposable(),
                 Some(&settings),
