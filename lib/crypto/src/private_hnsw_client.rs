@@ -4187,6 +4187,27 @@ mod tests {
             ),
             Err(PrivateHnswClientError::InvalidMerkleProof)
         );
+
+        let mut conflicting_leaf = proof.leaves[0].clone();
+        conflicting_leaf.leaf_hash = commitment(9);
+        let conflicting_proof = PrivateHnswOramMerkleProof {
+            leaves: vec![proof.leaves[0].clone(), conflicting_leaf],
+            ..proof
+        };
+        let conflicting_proof_json = serde_json::to_string(&conflicting_proof).unwrap();
+        assert_eq!(
+            open_private_hnsw_oram_verified_path_batch(
+                &keys,
+                bucket_base_context(),
+                config,
+                42,
+                &root_hash,
+                1,
+                &conflicting_proof_json,
+                &duplicated_buckets,
+            ),
+            Err(PrivateHnswClientError::InvalidMerkleProof)
+        );
     }
 
     #[test]
