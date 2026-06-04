@@ -379,6 +379,7 @@
 - REST/gRPC ORAM commit fixture는 non-increasing new_epoch, invalid Ed25519 commit signature, successful commit 이후 stale old_epoch replay를 모두 fail-closed로 검증한다. Commit path는 bucket/Merkle writeback 전에 store current epoch/root도 active session의 old epoch/root와 일치하는지 preflight한다.
 - REST/gRPC ORAM session fixture는 strict mode `fixed_budget=false`, non-current desired epoch, reserved `private_payload_oram_required` result privacy를 session open에서 거부한다.
 - REST/gRPC ORAM session fixture는 active session이 있는 같은 private index에 대해 두 번째 session open을 `ConcurrentWriter`로 거부한다.
+- REST/gRPC ORAM session fixture는 active session이 있는 같은 private index에 대해 signed manifest upload와 initial encrypted bucket upload도 거부한다.
 - REST/gRPC ORAM session fixture는 writeback commit 이후 stale signed manifest로는 새 epoch session을 열 수 없고, closed session id는 `read_paths`와 `commit`에 재사용할 수 없으며, refreshed signed manifest upload 뒤에는 같은 epoch session을 열 수 있음을 검증한다.
 - REST/gRPC `read_paths`와 `commit` 오류 응답은 unknown session id sentinel을 반사하지 않는다.
 - REST/gRPC session close 오류 응답은 unknown session id sentinel을 반사하지 않는다.
@@ -408,6 +409,7 @@
 - REST/gRPC `read_paths` fixture는 path count, requested path count, dummy padding flag가 fixed path budget과 다르거나 exact duplicate path label을 포함하면 bucket read 전에 fail-closed로 거부한다.
 - REST/gRPC `read_paths` 성공 경로는 collection/vector, key lineage, epoch/root, path labels, padding metadata에 대한 Ed25519 client signature를 검증한 뒤 encrypted buckets를 반환하고, invalid read signature는 fail-closed로 거부한다.
 - snapshot restore preflight는 `private_payload_oram_required` manifest를 payload ORAM provider 구현 전까지 거부하고 `ids_visible`만 허용한다.
+- CLI/startup snapshot mapping recovery도 crypto runtime validation 이후 private HNSW ORAM restore-layout preflight를 실행해 storage-level snapshot recovery와 같은 bucket/root consistency 검증을 적용한다.
 - manifest signature, manifest ORAM capacity, bucket hash, stale epoch, invalid commit signature, symlink/permission hardening, snapshot leakage, crash recovery는 현재 provider/store/API fixture에 추가되어 있다.
 
 완료 조건:

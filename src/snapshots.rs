@@ -176,7 +176,19 @@ fn validate_restored_collection_crypto_runtime(
                 "Failed to validate crypto runtime for recovered snapshot {collection_name}: {err}",
             )
         },
+    )?;
+    Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+        collection_name,
+        &config,
+        collection_path,
     )
+    .map_err(|err| {
+        format!(
+            "Failed to validate private HNSW ORAM snapshot layout for recovered snapshot \
+             {collection_name}: {err}",
+        )
+    })?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -194,20 +206,77 @@ fn validate_restored_collection_crypto_params(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
+    use std::fs;
 
     use collection::config::{
-        CollectionEncryptionConfig, CollectionParams, CryptoMigrationState, EncryptionRuleRef,
-        EncryptionSelector,
+        COLLECTION_CONFIG_FILE, CollectionConfigInternal, CollectionEncryptionConfig,
+        CollectionParams, CryptoMigrationState, EncryptionRuleRef, EncryptionSelector, WalConfig,
     };
+    use collection::operations::types::VectorsConfig;
+    use collection::operations::vector_params_builder::VectorParamsBuilder;
+    use collection::optimizers_builder::OptimizersConfig;
+    use collection::private_hnsw_oram_store::{PrivateHnswOramEpochState, PrivateHnswOramStore};
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_sec::{
-        LocalMasterKeyProvider, MasterKeyProvider, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey,
+        LocalMasterKeyProvider, MasterKeyProvider, PRIVATE_HNSW_ORAM_BINDING,
+        RESOURCE_KEY_WRAP_ALGORITHM, SecretKey,
     };
+    use segment::types::{Distance, HnswConfig};
     use serde_json::json;
+    use tempfile::TempDir;
+    use uuid::Uuid;
 
     use super::*;
+    use crate::common::private_hnsw_wire_fixture::{
+        COLLECTION_ID, KEY_ID, PrivateHnswRouteWireFixture, RK_EPOCH, SIGNING_KEY_ID, VECTOR_NAME,
+    };
     use crate::settings::{CryptoInstanceConfig, CryptoMaterialConfig, CryptoSettings};
+
+    fn recovered_private_hnsw_config() -> CollectionConfigInternal {
+        CollectionConfigInternal {
+            params: CollectionParams {
+                vectors: VectorsConfig::Multi(BTreeMap::from([(
+                    VECTOR_NAME.to_string(),
+                    VectorParamsBuilder::new(2, Distance::Euclid).build(),
+                )])),
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some(KEY_ID.to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: RK_EPOCH,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "text_private_hnsw".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec![VECTOR_NAME.to_string()],
+                        },
+                        instance: "docs_private_hnsw_v1".to_string(),
+                        binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            },
+            hnsw_config: HnswConfig::default(),
+            optimizer_config: OptimizersConfig {
+                deleted_threshold: 0.1,
+                vacuum_min_vector_number: 1000,
+                default_segment_number: 0,
+                max_segment_size: None,
+                #[expect(deprecated)]
+                memmap_threshold: None,
+                indexing_threshold: Some(100_000),
+                flush_interval_sec: 60,
+                max_optimization_threads: Some(0),
+                prevent_unoptimized: None,
+            },
+            wal_config: WalConfig::default(),
+            quantization_config: None,
+            strict_mode_config: None,
+            uuid: Some(Uuid::parse_str(COLLECTION_ID).unwrap()),
+            metadata: None,
+        }
+    }
 
     #[test]
     fn cli_snapshot_crypto_preflight_rejects_missing_runtime_instance() {
@@ -236,6 +305,72 @@ mod tests {
 
         assert!(err.contains("recovered snapshot docs"));
         assert!(err.contains("unknown payload crypto instance docs_payload_v1"));
+    }
+
+    #[test]
+    fn cli_snapshot_crypto_preflight_rejects_private_hnsw_bucket_root_mismatch() {
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let collection_dir = TempDir::new().unwrap();
+        let config = recovered_private_hnsw_config();
+        fs::write(
+            collection_dir.path().join(COLLECTION_CONFIG_FILE),
+            config.to_bytes().unwrap(),
+        )
+        .unwrap();
+
+        let store = PrivateHnswOramStore::new(collection_dir.path(), VECTOR_NAME).unwrap();
+        store
+            .write_manifest(&fixture.manifest, &fixture.manifest_signature)
+            .unwrap();
+        store
+            .write_initial_epoch(&PrivateHnswOramEpochState {
+                index_epoch: fixture.encrypted_build.index_epoch,
+                root_hash: fixture.encrypted_build.root_hash.clone(),
+            })
+            .unwrap();
+        store
+            .write_merkle_tree_from_commitments(
+                fixture.encrypted_build.index_epoch,
+                fixture.encrypted_build.root_hash.clone(),
+                fixture.leaf_commitments.clone(),
+            )
+            .unwrap();
+        for bucket in &fixture.encrypted_build.buckets {
+            let mut bucket = bucket.clone();
+            if bucket.bucket_id == 0 {
+                bucket.bucket_commitment = BASE64URL_NOPAD.encode(&[99; 32]);
+            }
+            store
+                .write_bucket(
+                    &bucket,
+                    fixture.encrypted_build.index_epoch,
+                    fixture.encrypted_build.bucket_count,
+                    crate::common::private_hnsw_wire_fixture::MAX_CIPHERTEXT_BYTES,
+                )
+                .unwrap();
+        }
+
+        let err =
+            validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
+                .expect_err("private HNSW ORAM restore layout mismatch must fail CLI preflight");
+
+        assert!(err.contains("private HNSW ORAM snapshot layout"), "{err}");
+        assert!(
+            err.contains("bucket commitments do not match manifest root_hash"),
+            "{err}"
+        );
+        assert!(
+            !err.contains(collection_dir.path().to_string_lossy().as_ref()),
+            "{err}"
+        );
+        assert!(!err.contains("private_hnsw_oram"), "{err}");
+        assert!(!err.contains(&fixture.encrypted_build.root_hash), "{err}");
+        assert!(
+            !err.contains(&fixture.encrypted_build.buckets[0].ciphertext),
+            "{err}"
+        );
+        assert!(!err.contains(SIGNING_KEY_ID), "{err}");
     }
 
     #[test]

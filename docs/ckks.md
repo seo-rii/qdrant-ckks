@@ -566,6 +566,9 @@ layer. Session open requests with `fixed_budget=false` in strict mode, a
 non-current desired epoch, or the reserved `private_payload_oram_required`
 result privacy mode are rejected before any ORAM path reads are served. Client
 id shape errors are sanitized without echoing the submitted client id.
+Signed manifest upload and initial encrypted bucket upload are also rejected
+while an active session holds the same private index, so a bulk upload cannot
+race a client-led traversal/writeback session.
 Because the manifest signs the current index epoch/root, a writeback commit
 that advances epoch/root must be followed by a freshly signed manifest upload
 before a later session can open at that new epoch. REST and gRPC live fixtures
@@ -629,6 +632,10 @@ metadata before encrypted buckets are returned.
 Snapshot restore preflight follows the same MVP result-privacy boundary:
 private HNSW ORAM manifests with `private_payload_oram_required` are rejected
 until the payload ORAM provider exists.
+The startup snapshot mapping recovery path runs the same private HNSW ORAM
+restore-layout preflight after crypto runtime validation, so CLI recovery
+cannot bypass bucket/root consistency checks that are enforced by storage-level
+snapshot recovery.
 
 Current result privacy support is deliberately narrow. `result_privacy:
 ids_visible` is the only accepted runtime mode in the MVP: Qdrant remains blind
