@@ -691,9 +691,11 @@ Directory hardening also checks symlink/type before chmod. It also exposes
 `merkle_path_batch/v1` proof DTO so a future result ORAM read API can return
 server-verifiable bucket commitment proofs without opening ciphertexts. The
 SDK-side `verify_private_result_oram_merkle_proof` and JSON helper validate
-proof kind, epoch/root, bucket count, duplicate leaves, sibling
-level/position, and bucket commitment matches against the same DTO emitted by
-the collection store. `write_initial_upload_bundle` validates an SDK-packaged
+proof kind, epoch/root, bucket count, sibling level/position, and bucket
+commitment matches against the same DTO emitted by the collection store. They
+preserve fixed-size path-batch semantics by allowing repeated bucket/proof
+entries only when the duplicate entries are byte-identical; conflicting
+duplicates fail closed. `write_initial_upload_bundle` validates an SDK-packaged
 signed manifest plus complete ordered bucket set, writes the manifest, Merkle
 metadata, encrypted buckets, and initial epoch state, and keeps root mismatch
 failures fail-closed. `commit_writeback` mirrors

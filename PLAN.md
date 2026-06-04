@@ -399,6 +399,7 @@
 - private result ORAM skeleton도 동일하게 commit plan의 old epoch/root와 현재 manifest를 묶어 refreshed manifest/signature를 만들고 stale old root를 거부한다.
 - private result ORAM store skeleton의 upload bundle, commit, stored Merkle tree root mismatch 오류는 computed Merkle root를 반사하지 않는다.
 - private result ORAM store skeleton은 directory chmod 전에 symlink/type을 검사하고, bucket symlink와 group/world-accessible bucket directory/file을 fail-closed로 거부한다.
+- private result ORAM Merkle proof verifier는 fixed-size path batch를 위해 반복 bucket/proof entry가 byte-identical인 경우만 허용하고, conflicting duplicate는 fail-closed로 거부한다.
 - REST/gRPC `read_paths` 오류 응답은 mismatched root hash sentinel, malformed path label sentinel, stored bucket ciphertext를 반사하지 않는다.
 - REST/gRPC `read_paths` missing encrypted bucket/proof 오류 응답은 collection-local `private_hnsw_oram` filesystem path를 반사하지 않는다.
 - REST/gRPC `read_paths`와 `commit` malformed client signature shape 오류 응답은 submitted signature sentinel을 반사하지 않는다.
