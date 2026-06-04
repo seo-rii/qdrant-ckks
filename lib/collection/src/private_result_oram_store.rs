@@ -1016,6 +1016,7 @@ fn sync_dir(path: &Path) -> CollectionResult<()> {
 mod tests {
     use qdrant_sec::{
         OramKind, OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_RESULT_ORAM_BINDING,
+        PrivateResultOramBucketCommitmentContext, private_result_oram_bucket_commitment,
         private_result_oram_merkle_root_for_commitments, verify_private_result_oram_merkle_proof,
     };
     use tempfile::TempDir;
@@ -1078,9 +1079,24 @@ mod tests {
             bucket_id,
             index_epoch: epoch,
             ciphertext,
-            ciphertext_sha256,
-            bucket_commitment: root_hash((bucket_id + 1) as u8),
+            ciphertext_sha256: ciphertext_sha256.clone(),
+            bucket_commitment: fixture_bucket_commitment(bucket_id, epoch, &ciphertext_sha256),
         }
+    }
+
+    fn fixture_bucket_commitment(bucket_id: u64, epoch: u64, ciphertext_sha256: &str) -> String {
+        private_result_oram_bucket_commitment(
+            PrivateResultOramBucketCommitmentContext {
+                collection_id: "collection-uuid-1",
+                key_id: "tenant-a/result-private-rk",
+                rk_id: "tenant-a/result-private-rk",
+                rk_epoch: 7,
+                bucket_id,
+                index_epoch: epoch,
+            },
+            ciphertext_sha256,
+        )
+        .unwrap()
     }
 
     fn fixture_upload_bundle() -> PrivateResultOramUploadBundle {
@@ -1369,7 +1385,6 @@ mod tests {
 
         let mut replacement = fixture_upload_bundle();
         replacement.buckets[0] = fixture_bucket(0, 42, b"replacement encrypted result bucket");
-        replacement.buckets[0].bucket_commitment = root_hash(77);
         let replacement_commitments = replacement
             .buckets
             .iter()
@@ -1412,18 +1427,18 @@ mod tests {
         store.write_initial_upload_bundle(&original, 128).unwrap();
         store.write_initial_upload_bundle(&original, 128).unwrap();
 
-        let mut replacement = original.clone();
-        replacement.buckets[0] = fixture_bucket(
+        let replacement = fixture_bucket(
             0,
             original.manifest.index_epoch,
             b"same root different encrypted result bucket",
         );
-        replacement.buckets[0].bucket_commitment = original.buckets[0].bucket_commitment.clone();
-        assert_eq!(replacement.manifest.root_hash, original.manifest.root_hash);
-        assert_ne!(replacement.buckets[0], original.buckets[0]);
+        assert_ne!(replacement, original.buckets[0]);
+        store
+            .write_bucket(&replacement, original.manifest.index_epoch, 3, 128)
+            .unwrap();
 
         let err = store
-            .write_initial_upload_bundle(&replacement, 128)
+            .write_initial_upload_bundle(&original, 128)
             .unwrap_err();
 
         assert!(err.to_string().contains("existing bucket set"));
@@ -1431,7 +1446,7 @@ mod tests {
             store
                 .read_bucket(0, original.manifest.index_epoch, 3, 128)
                 .unwrap(),
-            original.buckets[0],
+            replacement,
         );
     }
 

@@ -114,8 +114,9 @@ pub use private_hnsw_oram::{
     validate_private_hnsw_oram_read_paths_signature,
 };
 pub use private_result_oram::{
-    PRIVATE_RESULT_ORAM_COMMIT_SIGNATURE_DOMAIN, PRIVATE_RESULT_ORAM_MANIFEST_SIGNATURE_DOMAIN,
-    PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND, PrivateResultOramBucket,
+    PRIVATE_RESULT_ORAM_BUCKET_COMMITMENT_DOMAIN, PRIVATE_RESULT_ORAM_COMMIT_SIGNATURE_DOMAIN,
+    PRIVATE_RESULT_ORAM_MANIFEST_SIGNATURE_DOMAIN, PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND,
+    PrivateResultOramBucket, PrivateResultOramBucketCommitmentContext,
     PrivateResultOramBucketValidationContext, PrivateResultOramClientCommitBucketRef,
     PrivateResultOramCommitBucketRef, PrivateResultOramCommitPlan,
     PrivateResultOramCommitSignatureContext, PrivateResultOramCommitSignatureInput,
@@ -125,7 +126,8 @@ pub use private_result_oram::{
     PrivateResultOramMerkleSiblingPosition, PrivateResultOramSignature,
     PrivateResultOramSignatureVerification, PrivateResultOramUploadBundle,
     package_private_result_oram_upload_bundle, plan_private_result_oram_commit,
-    private_result_oram_commit_signature_message, private_result_oram_manifest_signature_message,
+    private_result_oram_bucket_commitment, private_result_oram_commit_signature_message,
+    private_result_oram_manifest_signature_message,
     private_result_oram_merkle_root_for_commitments,
     refresh_private_result_oram_manifest_for_commit, sign_private_result_oram_commit,
     sign_private_result_oram_manifest, sign_private_result_oram_manifest_refresh,

@@ -735,8 +735,10 @@ collection/key/epoch context, and root hash pinning;
 `private_result_oram_commit_signature_message` also fixes the future bucket
 writeback CAS signature input. `validate_private_result_oram_bucket_shape`
 checks bucket version, epoch, range, ciphertext size, ciphertext SHA-256, and
-bucket commitment encoding, while `private_result_oram_merkle_root_for_commitments`
-fixes the root hash calculation over bucket commitments.
+bucket commitment encoding. `private_result_oram_bucket_commitment` binds a
+bucket commitment to collection/key lineage, bucket id, index epoch, and
+`ciphertext_sha256`, while `private_result_oram_merkle_root_for_commitments`
+fixes the root hash calculation over those commitments.
 `plan_private_result_oram_commit` prepares the future writeback plan by checking
 old-root consistency, bucket epoch/range uniqueness, the next root, and commit
 signature bucket refs. `sign_private_result_oram_manifest` and
@@ -747,8 +749,8 @@ complete ordered bucket set whose commitments match the manifest root.
 `validate_private_result_oram_upload_bundle` and the bundle's
 `validate_initial_upload_contract` method let future SDKs preflight decoded
 result bundles before any runtime upload API exists: they validate manifest
-shape, ordered bucket ids, bucket ciphertext hash/size, and the manifest Merkle
-root. The collection-local result ORAM store uses the same helper for initial
+shape, ordered bucket ids, bucket ciphertext hash/size, context-bound bucket
+commitments, and the manifest Merkle root. The collection-local result ORAM store uses the same helper for initial
 bundle ingest, then applies its runtime ciphertext size cap before writing
 files.
 `refresh_private_result_oram_manifest_for_commit` and

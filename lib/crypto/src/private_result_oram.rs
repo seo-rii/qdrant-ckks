@@ -12,6 +12,8 @@ pub const PRIVATE_RESULT_ORAM_MANIFEST_SIGNATURE_DOMAIN: &str =
     "qdrant-sec/private-result-oram-manifest-signature/v1";
 pub const PRIVATE_RESULT_ORAM_COMMIT_SIGNATURE_DOMAIN: &str =
     "qdrant-sec/private-result-oram-commit-signature/v1";
+pub const PRIVATE_RESULT_ORAM_BUCKET_COMMITMENT_DOMAIN: &str =
+    "qdrant-sec/private-result-oram-bucket-commitment/v1";
 
 const PRIVATE_RESULT_ORAM_SIGNATURE_ALGORITHM: &str = "ed25519";
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
@@ -57,6 +59,8 @@ pub enum PrivateResultOramError {
     BucketOversized,
     #[error("private result ORAM bucket ciphertext_sha256 mismatch")]
     InvalidBucketHash,
+    #[error("private result ORAM bucket commitment context mismatch")]
+    InvalidBucketCommitment,
     #[error("private result ORAM Merkle tree is empty")]
     EmptyMerkleTree,
     #[error("private result ORAM Merkle root does not match current commitments")]
@@ -237,6 +241,16 @@ impl PrivateResultOramBucketValidationContext {
             max_ciphertext_bytes,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateResultOramBucketCommitmentContext<'a> {
+    pub collection_id: &'a str,
+    pub key_id: &'a str,
+    pub rk_id: &'a str,
+    pub rk_epoch: u64,
+    pub bucket_id: u64,
+    pub index_epoch: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -522,6 +536,20 @@ pub fn validate_private_result_oram_upload_bundle(
             return Err(PrivateResultOramError::InvalidBucketField("bucket_id"));
         }
         validate_private_result_oram_bucket_shape(bucket, validation_context)?;
+        let expected_commitment = private_result_oram_bucket_commitment(
+            PrivateResultOramBucketCommitmentContext {
+                collection_id: &manifest.collection_id,
+                key_id: &manifest.key_id,
+                rk_id: &manifest.rk_id,
+                rk_epoch: manifest.rk_epoch,
+                bucket_id: bucket.bucket_id,
+                index_epoch: manifest.index_epoch,
+            },
+            &bucket.ciphertext_sha256,
+        )?;
+        if expected_commitment != bucket.bucket_commitment {
+            return Err(PrivateResultOramError::InvalidBucketCommitment);
+        }
         commitments.push(bucket.bucket_commitment.clone());
     }
     if private_result_oram_merkle_root_for_commitments(&commitments)? != manifest.root_hash {
@@ -624,6 +652,31 @@ pub fn private_result_oram_commit_signature_message(
     push_str(&mut message, input.signature_alg);
     push_str(&mut message, input.signature_key_id);
     message
+}
+
+pub fn private_result_oram_bucket_commitment(
+    context: PrivateResultOramBucketCommitmentContext<'_>,
+    ciphertext_sha256: &str,
+) -> Result<String, PrivateResultOramError> {
+    validate_id(context.collection_id, "collection_id")?;
+    validate_resource_id(context.key_id)?;
+    validate_resource_id(context.rk_id)?;
+    let ciphertext_sha256 = decode_base64url_32(ciphertext_sha256, "ciphertext_sha256")
+        .map_err(|_| PrivateResultOramError::InvalidBucketField("ciphertext_sha256"))?;
+
+    let mut message = Vec::new();
+    push_domain(
+        &mut message,
+        PRIVATE_RESULT_ORAM_BUCKET_COMMITMENT_DOMAIN.as_bytes(),
+    );
+    push_str(&mut message, context.collection_id);
+    push_str(&mut message, context.key_id);
+    push_str(&mut message, context.rk_id);
+    push_u64(&mut message, context.rk_epoch);
+    push_u64(&mut message, context.bucket_id);
+    push_u64(&mut message, context.index_epoch);
+    message.extend_from_slice(&ciphertext_sha256);
+    Ok(BASE64URL_NOPAD.encode(Sha256::digest(&message).as_ref()))
 }
 
 pub fn private_result_oram_merkle_root_for_commitments(
@@ -1059,13 +1112,14 @@ mod tests {
 
     fn fixture_bucket() -> PrivateResultOramBucket {
         let ciphertext = [3; 32];
+        let ciphertext_sha256 = BASE64URL_NOPAD.encode(Sha256::digest(ciphertext).as_ref());
         PrivateResultOramBucket {
             version: 1,
             bucket_id: 9,
             index_epoch: 42,
             ciphertext: BASE64URL_NOPAD.encode(&ciphertext),
-            ciphertext_sha256: BASE64URL_NOPAD.encode(Sha256::digest(ciphertext).as_ref()),
-            bucket_commitment: BASE64URL_NOPAD.encode(&[4; 32]),
+            ciphertext_sha256: ciphertext_sha256.clone(),
+            bucket_commitment: fixture_bucket_commitment(9, 42, &ciphertext_sha256),
         }
     }
 
@@ -1074,19 +1128,35 @@ mod tests {
         epoch: u64,
         commitment_byte: u8,
     ) -> PrivateResultOramBucket {
-        let ciphertext = [bucket_id as u8; 32];
+        let ciphertext = [commitment_byte; 32];
+        let ciphertext_sha256 = BASE64URL_NOPAD.encode(Sha256::digest(ciphertext).as_ref());
         PrivateResultOramBucket {
             version: 1,
             bucket_id,
             index_epoch: epoch,
             ciphertext: BASE64URL_NOPAD.encode(&ciphertext),
-            ciphertext_sha256: BASE64URL_NOPAD.encode(Sha256::digest(ciphertext).as_ref()),
-            bucket_commitment: commitment(commitment_byte),
+            ciphertext_sha256: ciphertext_sha256.clone(),
+            bucket_commitment: fixture_bucket_commitment(bucket_id, epoch, &ciphertext_sha256),
         }
     }
 
     fn commitment(byte: u8) -> String {
         BASE64URL_NOPAD.encode(&[byte; 32])
+    }
+
+    fn fixture_bucket_commitment(bucket_id: u64, epoch: u64, ciphertext_sha256: &str) -> String {
+        private_result_oram_bucket_commitment(
+            PrivateResultOramBucketCommitmentContext {
+                collection_id: "collection-uuid-1",
+                key_id: "tenant-a/payload-private-rk",
+                rk_id: "tenant-a/payload-private-rk",
+                rk_epoch: 7,
+                bucket_id,
+                index_epoch: epoch,
+            },
+            ciphertext_sha256,
+        )
+        .unwrap()
     }
 
     fn fixture_bucket_set() -> Vec<PrivateResultOramBucket> {
@@ -1688,7 +1758,7 @@ mod tests {
         wrong_commitment.buckets[0].bucket_commitment = commitment(99);
         assert_eq!(
             validate_private_result_oram_upload_bundle(&wrong_commitment),
-            Err(PrivateResultOramError::MerkleRootMismatch)
+            Err(PrivateResultOramError::InvalidBucketCommitment)
         );
 
         let mut wrong_root = manifest;
