@@ -19,7 +19,10 @@ use super::point_ops::{
     apply_encrypted_payload_read_mode_to_scored_points,
     ensure_encrypted_payload_read_mode_is_supported,
 };
-use crate::config::EncryptionSelector;
+use crate::config::{
+    EncryptionSelector, encryption_rule_uses_private_hnsw_oram,
+    private_hnsw_oram_api_required_message,
+};
 use crate::events::SlowQueryEvent;
 use crate::operations::consistency_params::ReadConsistency;
 use crate::operations::shard_selector_internal::ShardSelectorInternal;
@@ -105,9 +108,14 @@ impl Collection {
                 for search in &request.searches {
                     let vector_name = search.query.get_vector_name();
                     if names.iter().any(|name| name == vector_name) {
-                        return Err(CollectionError::bad_input(format!(
-                            "cannot search encrypted vector '{vector_name}' through direct collection search; use the runtime CKKS sidecar search entrypoint",
-                        )));
+                        let message = if encryption_rule_uses_private_hnsw_oram(rule) {
+                            private_hnsw_oram_api_required_message(vector_name)
+                        } else {
+                            format!(
+                                "cannot search encrypted vector '{vector_name}' through direct collection search; use the runtime CKKS sidecar search entrypoint",
+                            )
+                        };
+                        return Err(CollectionError::bad_input(message));
                     }
                 }
             }

@@ -363,6 +363,34 @@ mod ckks_tests {
     }
 
     #[test]
+    fn private_hnsw_oram_vector_guard_message_uses_session_api() {
+        let private_rule = EncryptionRuleRef {
+            id: "embedding_private".to_string(),
+            selector: EncryptionSelector::VectorNames {
+                names: vec!["embedding".to_string()],
+            },
+            instance: "docs_text_private_hnsw".to_string(),
+            binding: Some("private-hnsw-oram/v1".to_string()),
+        };
+        let opaque_rule = EncryptionRuleRef {
+            id: "embedding_opaque".to_string(),
+            selector: EncryptionSelector::VectorNames {
+                names: vec!["opaque".to_string()],
+            },
+            instance: "docs_vector_v1".to_string(),
+            binding: Some("vector-envelope/v1".to_string()),
+        };
+
+        assert!(encryption_rule_uses_private_hnsw_oram(&private_rule));
+        assert!(!encryption_rule_uses_private_hnsw_oram(&opaque_rule));
+
+        let message = private_hnsw_oram_api_required_message("embedding");
+        assert!(message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
+        assert!(message.contains("/private-hnsw/embedding/session"));
+        assert!(message.contains("compatible SDK traversal APIs"));
+    }
+
+    #[test]
     fn encryption_config_rejects_sparse_only_encrypted_vector_selector() {
         let params = CollectionParams {
             sparse_vectors: Some(BTreeMap::from([(
@@ -2303,6 +2331,17 @@ pub fn encrypted_vector_return_request<'a>(
             })
         }),
     }
+}
+
+pub fn encryption_rule_uses_private_hnsw_oram(rule: &EncryptionRuleRef) -> bool {
+    rule.binding.as_deref() == Some(PRIVATE_HNSW_ORAM_BINDING)
+}
+
+pub fn private_hnsw_oram_api_required_message(vector_name: &str) -> String {
+    format!(
+        "{} requires client-led private ORAM sessions for vector '{vector_name}'. Use /private-hnsw/{vector_name}/session and compatible SDK traversal APIs.",
+        qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+    )
 }
 
 fn validate_crypto_identifier(value: &str) -> Result<(), validator::ValidationError> {

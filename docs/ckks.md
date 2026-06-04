@@ -544,6 +544,10 @@ The same private-session guidance is returned even when runtime crypto settings
 are absent, so private HNSW ORAM vectors do not fall through to CKKS/OpenFHE
 runtime fallback messages on ordinary query/search/recommend/discover/group/
 matrix APIs.
+Collection-internal direct query/search/search-matrix entrypoints make the same
+binding distinction: `private-hnsw-oram/v1` returns private ORAM session
+guidance, while other encrypted vector bindings keep the CKKS sidecar runtime
+entrypoint guidance.
 Point-level `retrieve`/`scroll` requests that ask for this vector with
 `with_vector` also fail closed with the same private HNSW ORAM session guidance;
 Qdrant does not expose a CKKS sidecar payload for this provider.

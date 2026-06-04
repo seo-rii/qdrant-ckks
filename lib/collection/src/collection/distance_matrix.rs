@@ -13,7 +13,10 @@ use segment::types::{
 };
 
 use crate::collection::Collection;
-use crate::config::EncryptionSelector;
+use crate::config::{
+    EncryptionSelector, encryption_rule_uses_private_hnsw_oram,
+    private_hnsw_oram_api_required_message,
+};
 use crate::operations::consistency_params::ReadConsistency;
 use crate::operations::shard_selector_internal::ShardSelectorInternal;
 use crate::operations::types::{CollectionError, CollectionResult};
@@ -167,9 +170,14 @@ impl Collection {
                     continue;
                 };
                 if names.iter().any(|name| name == &using) {
-                    return Err(CollectionError::bad_input(format!(
-                        "cannot build direct collection search matrix for encrypted vector '{using}'; use the runtime CKKS sidecar matrix entrypoint",
-                    )));
+                    let message = if encryption_rule_uses_private_hnsw_oram(rule) {
+                        private_hnsw_oram_api_required_message(&using)
+                    } else {
+                        format!(
+                            "cannot build direct collection search matrix for encrypted vector '{using}'; use the runtime CKKS sidecar matrix entrypoint",
+                        )
+                    };
+                    return Err(CollectionError::bad_input(message));
                 }
             }
         }

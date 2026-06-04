@@ -26,7 +26,10 @@ use crate::common::fetch_vectors::{
 };
 use crate::common::retrieve_request_trait::RetrieveRequest;
 use crate::common::transpose_iterator::transposed_iter;
-use crate::config::EncryptionSelector;
+use crate::config::{
+    EncryptionSelector, encryption_rule_uses_private_hnsw_oram,
+    private_hnsw_oram_api_required_message,
+};
 use crate::operations::consistency_params::ReadConsistency;
 use crate::operations::shard_selector_internal::ShardSelectorInternal;
 use crate::operations::types::{CollectionError, CollectionResult};
@@ -612,9 +615,14 @@ impl Collection {
                         .and_then(ScoringQuery::get_vector_name)
                         && names.iter().any(|name| name == vector_name)
                     {
-                        return Err(CollectionError::bad_input(format!(
-                            "cannot query encrypted vector '{vector_name}' through direct collection query; use the runtime CKKS sidecar query entrypoint",
-                        )));
+                        let message = if encryption_rule_uses_private_hnsw_oram(rule) {
+                            private_hnsw_oram_api_required_message(vector_name)
+                        } else {
+                            format!(
+                                "cannot query encrypted vector '{vector_name}' through direct collection query; use the runtime CKKS sidecar query entrypoint",
+                            )
+                        };
+                        return Err(CollectionError::bad_input(message));
                     }
 
                     let mut prefetches: Vec<&ShardPrefetch> = request.prefetches.iter().collect();
@@ -625,9 +633,14 @@ impl Collection {
                             .and_then(ScoringQuery::get_vector_name)
                             && names.iter().any(|name| name == vector_name)
                         {
-                            return Err(CollectionError::bad_input(format!(
-                                "cannot query encrypted vector '{vector_name}' through direct collection query; use the runtime CKKS sidecar query entrypoint",
-                            )));
+                            let message = if encryption_rule_uses_private_hnsw_oram(rule) {
+                                private_hnsw_oram_api_required_message(vector_name)
+                            } else {
+                                format!(
+                                    "cannot query encrypted vector '{vector_name}' through direct collection query; use the runtime CKKS sidecar query entrypoint",
+                                )
+                            };
+                            return Err(CollectionError::bad_input(message));
                         }
                         prefetches.extend(prefetch.prefetches.iter());
                     }
