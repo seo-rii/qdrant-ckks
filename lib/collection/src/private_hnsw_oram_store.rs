@@ -1191,6 +1191,30 @@ mod tests {
     }
 
     #[test]
+    fn bucket_read_rejects_file_id_mismatch_without_ciphertext_leak() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        store.ensure_layout().unwrap();
+        let mut mismatched_bucket = fixture_bucket(1, 42, b"encrypted bucket mismatch");
+        mismatched_bucket.ciphertext =
+            BASE64URL_NOPAD.encode(b"private-hnsw-bucket-ciphertext-sentinel");
+        write_json_atomic(
+            store.root_path(),
+            &store.temp_dir(),
+            &store.root_path().join(BUCKETS_DIR).join("00000000.bucket"),
+            &mismatched_bucket,
+        )
+        .unwrap();
+
+        let err = store.read_bucket(0, 42, 2, 128).unwrap_err();
+        let err = err.to_string();
+
+        assert!(err.contains("bucket file id mismatch"));
+        assert!(!err.contains("private-hnsw-bucket-ciphertext-sentinel"));
+        assert!(!err.contains(&mismatched_bucket.ciphertext));
+    }
+
+    #[test]
     fn store_accepts_client_sealed_buckets_and_merkle_root_roundtrips() {
         let temp = TempDir::new().unwrap();
         let store = fixture_store(&temp);
