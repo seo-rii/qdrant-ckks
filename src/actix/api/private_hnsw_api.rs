@@ -1223,6 +1223,45 @@ mod private_hnsw_rest_tests {
                 !active_snapshot_session_error.contains("private_hnsw_oram"),
                 "{active_snapshot_session_error}"
             );
+            let active_snapshot_manifest_upload_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: fixture.manifest.clone(),
+                    signature: fixture.manifest_signature.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "active collection snapshot"
+            );
+            assert!(
+                !active_snapshot_manifest_upload_error.contains(&fixture.manifest.root_hash),
+                "{active_snapshot_manifest_upload_error}"
+            );
+            assert!(
+                !active_snapshot_manifest_upload_error.contains("private_hnsw_oram"),
+                "{active_snapshot_manifest_upload_error}"
+            );
+            let mut active_snapshot_bucket_upload = fixture.encrypted_build.buckets.clone();
+            active_snapshot_bucket_upload[0].ciphertext =
+                "active-snapshot-bucket-upload-ciphertext-sentinel".to_string();
+            let active_snapshot_bucket_upload_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/buckets",
+                UploadPrivateHnswBucketsRequest {
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: active_snapshot_bucket_upload,
+                },
+                StatusCode::BAD_REQUEST,
+                "active collection snapshot"
+            );
+            assert!(
+                !active_snapshot_bucket_upload_error
+                    .contains("active-snapshot-bucket-upload-ciphertext-sentinel"),
+                "{active_snapshot_bucket_upload_error}"
+            );
+            assert!(
+                !active_snapshot_bucket_upload_error.contains("private_hnsw_oram"),
+                "{active_snapshot_bucket_upload_error}"
+            );
             drop(snapshot_guard);
 
             let session_result = post_json_ok!(

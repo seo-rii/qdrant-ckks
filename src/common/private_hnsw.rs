@@ -1483,6 +1483,28 @@ fn ensure_no_active_private_hnsw_session(
     let mut registry = session_registry()
         .lock()
         .map_err(|_| StorageError::service_error("private HNSW ORAM session registry poisoned"))?;
+    ensure_private_hnsw_write_window_in_registry(
+        &mut registry,
+        collection_id,
+        vector_name,
+        now_unix,
+    )
+}
+
+fn ensure_private_hnsw_write_window_in_registry(
+    registry: &mut PrivateHnswSessionRegistry,
+    collection_id: &str,
+    vector_name: &str,
+    now_unix: u64,
+) -> StorageResult<()> {
+    if registry
+        .active_snapshot_by_collection
+        .contains_key(collection_id)
+    {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM upload requires no active collection snapshot",
+        ));
+    }
     if registry.has_active_index(collection_id, vector_name, now_unix) {
         return Err(StorageError::bad_request(
             "private HNSW ORAM upload requires no active session for this index",
@@ -2151,6 +2173,36 @@ mod private_hnsw_tests {
         registry
             .open(fixture_session("session-1", 20), now)
             .unwrap();
+    }
+
+    #[test]
+    fn collection_snapshot_guard_rejects_private_hnsw_upload_write_window() {
+        let now = 10;
+        let mut registry = PrivateHnswSessionRegistry::default();
+        registry
+            .begin_collection_snapshot("collection-uuid-1", now)
+            .unwrap();
+
+        let err = ensure_private_hnsw_write_window_in_registry(
+            &mut registry,
+            "collection-uuid-1",
+            "text",
+            now,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("upload requires no active collection snapshot")
+        );
+
+        registry.release_collection_snapshot("collection-uuid-1");
+        ensure_private_hnsw_write_window_in_registry(
+            &mut registry,
+            "collection-uuid-1",
+            "text",
+            now,
+        )
+        .unwrap();
     }
 
     #[test]
