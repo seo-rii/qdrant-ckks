@@ -10,6 +10,7 @@ use qdrant_sec::{
     PrivateResultOramMerkleProof, PrivateResultOramMerkleProofLeaf, PrivateResultOramMerkleSibling,
     PrivateResultOramMerkleSiblingPosition, PrivateResultOramSignature,
     PrivateResultOramUploadBundle, validate_private_result_oram_bucket_shape,
+    validate_private_result_oram_upload_bundle,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -677,36 +678,16 @@ fn validate_upload_bundle(
     bundle: &PrivateResultOramUploadBundle,
     max_ciphertext_bytes: usize,
 ) -> CollectionResult<Vec<String>> {
-    if bundle.manifest.bucket_count != bundle.buckets.len() as u64 {
-        return Err(CollectionError::bad_request(
-            "private result ORAM upload bundle bucket_count does not match buckets",
-        ));
-    }
-
-    let mut leaf_commitments = Vec::with_capacity(bundle.buckets.len());
-    for (expected_bucket_id, bucket) in bundle.buckets.iter().enumerate() {
-        if bucket.bucket_id != expected_bucket_id as u64 {
-            return Err(CollectionError::bad_request(format!(
-                "private result ORAM upload bundle bucket {} is not ordered",
-                bucket.bucket_id,
-            )));
-        }
+    let leaf_commitments =
+        validate_private_result_oram_upload_bundle(bundle).map_err(private_result_oram_error)?;
+    for bucket in &bundle.buckets {
         validate_bucket(
             bucket,
             bundle.manifest.index_epoch,
             bundle.manifest.bucket_count,
             max_ciphertext_bytes,
         )?;
-        leaf_commitments.push(bucket.bucket_commitment.clone());
     }
-
-    let computed_root = PrivateResultOramStore::merkle_root_for_commitments(&leaf_commitments)?;
-    if computed_root != bundle.manifest.root_hash {
-        return Err(CollectionError::bad_request(
-            "private result ORAM upload bundle root_hash mismatch",
-        ));
-    }
-
     Ok(leaf_commitments)
 }
 
@@ -1287,7 +1268,7 @@ mod tests {
 
         let err = store.write_initial_upload_bundle(&bundle, 128).unwrap_err();
 
-        assert!(err.to_string().contains("root_hash mismatch"));
+        assert!(err.to_string().contains("Merkle root does not match"));
         assert!(!err.to_string().contains(&computed_root));
     }
 
