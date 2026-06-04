@@ -2527,4 +2527,140 @@ mod private_hnsw_grpc_tests {
             assert!(closed.closed);
         });
     }
+
+    #[test]
+    fn read_paths_grpc_service_preserves_fixed_size_bucket_sequence() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded_with_path_batch_size(2);
+        let settings = fixture.route_settings();
+        let (_temp, dispatcher) = test_dispatcher();
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+            let service =
+                PrivateHnswOramService::new(Arc::new(dispatcher.clone()), settings.clone());
+
+            PrivateHnswOram::upload_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                    signature: Some(signature_to_proto(fixture.manifest_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap();
+            PrivateHnswOram::upload_private_hnsw_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateHnswBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: fixture
+                        .encrypted_build
+                        .buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            )
+            .await
+            .unwrap();
+            let session = PrivateHnswOram::open_private_hnsw_session(
+                &service,
+                Request::new(grpc::OpenPrivateHnswSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    client_id: "tenant-a/sdk-instance-1".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: result_privacy_to_proto(ResultPrivacyMode::IdsVisible),
+                }),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+
+            let paths = vec![
+                encode_private_hnsw_oram_leaf_label(0, fixture.config.tree_height).unwrap(),
+                encode_private_hnsw_oram_leaf_label(1, fixture.config.tree_height).unwrap(),
+            ];
+            let signature = fixture.sign_read_paths(&paths, 2, true);
+            let read_response = PrivateHnswOram::read_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramReadPathsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths,
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 2,
+                        dummy_paths_included: true,
+                    }),
+                    client_signature: Some(signature_to_proto(signature)),
+                }),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            let expected_bucket_count = (fixture.manifest.oram.tree_height as usize + 1) * 2;
+            assert_eq!(read_response.buckets.len(), expected_bucket_count);
+            assert_eq!(
+                read_response.buckets[0].bucket_id,
+                read_response.buckets[3].bucket_id
+            );
+            assert_eq!(
+                read_response.buckets[1].bucket_id,
+                read_response.buckets[4].bucket_id
+            );
+
+            let proof_value = read_response.proof.as_ref().unwrap().value.clone();
+            let parsed_proof: qdrant_sec::PrivateHnswOramMerkleProof =
+                serde_json::from_str(&proof_value).unwrap();
+            assert_eq!(parsed_proof.leaves.len(), expected_bucket_count);
+            assert_eq!(
+                parsed_proof.leaves[0].bucket_id,
+                parsed_proof.leaves[3].bucket_id
+            );
+            assert_eq!(
+                parsed_proof.leaves[1].bucket_id,
+                parsed_proof.leaves[4].bucket_id
+            );
+            let read_buckets = read_response
+                .buckets
+                .into_iter()
+                .map(bucket_from_proto)
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            let opened_buckets = open_private_hnsw_oram_verified_path_batch(
+                &fixture.keys,
+                fixture.base_context,
+                fixture.config,
+                BASE_EPOCH,
+                &fixture.encrypted_build.root_hash,
+                fixture.encrypted_build.bucket_count,
+                &proof_value,
+                &read_buckets,
+            )
+            .unwrap();
+            assert_eq!(opened_buckets.len(), expected_bucket_count);
+
+            let closed = PrivateHnswOram::close_private_hnsw_session(
+                &service,
+                Request::new(grpc::ClosePrivateHnswSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id,
+                }),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            assert!(closed.closed);
+        });
+    }
 }
