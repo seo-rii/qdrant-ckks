@@ -659,6 +659,10 @@ bucket set. Shared prefix buckets may therefore appear more than once in the
 response, and the SDK Merkle verifier accepts only byte-identical repeated
 bucket/proof entries. This keeps the encrypted bucket response length fixed at
 `requested_paths * (tree_height + 1)`.
+Active sessions do not keep serving under stale runtime policy. Each `read_paths`
+and `commit` call compares the session manifest against the current runtime
+context, including collection/vector identity, key lineage, vector metadata,
+result privacy, and the `hnsw`/`oram`/`fixed_budget` policy; drift fails closed.
 Malformed client signature shape errors for `read_paths` and `commit` are also
 sanitized so submitted signature bodies are not echoed.
 Commit error handling follows the same boundary: malformed updated bucket

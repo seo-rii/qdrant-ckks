@@ -282,6 +282,49 @@ impl ResolvedPrivateHnswContext {
         &self,
         manifest: &PrivateHnswOramManifest,
     ) -> StorageResult<()> {
+        self.validate_manifest_runtime_context(manifest)?;
+        Ok(())
+    }
+
+    fn validate_manifest_runtime_context(
+        &self,
+        manifest: &PrivateHnswOramManifest,
+    ) -> StorageResult<()> {
+        if manifest.collection_id != self.collection_crypto_id {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM manifest collection_id does not match runtime context",
+            ));
+        }
+        if manifest.vector_name != self.vector_name {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM manifest vector_name does not match runtime context",
+            ));
+        }
+        if manifest.key_id != self.expected_key_id {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM manifest key_id does not match runtime instance",
+            ));
+        }
+        if manifest.rk_id != self.expected_rk_id {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM manifest rk_id does not match runtime instance",
+            ));
+        }
+        if manifest.rk_epoch < self.min_rk_epoch || manifest.rk_epoch > self.max_rk_epoch {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM manifest rk_epoch does not match runtime instance",
+            ));
+        }
+        if manifest.dim != self.expected_dim {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM manifest dim does not match runtime vector size",
+            ));
+        }
+        if manifest.distance != self.expected_distance {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM manifest distance does not match runtime vector distance",
+            ));
+        }
         if manifest.result_privacy != self.expected_result_privacy {
             return Err(StorageError::bad_request(
                 "private HNSW ORAM manifest result_privacy does not match runtime instance",
@@ -647,11 +690,12 @@ pub async fn do_read_private_hnsw_paths(
         .lock()
         .map_err(|_| StorageError::service_error("private HNSW ORAM session registry poisoned"))?;
     registry.with_session_mut(
-        &request_context.collection_id,
+        &request_context.collection_crypto_id,
         vector_name,
         session_id,
         now_unix,
         |session| {
+            request_context.validate_manifest_runtime_context(&session.manifest)?;
             if session.index_epoch != index_epoch || session.root_hash != root_hash {
                 return Err(StorageError::bad_request(
                     "private HNSW ORAM session epoch/root mismatch",
@@ -763,7 +807,8 @@ pub async fn do_commit_private_hnsw_paths(
     let mut registry = session_registry()
         .lock()
         .map_err(|_| StorageError::service_error("private HNSW ORAM session registry poisoned"))?;
-    registry.with_session_mut(&request_context.collection_id, vector_name, session_id, now_unix, |session| {
+    registry.with_session_mut(&request_context.collection_crypto_id, vector_name, session_id, now_unix, |session| {
+        request_context.validate_manifest_runtime_context(&session.manifest)?;
         if session.index_epoch != old_epoch || session.root_hash != old_root_hash {
             return Err(StorageError::bad_request(
                 "private HNSW ORAM commit old epoch/root does not match active session",
@@ -889,7 +934,11 @@ pub async fn do_close_private_hnsw_session(
     let closed = session_registry()
         .lock()
         .map_err(|_| StorageError::service_error("private HNSW ORAM session registry poisoned"))?
-        .close(&request_context.collection_id, vector_name, session_id);
+        .close(
+            &request_context.collection_crypto_id,
+            vector_name,
+            session_id,
+        );
     if !closed {
         return Err(StorageError::bad_request(
             "private HNSW ORAM session is missing or already closed",
@@ -1174,11 +1223,6 @@ fn signature_public_key(
     Ok(public_key)
 }
 
-struct PrivateHnswRequestContext {
-    collection_id: String,
-    public_key: Vec<u8>,
-}
-
 async fn collection_context_for_request(
     toc: &TableOfContent,
     auth: &Auth,
@@ -1187,7 +1231,7 @@ async fn collection_context_for_request(
     vector_name: &str,
     signature_key_id: Option<&str>,
     method: &str,
-) -> StorageResult<PrivateHnswRequestContext> {
+) -> StorageResult<ResolvedPrivateHnswContext> {
     let pass = auth.check_collection_access(collection_name, AccessRequirements::new(), method)?;
     let collection: std::sync::Arc<collection::collection::Collection> =
         toc.get_collection(&pass).await?;
@@ -1206,14 +1250,21 @@ async fn collection_context_for_request(
     })?;
     let rule = private_hnsw_rule(&encryption, vector_name)?;
     let instance = private_hnsw_instance(settings, rule)?;
+    let runtime_context = manifest_context_from_runtime(
+        &config.params,
+        &collection_crypto_id,
+        vector_name,
+        instance,
+    )?;
     let public_key = if let Some(signature_key_id) = signature_key_id {
         signature_public_key(instance, signature_key_id)?
     } else {
         Vec::new()
     };
-    Ok(PrivateHnswRequestContext {
-        collection_id: collection_crypto_id,
+    Ok(ResolvedPrivateHnswContext {
+        collection_path: collection.path().to_path_buf(),
         public_key,
+        ..runtime_context
     })
 }
 
