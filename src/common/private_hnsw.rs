@@ -1485,11 +1485,11 @@ mod private_hnsw_tests {
     }
 
     #[test]
-    fn path_oram_batch_deduplicates_shared_prefixes() {
+    fn path_oram_batch_preserves_fixed_size_bucket_sequence() {
         let left = BASE64URL_NOPAD.encode(&4u64.to_be_bytes());
         let right = BASE64URL_NOPAD.encode(&5u64.to_be_bytes());
         let bucket_ids = bucket_ids_for_path_batch(&[left, right], 3, 15).unwrap();
-        assert_eq!(bucket_ids, vec![0, 2, 5, 11, 12]);
+        assert_eq!(bucket_ids, vec![0, 2, 5, 11, 0, 2, 5, 12]);
     }
 
     #[test]
