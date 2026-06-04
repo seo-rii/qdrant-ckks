@@ -8,7 +8,8 @@ use collection::config::{
 };
 use collection::operations::types::CollectionError;
 use collection::private_hnsw_oram_store::{
-    PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND, PrivateHnswOramEpochState, PrivateHnswOramStore,
+    PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND, PrivateHnswOramEpochState, PrivateHnswOramMerkleProof,
+    PrivateHnswOramStore,
 };
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
@@ -930,6 +931,7 @@ pub async fn do_read_private_hnsw_paths(
                     session.bucket_count,
                 )
                 .map_err(private_hnsw_read_store_error)?;
+            ensure_private_hnsw_read_proof_matches_buckets(&proof, &buckets)?;
             let proof_value = serde_json::to_string(&proof).map_err(|err| {
                 StorageError::service_error(format!(
                     "failed to serialize private HNSW ORAM Merkle proof: {err}",
@@ -1719,6 +1721,25 @@ fn session_index_key(collection_id: &str, vector_name: &str) -> String {
     format!("{collection_id}\x1f{vector_name}")
 }
 
+fn ensure_private_hnsw_read_proof_matches_buckets(
+    proof: &PrivateHnswOramMerkleProof,
+    buckets: &[PrivateHnswOramBucket],
+) -> StorageResult<()> {
+    if proof.leaves.len() != buckets.len() {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM encrypted bucket/proof consistency validation failed",
+        ));
+    }
+    for (leaf, bucket) in proof.leaves.iter().zip(buckets) {
+        if leaf.bucket_id != bucket.bucket_id || leaf.leaf_hash != bucket.bucket_commitment {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM encrypted bucket/proof consistency validation failed",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn max_bucket_ciphertext_bytes(manifest: &PrivateHnswOramManifest) -> StorageResult<usize> {
     let block_size = usize::try_from(manifest.oram.block_size_bytes).map_err(|_| {
         StorageError::bad_request("private HNSW ORAM block_size_bytes exceeds usize")
@@ -1985,6 +2006,32 @@ mod private_hnsw_tests {
 
         let err = ordered_initial_bucket_commitments(&[fixture_bucket(0, 41)], 42, 1).unwrap_err();
         assert!(err.to_string().contains("stale epoch"));
+    }
+
+    #[test]
+    fn read_proof_bucket_commitment_mismatch_rejects_without_ciphertext_leak() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let store = PrivateHnswOramStore::new(temp.path(), "text").unwrap();
+        let bucket = fixture_bucket(0, 42);
+        let root =
+            PrivateHnswOramStore::merkle_root_for_commitments(&[bucket.bucket_commitment.clone()])
+                .unwrap();
+        store
+            .write_merkle_tree_from_commitments(
+                42,
+                root.clone(),
+                vec![bucket.bucket_commitment.clone()],
+            )
+            .unwrap();
+
+        let mut proof = store.read_merkle_path_batch(&[0], 42, &root, 1).unwrap();
+        proof.leaves[0].leaf_hash = BASE64URL_NOPAD.encode(&[99; 32]);
+
+        let err = ensure_private_hnsw_read_proof_matches_buckets(&proof, &[bucket.clone()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("bucket/proof consistency validation failed"));
+        assert!(!err.contains(&bucket.ciphertext));
     }
 
     #[test]

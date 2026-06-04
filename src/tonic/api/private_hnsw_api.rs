@@ -2351,6 +2351,48 @@ mod private_hnsw_grpc_tests {
             assert!(!err.message().contains("private_hnsw_oram"));
             std::fs::write(&bucket_path, &original_bucket_bytes).unwrap();
 
+            let mut proof_mismatched_bucket = read_buckets[0].clone();
+            proof_mismatched_bucket.bucket_commitment =
+                data_encoding::BASE64URL_NOPAD.encode(&[91; 32]);
+            std::fs::write(
+                &bucket_path,
+                serde_json::to_vec_pretty(&proof_mismatched_bucket).unwrap(),
+            )
+            .unwrap();
+            let proof_mismatch_paths = vec![fixture.entry_leaf_label()];
+            let proof_mismatch_signature = fixture.sign_read_paths(&proof_mismatch_paths, 1, true);
+            let err = PrivateHnswOram::read_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramReadPathsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: proof_mismatch_paths,
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    }),
+                    client_signature: Some(signature_to_proto(proof_mismatch_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("bucket/proof consistency validation failed")
+            );
+            assert!(
+                !err.message().contains(&proof_mismatched_bucket.ciphertext),
+                "{}",
+                err.message()
+            );
+            assert!(!err.message().contains("private_hnsw_oram"));
+            assert!(!err.message().contains("/tmp"));
+            std::fs::write(&bucket_path, &original_bucket_bytes).unwrap();
+
             let current_epoch_path = uploaded_store
                 .root_path()
                 .join("epochs")

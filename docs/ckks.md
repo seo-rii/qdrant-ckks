@@ -690,6 +690,9 @@ before bucket reads so a larger path batch cannot satisfy the fixed budget by
 repeating the same leaf. Missing encrypted bucket/proof data is
 reported as sanitized unavailable bucket data without exposing collection-local
 `private_hnsw_oram` filesystem paths.
+Before returning a `read_paths` response, Qdrant also checks that each encrypted
+bucket commitment matches the same-position Merkle proof leaf. Bucket/proof
+mismatches fail closed without echoing bucket ciphertexts or store paths.
 For successful fixed-budget reads, the server preserves each requested ORAM
 path's full bucket sequence instead of collapsing the response to a unique
 bucket set. Shared prefix buckets may therefore appear more than once in the

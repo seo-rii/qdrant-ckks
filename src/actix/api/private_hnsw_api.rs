@@ -1720,6 +1720,50 @@ mod private_hnsw_rest_tests {
             );
             std::fs::write(&bucket_path, &original_bucket_bytes).unwrap();
 
+            let mut proof_mismatched_bucket = read_response.buckets[0].clone();
+            proof_mismatched_bucket.bucket_commitment =
+                data_encoding::BASE64URL_NOPAD.encode(&[91; 32]);
+            std::fs::write(
+                &bucket_path,
+                serde_json::to_vec_pretty(&proof_mismatched_bucket).unwrap(),
+            )
+            .unwrap();
+            let proof_mismatch_paths = vec![fixture.entry_leaf_label()];
+            let proof_mismatch_signature = fixture.sign_read_paths(&proof_mismatch_paths, 1, true);
+            let proof_mismatch_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/read_paths",
+                OramReadPathsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: proof_mismatch_paths,
+                    padding: OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    },
+                    client_signature: PrivateHnswClientSignature {
+                        alg: proof_mismatch_signature.alg,
+                        key_id: proof_mismatch_signature.key_id,
+                        sig: proof_mismatch_signature.sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "bucket/proof consistency validation failed"
+            );
+            assert!(
+                !proof_mismatch_error.contains(&proof_mismatched_bucket.ciphertext),
+                "{proof_mismatch_error}"
+            );
+            assert!(
+                !proof_mismatch_error.contains("private_hnsw_oram"),
+                "{proof_mismatch_error}"
+            );
+            assert!(
+                !proof_mismatch_error.contains("/tmp"),
+                "{proof_mismatch_error}"
+            );
+            std::fs::write(&bucket_path, &original_bucket_bytes).unwrap();
+
             let current_epoch_path = uploaded_store
                 .root_path()
                 .join("epochs")
