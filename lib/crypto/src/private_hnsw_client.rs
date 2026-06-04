@@ -468,6 +468,13 @@ pub struct PrivateHnswSpeculativePrefetchPlan {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateHnswGraphTraversalPathBatchPlan {
+    pub leaf_labels: Vec<String>,
+    pub real_path_count: usize,
+    pub retained_neighbor_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrivateHnswDirectionalNeighborFilterPlan {
     pub node_ids: Vec<[u8; 32]>,
     pub retained_count: usize,
@@ -1245,6 +1252,32 @@ pub fn plan_private_hnsw_oram_graph_traversal_path_batch(
     fixed_path_count: usize,
     padding_leaf: u64,
 ) -> Result<PrivateHnswSpeculativePrefetchPlan, PrivateHnswClientError> {
+    let plan = plan_private_hnsw_oram_graph_traversal_path_batch_with_stats(
+        state,
+        config,
+        current_block,
+        neighbor_blocks,
+        query,
+        distance,
+        fixed_path_count,
+        padding_leaf,
+    )?;
+    Ok(PrivateHnswSpeculativePrefetchPlan {
+        leaf_labels: plan.leaf_labels,
+        real_path_count: plan.real_path_count,
+    })
+}
+
+pub fn plan_private_hnsw_oram_graph_traversal_path_batch_with_stats(
+    state: &PrivateHnswOramClientState,
+    config: PrivateHnswOramClientConfig,
+    current_block: &PrivateHnswNodeBlockPlaintext,
+    neighbor_blocks: &[PrivateHnswNodeBlockPlaintext],
+    query: &[f32],
+    distance: DistanceKind,
+    fixed_path_count: usize,
+    padding_leaf: u64,
+) -> Result<PrivateHnswGraphTraversalPathBatchPlan, PrivateHnswClientError> {
     let directional_plan = plan_private_hnsw_oram_directional_neighbor_filter(
         current_block,
         neighbor_blocks,
@@ -1252,13 +1285,18 @@ pub fn plan_private_hnsw_oram_graph_traversal_path_batch(
         distance,
         fixed_path_count,
     )?;
-    plan_private_hnsw_oram_speculative_prefetch(
+    let prefetch_plan = plan_private_hnsw_oram_speculative_prefetch(
         state,
         config,
         &directional_plan.node_ids,
         fixed_path_count,
         padding_leaf,
-    )
+    )?;
+    Ok(PrivateHnswGraphTraversalPathBatchPlan {
+        leaf_labels: prefetch_plan.leaf_labels,
+        real_path_count: prefetch_plan.real_path_count,
+        retained_neighbor_count: directional_plan.retained_count,
+    })
 }
 
 pub fn build_private_hnsw_oram_plaintext_index_from_layered_f32_points(
@@ -3630,11 +3668,16 @@ mod tests {
         )
         .unwrap();
 
-        let plan = plan_private_hnsw_oram_graph_traversal_path_batch(
+        let plan = plan_private_hnsw_oram_graph_traversal_path_batch_with_stats(
             &state,
             config,
             &current,
-            &[forward_far, backward, sideways, forward_near],
+            &[
+                forward_far.clone(),
+                backward.clone(),
+                sideways.clone(),
+                forward_near.clone(),
+            ],
             &[10.0, 0.0],
             DistanceKind::Euclid,
             3,
@@ -3647,8 +3690,53 @@ mod tests {
             .map(|label| decode_private_hnsw_oram_leaf_label(label, config.tree_height).unwrap())
             .collect::<Vec<_>>();
 
+        assert_eq!(plan.retained_neighbor_count, 2);
         assert_eq!(plan.real_path_count, 2);
         assert_eq!(leaves, vec![2, 1, 7]);
+
+        let compatibility_plan = plan_private_hnsw_oram_graph_traversal_path_batch(
+            &state,
+            config,
+            &current,
+            &[
+                forward_far.clone(),
+                backward.clone(),
+                sideways.clone(),
+                forward_near.clone(),
+            ],
+            &[10.0, 0.0],
+            DistanceKind::Euclid,
+            3,
+            7,
+        )
+        .unwrap();
+        assert_eq!(compatibility_plan.leaf_labels, plan.leaf_labels);
+        assert_eq!(compatibility_plan.real_path_count, plan.real_path_count);
+
+        let sparse_state = PrivateHnswOramClientState::with_position_map(
+            [(forward_near.node_id, 2)],
+            config.tree_height,
+        )
+        .unwrap();
+        let sparse_plan = plan_private_hnsw_oram_graph_traversal_path_batch_with_stats(
+            &sparse_state,
+            config,
+            &current,
+            &[forward_far, backward, sideways, forward_near],
+            &[10.0, 0.0],
+            DistanceKind::Euclid,
+            3,
+            7,
+        )
+        .unwrap();
+        let sparse_leaves = sparse_plan
+            .leaf_labels
+            .iter()
+            .map(|label| decode_private_hnsw_oram_leaf_label(label, config.tree_height).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(sparse_plan.retained_neighbor_count, 2);
+        assert_eq!(sparse_plan.real_path_count, 1);
+        assert_eq!(sparse_leaves, vec![2, 7, 7]);
     }
 
     #[test]

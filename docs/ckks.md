@@ -815,7 +815,11 @@ only neighbor nodes that move in the query direction and ranks them by
 client-side distance before the SDK chooses which padded ORAM paths to request.
 `plan_private_hnsw_oram_graph_traversal_path_batch` composes that filter with
 the client position map and speculative prefetch padding to produce a fixed-size
-`read_paths` label batch for graph-traversal tailored ORAM experiments.
+`read_paths` label batch for graph-traversal tailored ORAM experiments. The
+`*_with_stats` variant keeps the same padded labels while also reporting how
+many directional neighbors survived before missing position-map entries were
+dropped, so SDK benchmarks can separate graph-filter selectivity from ORAM path
+volume.
 
 Client state is mandatory backup material for this provider. Qdrant snapshots
 contain encrypted buckets, manifest, and epoch/root metadata, but not the ORAM
