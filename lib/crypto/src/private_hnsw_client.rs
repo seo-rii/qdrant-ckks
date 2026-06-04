@@ -2279,15 +2279,23 @@ pub fn verify_private_hnsw_oram_merkle_proof(
             return Err(PrivateHnswClientError::InvalidMerkleProof);
         }
         decode_bucket_commitment(&bucket.bucket_commitment)?;
-        if buckets_by_id.insert(bucket.bucket_id, bucket).is_some() {
-            return Err(PrivateHnswClientError::InvalidMerkleProof);
+        if let Some(existing) = buckets_by_id.insert(bucket.bucket_id, bucket) {
+            if existing != bucket {
+                return Err(PrivateHnswClientError::InvalidMerkleProof);
+            }
         }
     }
 
-    let mut seen_leaves = BTreeSet::new();
+    let mut leaves_by_id = BTreeMap::new();
     for leaf in &proof.leaves {
-        if leaf.bucket_id >= expected_bucket_count || !seen_leaves.insert(leaf.bucket_id) {
+        if leaf.bucket_id >= expected_bucket_count {
             return Err(PrivateHnswClientError::InvalidMerkleProof);
+        }
+        if let Some(existing) = leaves_by_id.insert(leaf.bucket_id, leaf) {
+            if existing != leaf {
+                return Err(PrivateHnswClientError::InvalidMerkleProof);
+            }
+            continue;
         }
         let Some(bucket) = buckets_by_id.get(&leaf.bucket_id) else {
             return Err(PrivateHnswClientError::MerkleProofMismatch);
@@ -2322,6 +2330,11 @@ pub fn verify_private_hnsw_oram_merkle_proof(
             index /= 2;
         }
         if node_hash != expected_root {
+            return Err(PrivateHnswClientError::MerkleProofMismatch);
+        }
+    }
+    for bucket_id in buckets_by_id.keys() {
+        if !leaves_by_id.contains_key(bucket_id) {
             return Err(PrivateHnswClientError::MerkleProofMismatch);
         }
     }
@@ -3822,6 +3835,68 @@ mod tests {
                 &[bucket],
             ),
             Err(PrivateHnswClientError::MerkleProofMismatch)
+        );
+    }
+
+    #[test]
+    fn verified_path_batch_accepts_identical_duplicate_buckets_for_fixed_size_paths() {
+        let config = oram_config();
+        let keys = test_keys();
+        let plaintext_bucket = PrivateHnswOramPlaintextBucket {
+            bucket_id: 0,
+            blocks: vec![Some(node_block_with_id(8))],
+        };
+        let bucket = seal_private_hnsw_oram_plaintext_bucket(
+            &keys,
+            bucket_base_context(),
+            42,
+            &plaintext_bucket,
+            config,
+        )
+        .unwrap();
+        let root_hash = bucket.bucket_commitment.clone();
+        let leaf = PrivateHnswOramMerkleProofLeaf {
+            bucket_id: 0,
+            leaf_hash: bucket.bucket_commitment.clone(),
+            siblings: vec![],
+        };
+        let proof = PrivateHnswOramMerkleProof {
+            kind: PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND.to_string(),
+            index_epoch: 42,
+            root_hash: root_hash.clone(),
+            bucket_count: 1,
+            leaves: vec![leaf.clone(), leaf],
+        };
+        let proof_json = serde_json::to_string(&proof).unwrap();
+        let duplicated_buckets = vec![bucket.clone(), bucket.clone()];
+
+        let opened = open_private_hnsw_oram_verified_path_batch(
+            &keys,
+            bucket_base_context(),
+            config,
+            42,
+            &root_hash,
+            1,
+            &proof_json,
+            &duplicated_buckets,
+        )
+        .unwrap();
+        assert_eq!(opened, vec![plaintext_bucket.clone(), plaintext_bucket]);
+
+        let mut mismatched_duplicate = bucket.clone();
+        mismatched_duplicate.ciphertext = BASE64URL_NOPAD.encode(b"different ciphertext");
+        assert_eq!(
+            open_private_hnsw_oram_verified_path_batch(
+                &keys,
+                bucket_base_context(),
+                config,
+                42,
+                &root_hash,
+                1,
+                &proof_json,
+                &[bucket, mismatched_duplicate],
+            ),
+            Err(PrivateHnswClientError::InvalidMerkleProof)
         );
     }
 

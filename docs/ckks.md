@@ -614,6 +614,12 @@ before bucket reads so a larger path batch cannot satisfy the fixed budget by
 repeating the same leaf. Missing encrypted bucket/proof data is
 reported as sanitized unavailable bucket data without exposing collection-local
 `private_hnsw_oram` filesystem paths.
+For successful fixed-budget reads, the server preserves each requested ORAM
+path's full bucket sequence instead of collapsing the response to a unique
+bucket set. Shared prefix buckets may therefore appear more than once in the
+response, and the SDK Merkle verifier accepts only byte-identical repeated
+bucket/proof entries. This keeps the encrypted bucket response length fixed at
+`requested_paths * (tree_height + 1)`.
 Malformed client signature shape errors for `read_paths` and `commit` are also
 sanitized so submitted signature bodies are not echoed.
 Commit error handling follows the same boundary: malformed updated bucket

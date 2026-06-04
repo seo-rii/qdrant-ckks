@@ -17,7 +17,8 @@ use qdrant_sec::{
     PrivateHnswOramCommitSignatureInput, PrivateHnswOramManifest,
     PrivateHnswOramReadPathsSignatureInput, PrivateHnswOramSignature,
     PrivateHnswSignatureVerification, ResultPrivacyMode, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
-    private_hnsw_oram_bucket_ids_for_leaf_labels, validate_private_hnsw_oram_commit_signature,
+    decode_private_hnsw_oram_leaf_label, private_hnsw_oram_bucket_count,
+    private_hnsw_oram_bucket_ids_for_leaf, validate_private_hnsw_oram_commit_signature,
     validate_private_hnsw_oram_manifest, validate_private_hnsw_oram_read_paths_signature,
 };
 use segment::types::Distance;
@@ -1424,12 +1425,28 @@ fn bucket_ids_for_path_batch(
     tree_height: u32,
     bucket_count: u64,
 ) -> StorageResult<Vec<u64>> {
-    private_hnsw_oram_bucket_ids_for_leaf_labels(
-        paths.iter().map(String::as_str),
-        tree_height,
-        bucket_count,
-    )
-    .map_err(|err| StorageError::bad_request(err.to_string()))
+    let expected_bucket_count = private_hnsw_oram_bucket_count(tree_height)
+        .map_err(|err| StorageError::bad_request(err.to_string()))?;
+    if bucket_count != expected_bucket_count {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM bucket_count does not match tree_height",
+        ));
+    }
+
+    let path_len = usize::try_from(tree_height)
+        .ok()
+        .and_then(|height| height.checked_add(1))
+        .ok_or_else(|| StorageError::bad_request("private HNSW ORAM tree_height is too large"))?;
+    let mut bucket_ids = Vec::with_capacity(paths.len().saturating_mul(path_len));
+    for path in paths {
+        let leaf = decode_private_hnsw_oram_leaf_label(path, tree_height)
+            .map_err(|err| StorageError::bad_request(err.to_string()))?;
+        bucket_ids.extend(
+            private_hnsw_oram_bucket_ids_for_leaf(leaf, tree_height)
+                .map_err(|err| StorageError::bad_request(err.to_string()))?,
+        );
+    }
+    Ok(bucket_ids)
 }
 
 fn validate_root_hash_string(value: &str, field: &str) -> StorageResult<()> {
@@ -1653,12 +1670,22 @@ mod private_hnsw_tests {
         let first_leaf = encode_private_hnsw_oram_leaf_label(0, config.tree_height).unwrap();
         assert_eq!(
             bucket_ids_for_path_batch(
-                &[first_leaf],
+                std::slice::from_ref(&first_leaf),
                 manifest.oram.tree_height,
                 manifest.bucket_count
             )
             .unwrap(),
             vec![0, 1],
+        );
+        let second_leaf = encode_private_hnsw_oram_leaf_label(1, config.tree_height).unwrap();
+        assert_eq!(
+            bucket_ids_for_path_batch(
+                &[first_leaf, second_leaf],
+                manifest.oram.tree_height,
+                manifest.bucket_count
+            )
+            .unwrap(),
+            vec![0, 1, 0, 2],
         );
     }
 
