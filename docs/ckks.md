@@ -533,8 +533,10 @@ contract. It uses binding `private-hnsw-oram/v1`, forbids server materials and
 OpenFHE backends even outside strict mode, requires pinned RK id/epoch,
 configured Ed25519 signing public keys, `search_execution: client_led`,
 `search_mode: private_hnsw_oram`, explicit `result_privacy`, and fixed-budget
-search in strict mode. Qdrant does not store point-level dense vectors for this
-provider and does not score or traverse HNSW server-side; normal vector writes
+search in strict mode. Runtime validation also rejects unknown top-level and
+nested private HNSW ORAM options instead of silently accepting secret-like policy
+drift. Qdrant does not store point-level dense vectors for this provider and
+does not score or traverse HNSW server-side; normal vector writes
 and server scoring, including legacy search/batch search, ordinary
 query/fusion/context/MMR, recommend/discover, grouped search/query, and search
 matrix paths, fail closed and direct clients to the private HNSW ORAM session
