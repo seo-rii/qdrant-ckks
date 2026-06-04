@@ -1794,6 +1794,37 @@ mod private_hnsw_grpc_tests {
                 !err.message()
                     .contains(&fixture.encrypted_build.buckets[0].ciphertext)
             );
+            let unauthenticated_path_label_sentinel =
+                "qdrant-sec-private-hnsw-unauthenticated-path-label-sentinel";
+            let err = PrivateHnswOram::read_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramReadPathsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: vec![unauthenticated_path_label_sentinel.to_string()],
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    }),
+                    client_signature: Some(signature_to_proto(fixture.client_signature())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("read_paths signature verification failed")
+            );
+            assert!(!err.message().contains("leaf label"));
+            assert!(
+                !err.message().contains(unauthenticated_path_label_sentinel),
+                "{}",
+                err.message()
+            );
             let wrong_budget_paths = vec![fixture.entry_leaf_label()];
             let wrong_budget_signature = fixture.sign_read_paths(&wrong_budget_paths, 2, true);
             let err = PrivateHnswOram::read_private_hnsw_paths(

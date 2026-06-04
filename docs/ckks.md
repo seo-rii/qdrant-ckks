@@ -666,6 +666,9 @@ result privacy, and the `hnsw`/`oram`/`fixed_budget` policy; drift fails closed.
 The request signing key must also match the session manifest's
 `owner_signing_key_id`; merely being present in `signature_public_keys` is not
 enough to authorize ORAM read or commit requests for that private index.
+For `read_paths`, the server verifies the Ed25519 request signature before
+decoding ORAM leaf labels or computing bucket paths, after the fixed-budget and
+session epoch/root checks.
 Malformed client signature shape errors for `read_paths` and `commit` are also
 sanitized so submitted signature bodies are not echoed.
 Commit error handling follows the same boundary: malformed updated bucket
