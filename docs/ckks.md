@@ -747,8 +747,9 @@ CLI and REST snapshot recovery also validate stored private HNSW ORAM manifest
 signatures against the runtime `signature_public_keys` registry after the
 restore-layout preflight passes, so tampered manifest signatures fail closed
 without exposing bucket roots, ciphertexts, or store paths.
-Storage-level snapshot recovery applies the same sanitization before returning
-private HNSW ORAM layout failures to callers.
+Storage-level `Collection::restore_snapshot` also runs the private HNSW ORAM
+restore-layout preflight before shard restore begins and applies the same
+sanitization before returning layout failures to callers.
 
 Current result privacy support is deliberately narrow. `result_privacy:
 ids_visible` is the only accepted runtime mode in the MVP: Qdrant remains blind

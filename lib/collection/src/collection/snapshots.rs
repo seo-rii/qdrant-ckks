@@ -242,6 +242,16 @@ impl Collection {
         let config = CollectionConfigInternal::load(target_dir)?;
         config.validate_and_warn();
         ensure_private_result_oram_snapshot_restore_not_present(target_dir)?;
+        let restore_collection_name = target_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("restored_collection");
+        Self::validate_private_hnsw_oram_snapshot_restore_layout(
+            restore_collection_name,
+            &config,
+            target_dir,
+        )
+        .map_err(|err| sanitize_private_hnsw_snapshot_layout_error(target_dir, err))?;
         let configured_shards = config.params.shard_number.get();
 
         let shard_ids_list: Vec<_> = match config.params.sharding_method.unwrap_or_default() {
@@ -747,6 +757,19 @@ fn validate_private_hnsw_oram_snapshot_store_matches_config(
     }
 
     Ok(())
+}
+
+fn sanitize_private_hnsw_snapshot_layout_error(
+    collection_dir: &Path,
+    err: CollectionError,
+) -> CollectionError {
+    let rendered = err.to_string();
+    if rendered.contains(collection_dir.to_string_lossy().as_ref())
+        || rendered.contains(PRIVATE_HNSW_ORAM_DIR)
+    {
+        return CollectionError::bad_request("private HNSW ORAM snapshot layout validation failed");
+    }
+    err
 }
 
 fn validate_private_hnsw_oram_restore_manifest(
@@ -1642,6 +1665,60 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("00000000.bucket"));
+    }
+
+    #[test]
+    fn private_hnsw_oram_storage_restore_runs_sanitized_layout_preflight() {
+        let snapshot_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-storage-restore-source")
+            .tempdir()
+            .unwrap();
+        let target_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-storage-restore-target")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        fs::write(
+            snapshot_dir.path().join(COLLECTION_CONFIG_FILE),
+            config.to_bytes().unwrap(),
+        )
+        .unwrap();
+        let store = PrivateHnswOramStore::new(snapshot_dir.path(), "text").unwrap();
+        let signature = PrivateHnswOramSignature {
+            alg: "ed25519".to_string(),
+            key_id: manifest.owner_signing_key_id.clone(),
+            sig: BASE64URL_NOPAD.encode(&[7; 64]),
+        };
+        store.write_manifest(&manifest, &signature).unwrap();
+        store
+            .write_initial_epoch(&crate::private_hnsw_oram_store::PrivateHnswOramEpochState {
+                index_epoch: manifest.index_epoch,
+                root_hash: manifest.root_hash.clone(),
+            })
+            .unwrap();
+        store
+            .write_merkle_tree_from_commitments(
+                manifest.index_epoch,
+                manifest.root_hash.clone(),
+                private_hnsw_snapshot_leaf_commitments(manifest.bucket_count),
+            )
+            .unwrap();
+
+        let err = Collection::restore_snapshot(
+            SnapshotData::Unpacked(snapshot_dir),
+            target_dir.path(),
+            0,
+            true,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("private HNSW ORAM snapshot layout validation failed"));
+        assert!(!err.contains(target_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!err.contains("00000000.bucket"));
     }
 
     #[test]

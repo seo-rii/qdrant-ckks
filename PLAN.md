@@ -446,7 +446,7 @@
 - snapshot restore preflight는 `private_payload_oram_required` manifest를 payload ORAM provider 구현 전까지 거부하고 `ids_visible`만 허용한다.
 - CLI/startup snapshot mapping recovery도 crypto runtime validation 이후 private HNSW ORAM restore-layout preflight를 실행해 storage-level snapshot recovery와 같은 bucket/root consistency 검증을 적용하고, store-originated layout 오류는 collection-local `private_hnsw_oram` 경로나 bucket body를 반사하지 않도록 sanitize한다.
 - CLI/REST snapshot recovery는 private HNSW ORAM restore-layout preflight 이후 runtime `signature_public_keys`로 stored manifest Ed25519 signature를 검증하고, tampered manifest signature를 bucket/root/path 반사 없이 fail closed 한다.
-- storage-level snapshot recovery도 private HNSW ORAM restore-layout 오류가 collection-local `private_hnsw_oram` 경로나 bucket body를 반사하지 않도록 sanitize한다.
+- storage-level `Collection::restore_snapshot` 자체도 shard restore 전에 private HNSW ORAM restore-layout preflight를 실행하고, layout 오류가 collection-local `private_hnsw_oram` 경로나 bucket body를 반사하지 않도록 sanitize한다.
 - snapshot creation/restore preflight는 on-disk private HNSW ORAM vector store가 collection encryption rule에 매칭되지 않거나, configured vector store가 없거나, parent store가 symlink이면 fail-closed로 거부한다.
 - manifest signature, manifest ORAM capacity, bucket hash, stale epoch, invalid commit signature, symlink/permission hardening, snapshot leakage, crash recovery는 현재 provider/store/API fixture에 추가되어 있다.
 
