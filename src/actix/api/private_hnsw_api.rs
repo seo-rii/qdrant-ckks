@@ -1593,7 +1593,7 @@ mod private_hnsw_rest_tests {
                 !mismatched_bucket_error.contains("private_hnsw_oram"),
                 "{mismatched_bucket_error}"
             );
-            std::fs::write(&bucket_path, original_bucket_bytes).unwrap();
+            std::fs::write(&bucket_path, &original_bucket_bytes).unwrap();
 
             let current_epoch_path = uploaded_store
                 .root_path()
@@ -1656,6 +1656,25 @@ mod private_hnsw_rest_tests {
                 )
                 .unwrap();
             assert_eq!(&stored_writeback_bucket, original_writeback_bucket);
+            let assert_pre_commit_state_unchanged = || {
+                assert_eq!(
+                    uploaded_store.read_current_epoch().unwrap(),
+                    PrivateHnswOramEpochState {
+                        index_epoch: BASE_EPOCH,
+                        root_hash: fixture.encrypted_build.root_hash.clone(),
+                    }
+                );
+                let stored_writeback_bucket = uploaded_store
+                    .read_bucket(
+                        search_run.updated_buckets[0].bucket_id,
+                        BASE_EPOCH,
+                        fixture.encrypted_build.bucket_count,
+                        MAX_CIPHERTEXT_BYTES,
+                    )
+                    .unwrap();
+                assert_eq!(&stored_writeback_bucket, original_writeback_bucket);
+            };
+            assert_pre_commit_state_unchanged();
 
             std::fs::remove_file(&bucket_path).unwrap();
 
@@ -1689,6 +1708,21 @@ mod private_hnsw_rest_tests {
                 !missing_bucket_error.contains("/tmp"),
                 "{missing_bucket_error}"
             );
+            let original_missing_bucket = fixture
+                .encrypted_build
+                .buckets
+                .iter()
+                .find(|bucket| bucket.bucket_id == missing_bucket_id)
+                .unwrap();
+            uploaded_store
+                .write_bucket(
+                    original_missing_bucket,
+                    BASE_EPOCH,
+                    fixture.encrypted_build.bucket_count,
+                    MAX_CIPHERTEXT_BYTES,
+                )
+                .unwrap();
+            assert_pre_commit_state_unchanged();
 
             let unknown_commit_key_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
@@ -2006,6 +2040,7 @@ mod private_hnsw_rest_tests {
                 !malformed_commit_error.contains(commit_ciphertext_sentinel),
                 "{malformed_commit_error}"
             );
+            assert_pre_commit_state_unchanged();
 
             let mut wrong_commitment_buckets = search_run.updated_buckets.clone();
             wrong_commitment_buckets[0].bucket_commitment =
@@ -2028,6 +2063,7 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "commit bucket commitment context mismatch"
             );
+            assert_pre_commit_state_unchanged();
 
             std::fs::remove_file(uploaded_store.root_path().join("merkle").join("nodes.dat"))
                 .unwrap();
@@ -2057,6 +2093,7 @@ mod private_hnsw_rest_tests {
                 !missing_commit_metadata_error.contains("/tmp"),
                 "{missing_commit_metadata_error}"
             );
+            assert_pre_commit_state_unchanged();
             uploaded_store
                 .write_merkle_tree_from_commitments(
                     BASE_EPOCH,
