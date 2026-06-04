@@ -74,6 +74,10 @@ pub(crate) struct PrivateHnswRouteWireSearchRun {
 
 impl PrivateHnswRouteWireFixture {
     pub(crate) fn build_uploaded() -> Self {
+        Self::build_uploaded_with_path_batch_size(1)
+    }
+
+    pub(crate) fn build_uploaded_with_path_batch_size(path_batch_size: u32) -> Self {
         let temp = TempDir::new().unwrap();
         let store = PrivateHnswOramStore::new(temp.path(), VECTOR_NAME).unwrap();
         let keys =
@@ -125,13 +129,13 @@ impl PrivateHnswRouteWireFixture {
                     bucket_size: config.bucket_size as u32,
                     block_size_bytes: config.block_size_bytes as u32,
                     tree_height: config.tree_height,
-                    path_batch_size: 1,
+                    path_batch_size,
                 },
                 fixed_budget: FixedBudgetParams {
                     enabled: true,
                     upper_layer_steps: 1,
                     base_layer_steps: 3,
-                    paths_per_round: 1,
+                    paths_per_round: path_batch_size,
                     fixed_result_k: 1,
                 },
                 result_privacy: ResultPrivacyMode::IdsVisible,
@@ -308,13 +312,13 @@ impl PrivateHnswRouteWireFixture {
                             "bucket_size": 2,
                             "block_size_bytes": 4096,
                             "tree_height": 2,
-                            "path_batch_size": 1
+                            "path_batch_size": self.manifest.oram.path_batch_size
                         },
                         "fixed_budget": {
                             "enabled": true,
                             "upper_layer_steps": 1,
                             "base_layer_steps": 3,
-                            "paths_per_round": 1,
+                            "paths_per_round": self.manifest.fixed_budget.paths_per_round,
                             "fixed_result_k": 1
                         },
                         "integrity": {

@@ -1860,4 +1860,128 @@ mod private_hnsw_rest_tests {
             assert_eq!(close_response.status(), StatusCode::OK);
         });
     }
+
+    #[test]
+    fn read_paths_rest_route_preserves_fixed_size_bucket_sequence() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded_with_path_batch_size(2);
+        let settings = fixture.route_settings();
+        let (_temp, dispatcher) = test_dispatcher();
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+            let app = actix_test::init_service(
+                App::new()
+                    .app_data(web::Data::new(dispatcher.clone()))
+                    .app_data(web::Data::new(settings.clone()))
+                    .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
+                    .configure(config_private_hnsw_api),
+            )
+            .await;
+
+            macro_rules! post_json_ok {
+                ($uri:expr, $body:expr) => {{
+                    let request = actix_test::TestRequest::post()
+                        .uri($uri)
+                        .set_json(&$body)
+                        .to_request();
+                    let response = actix_test::call_service(&app, request).await;
+                    let status = response.status();
+                    let body_bytes = actix_test::read_body(response).await;
+                    let body: Value = serde_json::from_slice(&body_bytes).unwrap_or_else(|err| {
+                        panic!(
+                            "failed to parse response body for {status}: {err}: {}",
+                            String::from_utf8_lossy(&body_bytes)
+                        )
+                    });
+                    assert_eq!(status, StatusCode::OK, "{body}");
+                    assert_eq!(body["status"], "ok");
+                    body["result"].clone()
+                }};
+            }
+
+            let _ = post_json_ok!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: fixture.manifest.clone(),
+                    signature: fixture.manifest_signature.clone(),
+                }
+            );
+            let _ = post_json_ok!(
+                "/collections/docs/private-hnsw/text/buckets",
+                UploadPrivateHnswBucketsRequest {
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: fixture.encrypted_build.buckets.clone(),
+                }
+            );
+            let session = post_json_ok!(
+                "/collections/docs/private-hnsw/text/session",
+                OpenPrivateHnswSessionRequest {
+                    client_id: "tenant-a/sdk-instance-1".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
+                }
+            );
+            let session_id = session["session_id"].as_str().unwrap().to_string();
+            let paths = vec![
+                qdrant_sec::encode_private_hnsw_oram_leaf_label(0, fixture.config.tree_height)
+                    .unwrap(),
+                qdrant_sec::encode_private_hnsw_oram_leaf_label(1, fixture.config.tree_height)
+                    .unwrap(),
+            ];
+            let signature = fixture.sign_read_paths(&paths, 2, true);
+            let read = post_json_ok!(
+                "/collections/docs/private-hnsw/text/oram/read_paths",
+                OramReadPathsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths,
+                    padding: OramReadPadding {
+                        requested_paths: 2,
+                        dummy_paths_included: true,
+                    },
+                    client_signature: PrivateHnswClientSignature {
+                        alg: signature.alg,
+                        key_id: signature.key_id,
+                        sig: signature.sig,
+                    },
+                }
+            );
+            let buckets = read["buckets"].as_array().unwrap();
+            let expected_bucket_count = (fixture.manifest.oram.tree_height as usize + 1) * 2;
+            assert_eq!(buckets.len(), expected_bucket_count);
+            assert_eq!(buckets[0]["bucket_id"], buckets[3]["bucket_id"]);
+            assert_eq!(buckets[1]["bucket_id"], buckets[4]["bucket_id"]);
+            let proof_value = read["proof"]["value"].as_str().unwrap();
+            let proof: qdrant_sec::PrivateHnswOramMerkleProof =
+                serde_json::from_str(proof_value).unwrap();
+            assert_eq!(proof.leaves.len(), expected_bucket_count);
+            assert_eq!(proof.leaves[0].bucket_id, proof.leaves[3].bucket_id);
+            assert_eq!(proof.leaves[1].bucket_id, proof.leaves[4].bucket_id);
+            let response_buckets: Vec<qdrant_sec::PrivateHnswOramBucket> =
+                serde_json::from_value(read["buckets"].clone()).unwrap();
+            let opened = qdrant_sec::open_private_hnsw_oram_verified_path_batch(
+                &fixture.keys,
+                fixture.base_context,
+                fixture.config,
+                BASE_EPOCH,
+                &fixture.encrypted_build.root_hash,
+                fixture.encrypted_build.bucket_count,
+                proof_value,
+                &response_buckets,
+            )
+            .unwrap();
+            assert_eq!(opened.len(), expected_bucket_count);
+
+            let close_request = actix_test::TestRequest::post()
+                .uri(&format!(
+                    "/collections/docs/private-hnsw/text/session/{session_id}/close"
+                ))
+                .to_request();
+            let close_response = actix_test::call_service(&app, close_request).await;
+            assert_eq!(close_response.status(), StatusCode::OK);
+        });
+    }
 }
