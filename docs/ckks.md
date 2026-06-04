@@ -849,7 +849,8 @@ sign live `read_paths` requests, verify responses with the SDK Merkle verifier, 
 writeback buckets, close the sessions, refresh the signed manifest at the
 committed epoch/root, and re-open at the new epoch. Initial manifest upload
 creates the private epoch layout when no current epoch exists; repeated uploads
-still require the current epoch/root to match. ORAM commits may carry unchanged
+still require the current epoch/root to match, and a mismatched upload leaves
+the stored current epoch untouched. ORAM commits may carry unchanged
 buckets forward from an older bucket epoch; the current Merkle root commits to
 each bucket commitment, and clients open each bucket with the epoch recorded in
 that bucket while rejecting buckets newer than the requested index epoch. Search

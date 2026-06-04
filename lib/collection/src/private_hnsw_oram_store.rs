@@ -1130,6 +1130,37 @@ mod tests {
     }
 
     #[test]
+    fn initial_epoch_reupload_is_idempotent_and_conflict_preserves_current() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let epoch = PrivateHnswOramEpochState {
+            index_epoch: 42,
+            root_hash: root_hash(42),
+        };
+        let conflicting_epoch = PrivateHnswOramEpochState {
+            index_epoch: 42,
+            root_hash: root_hash(43),
+        };
+
+        store
+            .write_initial_epoch_if_absent_or_matching(&epoch)
+            .unwrap();
+        store
+            .write_initial_epoch_if_absent_or_matching(&epoch)
+            .unwrap();
+        assert_eq!(store.read_current_epoch().unwrap(), epoch);
+
+        let err = store
+            .write_initial_epoch_if_absent_or_matching(&conflicting_epoch)
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("current epoch/root does not match uploaded manifest")
+        );
+        assert_eq!(store.read_current_epoch().unwrap(), epoch);
+    }
+
+    #[test]
     fn bucket_write_rejects_hash_mismatch_and_oversize() {
         let temp = TempDir::new().unwrap();
         let store = fixture_store(&temp);
