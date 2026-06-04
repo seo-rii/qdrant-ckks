@@ -677,6 +677,9 @@ Active sessions do not keep serving under stale runtime policy. Each `read_paths
 and `commit` call compares the session manifest against the current runtime
 context, including collection/vector identity, key lineage, vector metadata,
 result privacy, and the `hnsw`/`oram`/`fixed_budget` policy; drift fails closed.
+REST and gRPC route fixtures both exercise this by opening a session under one
+runtime policy and then rejecting `read_paths` or `commit` through a service
+with drifted `fixed_budget` or `oram` options.
 The request signing key must also match the session manifest's
 `owner_signing_key_id`; merely being present in `signature_public_keys` is not
 enough to authorize ORAM read or commit requests for that private index.
