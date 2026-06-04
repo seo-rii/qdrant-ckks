@@ -2146,6 +2146,49 @@ mod private_hnsw_rest_tests {
     }
 
     #[test]
+    fn manifest_upload_rest_route_rejects_reserved_result_private_runtime_mode() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let mut settings = fixture.route_settings();
+        settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["result_privacy"] = serde_json::json!("private_payload_oram_required");
+        let (_temp, dispatcher) = test_dispatcher();
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+            let app = actix_test::init_service(
+                App::new()
+                    .app_data(web::Data::new(dispatcher.clone()))
+                    .app_data(web::Data::new(settings.clone()))
+                    .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
+                    .configure(config_private_hnsw_api),
+            )
+            .await;
+
+            let response = actix_test::call_service(
+                &app,
+                actix_test::TestRequest::post()
+                    .uri("/collections/docs/private-hnsw/text/manifest")
+                    .set_json(&UploadPrivateHnswManifestRequest {
+                        manifest: fixture.manifest.clone(),
+                        signature: fixture.manifest_signature.clone(),
+                    })
+                    .to_request(),
+            )
+            .await;
+            let status = response.status();
+            let body_bytes = actix_test::read_body(response).await;
+            let body = String::from_utf8_lossy(&body_bytes);
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert!(body.contains("option result_privacy is invalid"), "{body}");
+            assert!(body.contains("expected ids_visible"), "{body}");
+        });
+    }
+
+    #[test]
     fn read_paths_rest_route_rejects_active_session_after_runtime_policy_drift() {
         let _guard = route_e2e_guard();
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();

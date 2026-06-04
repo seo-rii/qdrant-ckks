@@ -386,6 +386,7 @@
 - REST/gRPC ORAM commit fixture는 non-increasing new_epoch, invalid Ed25519 commit signature, successful commit 이후 stale old_epoch replay를 모두 fail-closed로 검증한다. Commit path는 bucket/Merkle writeback 전에 store current epoch/root도 active session의 old epoch/root와 일치하는지 preflight한다.
 - REST/gRPC ORAM commit path는 updated bucket writeback도 bucket `ciphertext_sha256`와 collection/vector/key lineage/bucket epoch context에 묶인 commitment인지 Merkle prepare/write 전에 검증한다.
 - REST/gRPC ORAM session fixture는 strict mode `fixed_budget=false`, non-current desired epoch, reserved `private_payload_oram_required` result privacy를 session open에서 거부한다.
+- REST/gRPC manifest upload fixture는 route settings가 reserved `private_payload_oram_required` runtime mode로 drift되어도 runtime option validation에서 fail closed 되는지 검증한다.
 - REST/gRPC ORAM session fixture는 active session이 있는 같은 private index에 대해 두 번째 session open을 `ConcurrentWriter`로 거부한다.
 - session registry는 lease가 만료된 session을 제거하면서 같은 private index의 single-writer lock도 해제하고, 만료된 session id 재사용은 fail closed 한다.
 - REST/gRPC ORAM session fixture는 active session이 있는 같은 private index에 대해 signed manifest upload와 initial encrypted bucket upload도 거부한다.
