@@ -1538,6 +1538,12 @@ mod tests {
             PrivateResultOramMerkleSiblingPosition::Right
         );
 
+        let duplicate_proof = store
+            .read_merkle_path_batch(&[0, 2, 0], 42, &root, 3)
+            .unwrap();
+        assert_eq!(duplicate_proof.leaves.len(), 3);
+        assert_eq!(duplicate_proof.leaves[0], duplicate_proof.leaves[2]);
+
         let err = store
             .read_merkle_path_batch(&[3], 42, &root, 3)
             .unwrap_err();

@@ -657,15 +657,23 @@ pub fn verify_private_result_oram_merkle_proof(
             return Err(PrivateResultOramError::InvalidMerkleProof);
         }
         decode_bucket_commitment(&bucket.bucket_commitment)?;
-        if buckets_by_id.insert(bucket.bucket_id, bucket).is_some() {
-            return Err(PrivateResultOramError::InvalidMerkleProof);
+        if let Some(existing) = buckets_by_id.insert(bucket.bucket_id, bucket) {
+            if existing != bucket {
+                return Err(PrivateResultOramError::InvalidMerkleProof);
+            }
         }
     }
 
-    let mut seen_leaves = std::collections::BTreeSet::new();
+    let mut leaves_by_id = std::collections::BTreeMap::new();
     for leaf in &proof.leaves {
-        if leaf.bucket_id >= expected_bucket_count || !seen_leaves.insert(leaf.bucket_id) {
+        if leaf.bucket_id >= expected_bucket_count {
             return Err(PrivateResultOramError::InvalidMerkleProof);
+        }
+        if let Some(existing) = leaves_by_id.insert(leaf.bucket_id, leaf) {
+            if existing != leaf {
+                return Err(PrivateResultOramError::InvalidMerkleProof);
+            }
+            continue;
         }
         let Some(bucket) = buckets_by_id.get(&leaf.bucket_id) else {
             return Err(PrivateResultOramError::MerkleProofMismatch);
@@ -700,6 +708,11 @@ pub fn verify_private_result_oram_merkle_proof(
             index /= 2;
         }
         if node_hash != expected_root {
+            return Err(PrivateResultOramError::MerkleProofMismatch);
+        }
+    }
+    for bucket_id in buckets_by_id.keys() {
+        if !leaves_by_id.contains_key(bucket_id) {
             return Err(PrivateResultOramError::MerkleProofMismatch);
         }
     }
@@ -1265,6 +1278,46 @@ mod tests {
             &[bucket0.clone(), bucket1.clone()],
         )
         .unwrap();
+
+        let duplicate_proof = PrivateResultOramMerkleProof {
+            leaves: vec![proof.leaves[0].clone(), proof.leaves[0].clone()],
+            ..proof.clone()
+        };
+        verify_private_result_oram_merkle_proof(
+            &duplicate_proof,
+            42,
+            &root,
+            2,
+            &[bucket0.clone(), bucket0.clone()],
+        )
+        .unwrap();
+
+        let mut conflicting_duplicate_bucket = bucket0.clone();
+        conflicting_duplicate_bucket.ciphertext =
+            BASE64URL_NOPAD.encode(b"conflicting duplicate bucket");
+        assert_eq!(
+            verify_private_result_oram_merkle_proof(
+                &duplicate_proof,
+                42,
+                &root,
+                2,
+                &[bucket0.clone(), conflicting_duplicate_bucket],
+            ),
+            Err(PrivateResultOramError::InvalidMerkleProof)
+        );
+
+        let mut conflicting_duplicate_proof = duplicate_proof.clone();
+        conflicting_duplicate_proof.leaves[1].leaf_hash = bucket1.bucket_commitment.clone();
+        assert_eq!(
+            verify_private_result_oram_merkle_proof(
+                &conflicting_duplicate_proof,
+                42,
+                &root,
+                2,
+                &[bucket0.clone(), bucket0.clone()],
+            ),
+            Err(PrivateResultOramError::InvalidMerkleProof)
+        );
 
         let mut tampered = proof.clone();
         tampered.leaves[0].leaf_hash = bucket1.bucket_commitment.clone();
