@@ -130,7 +130,8 @@ pub use private_result_oram::{
     validate_private_result_oram_bucket_shape, validate_private_result_oram_commit_signature,
     validate_private_result_oram_manifest, validate_private_result_oram_manifest_shape,
     validate_private_result_oram_manifest_signature,
-    validate_private_result_oram_manifest_signature_shape, verify_private_result_oram_merkle_proof,
+    validate_private_result_oram_manifest_signature_shape,
+    validate_private_result_oram_upload_bundle, verify_private_result_oram_merkle_proof,
     verify_private_result_oram_merkle_proof_json,
 };
 pub use vector::{

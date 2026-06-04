@@ -675,6 +675,11 @@ signature bucket refs. `sign_private_result_oram_manifest` and
 helpers. `PrivateResultOramUploadBundle` and
 `package_private_result_oram_upload_bundle` package a signed manifest with a
 complete ordered bucket set whose commitments match the manifest root.
+`validate_private_result_oram_upload_bundle` and the bundle's
+`validate_initial_upload_contract` method let future SDKs preflight decoded
+result bundles before any runtime upload API exists: they validate manifest
+shape, ordered bucket ids, bucket ciphertext hash/size, and the manifest Merkle
+root.
 `refresh_private_result_oram_manifest_for_commit` and
 `sign_private_result_oram_manifest_refresh` mirror the private HNSW helper by
 deriving the next signed manifest only when a commit plan's old epoch/root

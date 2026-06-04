@@ -182,6 +182,10 @@ impl PrivateResultOramUploadBundle {
             .map(|bucket| bucket.bucket_commitment.clone())
             .collect()
     }
+
+    pub fn validate_initial_upload_contract(&self) -> Result<Vec<String>, PrivateResultOramError> {
+        validate_private_result_oram_upload_bundle(self)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -488,30 +492,55 @@ pub fn package_private_result_oram_upload_bundle(
     manifest: PrivateResultOramManifest,
     buckets: Vec<PrivateResultOramBucket>,
 ) -> Result<PrivateResultOramUploadBundle, PrivateResultOramError> {
-    validate_private_result_oram_manifest_shape(&manifest)?;
-    if manifest.bucket_count != buckets.len() as u64 {
+    let manifest_signature = sign_private_result_oram_manifest(key_pair, &manifest)?;
+    let bundle = PrivateResultOramUploadBundle {
+        manifest,
+        manifest_signature,
+        buckets,
+    };
+    validate_private_result_oram_upload_bundle(&bundle)?;
+    Ok(bundle)
+}
+
+pub fn validate_private_result_oram_upload_bundle(
+    bundle: &PrivateResultOramUploadBundle,
+) -> Result<Vec<String>, PrivateResultOramError> {
+    let manifest = &bundle.manifest;
+    validate_private_result_oram_manifest_shape(manifest)?;
+    let bucket_count = usize::try_from(manifest.bucket_count)
+        .map_err(|_| PrivateResultOramError::InvalidManifestField("bucket_count"))?;
+    if bundle.buckets.len() != bucket_count {
         return Err(PrivateResultOramError::InvalidManifestField("bucket_count"));
     }
-    let mut commitments = Vec::with_capacity(buckets.len());
-    for (expected_bucket_id, bucket) in buckets.iter().enumerate() {
+
+    let max_ciphertext_bytes = private_result_oram_upload_max_ciphertext_bytes(manifest)?;
+    let validation_context =
+        PrivateResultOramBucketValidationContext::from_manifest(manifest, max_ciphertext_bytes);
+    let mut commitments = Vec::with_capacity(bundle.buckets.len());
+    for (expected_bucket_id, bucket) in bundle.buckets.iter().enumerate() {
         if bucket.bucket_id != expected_bucket_id as u64 {
             return Err(PrivateResultOramError::InvalidBucketField("bucket_id"));
         }
-        if bucket.index_epoch != manifest.index_epoch {
-            return Err(PrivateResultOramError::InvalidBucketField("index_epoch"));
-        }
-        decode_bucket_commitment(&bucket.bucket_commitment)?;
+        validate_private_result_oram_bucket_shape(bucket, validation_context)?;
         commitments.push(bucket.bucket_commitment.clone());
     }
     if private_result_oram_merkle_root_for_commitments(&commitments)? != manifest.root_hash {
         return Err(PrivateResultOramError::MerkleRootMismatch);
     }
-    let manifest_signature = sign_private_result_oram_manifest(key_pair, &manifest)?;
-    Ok(PrivateResultOramUploadBundle {
-        manifest,
-        manifest_signature,
-        buckets,
-    })
+    Ok(commitments)
+}
+
+fn private_result_oram_upload_max_ciphertext_bytes(
+    manifest: &PrivateResultOramManifest,
+) -> Result<usize, PrivateResultOramError> {
+    let block_size = usize::try_from(manifest.oram.block_size_bytes)
+        .map_err(|_| PrivateResultOramError::InvalidManifestField("block_size_bytes"))?;
+    let bucket_size = usize::try_from(manifest.oram.bucket_size)
+        .map_err(|_| PrivateResultOramError::InvalidManifestField("bucket_size"))?;
+    block_size
+        .checked_mul(bucket_size)
+        .and_then(|size| size.checked_add(4096))
+        .ok_or(PrivateResultOramError::InvalidManifestField("oram"))
 }
 
 pub fn refresh_private_result_oram_manifest_for_commit(
@@ -1613,10 +1642,16 @@ mod tests {
             private_result_oram_merkle_root_for_commitments(&bundle.bucket_commitments()).unwrap(),
             root_hash
         );
+        let ordered_commitments = bundle.validate_initial_upload_contract().unwrap();
+        assert_eq!(ordered_commitments, bundle.bucket_commitments());
 
         let encoded = serde_json::to_string(&bundle).unwrap();
         let decoded: PrivateResultOramUploadBundle = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, bundle);
+        assert_eq!(
+            validate_private_result_oram_upload_bundle(&decoded).unwrap(),
+            ordered_commitments
+        );
 
         validate_private_result_oram_manifest(
             &decoded.manifest,
@@ -1627,6 +1662,34 @@ mod tests {
             ),
         )
         .unwrap();
+
+        let mut incomplete = decoded.clone();
+        incomplete.buckets.pop();
+        assert_eq!(
+            validate_private_result_oram_upload_bundle(&incomplete),
+            Err(PrivateResultOramError::InvalidManifestField("bucket_count"))
+        );
+
+        let mut unordered = decoded.clone();
+        unordered.buckets.swap(0, 1);
+        assert_eq!(
+            validate_private_result_oram_upload_bundle(&unordered),
+            Err(PrivateResultOramError::InvalidBucketField("bucket_id"))
+        );
+
+        let mut wrong_hash = decoded.clone();
+        wrong_hash.buckets[0].ciphertext_sha256 = commitment(99);
+        assert_eq!(
+            validate_private_result_oram_upload_bundle(&wrong_hash),
+            Err(PrivateResultOramError::InvalidBucketHash)
+        );
+
+        let mut wrong_commitment = decoded.clone();
+        wrong_commitment.buckets[0].bucket_commitment = commitment(99);
+        assert_eq!(
+            validate_private_result_oram_upload_bundle(&wrong_commitment),
+            Err(PrivateResultOramError::MerkleRootMismatch)
+        );
 
         let mut wrong_root = manifest;
         wrong_root.root_hash = commitment(99);
