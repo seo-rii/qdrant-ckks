@@ -1194,6 +1194,22 @@ mod private_hnsw_rest_tests {
             let session_id = session_result["session_id"].as_str().unwrap().to_string();
             assert_eq!(session_result["collection_id"], COLLECTION_ID);
             assert_eq!(session_result["index_epoch"], BASE_EPOCH);
+            let auth = Auth::new_internal(Access::full("private HNSW ORAM route test"));
+            let collection_pass = auth
+                .check_collection_access(
+                    "docs",
+                    AccessRequirements::new(),
+                    "private_hnsw_active_session_upload_guard_test",
+                )
+                .unwrap();
+            let pass = new_unchecked_verification_pass();
+            let collection = dispatcher
+                .toc(&auth, &pass)
+                .get_collection(&collection_pass)
+                .await
+                .unwrap();
+            let uploaded_store = PrivateHnswOramStore::new(collection.path(), "text").unwrap();
+            let search_run = fixture.run_single_search_collect_writeback();
 
             post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/session",
@@ -1207,24 +1223,54 @@ mod private_hnsw_rest_tests {
                 "ConcurrentWriter"
             );
 
-            post_json_error_contains!(
+            let (refreshed_manifest, refreshed_signature) =
+                fixture.sign_manifest_refresh(&search_run.commit_plan);
+            let active_manifest_upload_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {
-                    manifest: fixture.manifest.clone(),
-                    signature: fixture.manifest_signature.clone(),
+                    manifest: refreshed_manifest.clone(),
+                    signature: refreshed_signature,
                 },
                 StatusCode::BAD_REQUEST,
                 "requires no active session"
             );
-            post_json_error_contains!(
+            assert!(
+                !active_manifest_upload_error.contains(&refreshed_manifest.root_hash),
+                "{active_manifest_upload_error}"
+            );
+            assert_eq!(
+                uploaded_store.read_manifest().unwrap(),
+                (fixture.manifest.clone(), fixture.manifest_signature.clone())
+            );
+
+            let mut active_guard_bucket_upload = fixture.encrypted_build.buckets.clone();
+            active_guard_bucket_upload[0].ciphertext =
+                "active-session-bucket-upload-ciphertext-sentinel".to_string();
+            let active_bucket_upload_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/buckets",
                 UploadPrivateHnswBucketsRequest {
                     index_epoch: fixture.encrypted_build.index_epoch,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
-                    buckets: fixture.encrypted_build.buckets.clone(),
+                    buckets: active_guard_bucket_upload,
                 },
                 StatusCode::BAD_REQUEST,
                 "requires no active session"
+            );
+            assert!(
+                !active_bucket_upload_error
+                    .contains("active-session-bucket-upload-ciphertext-sentinel"),
+                "{active_bucket_upload_error}"
+            );
+            assert_eq!(
+                uploaded_store
+                    .read_bucket(
+                        fixture.encrypted_build.buckets[0].bucket_id,
+                        BASE_EPOCH,
+                        fixture.encrypted_build.bucket_count,
+                        MAX_CIPHERTEXT_BYTES,
+                    )
+                    .unwrap(),
+                fixture.encrypted_build.buckets[0]
             );
 
             let epoch_root_mismatch_paths = vec![fixture.entry_leaf_label()];
@@ -1495,21 +1541,6 @@ mod private_hnsw_rest_tests {
             .unwrap();
             assert!(!opened_buckets.is_empty());
 
-            let auth = Auth::new_internal(Access::full("private HNSW ORAM route test"));
-            let collection_pass = auth
-                .check_collection_access(
-                    "docs",
-                    AccessRequirements::new(),
-                    "private_hnsw_missing_bucket_test",
-                )
-                .unwrap();
-            let pass = new_unchecked_verification_pass();
-            let collection = dispatcher
-                .toc(&auth, &pass)
-                .get_collection(&collection_pass)
-                .await
-                .unwrap();
-            let uploaded_store = PrivateHnswOramStore::new(collection.path(), "text").unwrap();
             let missing_bucket_id = read_response.buckets[0].bucket_id;
             let bucket_path = uploaded_store
                 .root_path()
@@ -1564,7 +1595,6 @@ mod private_hnsw_rest_tests {
             );
             std::fs::write(&bucket_path, original_bucket_bytes).unwrap();
 
-            let search_run = fixture.run_single_search_collect_writeback();
             let current_epoch_path = uploaded_store
                 .root_path()
                 .join("epochs")

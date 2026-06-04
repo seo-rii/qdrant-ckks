@@ -1746,6 +1746,22 @@ mod private_hnsw_grpc_tests {
             .into_inner();
             assert_eq!(session.collection_id, COLLECTION_ID);
             assert_eq!(session.index_epoch, BASE_EPOCH);
+            let auth = Auth::new_internal(Access::full("private HNSW ORAM grpc test"));
+            let collection_pass = auth
+                .check_collection_access(
+                    COLLECTION_NAME,
+                    AccessRequirements::new(),
+                    "private_hnsw_active_session_upload_guard_test",
+                )
+                .unwrap();
+            let pass = new_unchecked_verification_pass();
+            let collection = dispatcher
+                .toc(&auth, &pass)
+                .get_collection(&collection_pass)
+                .await
+                .unwrap();
+            let uploaded_store = PrivateHnswOramStore::new(collection.path(), VECTOR_NAME).unwrap();
+            let search_run = fixture.run_single_search_collect_writeback();
 
             let err = PrivateHnswOram::open_private_hnsw_session(
                 &service,
@@ -1763,20 +1779,34 @@ mod private_hnsw_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("ConcurrentWriter"));
 
+            let (refreshed_manifest, refreshed_signature) =
+                fixture.sign_manifest_refresh(&search_run.commit_plan);
             let err = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,
                 Request::new(grpc::UploadPrivateHnswManifestRequest {
                     collection_name: COLLECTION_NAME.to_string(),
                     vector_name: VECTOR_NAME.to_string(),
-                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
-                    signature: Some(signature_to_proto(fixture.manifest_signature.clone())),
+                    manifest: Some(manifest_to_proto(refreshed_manifest.clone())),
+                    signature: Some(signature_to_proto(refreshed_signature)),
                 }),
             )
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("requires no active session"));
+            assert!(
+                !err.message().contains(&refreshed_manifest.root_hash),
+                "{}",
+                err.message()
+            );
+            assert_eq!(
+                uploaded_store.read_manifest().unwrap(),
+                (fixture.manifest.clone(), fixture.manifest_signature.clone())
+            );
 
+            let mut active_guard_bucket_upload = fixture.encrypted_build.buckets.clone();
+            active_guard_bucket_upload[0].ciphertext =
+                "active-session-bucket-upload-ciphertext-sentinel".to_string();
             let err = PrivateHnswOram::upload_private_hnsw_buckets(
                 &service,
                 Request::new(grpc::UploadPrivateHnswBucketsRequest {
@@ -1784,10 +1814,7 @@ mod private_hnsw_grpc_tests {
                     vector_name: VECTOR_NAME.to_string(),
                     index_epoch: fixture.encrypted_build.index_epoch,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
-                    buckets: fixture
-                        .encrypted_build
-                        .buckets
-                        .clone()
+                    buckets: active_guard_bucket_upload
                         .into_iter()
                         .map(bucket_to_proto)
                         .collect(),
@@ -1797,6 +1824,23 @@ mod private_hnsw_grpc_tests {
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("requires no active session"));
+            assert!(
+                !err.message()
+                    .contains("active-session-bucket-upload-ciphertext-sentinel"),
+                "{}",
+                err.message()
+            );
+            assert_eq!(
+                uploaded_store
+                    .read_bucket(
+                        fixture.encrypted_build.buckets[0].bucket_id,
+                        BASE_EPOCH,
+                        fixture.encrypted_build.bucket_count,
+                        MAX_CIPHERTEXT_BYTES,
+                    )
+                    .unwrap(),
+                fixture.encrypted_build.buckets[0]
+            );
 
             let epoch_root_mismatch_paths = vec![fixture.entry_leaf_label()];
             let epoch_root_mismatch_signature =
@@ -2125,21 +2169,6 @@ mod private_hnsw_grpc_tests {
             .unwrap();
             assert!(!opened_buckets.is_empty());
 
-            let auth = Auth::new_internal(Access::full("private HNSW ORAM grpc test"));
-            let collection_pass = auth
-                .check_collection_access(
-                    COLLECTION_NAME,
-                    AccessRequirements::new(),
-                    "private_hnsw_missing_bucket_test",
-                )
-                .unwrap();
-            let pass = new_unchecked_verification_pass();
-            let collection = dispatcher
-                .toc(&auth, &pass)
-                .get_collection(&collection_pass)
-                .await
-                .unwrap();
-            let uploaded_store = PrivateHnswOramStore::new(collection.path(), VECTOR_NAME).unwrap();
             let missing_bucket_id = read_buckets[0].bucket_id;
             let bucket_path = uploaded_store
                 .root_path()
@@ -2197,7 +2226,6 @@ mod private_hnsw_grpc_tests {
             assert!(!err.message().contains("private_hnsw_oram"));
             std::fs::write(&bucket_path, original_bucket_bytes).unwrap();
 
-            let search_run = fixture.run_single_search_collect_writeback();
             let current_epoch_path = uploaded_store
                 .root_path()
                 .join("epochs")
