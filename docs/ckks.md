@@ -636,9 +636,10 @@ bucket/proof entries. This keeps the encrypted bucket response length fixed at
 Malformed client signature shape errors for `read_paths` and `commit` are also
 sanitized so submitted signature bodies are not echoed.
 Commit error handling follows the same boundary: malformed updated bucket
-ciphertext and old epoch/root mismatches are rejected without echoing the
-submitted ciphertext or old root hash into the REST body or gRPC status
-message. Missing commit Merkle metadata is reported without exposing
+ciphertext, malformed new root hashes, and old epoch/root mismatches are
+rejected without echoing the submitted ciphertext, new root hash, or old root
+hash into the REST body or gRPC status message. Missing commit Merkle metadata
+is reported without exposing
 collection-local `private_hnsw_oram` filesystem paths. Empty and oversized
 `updated_buckets` commits are rejected by fixed writeback request-size
 validation before bucket writes are attempted.

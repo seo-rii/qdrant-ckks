@@ -1548,6 +1548,29 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "new_epoch must be greater than old_epoch"
             );
+            let commit_new_root_sentinel = "commit-new-root-sentinel";
+            let commit_new_root_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/commit",
+                OramCommitRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: commit_new_root_sentinel.to_string(),
+                    updated_buckets: search_run.updated_buckets.clone(),
+                    commit_signature: PrivateHnswClientSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: SIGNING_KEY_ID.to_string(),
+                        sig: fixture.client_signature().sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "new_root_hash must encode 32 bytes"
+            );
+            assert!(
+                !commit_new_root_error.contains(commit_new_root_sentinel),
+                "{commit_new_root_error}"
+            );
             post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
