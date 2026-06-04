@@ -9300,6 +9300,68 @@ mod tests {
     }
 
     #[test]
+    fn validate_crypto_settings_rejects_private_hnsw_signature_public_key_registry() {
+        let mut settings = CryptoSettings {
+            zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+            allow_inline_key_material: false,
+            instances: HashMap::from([(
+                "docs_private_hnsw_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                    materials: HashMap::new(),
+                    backend_ref: None,
+                    options: private_hnsw_oram_options(),
+                },
+            )]),
+            ..CryptoSettings::default()
+        };
+
+        settings
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options[SIGNATURE_PUBLIC_KEYS_OPTION] = json!({});
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private HNSW ORAM must require signature_public_keys");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == SIGNATURE_PUBLIC_KEYS_OPTION
+                    && reason.contains("signature_public_keys")),
+            "unexpected error: {err:?}",
+        );
+
+        settings
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options[SIGNATURE_PUBLIC_KEYS_OPTION] = json!("not-an-object");
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private HNSW ORAM must reject non-object signature_public_keys");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == SIGNATURE_PUBLIC_KEYS_OPTION
+                    && reason.contains("signature_public_keys")),
+            "unexpected error: {err:?}",
+        );
+
+        settings
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options[SIGNATURE_PUBLIC_KEYS_OPTION] = json!({
+            "tenant-a/private-hnsw-signing-v1": "A".repeat(BASE64URL_NOPAD_32_BYTE_LEN + 1),
+        });
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private HNSW ORAM must reject malformed signature public keys");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == SIGNATURE_PUBLIC_KEYS_OPTION
+                    && reason.contains("invalid encoded length")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
     fn validate_crypto_settings_rejects_reserved_private_result_oram_provider() {
         let settings = CryptoSettings {
             zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
