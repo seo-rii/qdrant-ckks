@@ -696,6 +696,9 @@ is reported without exposing
 collection-local `private_hnsw_oram` filesystem paths. Empty and oversized
 `updated_buckets` commits are rejected by fixed writeback request-size
 validation before bucket writes are attempted.
+Commit writebacks also validate every updated bucket commitment against the
+bucket ciphertext hash plus collection/vector/key lineage and the proposed
+bucket epoch before Merkle metadata is prepared or bucket files are written.
 The same live fixtures reject `read_paths` calls whose path count, requested
 path count, or dummy padding flag does not match the configured fixed path
 budget, before bucket reads are served. Valid `read_paths` calls must carry an

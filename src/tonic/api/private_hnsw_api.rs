@@ -2588,6 +2588,34 @@ mod private_hnsw_grpc_tests {
                 err.message()
             );
 
+            let mut wrong_commitment_buckets = search_run.updated_buckets.clone();
+            wrong_commitment_buckets[0].bucket_commitment =
+                data_encoding::BASE64URL_NOPAD.encode(&[99; 32]);
+            let err = PrivateHnswOram::commit_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramCommitRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: wrong_commitment_buckets
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                    commit_signature: Some(signature_to_proto(search_run.commit_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("commit bucket commitment context mismatch")
+            );
+
             std::fs::remove_file(uploaded_store.root_path().join("merkle").join("nodes.dat"))
                 .unwrap();
             let err = PrivateHnswOram::commit_private_hnsw_paths(

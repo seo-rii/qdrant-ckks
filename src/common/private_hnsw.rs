@@ -883,14 +883,6 @@ pub async fn do_commit_private_hnsw_paths(
         validate_root_hash_string(&new_root_hash, "new_root_hash")?;
 
         let store = PrivateHnswOramStore::new(&session.collection_path, vector_name)?;
-        let prepared_merkle_commit = store.prepare_merkle_commit(
-            old_epoch,
-            &old_root_hash,
-            new_epoch,
-            &new_root_hash,
-            session.bucket_count,
-            &updated_buckets,
-        ).map_err(private_hnsw_commit_metadata_store_error)?;
         ensure_private_hnsw_commit_current_epoch(&store, old_epoch, &old_root_hash)?;
         for bucket in &updated_buckets {
             store
@@ -902,6 +894,20 @@ pub async fn do_commit_private_hnsw_paths(
                 )
                 .map_err(private_hnsw_commit_bucket_store_error)?;
         }
+        validate_bucket_commitment_context(
+            &session.manifest,
+            new_epoch,
+            &updated_buckets,
+            "commit",
+        )?;
+        let prepared_merkle_commit = store.prepare_merkle_commit(
+            old_epoch,
+            &old_root_hash,
+            new_epoch,
+            &new_root_hash,
+            session.bucket_count,
+            &updated_buckets,
+        ).map_err(private_hnsw_commit_metadata_store_error)?;
         for bucket in &updated_buckets {
             store.write_bucket(
                 bucket,
@@ -1500,7 +1506,7 @@ fn validate_initial_private_hnsw_upload_bundle(
     }
     let leaf_commitments =
         ordered_initial_bucket_commitments(buckets, index_epoch, manifest.bucket_count)?;
-    validate_initial_bucket_commitment_context(manifest, index_epoch, buckets)?;
+    validate_bucket_commitment_context(manifest, index_epoch, buckets, "initial upload")?;
     let computed_root = PrivateHnswOramStore::merkle_root_for_commitments(&leaf_commitments)?;
     if computed_root != root_hash {
         return Err(StorageError::bad_request(
@@ -1510,10 +1516,11 @@ fn validate_initial_private_hnsw_upload_bundle(
     Ok(leaf_commitments)
 }
 
-fn validate_initial_bucket_commitment_context(
+fn validate_bucket_commitment_context(
     manifest: &PrivateHnswOramManifest,
     index_epoch: u64,
     buckets: &[PrivateHnswOramBucket],
+    operation: &str,
 ) -> StorageResult<()> {
     for bucket in buckets {
         let expected_commitment = private_hnsw_bucket_commitment(
@@ -1529,14 +1536,14 @@ fn validate_initial_bucket_commitment_context(
             &bucket.ciphertext_sha256,
         )
         .map_err(|_| {
-            StorageError::bad_request(
-                "private HNSW ORAM initial upload bucket commitment context mismatch",
-            )
+            StorageError::bad_request(format!(
+                "private HNSW ORAM {operation} bucket commitment context mismatch",
+            ))
         })?;
         if expected_commitment != bucket.bucket_commitment {
-            return Err(StorageError::bad_request(
-                "private HNSW ORAM initial upload bucket commitment context mismatch",
-            ));
+            return Err(StorageError::bad_request(format!(
+                "private HNSW ORAM {operation} bucket commitment context mismatch",
+            )));
         }
     }
     Ok(())

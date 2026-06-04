@@ -1867,6 +1867,28 @@ mod private_hnsw_rest_tests {
                 "{malformed_commit_error}"
             );
 
+            let mut wrong_commitment_buckets = search_run.updated_buckets.clone();
+            wrong_commitment_buckets[0].bucket_commitment =
+                data_encoding::BASE64URL_NOPAD.encode(&[99; 32]);
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/commit",
+                OramCommitRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: wrong_commitment_buckets,
+                    commit_signature: PrivateHnswClientSignature {
+                        alg: search_run.commit_signature.alg.clone(),
+                        key_id: search_run.commit_signature.key_id.clone(),
+                        sig: search_run.commit_signature.sig.clone(),
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "commit bucket commitment context mismatch"
+            );
+
             std::fs::remove_file(uploaded_store.root_path().join("merkle").join("nodes.dat"))
                 .unwrap();
             let missing_commit_metadata_error = post_json_error_contains!(
