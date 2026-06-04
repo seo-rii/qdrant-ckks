@@ -1741,6 +1741,79 @@ mod tests {
     }
 
     #[test]
+    fn writeback_commit_rejects_invalid_bucket_and_root_mismatch_before_writes() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let bundle = fixture_upload_bundle();
+        let old = store.write_initial_upload_bundle(&bundle, 128).unwrap();
+        let original_bucket = bundle.buckets[1].clone();
+        let assert_writeback_target_unchanged = || {
+            assert_eq!(store.read_current_epoch().unwrap(), old);
+            assert_eq!(
+                store
+                    .read_bucket(1, old.index_epoch, bundle.bucket_count(), 128)
+                    .unwrap(),
+                original_bucket
+            );
+            let proof = store
+                .read_merkle_path_batch(
+                    &[1],
+                    old.index_epoch,
+                    &old.root_hash,
+                    bundle.bucket_count(),
+                )
+                .unwrap();
+            assert_eq!(proof.leaves[0].leaf_hash, original_bucket.bucket_commitment);
+        };
+
+        let mut hash_mismatch_bucket = fixture_bucket(1, 43, b"hash mismatch result bucket");
+        hash_mismatch_bucket.ciphertext =
+            BASE64URL_NOPAD.encode(b"private-result-writeback-ciphertext-sentinel");
+        let mut hash_mismatch_commitments = bundle.bucket_commitments();
+        hash_mismatch_commitments[1] = hash_mismatch_bucket.bucket_commitment.clone();
+        let hash_mismatch_new = PrivateResultOramEpochState {
+            index_epoch: 43,
+            root_hash: PrivateResultOramStore::merkle_root_for_commitments(
+                &hash_mismatch_commitments,
+            )
+            .unwrap(),
+        };
+
+        let err = store
+            .commit_writeback(
+                &old,
+                &hash_mismatch_new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&hash_mismatch_bucket),
+                128,
+            )
+            .unwrap_err();
+        let err = err.to_string();
+        assert!(err.contains("ciphertext_sha256 mismatch"));
+        assert!(!err.contains("private-result-writeback-ciphertext-sentinel"));
+        assert!(!err.contains(&hash_mismatch_bucket.ciphertext));
+        assert_writeback_target_unchanged();
+
+        let valid_bucket = fixture_bucket(1, 43, b"valid result bucket with wrong root");
+        let wrong_root_new = PrivateResultOramEpochState {
+            index_epoch: 43,
+            root_hash: root_hash(99),
+        };
+
+        let err = store
+            .commit_writeback(
+                &old,
+                &wrong_root_new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&valid_bucket),
+                128,
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("new_root_hash mismatch"));
+        assert_writeback_target_unchanged();
+    }
+
+    #[test]
     fn writeback_commit_preflights_manifest_epoch_root_before_writes() {
         let temp = TempDir::new().unwrap();
         let store = fixture_store(&temp);
