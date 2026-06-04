@@ -820,7 +820,6 @@ pub async fn do_commit_private_hnsw_paths(
                 "private HNSW ORAM commit new_epoch must be greater than old_epoch",
             ));
         }
-        validate_root_hash_string(&new_root_hash, "new_root_hash")?;
         let max_updated_buckets = max_updated_bucket_count(session)?;
         if updated_buckets.is_empty() || updated_buckets.len() > max_updated_buckets {
             return Err(StorageError::bad_request(format!(
@@ -865,6 +864,7 @@ pub async fn do_commit_private_hnsw_paths(
             },
         )
         .map_err(private_hnsw_error)?;
+        validate_root_hash_string(&new_root_hash, "new_root_hash")?;
 
         let store = PrivateHnswOramStore::new(&session.collection_path, vector_name)?;
         let prepared_merkle_commit = store.prepare_merkle_commit(

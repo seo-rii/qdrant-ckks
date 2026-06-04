@@ -417,6 +417,7 @@
 - REST/gRPC `read_paths` fixture는 path count, requested path count, dummy padding flag가 fixed path budget과 다르거나 exact duplicate path label을 포함하면 bucket read 전에 fail-closed로 거부한다.
 - REST/gRPC `read_paths` 성공 경로는 collection/vector, key lineage, epoch/root, path labels, padding metadata에 대한 Ed25519 client signature를 검증한 뒤 encrypted buckets를 반환하고, invalid read signature는 fail-closed로 거부한다.
 - REST/gRPC `read_paths`는 fixed-budget/session epoch-root 검증 뒤 Ed25519 request signature를 leaf-label parsing과 ORAM bucket path 계산보다 먼저 검증해 unauthenticated malformed path labels를 parser까지 보내지 않는다.
+- REST/gRPC `commit`은 bounded request-size/epoch checks 뒤 Ed25519 request signature를 `new_root_hash` parsing과 Merkle/writeback preparation보다 먼저 검증해 unauthenticated malformed root values를 parser까지 보내지 않는다.
 - REST/gRPC `read_paths`와 `commit` request signature key id는 session manifest의 `owner_signing_key_id`와 달라도 fail closed 한다.
 - active session의 `read_paths`와 `commit`은 session open 이후 runtime instance policy가 바뀌어도 session manifest를 현재 runtime context와 다시 비교하고 drift를 fail closed 한다.
 - snapshot restore preflight는 `private_payload_oram_required` manifest를 payload ORAM provider 구현 전까지 거부하고 `ids_visible`만 허용한다.

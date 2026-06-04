@@ -1605,6 +1605,39 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
+                "commit signature verification failed"
+            );
+            assert!(!commit_new_root_error.contains("new_root_hash"));
+            assert!(
+                !commit_new_root_error.contains(commit_new_root_sentinel),
+                "{commit_new_root_error}"
+            );
+
+            let malformed_new_root_plan = qdrant_sec::PrivateHnswClientCommitPlan {
+                old_epoch: BASE_EPOCH,
+                new_epoch: NEXT_EPOCH,
+                old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                new_root_hash: commit_new_root_sentinel.to_string(),
+                leaf_commitments: search_run.commit_plan.leaf_commitments.clone(),
+                updated_buckets: search_run.commit_plan.updated_buckets.clone(),
+            };
+            let malformed_new_root_signature = fixture.sign_commit(&malformed_new_root_plan);
+            let commit_new_root_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/commit",
+                OramCommitRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: commit_new_root_sentinel.to_string(),
+                    updated_buckets: search_run.updated_buckets.clone(),
+                    commit_signature: PrivateHnswClientSignature {
+                        alg: malformed_new_root_signature.alg,
+                        key_id: malformed_new_root_signature.key_id,
+                        sig: malformed_new_root_signature.sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
                 "new_root_hash must encode 32 bytes"
             );
             assert!(
