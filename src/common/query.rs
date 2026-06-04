@@ -9087,6 +9087,40 @@ mod tests {
                         && !description.contains("runtime OpenFHE")
             ));
 
+            let err = do_discover_points(
+                &toc,
+                COLLECTION_NAME,
+                DiscoverRequestInternal {
+                    target: Some(RecommendExample::Dense(vec![1.0, 0.0])),
+                    context: None,
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    using: Some(UsingVector::Name(VECTOR_NAME.to_string())),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/text/session")
+                        && !description.contains("runtime CKKS")
+                        && !description.contains("runtime OpenFHE")
+            ));
+
             let err = do_search_points_matrix(
                 &toc,
                 COLLECTION_NAME,
@@ -9095,6 +9129,87 @@ mod tests {
                     limit_per_sample: 1,
                     filter: None,
                     using: VECTOR_NAME.to_string(),
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/text/session")
+                        && !description.contains("runtime CKKS")
+                        && !description.contains("runtime OpenFHE")
+            ));
+
+            let group_by = "group".parse::<JsonPath>().unwrap();
+            let err = do_search_point_groups(
+                &toc,
+                COLLECTION_NAME,
+                SearchGroupsRequestInternal {
+                    vector: api::rest::NamedVectorStruct::Dense(
+                        segment::data_types::vectors::NamedVector {
+                            name: VECTOR_NAME.to_string(),
+                            vector: vec![1.0, 0.0],
+                        },
+                    ),
+                    filter: None,
+                    params: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                    group_request: api::rest::BaseGroupRequest {
+                        group_by: group_by.clone(),
+                        group_size: 1,
+                        limit: 1,
+                        with_lookup: None,
+                    },
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/text/session")
+                        && !description.contains("runtime CKKS")
+                        && !description.contains("runtime OpenFHE")
+            ));
+
+            let err = do_query_point_groups(
+                &toc,
+                COLLECTION_NAME,
+                CollectionQueryGroupsRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::Vector(VectorInternal::Dense(vec![1.0, 0.0])),
+                    ))),
+                    using: VECTOR_NAME.to_string(),
+                    filter: None,
+                    params: None,
+                    score_threshold: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                    group_by,
+                    group_size: 1,
+                    limit: 1,
+                    with_lookup: None,
                 },
                 None,
                 ShardSelectorInternal::All,
