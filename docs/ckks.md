@@ -1496,8 +1496,9 @@ JWT RBAC claims must grant the decrypt capability explicitly:
 ```
 
 Decrypted snapshot export remains unsupported; slow request logs and request
-hashes use redacted request values, and collection telemetry has sentinel
-coverage so decrypted plaintext is not intentionally emitted there. Audit events
+hashes use redacted request values, including private HNSW ORAM path labels,
+session ids, client-state fields, and payload/result tokens. Collection
+telemetry has sentinel coverage so decrypted plaintext is not intentionally emitted there. Audit events
 never include request bodies; denied audit errors also redact qdrant-sec
 envelope markers and secret-like crypto fields before serialization.
 Client-side-only envelope collections must use `raw` or `redacted`; requesting

@@ -235,6 +235,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "token"
                         | "access_token"
                         | "refresh_token"
+                        | "client_id"
+                        | "session_id"
                         | "access_key_id"
                         | "secret_access_key"
                         | "bearer_token"
@@ -260,6 +262,18 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "private_key_b64"
                         | "secret_key"
                         | "secret_key_b64"
+                        | "paths"
+                        | "path_label"
+                        | "path_labels"
+                        | "leaf_label"
+                        | "leaf_labels"
+                        | "client_state"
+                        | "position_map"
+                        | "stash"
+                        | "point_token"
+                        | "point_tokens"
+                        | "payload_fetch_token"
+                        | "payload_fetch_tokens"
                 ) || matches!(
                     key_without_separators,
                     "xapikey"
@@ -277,6 +291,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "xamzsecuritytoken"
                         | "xamzcredential"
                         | "xamzsignature"
+                        | "clientid"
+                        | "sessionid"
                         | "clientsecret"
                         | "privatekey"
                         | "privatekeyb64"
@@ -325,6 +341,16 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "resourcekeyb64"
                         | "wrappingkey"
                         | "wrappingkeyb64"
+                        | "pathlabel"
+                        | "pathlabels"
+                        | "leaflabel"
+                        | "leaflabels"
+                        | "clientstate"
+                        | "positionmap"
+                        | "pointtoken"
+                        | "pointtokens"
+                        | "payloadfetchtoken"
+                        | "payloadfetchtokens"
                 ) {
                     *value = Value::String("[redacted]".to_string());
                 } else {
@@ -737,6 +763,47 @@ mod tests {
             "qdrant-sec-wrapped-keys-log-sentinel",
             "qdrant-sec-inline-key-log-sentinel",
             "qdrant-sec-inline-keys-log-sentinel",
+        ] {
+            assert!(!serialized.contains(sentinel));
+        }
+        assert!(serialized.contains("[redacted]"));
+    }
+
+    #[test]
+    fn log_value_redacts_private_hnsw_oram_access_pattern_fields() {
+        let mut value = json!({
+            "private_hnsw": {
+                "client_id": "qdrant-sec-private-hnsw-client-id-log-sentinel",
+                "session_id": "qdrant-sec-private-hnsw-session-id-log-sentinel",
+                "paths": ["qdrant-sec-private-hnsw-path-log-sentinel"],
+                "path_label": "qdrant-sec-private-hnsw-path-label-log-sentinel",
+                "pathLabels": ["qdrant-sec-private-hnsw-camel-path-label-log-sentinel"],
+                "leaf_label": "qdrant-sec-private-hnsw-leaf-label-log-sentinel",
+                "leafLabels": ["qdrant-sec-private-hnsw-camel-leaf-label-log-sentinel"],
+                "client_state": {
+                    "position_map": "qdrant-sec-private-hnsw-position-map-log-sentinel",
+                    "stash": "qdrant-sec-private-hnsw-stash-log-sentinel"
+                },
+                "point_token": "qdrant-sec-private-hnsw-point-token-log-sentinel",
+                "payload_fetch_token": "qdrant-sec-private-hnsw-payload-token-log-sentinel"
+            }
+        });
+
+        redact_sensitive_log_fields(&mut value);
+        let serialized = serde_json::to_string(&value).unwrap();
+
+        for sentinel in [
+            "qdrant-sec-private-hnsw-client-id-log-sentinel",
+            "qdrant-sec-private-hnsw-session-id-log-sentinel",
+            "qdrant-sec-private-hnsw-path-log-sentinel",
+            "qdrant-sec-private-hnsw-path-label-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-path-label-log-sentinel",
+            "qdrant-sec-private-hnsw-leaf-label-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-leaf-label-log-sentinel",
+            "qdrant-sec-private-hnsw-position-map-log-sentinel",
+            "qdrant-sec-private-hnsw-stash-log-sentinel",
+            "qdrant-sec-private-hnsw-point-token-log-sentinel",
+            "qdrant-sec-private-hnsw-payload-token-log-sentinel",
         ] {
             assert!(!serialized.contains(sentinel));
         }

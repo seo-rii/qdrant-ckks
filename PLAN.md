@@ -428,6 +428,7 @@
 - private result ORAM store skeleton은 directory chmod 전에 symlink/type을 검사하고, bucket symlink와 group/world-accessible bucket directory/file을 fail-closed로 거부한다. Snapshot source/restore guard도 private result ORAM symlink를 fail closed로 거부하면서 symlink target path를 오류에 반사하지 않는다.
 - private result ORAM Merkle proof verifier는 fixed-size path batch를 위해 반복 bucket/proof entry가 byte-identical인 경우만 허용하고, conflicting duplicate는 fail-closed로 거부한다.
 - SDK verified encrypted search는 upper-layer client cache hit 경로에서도 Merkle proof를 bucket decrypt, state remap, ORAM writeback보다 먼저 검증한다.
+- slow request log/request hash redaction은 private HNSW ORAM path labels, session ids, client-state fields, point/payload fetch tokens를 숨긴다.
 - REST/gRPC `read_paths` 오류 응답은 mismatched root hash sentinel, malformed path label sentinel, stored bucket ciphertext를 반사하지 않는다.
 - REST/gRPC `read_paths` missing encrypted bucket/proof 오류 응답은 collection-local `private_hnsw_oram` filesystem path를 반사하지 않는다.
 - REST/gRPC `read_paths`는 store current epoch/root가 active session과 맞지 않으면 bucket을 읽기 전에 fail closed 하고 stale root, stored bucket ciphertext, collection-local `private_hnsw_oram` path를 반사하지 않는다.
