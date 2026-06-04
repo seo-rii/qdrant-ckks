@@ -668,6 +668,11 @@ upload a refreshed signed manifest, and then re-open successfully.
 For initial signed manifest upload, Qdrant writes the manifest/signature before
 publishing `epochs/current.json`, so a manifest-store write failure does not
 leave a current epoch without a corresponding signed manifest.
+If the stored manifest already matches the current epoch/root, repeated
+manifest upload is accepted only as a byte-identical no-op. A refreshed signed
+manifest is still accepted after commit when `epochs/current.json` has advanced
+past the stored manifest and the uploaded manifest matches the new current
+epoch/root.
 Unknown session id handling for `read_paths`, `commit`, and `close` returns
 sanitized errors without echoing the submitted session id.
 SDKs should use `refresh_private_hnsw_oram_manifest_for_commit` or

@@ -226,7 +226,23 @@ impl PrivateHnswOramStore {
     ) -> CollectionResult<()> {
         self.ensure_layout()?;
         match self.read_current_epoch() {
-            Ok(current) if current == *epoch => self.write_manifest(manifest, signature),
+            Ok(current) if current == *epoch => match self.read_manifest() {
+                Ok((stored_manifest, stored_signature))
+                    if stored_manifest.index_epoch == current.index_epoch
+                        && stored_manifest.root_hash == current.root_hash =>
+                {
+                    if stored_manifest != *manifest || stored_signature != *signature {
+                        return Err(CollectionError::bad_request(
+                            "private HNSW ORAM manifest upload does not match existing current manifest",
+                        ));
+                    }
+                    Ok(())
+                }
+                Ok(_) | Err(CollectionError::NotFound { .. }) => {
+                    self.write_manifest(manifest, signature)
+                }
+                Err(err) => Err(err),
+            },
             Ok(current) => Err(CollectionError::bad_request(format!(
                 "private HNSW ORAM current epoch/root does not match uploaded manifest epoch {}",
                 current.index_epoch,
@@ -1179,6 +1195,94 @@ mod tests {
                 .contains("current epoch/root does not match uploaded manifest")
         );
         assert_eq!(store.read_current_epoch().unwrap(), epoch);
+    }
+
+    #[test]
+    fn current_manifest_reupload_requires_existing_manifest_to_match() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let manifest = fixture_manifest();
+        let signature = fixture_signature();
+        let epoch = PrivateHnswOramEpochState {
+            index_epoch: manifest.index_epoch,
+            root_hash: manifest.root_hash.clone(),
+        };
+
+        store
+            .write_manifest_with_initial_epoch_if_absent_or_matching(&manifest, &signature, &epoch)
+            .unwrap();
+        store
+            .write_manifest_with_initial_epoch_if_absent_or_matching(&manifest, &signature, &epoch)
+            .unwrap();
+
+        let mut replacement = manifest.clone();
+        replacement.logical_node_count += 1;
+        replacement.dummy_node_count -= 1;
+        let replacement_signature = PrivateHnswOramSignature {
+            sig: BASE64URL_NOPAD.encode(&[8; 64]),
+            ..signature.clone()
+        };
+        let err = store
+            .write_manifest_with_initial_epoch_if_absent_or_matching(
+                &replacement,
+                &replacement_signature,
+                &epoch,
+            )
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("manifest upload does not match existing current manifest")
+        );
+        assert_eq!(store.read_current_epoch().unwrap(), epoch);
+        assert_eq!(store.read_manifest().unwrap(), (manifest, signature));
+    }
+
+    #[test]
+    fn post_commit_manifest_refresh_allows_current_epoch_ahead_of_stored_manifest() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let old_manifest = fixture_manifest();
+        let old_signature = fixture_signature();
+        let old_epoch = PrivateHnswOramEpochState {
+            index_epoch: old_manifest.index_epoch,
+            root_hash: old_manifest.root_hash.clone(),
+        };
+        let mut new_manifest = old_manifest.clone();
+        new_manifest.index_epoch = old_manifest.index_epoch + 1;
+        new_manifest.root_hash = root_hash(43);
+        let new_signature = PrivateHnswOramSignature {
+            sig: BASE64URL_NOPAD.encode(&[8; 64]),
+            ..old_signature.clone()
+        };
+        let new_epoch = PrivateHnswOramEpochState {
+            index_epoch: new_manifest.index_epoch,
+            root_hash: new_manifest.root_hash.clone(),
+        };
+
+        store
+            .write_manifest_with_initial_epoch_if_absent_or_matching(
+                &old_manifest,
+                &old_signature,
+                &old_epoch,
+            )
+            .unwrap();
+        store
+            .compare_and_swap_epoch(&old_epoch, &new_epoch)
+            .unwrap();
+        store
+            .write_manifest_with_initial_epoch_if_absent_or_matching(
+                &new_manifest,
+                &new_signature,
+                &new_epoch,
+            )
+            .unwrap();
+
+        assert_eq!(store.read_current_epoch().unwrap(), new_epoch);
+        assert_eq!(
+            store.read_manifest().unwrap(),
+            (new_manifest, new_signature)
+        );
     }
 
     #[test]
