@@ -1985,7 +1985,14 @@ mod tests {
     fn merkle_path_batch_returns_leaf_hashes_and_siblings() {
         let temp = TempDir::new().unwrap();
         let store = fixture_store(&temp);
-        let leaf_commitments = vec![root_hash(1), root_hash(2), root_hash(3)];
+        let bucket0 = fixture_bucket(0, 42, b"encrypted result bucket 0");
+        let bucket1 = fixture_bucket(1, 42, b"encrypted result bucket 1");
+        let bucket2 = fixture_bucket(2, 42, b"encrypted result bucket 2");
+        let leaf_commitments = vec![
+            bucket0.bucket_commitment.clone(),
+            bucket1.bucket_commitment.clone(),
+            bucket2.bucket_commitment.clone(),
+        ];
         let root = PrivateResultOramStore::merkle_root_for_commitments(&leaf_commitments).unwrap();
         store
             .write_merkle_tree_from_commitments(42, root.clone(), leaf_commitments.clone())
@@ -2014,6 +2021,14 @@ mod tests {
             .unwrap();
         assert_eq!(duplicate_proof.leaves.len(), 3);
         assert_eq!(duplicate_proof.leaves[0], duplicate_proof.leaves[2]);
+        verify_private_result_oram_merkle_proof(
+            &duplicate_proof,
+            42,
+            &root,
+            3,
+            &[bucket0.clone(), bucket2, bucket0],
+        )
+        .unwrap();
 
         let err = store
             .read_merkle_path_batch(&[3], 42, &root, 3)
