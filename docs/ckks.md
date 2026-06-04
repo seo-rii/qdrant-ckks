@@ -552,6 +552,9 @@ JSON artifacts after rejecting non-directory or symlinked private ORAM snapshot
 sources; snapshot tests seal a plaintext sentinel into a client bucket and
 assert that the raw snapshot archive and restored bucket file do not contain the
 sentinel bytes.
+Snapshot creation also refuses to archive orphan private HNSW ORAM vector stores
+whose on-disk store does not match a configured private HNSW ORAM encryption
+rule.
 Restore preflight rejects result-private manifests, collection/vector context
 mismatches, vector dimension/distance mismatches, manifest signature key-id
 mismatches, Path ORAM tree_height/bucket_count mismatches, current epoch/root

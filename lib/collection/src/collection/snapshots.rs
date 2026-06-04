@@ -68,13 +68,21 @@ impl Collection {
         global_temp_dir: &Path,
         this_peer_id: PeerId,
     ) -> CollectionResult<SnapshotDescription> {
-        {
+        let collection_config = {
             let collection_config = self.collection_config.read().await;
             ensure_snapshot_crypto_migration_state_allows_snapshot(
                 self.name(),
                 &collection_config.params,
             )?;
-        }
+            let collection_config = collection_config.clone();
+            let configured_private_hnsw_vectors =
+                private_hnsw_oram_configured_vectors(&collection_config.params)?;
+            validate_private_hnsw_oram_snapshot_store_matches_config(
+                &self.path,
+                &configured_private_hnsw_vectors,
+            )?;
+            collection_config
+        };
 
         let snapshot_name = format!(
             "{}-{this_peer_id}-{}.snapshot",
@@ -151,7 +159,7 @@ impl Collection {
         .await?;
 
         tar.append_data(
-            self.collection_config.read().await.to_bytes()?,
+            collection_config.to_bytes()?,
             Path::new(COLLECTION_CONFIG_FILE),
         )
         .await?;
@@ -293,22 +301,7 @@ impl Collection {
         config: &CollectionConfigInternal,
         collection_dir: &Path,
     ) -> CollectionResult<()> {
-        let mut configured_vectors = HashSet::new();
-        if let Some(encryption) = config.params.effective_encryption() {
-            for rule in encryption
-                .rules
-                .iter()
-                .filter(|rule| rule.binding.as_deref() == Some(PRIVATE_HNSW_ORAM_BINDING))
-            {
-                let EncryptionSelector::VectorNames { names } = &rule.selector else {
-                    return Err(CollectionError::bad_request(format!(
-                        "private HNSW ORAM snapshot rule {} must use vector_names selector",
-                        rule.id,
-                    )));
-                };
-                configured_vectors.extend(names.iter().cloned());
-            }
-        }
+        let configured_vectors = private_hnsw_oram_configured_vectors(&config.params)?;
 
         validate_private_hnsw_oram_snapshot_store_matches_config(
             collection_dir,
@@ -618,6 +611,31 @@ fn validate_private_hnsw_oram_vector_snapshot(
     )?;
 
     Ok(())
+}
+
+fn private_hnsw_oram_configured_vectors(
+    params: &CollectionParams,
+) -> CollectionResult<HashSet<String>> {
+    let mut configured_vectors = HashSet::new();
+    let Some(encryption) = params.effective_encryption() else {
+        return Ok(configured_vectors);
+    };
+
+    for rule in encryption
+        .rules
+        .iter()
+        .filter(|rule| rule.binding.as_deref() == Some(PRIVATE_HNSW_ORAM_BINDING))
+    {
+        let EncryptionSelector::VectorNames { names } = &rule.selector else {
+            return Err(CollectionError::bad_request(format!(
+                "private HNSW ORAM snapshot rule {} must use vector_names selector",
+                rule.id,
+            )));
+        };
+        configured_vectors.extend(names.iter().cloned());
+    }
+
+    Ok(configured_vectors)
 }
 
 fn validate_private_hnsw_oram_snapshot_store_matches_config(
