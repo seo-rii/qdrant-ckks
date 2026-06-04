@@ -586,6 +586,13 @@ mod private_hnsw_grpc_tests {
         proto.distance = 0;
         let err = manifest_from_proto(proto).unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("distance"));
+
+        let mut proto = manifest_to_proto(sample_manifest());
+        proto.result_privacy = 0;
+        let err = manifest_from_proto(proto).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("result_privacy"));
 
         let mut proto = manifest_to_proto(sample_manifest());
         proto.oram = None;
