@@ -104,8 +104,9 @@ Selector components that collide with reserved envelope markers
 
 Runtime crypto instances currently accept only these provider IDs:
 `payload/aes-256-gcm@v1`, `payload/client-aead@v1`,
-`metadata/aes-256-gcm@v1`, `metadata/blind-index-hmac@v1`, and
-`vector/openfhe-ckks@v1`.
+`metadata/aes-256-gcm@v1`, `metadata/blind-index-hmac@v1`,
+`vector/openfhe-ckks@v1`, `vector/client-ckks@v1`, and
+`vector/private-hnsw-oram@v1`.
 Unknown provider IDs fail runtime settings
 validation instead of being treated as extension points.
 `payload/aes-256-gcm@v1` must bind a `materials.sym_key` resource key and set
@@ -119,6 +120,12 @@ metadata sealing, set `options.material_fingerprint_id`, and configure
 `metadata/blind-index-hmac@v1` is server-blind: clients compute exact-match
 tokens outside Qdrant, and the runtime instance only pins non-secret key lineage
 metadata with `key_id`, `expected_rk_id`, `min_rk_epoch`, and `max_rk_epoch`.
+`vector/client-ckks@v1` is server-blind opaque vector storage: it forbids
+server materials/backends and pins client CKKS public material, RK lineage,
+`search_mode: opaque_storage_only`, and signing public keys.
+`vector/private-hnsw-oram@v1` is server-blind searchable ANN storage: it also
+forbids server materials/backends and pins RK lineage, private HNSW/Path
+ORAM/fixed-budget policy, integrity requirements, and signing public keys.
 Runtime crypto materials currently accept only `symmetric_key_32`,
 `wrapping_key_32`, and `wrapped_symmetric_key_32` kinds.
 
@@ -487,13 +494,20 @@ The generic `crypto` control plane supports a safer MK/RK hierarchy:
 Provider `options` are allowlisted per provider. `payload/aes-256-gcm@v1`
 accepts only `key_id`, `material_fingerprint_id`, and `retired_materials`;
 `payload/client-aead@v1` accepts only its client envelope policy and signature
-options; `metadata/blind-index-hmac@v1` accepts only `key_id`,
+options; `metadata/aes-256-gcm@v1` accepts the same server-side AEAD options as
+payload AEAD; `metadata/blind-index-hmac@v1` accepts only `key_id`,
 `expected_rk_id`, `min_rk_epoch`, and `max_rk_epoch`; `vector/openfhe-ckks@v1`
 accepts only `key_id`, `material_fingerprint_id`, `profile`,
 `crypto_context_b64`, `public_key_b64`, `allow_plaintext_queries`,
 `plaintext_query_tcb_ack`, `score_plaintext_output_tcb_ack`, and
-`signature_public_keys`. Unknown options fail
-startup/runtime validation instead of being silently ignored.
+`signature_public_keys`; `vector/client-ckks@v1` accepts only `key_id`,
+`expected_rk_id`, `min_rk_epoch`, `max_rk_epoch`, `search_mode`, `profile`,
+`crypto_context_b64`, `public_key_b64`, and `signature_public_keys`;
+`vector/private-hnsw-oram@v1` accepts only `key_id`, `expected_rk_id`,
+`min_rk_epoch`, `max_rk_epoch`, `search_execution`, `search_mode`,
+`result_privacy`, `distance`, `dim`, `hnsw`, `oram`, `fixed_budget`,
+`integrity`, and `signature_public_keys`. Unknown options fail startup/runtime
+validation instead of being silently ignored.
 
 Provider `materials` roles are also allowlisted. Server-side payload AEAD and
 OpenFHE CKKS vector-envelope providers accept only `materials.sym_key`;
