@@ -2281,6 +2281,118 @@ mod private_hnsw_rest_tests {
     }
 
     #[test]
+    fn bucket_upload_rest_route_revalidates_runtime_policy_drift() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let mut fixed_budget_drifted_settings = settings.clone();
+        fixed_budget_drifted_settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["fixed_budget"]["fixed_result_k"] = serde_json::json!(2);
+        let mut reserved_privacy_settings = settings.clone();
+        reserved_privacy_settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["result_privacy"] = serde_json::json!("private_payload_oram_required");
+        let (_temp, dispatcher) = test_dispatcher();
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+            let app = actix_test::init_service(
+                App::new()
+                    .app_data(web::Data::new(dispatcher.clone()))
+                    .app_data(web::Data::new(settings.clone()))
+                    .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
+                    .configure(config_private_hnsw_api),
+            )
+            .await;
+            let fixed_budget_drifted_app = actix_test::init_service(
+                App::new()
+                    .app_data(web::Data::new(dispatcher.clone()))
+                    .app_data(web::Data::new(fixed_budget_drifted_settings))
+                    .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
+                    .configure(config_private_hnsw_api),
+            )
+            .await;
+            let reserved_privacy_app = actix_test::init_service(
+                App::new()
+                    .app_data(web::Data::new(dispatcher.clone()))
+                    .app_data(web::Data::new(reserved_privacy_settings))
+                    .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
+                    .configure(config_private_hnsw_api),
+            )
+            .await;
+
+            let upload_response = actix_test::call_service(
+                &app,
+                actix_test::TestRequest::post()
+                    .uri("/collections/docs/private-hnsw/text/manifest")
+                    .set_json(&UploadPrivateHnswManifestRequest {
+                        manifest: fixture.manifest.clone(),
+                        signature: fixture.manifest_signature.clone(),
+                    })
+                    .to_request(),
+            )
+            .await;
+            assert_eq!(upload_response.status(), StatusCode::OK);
+
+            let bucket_request = UploadPrivateHnswBucketsRequest {
+                index_epoch: fixture.encrypted_build.index_epoch,
+                root_hash: fixture.encrypted_build.root_hash.clone(),
+                buckets: fixture.encrypted_build.buckets.clone(),
+            };
+            let response = actix_test::call_service(
+                &fixed_budget_drifted_app,
+                actix_test::TestRequest::post()
+                    .uri("/collections/docs/private-hnsw/text/buckets")
+                    .set_json(&bucket_request)
+                    .to_request(),
+            )
+            .await;
+            let status = response.status();
+            let body_bytes = actix_test::read_body(response).await;
+            let body = String::from_utf8_lossy(&body_bytes);
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert!(
+                body.contains("manifest fixed_budget does not match runtime instance"),
+                "{body}"
+            );
+
+            let response = actix_test::call_service(
+                &reserved_privacy_app,
+                actix_test::TestRequest::post()
+                    .uri("/collections/docs/private-hnsw/text/buckets")
+                    .set_json(&bucket_request)
+                    .to_request(),
+            )
+            .await;
+            let status = response.status();
+            let body_bytes = actix_test::read_body(response).await;
+            let body = String::from_utf8_lossy(&body_bytes);
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert!(body.contains("option result_privacy is invalid"), "{body}");
+            assert!(body.contains("expected ids_visible"), "{body}");
+
+            let response = actix_test::call_service(
+                &app,
+                actix_test::TestRequest::post()
+                    .uri("/collections/docs/private-hnsw/text/buckets")
+                    .set_json(&bucket_request)
+                    .to_request(),
+            )
+            .await;
+            let status = response.status();
+            let body_bytes = actix_test::read_body(response).await;
+            let body = String::from_utf8_lossy(&body_bytes);
+            assert_eq!(status, StatusCode::OK, "{body}");
+        });
+    }
+
+    #[test]
     fn read_paths_rest_route_rejects_active_session_after_runtime_policy_drift() {
         let _guard = route_e2e_guard();
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
