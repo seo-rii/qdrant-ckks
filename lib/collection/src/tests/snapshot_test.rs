@@ -333,7 +333,12 @@ async fn test_snapshot_private_result_oram_is_included_but_restore_fails_closed(
         .unwrap();
     let snapshot_data = SnapshotData::new_packed_persistent(snapshot_path);
     let err = Collection::restore_snapshot(snapshot_data, recover_dir.path(), 0, true).unwrap_err();
-    assert!(err.to_string().contains("payload/private-result-oram@v1"));
+    let err = err.to_string();
+    assert!(err.contains("payload/private-result-oram@v1"));
+    assert!(!err.contains(collection_dir.path().to_string_lossy().as_ref()));
+    assert!(!err.contains(recover_dir.path().to_string_lossy().as_ref()));
+    assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
+    assert!(!err.contains(&ciphertext));
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -1074,10 +1074,10 @@ mod tests {
         fs::create_dir(temp_dir.path().join(PRIVATE_RESULT_ORAM_DIR)).unwrap();
         let err =
             ensure_private_result_oram_snapshot_restore_not_present(temp_dir.path()).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains(PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
-        );
+        let err = err.to_string();
+        assert!(err.contains(PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
+        assert!(!err.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
     }
 
     #[cfg(unix)]
