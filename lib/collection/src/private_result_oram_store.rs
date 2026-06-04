@@ -59,6 +59,12 @@ pub struct PrivateResultPreparedMerkleCommit {
     tree: PrivateResultOramMerkleTree,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InitialEpochStatus {
+    Absent,
+    Matching,
+}
+
 impl PrivateResultOramStore {
     pub fn new(collection_path: impl AsRef<Path>) -> Self {
         Self {
@@ -120,7 +126,17 @@ impl PrivateResultOramStore {
             root_hash: bundle.manifest.root_hash.clone(),
         };
 
-        self.ensure_initial_epoch_absent_or_matching(&epoch)?;
+        match self.initial_epoch_status(&epoch, "upload bundle")? {
+            InitialEpochStatus::Absent => {}
+            InitialEpochStatus::Matching => {
+                self.validate_existing_initial_upload_bundle(
+                    bundle,
+                    &leaf_commitments,
+                    max_ciphertext_bytes,
+                )?;
+                return Ok(epoch);
+            }
+        }
         self.write_manifest(&bundle.manifest, &bundle.manifest_signature)?;
         self.write_merkle_tree_from_commitments(
             bundle.manifest.index_epoch,
@@ -139,20 +155,61 @@ impl PrivateResultOramStore {
         Ok(epoch)
     }
 
-    fn ensure_initial_epoch_absent_or_matching(
+    fn initial_epoch_status(
         &self,
         epoch: &PrivateResultOramEpochState,
-    ) -> CollectionResult<()> {
+        operation: &str,
+    ) -> CollectionResult<InitialEpochStatus> {
         self.ensure_layout()?;
         match self.read_current_epoch() {
-            Ok(current) if current == *epoch => Ok(()),
+            Ok(current) if current == *epoch => Ok(InitialEpochStatus::Matching),
             Ok(current) => Err(CollectionError::bad_request(format!(
-                "private result ORAM current epoch/root does not match upload bundle epoch {}",
+                "private result ORAM current epoch/root does not match {operation} epoch {}",
                 current.index_epoch,
             ))),
-            Err(CollectionError::NotFound { .. }) => Ok(()),
+            Err(CollectionError::NotFound { .. }) => Ok(InitialEpochStatus::Absent),
             Err(err) => Err(err),
         }
+    }
+
+    fn validate_existing_initial_upload_bundle(
+        &self,
+        bundle: &PrivateResultOramUploadBundle,
+        leaf_commitments: &[String],
+        max_ciphertext_bytes: usize,
+    ) -> CollectionResult<()> {
+        let (stored_manifest, stored_signature) = self.read_manifest()?;
+        if stored_manifest != bundle.manifest || stored_signature != bundle.manifest_signature {
+            return Err(CollectionError::bad_request(
+                "private result ORAM initial upload bundle does not match existing manifest",
+            ));
+        }
+
+        let stored_tree = self.read_merkle_tree()?;
+        if stored_tree.index_epoch != bundle.manifest.index_epoch
+            || stored_tree.root_hash != bundle.manifest.root_hash
+            || stored_tree.bucket_count != bundle.manifest.bucket_count
+            || stored_tree.leaf_hashes.as_slice() != leaf_commitments
+        {
+            return Err(CollectionError::bad_request(
+                "private result ORAM initial upload bundle does not match existing Merkle tree",
+            ));
+        }
+
+        for bucket in &bundle.buckets {
+            let stored_bucket = self.read_bucket(
+                bucket.bucket_id,
+                bundle.manifest.index_epoch,
+                bundle.manifest.bucket_count,
+                max_ciphertext_bytes,
+            )?;
+            if stored_bucket != *bucket {
+                return Err(CollectionError::bad_request(
+                    "private result ORAM initial upload bundle does not match existing bucket set",
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub fn write_bucket(
@@ -1344,6 +1401,37 @@ mod tests {
         assert_eq!(
             proof.leaves[0].leaf_hash,
             original.buckets[0].bucket_commitment
+        );
+    }
+
+    #[test]
+    fn initial_upload_bundle_matching_epoch_requires_existing_files_to_match() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let original = fixture_upload_bundle();
+        store.write_initial_upload_bundle(&original, 128).unwrap();
+        store.write_initial_upload_bundle(&original, 128).unwrap();
+
+        let mut replacement = original.clone();
+        replacement.buckets[0] = fixture_bucket(
+            0,
+            original.manifest.index_epoch,
+            b"same root different encrypted result bucket",
+        );
+        replacement.buckets[0].bucket_commitment = original.buckets[0].bucket_commitment.clone();
+        assert_eq!(replacement.manifest.root_hash, original.manifest.root_hash);
+        assert_ne!(replacement.buckets[0], original.buckets[0]);
+
+        let err = store
+            .write_initial_upload_bundle(&replacement, 128)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("existing bucket set"));
+        assert_eq!(
+            store
+                .read_bucket(0, original.manifest.index_epoch, 3, 128)
+                .unwrap(),
+            original.buckets[0],
         );
     }
 

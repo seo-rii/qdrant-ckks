@@ -773,6 +773,9 @@ signed manifest plus complete ordered bucket set, writes the manifest, Merkle
 metadata, encrypted buckets, and initial epoch state, and keeps root mismatch
 failures fail-closed. Repeated initial epoch writes are idempotent only for the
 same epoch/root and leave the stored current epoch untouched on mismatch.
+Repeated initial upload bundles with that same epoch/root are accepted as no-op
+only when the stored manifest/signature, Merkle tree, and bucket set already
+match the incoming bundle.
 `commit_writeback` mirrors
 the private HNSW ORAM commit order by preparing the Merkle update, writing
 updated encrypted buckets, writing Merkle metadata, then applying epoch/root
