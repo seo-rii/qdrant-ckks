@@ -189,6 +189,12 @@ fn validate_restored_collection_crypto_runtime(
              {collection_name}: {detail}",
         )
     })?;
+    validate_private_result_oram_snapshot_restore_not_present(collection_path).map_err(|err| {
+        format!(
+            "Failed to validate private result ORAM snapshot layout for recovered snapshot \
+             {collection_name}: {err}",
+        )
+    })?;
     Ok(())
 }
 
@@ -204,6 +210,22 @@ fn sanitize_private_hnsw_snapshot_layout_error(
         return "private HNSW ORAM snapshot layout validation failed".to_string();
     }
     rendered
+}
+
+fn validate_private_result_oram_snapshot_restore_not_present(
+    collection_path: &Path,
+) -> Result<(), String> {
+    let private_result_oram_path =
+        collection_path.join(collection::private_result_oram_store::PRIVATE_RESULT_ORAM_DIR);
+    match fs::symlink_metadata(&private_result_oram_path) {
+        Ok(_) => Err(format!(
+            "private result ORAM snapshot restore requires {}, which is reserved until the \
+             payload ORAM provider runtime is implemented",
+            qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+        )),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err("private result ORAM snapshot layout validation failed".to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -234,6 +256,7 @@ mod tests {
     use collection::private_hnsw_oram_store::{
         PRIVATE_HNSW_ORAM_DIR, PrivateHnswOramEpochState, PrivateHnswOramStore,
     };
+    use collection::private_result_oram_store::PRIVATE_RESULT_ORAM_DIR;
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_sec::{
         LocalMasterKeyProvider, MasterKeyProvider, PRIVATE_HNSW_ORAM_BINDING,
@@ -443,6 +466,28 @@ mod tests {
 
         validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
             .expect("valid private HNSW ORAM snapshot layout must pass CLI preflight");
+    }
+
+    #[test]
+    fn cli_snapshot_crypto_preflight_rejects_reserved_private_result_oram_directory() {
+        let settings = Settings::new(None).unwrap();
+        let collection_dir = TempDir::new().unwrap();
+        let mut config = recovered_private_hnsw_config();
+        config.params.encryption = None;
+        fs::write(
+            collection_dir.path().join(COLLECTION_CONFIG_FILE),
+            config.to_bytes().unwrap(),
+        )
+        .unwrap();
+        fs::create_dir(collection_dir.path().join(PRIVATE_RESULT_ORAM_DIR)).unwrap();
+
+        let err =
+            validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
+                .expect_err("reserved private result ORAM directory must fail CLI preflight");
+
+        assert!(err.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
+        assert!(!err.contains(collection_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
     }
 
     #[test]

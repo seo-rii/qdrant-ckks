@@ -718,6 +718,8 @@ not wired into runtime upload/session APIs yet.
 Collection snapshots include the `private_result_oram/` directory if it is
 present, but current restore fail-closes when that directory or a symlink at
 that path appears because `payload/private-result-oram@v1` is still reserved.
+The CLI/startup snapshot mapping preflight applies the same reserved-directory
+guard before accepting a recovered collection.
 Cluster runtime parity uses the existing crypto capability fingerprint for this
 provider as well. The fingerprint includes non-secret private HNSW ORAM policy
 such as tree shape, fixed budget, result privacy mode, and signing verifier
