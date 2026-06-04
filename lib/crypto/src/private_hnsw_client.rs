@@ -1946,6 +1946,15 @@ pub fn plan_private_hnsw_oram_speculative_prefetch(
         ));
     }
     validate_private_hnsw_oram_leaf(padding_leaf, config.tree_height)?;
+    let leaf_count = private_hnsw_oram_leaf_count(config.tree_height)?;
+    if u64::try_from(fixed_path_count)
+        .map_err(|_| PrivateHnswClientError::InvalidSearchConfig("fixed_path_count"))?
+        > leaf_count
+    {
+        return Err(PrivateHnswClientError::InvalidSearchConfig(
+            "fixed_path_count",
+        ));
+    }
 
     let mut leaves = Vec::with_capacity(fixed_path_count);
     let mut seen_leaves = BTreeSet::new();
@@ -1961,8 +1970,13 @@ pub fn plan_private_hnsw_oram_speculative_prefetch(
         }
     }
     let real_path_count = leaves.len();
+    let mut next_padding_offset = 0;
     while leaves.len() < fixed_path_count {
-        leaves.push(padding_leaf);
+        let leaf = (padding_leaf + next_padding_offset) % leaf_count;
+        next_padding_offset += 1;
+        if seen_leaves.insert(leaf) {
+            leaves.push(leaf);
+        }
     }
 
     let leaf_labels = leaves
@@ -3589,9 +3603,26 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(plan.real_path_count, 2);
-        assert_eq!(leaves, vec![0, 1, 3, 3]);
+        assert_eq!(leaves, vec![0, 1, 3, 2]);
+        assert_eq!(leaves.iter().collect::<BTreeSet<_>>().len(), leaves.len());
+        let colliding_padding =
+            plan_private_hnsw_oram_speculative_prefetch(&state, config, &[[1; 32], [2; 32]], 3, 1)
+                .unwrap();
+        let colliding_padding_leaves = colliding_padding
+            .leaf_labels
+            .iter()
+            .map(|label| decode_private_hnsw_oram_leaf_label(label, config.tree_height).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(colliding_padding.real_path_count, 2);
+        assert_eq!(colliding_padding_leaves, vec![0, 1, 2]);
         assert_eq!(
             plan_private_hnsw_oram_speculative_prefetch(&state, config, &[[1; 32]], 0, 3),
+            Err(PrivateHnswClientError::InvalidSearchConfig(
+                "fixed_path_count"
+            ))
+        );
+        assert_eq!(
+            plan_private_hnsw_oram_speculative_prefetch(&state, config, &[], 5, 3),
             Err(PrivateHnswClientError::InvalidSearchConfig(
                 "fixed_path_count"
             ))
@@ -3736,7 +3767,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(sparse_plan.retained_neighbor_count, 2);
         assert_eq!(sparse_plan.real_path_count, 1);
-        assert_eq!(sparse_leaves, vec![2, 7, 7]);
+        assert_eq!(sparse_leaves, vec![2, 7, 0]);
     }
 
     #[test]
