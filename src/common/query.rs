@@ -8632,6 +8632,45 @@ mod tests {
     }
 
     #[test]
+    fn private_hnsw_oram_search_matrix_requires_client_led_session() {
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let (_temp, dispatcher) = test_dispatcher();
+        let auth = Auth::new_internal(Access::full("For test"));
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+            let pass = new_unchecked_verification_pass();
+            let toc = dispatcher.toc(&auth, &pass).clone();
+
+            let err = do_search_points_matrix(
+                &toc,
+                COLLECTION_NAME,
+                CollectionSearchMatrixRequest {
+                    sample_size: 2,
+                    limit_per_sample: 1,
+                    filter: None,
+                    using: VECTOR_NAME.to_string(),
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth,
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/text/session")
+            ));
+        });
+    }
+
+    #[test]
     fn ckks_score_query_source_batch_forwards_query_rk_id_not_key_id() {
         let bridge_dir = tempfile::Builder::new()
             .prefix("qdrant-sec-query-rk-bridge-")
