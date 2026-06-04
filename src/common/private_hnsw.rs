@@ -47,6 +47,8 @@ const FIXED_BUDGET_OPTION: &str = "fixed_budget";
 const ZERO_TRUST_PROFILE_STRICT: &str = "strict";
 const SESSION_LEASE_SECS: u64 = 300;
 const MAX_SESSION_COUNT: usize = 1024;
+const BUCKET_PLAINTEXT_HEADER_BYTES: usize = 4 + 2 + 4 + 4;
+const BUCKET_AEAD_OVERHEAD_BYTES: usize = 1 + 12 + 16;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PrivateHnswManifestRecord {
@@ -668,6 +670,7 @@ pub async fn do_upload_private_hnsw_buckets(
                 max_ciphertext_bytes,
             )
             .map_err(private_hnsw_upload_store_error)?;
+        validate_bucket_ciphertext_fixed_size(bucket, &manifest)?;
     }
     let leaf_commitments =
         validate_initial_private_hnsw_upload_bundle(&manifest, index_epoch, &root_hash, &buckets)?;
@@ -1055,6 +1058,7 @@ pub async fn do_commit_private_hnsw_paths(
                     session.max_bucket_ciphertext_bytes,
                 )
                 .map_err(private_hnsw_commit_bucket_store_error)?;
+            validate_bucket_ciphertext_fixed_size(bucket, &session.manifest)?;
         }
         validate_bucket_commitment_context(
             &session.manifest,
@@ -1808,6 +1812,46 @@ fn max_bucket_ciphertext_bytes(manifest: &PrivateHnswOramManifest) -> StorageRes
         .ok_or_else(|| StorageError::bad_request("private HNSW ORAM bucket size overflows"))
 }
 
+fn expected_bucket_ciphertext_bytes(manifest: &PrivateHnswOramManifest) -> StorageResult<usize> {
+    let block_size = usize::try_from(manifest.oram.block_size_bytes).map_err(|_| {
+        StorageError::bad_request("private HNSW ORAM block_size_bytes exceeds usize")
+    })?;
+    let bucket_size = usize::try_from(manifest.oram.bucket_size)
+        .map_err(|_| StorageError::bad_request("private HNSW ORAM bucket_size exceeds usize"))?;
+    let encoded_plaintext_bytes =
+        bucket_size
+            .checked_mul(block_size.checked_add(1).ok_or_else(|| {
+                StorageError::bad_request("private HNSW ORAM bucket size overflows")
+            })?)
+            .and_then(|size| size.checked_add(BUCKET_PLAINTEXT_HEADER_BYTES))
+            .ok_or_else(|| StorageError::bad_request("private HNSW ORAM bucket size overflows"))?;
+    encoded_plaintext_bytes
+        .checked_add(BUCKET_AEAD_OVERHEAD_BYTES)
+        .ok_or_else(|| StorageError::bad_request("private HNSW ORAM bucket size overflows"))
+}
+
+fn validate_bucket_ciphertext_fixed_size(
+    bucket: &PrivateHnswOramBucket,
+    manifest: &PrivateHnswOramManifest,
+) -> StorageResult<()> {
+    let expected = expected_bucket_ciphertext_bytes(manifest)?;
+    let ciphertext = BASE64URL_NOPAD
+        .decode(bucket.ciphertext.as_bytes())
+        .map_err(|_| {
+            StorageError::bad_request(format!(
+                "private HNSW ORAM bucket {} ciphertext is not base64url",
+                bucket.bucket_id,
+            ))
+        })?;
+    if ciphertext.len() != expected {
+        return Err(StorageError::bad_request(format!(
+            "private HNSW ORAM bucket {} ciphertext must match fixed ciphertext size",
+            bucket.bucket_id,
+        )));
+    }
+    Ok(())
+}
+
 fn max_updated_bucket_count(session: &PrivateHnswSession) -> StorageResult<usize> {
     let levels = usize::try_from(session.tree_height)
         .ok()
@@ -1994,6 +2038,7 @@ mod private_hnsw_tests {
         sign_private_hnsw_oram_manifest,
     };
     use ring::signature::{Ed25519KeyPair, KeyPair};
+    use sha2::{Digest, Sha256};
 
     use super::*;
 
@@ -2211,6 +2256,25 @@ mod private_hnsw_tests {
         assert_eq!(
             PrivateHnswOramStore::merkle_root_for_commitments(&leaf_commitments).unwrap(),
             manifest.root_hash,
+        );
+        for bucket in &encrypted_build.buckets {
+            validate_bucket_ciphertext_fixed_size(bucket, &manifest).unwrap();
+        }
+
+        let mut short_ciphertext_bucket = encrypted_build.buckets[0].clone();
+        let mut short_raw = BASE64URL_NOPAD
+            .decode(short_ciphertext_bucket.ciphertext.as_bytes())
+            .unwrap();
+        short_raw.pop().unwrap();
+        short_ciphertext_bucket.ciphertext = BASE64URL_NOPAD.encode(&short_raw);
+        short_ciphertext_bucket.ciphertext_sha256 =
+            BASE64URL_NOPAD.encode(Sha256::digest(&short_raw).as_ref());
+        let err =
+            validate_bucket_ciphertext_fixed_size(&short_ciphertext_bucket, &manifest).unwrap_err();
+        assert!(err.to_string().contains("fixed ciphertext size"));
+        assert!(
+            !err.to_string()
+                .contains(&short_ciphertext_bucket.ciphertext)
         );
 
         let mut wrong_commitment_buckets = encrypted_build.buckets.clone();

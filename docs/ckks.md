@@ -700,14 +700,18 @@ Initial bucket upload also rejects incomplete bucket sets, duplicated bucket
 ids, malformed bucket ciphertext, and ciphertext hash mismatches before
 encrypted bucket files are written. Bucket commitments must also match the
 server-verifiable commitment over collection/vector/key lineage, bucket id,
-index epoch, and `ciphertext_sha256`. The malformed ciphertext, bucket
-commitment context mismatch, and Merkle root mismatch error paths do not echo
-the submitted ciphertext or computed Merkle root into REST response bodies or
-gRPC status messages, and epoch/root mismatch handling does not echo the
-submitted root hash. Bucket-store layout failures during upload are sanitized
-without exposing collection-local
-`private_hnsw_oram` filesystem paths. Corrupt current-epoch metadata observed
-during bucket upload or session open is sanitized the same way.
+index epoch, and `ciphertext_sha256`. Upload and commit ingress additionally
+check that decoded bucket ciphertext length exactly matches the fixed Path ORAM
+bucket size implied by `oram.bucket_size` and `oram.block_size_bytes`; a shorter
+or longer ciphertext is rejected even when its hash and commitment are
+self-consistent. The malformed ciphertext, fixed-size mismatch, bucket
+commitment context mismatch, and Merkle root mismatch error paths do not echo the
+submitted ciphertext or computed Merkle root into REST response bodies or gRPC
+status messages, and epoch/root mismatch handling does not echo the submitted
+root hash. Bucket-store layout failures during upload are sanitized without
+exposing collection-local `private_hnsw_oram` filesystem paths. Corrupt
+current-epoch metadata observed during bucket upload or session open is
+sanitized the same way.
 REST and gRPC `read_paths` error handling is checked for non-reflection:
 epoch/root mismatches and malformed path labels fail without echoing the
 submitted root hash, submitted path label, or any stored bucket ciphertext into
@@ -750,7 +754,8 @@ hash into the REST body or gRPC status message. Missing commit Merkle metadata
 is reported without exposing
 collection-local `private_hnsw_oram` filesystem paths. Empty and oversized
 `updated_buckets` commits are rejected by fixed writeback request-size
-validation before bucket writes are attempted.
+validation before bucket writes are attempted, and each updated bucket must also
+carry exactly the manifest-derived fixed ciphertext size.
 Commit writebacks also validate every updated bucket commitment against the
 bucket ciphertext hash plus collection/vector/key lineage and the proposed
 bucket epoch before Merkle metadata is prepared or bucket files are written.
