@@ -1231,6 +1231,23 @@ mod private_hnsw_rest_tests {
                 !active_snapshot_error.contains("private_hnsw_oram"),
                 "{active_snapshot_error}"
             );
+            let active_full_snapshot_error =
+                crate::common::snapshots::do_create_full_snapshot(&dispatcher, auth.clone())
+                    .await
+                    .unwrap_err()
+                    .to_string();
+            assert!(
+                active_full_snapshot_error.contains("requires no active private ORAM session"),
+                "{active_full_snapshot_error}"
+            );
+            assert!(
+                !active_full_snapshot_error.contains(&fixture.encrypted_build.root_hash),
+                "{active_full_snapshot_error}"
+            );
+            assert!(
+                !active_full_snapshot_error.contains("private_hnsw_oram"),
+                "{active_full_snapshot_error}"
+            );
 
             post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/session",

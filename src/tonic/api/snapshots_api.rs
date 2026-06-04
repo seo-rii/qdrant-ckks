@@ -12,8 +12,7 @@ use api::grpc::qdrant::{
 };
 use collection::operations::verification::new_unchecked_verification_pass;
 use storage::content_manager::snapshots::{
-    do_create_full_snapshot, do_delete_collection_snapshot, do_delete_full_snapshot,
-    do_list_full_snapshots,
+    do_delete_collection_snapshot, do_delete_full_snapshot, do_list_full_snapshots,
 };
 use storage::content_manager::toc::TableOfContent;
 use storage::dispatcher::Dispatcher;
@@ -23,6 +22,7 @@ use super::{validate, validate_and_log};
 use crate::common;
 use crate::common::collections::{do_create_snapshot, do_list_snapshots};
 use crate::common::http_client::HttpClient;
+use crate::common::snapshots::do_create_full_snapshot;
 use crate::settings::Settings;
 use crate::tonic::auth::extract_auth;
 

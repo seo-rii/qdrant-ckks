@@ -31,8 +31,7 @@ use shard::snapshots::snapshot_manifest::{RecoveryType, SnapshotManifest};
 use storage::content_manager::errors::{StorageError, StorageResult};
 use storage::content_manager::snapshots::recover::do_recover_from_snapshot;
 use storage::content_manager::snapshots::{
-    do_create_full_snapshot, do_delete_collection_snapshot, do_delete_full_snapshot,
-    do_list_full_snapshots,
+    do_delete_collection_snapshot, do_delete_full_snapshot, do_list_full_snapshots,
 };
 use storage::content_manager::toc::TableOfContent;
 use storage::dispatcher::Dispatcher;
@@ -53,8 +52,9 @@ use crate::common::collections::*;
 use crate::common::crypto::validate_recovered_collection_crypto_config;
 use crate::common::http_client::HttpClient;
 use crate::common::snapshots::{
-    redacted_snapshot_url_for_message, try_take_partial_snapshot_recovery_lock,
-    validate_snapshot_peer_base_url_policy, validate_snapshot_url_api_key_policy,
+    do_create_full_snapshot, redacted_snapshot_url_for_message,
+    try_take_partial_snapshot_recovery_lock, validate_snapshot_peer_base_url_policy,
+    validate_snapshot_url_api_key_policy,
 };
 use crate::settings::Settings;
 

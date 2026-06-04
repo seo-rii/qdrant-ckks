@@ -8,7 +8,7 @@ use collection::config::CollectionConfigInternal;
 use collection::operations::snapshot_ops::{
     ShardSnapshotLocation, SnapshotDescription, SnapshotPriority,
 };
-use collection::operations::verification::VerificationPass;
+use collection::operations::verification::{VerificationPass, new_unchecked_verification_pass};
 use collection::shards::replica_set::replica_set_state::ReplicaState;
 use collection::shards::shard::ShardId;
 use collection::shards::transfer::RecoveryStage;
@@ -26,6 +26,7 @@ use tokio::sync::OwnedRwLockWriteGuard;
 use super::auth::Auth;
 use super::crypto::validate_recovered_collection_crypto_config;
 use super::http_client::HttpClient;
+use super::private_hnsw::ensure_no_active_private_hnsw_collection_snapshot_session;
 use crate::settings::Settings;
 
 pub fn validate_snapshot_url_api_key_policy(
@@ -105,6 +106,24 @@ pub(crate) fn redacted_snapshot_url_for_message(url: &Url) -> String {
     redacted.set_query(url.query().map(|_| "[redacted]"));
     redacted.set_fragment(url.fragment().map(|_| "[redacted]"));
     redacted.to_string()
+}
+
+pub async fn do_create_full_snapshot(
+    dispatcher: &Dispatcher,
+    auth: Auth,
+) -> Result<SnapshotDescription, StorageError> {
+    let collections_pass =
+        auth.check_global_access(AccessRequirements::new().manage(), "create_full_snapshot")?;
+    let pass = new_unchecked_verification_pass();
+    let toc = dispatcher.toc(&auth, &pass).clone();
+
+    for collection_pass in toc.multipass_into_collections(&collections_pass).await {
+        let collection = toc.get_collection(&collection_pass).await?;
+        let config = collection.config_snapshot().await;
+        ensure_no_active_private_hnsw_collection_snapshot_session(collection.name(), &config)?;
+    }
+
+    snapshots::do_create_full_snapshot(dispatcher, auth).await
 }
 
 /// # Cancel safety
