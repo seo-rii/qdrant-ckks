@@ -535,11 +535,11 @@ configured Ed25519 signing public keys, `search_execution: client_led`,
 `search_mode: private_hnsw_oram`, explicit `result_privacy`, and fixed-budget
 search in strict mode. Qdrant does not store point-level dense vectors for this
 provider and does not score or traverse HNSW server-side; normal vector writes
-and server scoring, including ordinary query/fusion/context/MMR,
-recommend/discover, grouped search/query, and search matrix paths, fail closed
-and direct clients to the private HNSW ORAM session APIs. Phase 11 implements
-the encrypted bucket store and session read/commit APIs behind this validated
-control-plane contract.
+and server scoring, including legacy search/batch search, ordinary
+query/fusion/context/MMR, recommend/discover, grouped search/query, and search
+matrix paths, fail closed and direct clients to the private HNSW ORAM session
+APIs. Phase 11 implements the encrypted bucket store and session read/commit
+APIs behind this validated control-plane contract.
 The private ORAM bucket store is canonical encrypted index data, not an
 untrusted acceleration hint: manifests, epoch files, Merkle metadata, and
 buckets must live under private non-symlink directories. Directory creation

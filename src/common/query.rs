@@ -8726,6 +8726,89 @@ mod tests {
     }
 
     #[test]
+    fn private_hnsw_oram_legacy_and_batch_search_require_client_led_session() {
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let (_temp, dispatcher) = test_dispatcher();
+        let auth = Auth::new_internal(Access::full("For test"));
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+            let pass = new_unchecked_verification_pass();
+            let toc = dispatcher.toc(&auth, &pass).clone();
+
+            let err = do_search_points(
+                &toc,
+                COLLECTION_NAME,
+                SearchRequestInternal {
+                    vector: api::rest::NamedVectorStruct::Dense(
+                        segment::data_types::vectors::NamedVector {
+                            name: VECTOR_NAME.to_string(),
+                            vector: vec![1.0, 0.0],
+                        },
+                    ),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/text/session")
+            ));
+
+            let err = do_search_batch_points(
+                &toc,
+                COLLECTION_NAME,
+                vec![(
+                    CoreSearchRequest {
+                        query: QueryEnum::Nearest(NamedQuery::new(
+                            VectorInternal::Dense(vec![1.0, 0.0]),
+                            VECTOR_NAME.to_string(),
+                        )),
+                        filter: None,
+                        params: None,
+                        limit: 1,
+                        offset: 0,
+                        with_payload: Some(WithPayloadInterface::Bool(false)),
+                        with_vector: Some(WithVector::Bool(false)),
+                        score_threshold: None,
+                    },
+                    ShardSelectorInternal::All,
+                )],
+                None,
+                auth,
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/text/session")
+            ));
+        });
+    }
+
+    #[test]
     fn private_hnsw_oram_search_matrix_requires_client_led_session() {
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
         let settings = fixture.route_settings();
