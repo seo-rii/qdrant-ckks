@@ -30,7 +30,8 @@ use qdrant_sec::{
     RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, ServerPayloadVerifiedEnvelopeKey,
     VECTOR_CLIENT_CKKS_PROVIDER, VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER,
     VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, WrappedKeyBlob, client_ckks_vector_sidecar_envelope_key,
-    client_payload_nonce_replay_key, client_payload_signature_key_id, rewrap_resource_key,
+    client_payload_nonce_replay_key, client_payload_signature_key_id,
+    private_hnsw_min_f32_node_block_bytes, rewrap_resource_key,
     validate_client_ckks_vector_payload_value_for_runtime,
     validate_client_payload_value_for_runtime,
 };
@@ -3695,12 +3696,29 @@ fn validate_private_hnsw_oram_instance(
         PRIVATE_HNSW_RESULT_PRIVACY_IDS_VISIBLE,
     )?;
     private_hnsw_distance(instance_name, instance)?;
-    private_hnsw_required_u64(instance_name, instance, PRIVATE_HNSW_DIM_OPTION, 1, 65_536)?;
+    let dim =
+        private_hnsw_required_u64(instance_name, instance, PRIVATE_HNSW_DIM_OPTION, 1, 65_536)?;
 
-    validate_private_hnsw_hnsw_options(instance_name, instance)?;
+    let hnsw_shape = validate_private_hnsw_hnsw_options(instance_name, instance)?;
     let oram_shape = validate_private_hnsw_oram_options(instance_name, instance)?;
     let fixed_budget = validate_private_hnsw_fixed_budget_options(instance_name, instance)?;
     validate_private_hnsw_integrity_options(instance_name, instance)?;
+    let min_node_block_bytes =
+        private_hnsw_min_f32_node_block_bytes(dim as u32, hnsw_shape.fixed_neighbor_slots as u32)
+            .ok_or_else(|| CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: "oram.block_size_bytes".to_string(),
+            reason: "private HNSW node block size calculation overflowed".to_string(),
+        })?;
+    if oram_shape.block_size_bytes < min_node_block_bytes {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: "oram.block_size_bytes".to_string(),
+            reason: format!(
+                "must be at least {min_node_block_bytes} bytes to fit the fixed f32 node block for configured dim and fixed_neighbor_slots"
+            ),
+        });
+    }
     if fixed_budget.paths_per_round != oram_shape.path_batch_size {
         return Err(CryptoSetupError::InvalidInstanceOption {
             instance: instance_name.to_string(),
@@ -3956,7 +3974,7 @@ fn private_hnsw_distance(
 fn validate_private_hnsw_hnsw_options(
     instance_name: &str,
     instance: &CryptoInstanceConfig,
-) -> Result<(), CryptoSetupError> {
+) -> Result<PrivateHnswHnswRuntimeShape, CryptoSetupError> {
     let hnsw = private_hnsw_object(instance_name, instance, PRIVATE_HNSW_HNSW_OPTION)?;
     private_hnsw_reject_unknown_object_fields(
         instance_name,
@@ -3981,7 +3999,7 @@ fn validate_private_hnsw_hnsw_options(
         1,
         64,
     )?;
-    private_hnsw_object_u64(
+    let fixed_neighbor_slots = private_hnsw_object_u64(
         instance_name,
         hnsw,
         PRIVATE_HNSW_HNSW_OPTION,
@@ -3989,11 +4007,19 @@ fn validate_private_hnsw_hnsw_options(
         m,
         1024,
     )?;
-    Ok(())
+    Ok(PrivateHnswHnswRuntimeShape {
+        fixed_neighbor_slots,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PrivateHnswHnswRuntimeShape {
+    fixed_neighbor_slots: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PrivateHnswOramRuntimeShape {
+    block_size_bytes: u64,
     path_batch_size: u64,
 }
 
@@ -4094,7 +4120,10 @@ fn validate_private_hnsw_oram_options(
             reason: "must be less than or equal to the ORAM leaf count".to_string(),
         });
     }
-    Ok(PrivateHnswOramRuntimeShape { path_batch_size })
+    Ok(PrivateHnswOramRuntimeShape {
+        block_size_bytes: block_size,
+        path_batch_size,
+    })
 }
 
 fn validate_private_hnsw_fixed_budget_options(
@@ -9404,6 +9433,41 @@ mod tests {
             matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
                 if option == "oram.tree_height"
                     && reason.contains("1..=62")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
+    fn validate_crypto_settings_rejects_private_hnsw_impossible_node_block_budget() {
+        let mut settings = CryptoSettings {
+            zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+            allow_inline_key_material: false,
+            instances: HashMap::from([(
+                "docs_private_hnsw_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                    materials: HashMap::new(),
+                    backend_ref: None,
+                    options: private_hnsw_oram_options(),
+                },
+            )]),
+            ..CryptoSettings::default()
+        };
+
+        let options = &mut settings
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options;
+        options["dim"] = json!(1536);
+        options["oram"]["block_size_bytes"] = json!(8192);
+
+        let err = validate_crypto_settings(&settings)
+            .expect_err("block_size_bytes must fit the fixed f32 node block layout");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "oram.block_size_bytes"
+                    && reason.contains("fixed f32 node block")),
             "unexpected error: {err:?}",
         );
     }

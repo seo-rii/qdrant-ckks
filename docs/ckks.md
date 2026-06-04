@@ -562,6 +562,10 @@ Runtime and signed-manifest validation keep fixed path budgets executable:
 `fixed_budget.paths_per_round` must equal `oram.path_batch_size`. This prevents
 SDK/server disagreement and avoids configurations that could only be satisfied
 by duplicate `read_paths` labels.
+They also reject `dim`, `hnsw.fixed_neighbor_slots`, and
+`oram.block_size_bytes` combinations that cannot hold the fixed-size f32 node
+block layout. For example, a 1536-dimensional index with 64 fixed neighbor
+slots requires a 16 KiB block-size allowlist entry rather than 8 KiB.
 If a process crashes after bucket or Merkle writeback but before the epoch CAS,
 recovery continues to report the old current epoch and rejects mixed old-root /
 new-bucket reads rather than serving an inconsistent ORAM view.

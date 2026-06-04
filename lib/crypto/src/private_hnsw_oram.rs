@@ -17,6 +17,9 @@ const PRIVATE_HNSW_ORAM_SIGNATURE_ALGORITHM: &str = "ed25519";
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
 const BASE64URL_NOPAD_64_BYTE_LEN: usize = 86;
 const PRIVATE_HNSW_ORAM_MANIFEST_VERSION: u16 = 1;
+const PRIVATE_HNSW_NODE_BLOCK_FIXED_BYTES: u64 = 133;
+const PRIVATE_HNSW_NODE_BLOCK_F32_ELEMENT_BYTES: u64 = 4;
+const PRIVATE_HNSW_NODE_BLOCK_NEIGHBOR_SLOT_BYTES: u64 = 33;
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum PrivateHnswOramError {
@@ -318,6 +321,15 @@ pub fn validate_private_hnsw_oram_read_paths_signature(
         .map_err(|_| PrivateHnswOramError::InvalidReadPathsSignature)
 }
 
+pub fn private_hnsw_min_f32_node_block_bytes(dim: u32, fixed_neighbor_slots: u32) -> Option<u64> {
+    let vector_bytes = u64::from(dim).checked_mul(PRIVATE_HNSW_NODE_BLOCK_F32_ELEMENT_BYTES)?;
+    let neighbor_bytes =
+        u64::from(fixed_neighbor_slots).checked_mul(PRIVATE_HNSW_NODE_BLOCK_NEIGHBOR_SLOT_BYTES)?;
+    PRIVATE_HNSW_NODE_BLOCK_FIXED_BYTES
+        .checked_add(vector_bytes)?
+        .checked_add(neighbor_bytes)
+}
+
 pub fn private_hnsw_oram_manifest_signature_message(manifest: &PrivateHnswOramManifest) -> Vec<u8> {
     let mut message = Vec::new();
     push_domain(
@@ -443,6 +455,16 @@ fn validate_manifest_shape(manifest: &PrivateHnswOramManifest) -> Result<(), Pri
         || manifest.oram.path_batch_size == 0
     {
         return Err(PrivateHnswOramError::InvalidManifestField("oram"));
+    }
+    let min_node_block_bytes =
+        private_hnsw_min_f32_node_block_bytes(manifest.dim, manifest.hnsw.fixed_neighbor_slots)
+            .ok_or(PrivateHnswOramError::InvalidManifestField(
+                "oram.block_size_bytes",
+            ))?;
+    if u64::from(manifest.oram.block_size_bytes) < min_node_block_bytes {
+        return Err(PrivateHnswOramError::InvalidManifestField(
+            "oram.block_size_bytes",
+        ));
     }
     if !manifest.fixed_budget.enabled
         || manifest.fixed_budget.upper_layer_steps == 0
@@ -661,7 +683,7 @@ mod tests {
             oram: OramParams {
                 kind: OramKind::PathOram,
                 bucket_size: 4,
-                block_size_bytes: 8192,
+                block_size_bytes: 16384,
                 tree_height: 24,
                 path_batch_size: 8,
             },
@@ -717,7 +739,7 @@ mod tests {
         let digest = Sha256::digest(private_hnsw_oram_manifest_signature_message(&manifest));
         assert_eq!(
             BASE64URL_NOPAD.encode(digest.as_ref()),
-            "9AnLVsSwTaLPfRx8dTkLIxOReGmQYYJ5p5UVIP0sPGQ"
+            "1hzG6sGJ3RkYa_N_fB91X83CT5gF19sXnVxGdo2hiOQ"
         );
     }
 
@@ -892,6 +914,19 @@ mod tests {
             validate_private_hnsw_oram_manifest_shape(&manifest),
             Err(PrivateHnswOramError::InvalidManifestField(
                 "fixed_budget.paths_per_round"
+            ))
+        );
+    }
+
+    #[test]
+    fn manifest_shape_rejects_impossible_node_block_budget() {
+        let mut manifest = fixture_manifest();
+        manifest.oram.block_size_bytes = 8192;
+
+        assert_eq!(
+            validate_private_hnsw_oram_manifest_shape(&manifest),
+            Err(PrivateHnswOramError::InvalidManifestField(
+                "oram.block_size_bytes"
             ))
         );
     }

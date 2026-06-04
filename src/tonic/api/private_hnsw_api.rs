@@ -545,7 +545,7 @@ mod private_hnsw_grpc_tests {
             oram: OramParams {
                 kind: OramKind::PathOram,
                 bucket_size: 4,
-                block_size_bytes: 8192,
+                block_size_bytes: 16384,
                 tree_height: 24,
                 path_batch_size: 8,
             },
