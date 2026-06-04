@@ -250,6 +250,7 @@ struct ResolvedPrivateHnswContext {
     expected_hnsw: PrivateHnswParams,
     expected_oram: OramParams,
     expected_fixed_budget: FixedBudgetParams,
+    signature_public_keys: HashMap<String, String>,
     public_key: Vec<u8>,
 }
 
@@ -352,6 +353,16 @@ impl ResolvedPrivateHnswContext {
             ));
         }
         Ok(())
+    }
+
+    fn signature_public_key(&self, signature_key_id: &str) -> StorageResult<Vec<u8>> {
+        let public_key_b64 = self
+            .signature_public_keys
+            .get(signature_key_id)
+            .ok_or_else(|| {
+                StorageError::bad_request("private HNSW ORAM signature key id is not configured")
+            })?;
+        decode_signature_public_key(public_key_b64)
     }
 }
 
@@ -683,7 +694,7 @@ pub async fn do_read_private_hnsw_paths(
         settings,
         collection_name,
         vector_name,
-        Some(&client_signature.key_id),
+        None,
         "private_hnsw_oram_read_paths",
     )
     .await?;
@@ -712,6 +723,7 @@ pub async fn do_read_private_hnsw_paths(
                 ));
             }
             validate_session_signature_owner_key(session, &client_signature.key_id)?;
+            let public_key = request_context.signature_public_key(&client_signature.key_id)?;
             let path_refs = paths.iter().map(String::as_str).collect::<Vec<_>>();
             validate_private_hnsw_oram_read_paths_signature(
                 PrivateHnswOramReadPathsSignatureInput {
@@ -731,7 +743,7 @@ pub async fn do_read_private_hnsw_paths(
                 &client_signature.sig,
                 PrivateHnswSignatureVerification {
                     expected_key_id: &client_signature.key_id,
-                    public_key: &request_context.public_key,
+                    public_key: &public_key,
                 },
             )
             .map_err(private_hnsw_error)?;
@@ -802,7 +814,7 @@ pub async fn do_commit_private_hnsw_paths(
         settings,
         collection_name,
         vector_name,
-        Some(&commit_signature.key_id),
+        None,
         "private_hnsw_oram_commit",
     )
     .await?;
@@ -844,6 +856,7 @@ pub async fn do_commit_private_hnsw_paths(
             })
             .collect::<Vec<_>>();
         validate_session_signature_owner_key(session, &commit_signature.key_id)?;
+        let public_key = request_context.signature_public_key(&commit_signature.key_id)?;
         validate_private_hnsw_oram_commit_signature(
             PrivateHnswOramCommitSignatureInput {
                 collection_id: &session.collection_id,
@@ -862,7 +875,7 @@ pub async fn do_commit_private_hnsw_paths(
             &commit_signature.sig,
             PrivateHnswSignatureVerification {
                 expected_key_id: &commit_signature.key_id,
-                public_key: &request_context.public_key,
+                public_key: &public_key,
             },
         )
         .map_err(private_hnsw_error)?;
@@ -1159,6 +1172,7 @@ fn manifest_context_from_runtime(
     let expected_hnsw = required_option_struct(instance, HNSW_OPTION)?;
     let expected_oram = required_option_struct(instance, ORAM_OPTION)?;
     let expected_fixed_budget = required_option_struct(instance, FIXED_BUDGET_OPTION)?;
+    let verifier_public_keys = signature_public_keys(instance)?;
     let expected_distance = distance_kind(vector_params.distance);
     let expected_dim = u32::try_from(vector_params.size.get()).map_err(|_| {
         StorageError::bad_request(format!(
@@ -1179,6 +1193,7 @@ fn manifest_context_from_runtime(
         expected_hnsw,
         expected_oram,
         expected_fixed_budget,
+        signature_public_keys: verifier_public_keys,
         public_key: Vec::new(),
     })
 }
@@ -1201,6 +1216,16 @@ fn signature_public_key(
     instance: &CryptoInstanceConfig,
     signature_key_id: &str,
 ) -> StorageResult<Vec<u8>> {
+    let registry = signature_public_keys(instance)?;
+    let public_key_b64 = registry.get(signature_key_id).ok_or_else(|| {
+        StorageError::bad_request("private HNSW ORAM signature key id is not configured")
+    })?;
+    decode_signature_public_key(public_key_b64)
+}
+
+fn signature_public_keys(
+    instance: &CryptoInstanceConfig,
+) -> StorageResult<HashMap<String, String>> {
     let registry = instance
         .options
         .get(SIGNATURE_PUBLIC_KEYS_OPTION)
@@ -1210,12 +1235,18 @@ fn signature_public_key(
                 "private HNSW ORAM runtime instance must configure signature_public_keys",
             )
         })?;
-    let public_key_b64 = registry
-        .get(signature_key_id)
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| {
-            StorageError::bad_request("private HNSW ORAM signature key id is not configured")
-        })?;
+    registry
+        .iter()
+        .map(|(key_id, public_key)| {
+            let public_key_b64 = public_key.as_str().ok_or_else(|| {
+                StorageError::bad_request("private HNSW ORAM public key is not base64url")
+            })?;
+            Ok((key_id.clone(), public_key_b64.to_string()))
+        })
+        .collect()
+}
+
+fn decode_signature_public_key(public_key_b64: &str) -> StorageResult<Vec<u8>> {
     let public_key = BASE64URL_NOPAD
         .decode(public_key_b64.as_bytes())
         .map_err(|_| StorageError::bad_request("private HNSW ORAM public key is not base64url"))?;

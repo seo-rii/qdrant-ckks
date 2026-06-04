@@ -1979,7 +1979,11 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("signature key id is not configured"));
+            assert!(
+                err.message()
+                    .contains("signature key_id does not match manifest owner_signing_key_id")
+            );
+            assert!(!err.message().contains("not configured"));
             assert!(
                 !err.message().contains(signature_key_id_sentinel),
                 "{}",
@@ -2199,7 +2203,11 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("signature key id is not configured"));
+            assert!(
+                err.message()
+                    .contains("signature key_id does not match manifest owner_signing_key_id")
+            );
+            assert!(!err.message().contains("not configured"));
             assert!(
                 !err.message().contains(signature_key_id_sentinel),
                 "{}",

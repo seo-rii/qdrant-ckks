@@ -636,7 +636,9 @@ shape, and signature body shape before looking up the configured public key, so
 malformed signed requests do not reach the verifier registry lookup boundary.
 The `read_paths` and `commit` client signatures use the same key-id shape check
 before verifier lookup; invalid key ids are rejected without echoing the
-submitted value.
+submitted value. For active sessions, the request key id must match the session
+manifest's `owner_signing_key_id` before the verifier public key is looked up,
+so non-owner key ids do not reach the registry lookup boundary.
 Manifest-store layout failures during upload are sanitized without exposing
 collection-local `private_hnsw_oram` filesystem paths.
 Path ORAM manifests must also bind `bucket_count` to the canonical full binary
