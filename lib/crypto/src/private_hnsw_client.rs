@@ -68,6 +68,14 @@ pub enum PrivateHnswClientError {
     InvalidBucketContext(&'static str),
     #[error("private HNSW bucket ciphertext is not base64url")]
     InvalidBucketCiphertextEncoding,
+    #[error(
+        "private HNSW bucket {bucket_id} ciphertext length {actual_bytes} does not match expected fixed length {expected_bytes}"
+    )]
+    BucketCiphertextSizeMismatch {
+        bucket_id: u64,
+        expected_bytes: usize,
+        actual_bytes: usize,
+    },
     #[error("private HNSW bucket ciphertext hash is invalid")]
     InvalidBucketCiphertextHash,
     #[error("private HNSW bucket commitment is invalid")]
@@ -1724,6 +1732,7 @@ pub fn validate_private_hnsw_oram_upload_bundle(
     let bucket_count = usize::try_from(manifest.bucket_count)
         .map_err(|_| PrivateHnswClientError::BucketCountMismatch)?;
     decode_merkle_root(&manifest.root_hash)?;
+    let expected_ciphertext_bytes = expected_private_hnsw_upload_bucket_ciphertext_bytes(manifest)?;
 
     let base_context = PrivateHnswBucketAeadBaseContext {
         collection_id: &manifest.collection_id,
@@ -1739,6 +1748,7 @@ pub fn validate_private_hnsw_oram_upload_bundle(
             bucket,
             manifest.index_epoch,
             manifest.bucket_count,
+            expected_ciphertext_bytes,
         )?;
         let bucket_index = usize::try_from(bucket.bucket_id)
             .map_err(|_| PrivateHnswClientError::BucketCountMismatch)?;
@@ -1771,6 +1781,7 @@ fn validate_private_hnsw_upload_bucket(
     bucket: &PrivateHnswOramBucket,
     expected_epoch: u64,
     bucket_count: u64,
+    expected_ciphertext_bytes: usize,
 ) -> Result<(), PrivateHnswClientError> {
     if bucket.version != 1 {
         return Err(PrivateHnswClientError::UnsupportedBucketVersion(
@@ -1794,6 +1805,13 @@ fn validate_private_hnsw_upload_bucket(
     let raw_ciphertext = BASE64URL_NOPAD
         .decode(bucket.ciphertext.as_bytes())
         .map_err(|_| PrivateHnswClientError::InvalidBucketCiphertextEncoding)?;
+    if raw_ciphertext.len() != expected_ciphertext_bytes {
+        return Err(PrivateHnswClientError::BucketCiphertextSizeMismatch {
+            bucket_id: bucket.bucket_id,
+            expected_bytes: expected_ciphertext_bytes,
+            actual_bytes: raw_ciphertext.len(),
+        });
+    }
     if raw_ciphertext.len() < 1 + BUCKET_AEAD_NONCE_LEN + BUCKET_AEAD_TAG_LEN {
         return Err(PrivateHnswClientError::InvalidBucketCiphertextEncoding);
     }
@@ -1813,6 +1831,41 @@ fn validate_private_hnsw_upload_bucket(
         return Err(PrivateHnswClientError::InvalidBucketCommitment);
     }
     Ok(())
+}
+
+fn expected_private_hnsw_upload_bucket_ciphertext_bytes(
+    manifest: &PrivateHnswOramManifest,
+) -> Result<usize, PrivateHnswClientError> {
+    let bucket_size = usize::try_from(manifest.oram.bucket_size)
+        .map_err(|_| PrivateHnswClientError::InvalidOramClientConfig("bucket_size"))?;
+    let block_size_bytes = usize::try_from(manifest.oram.block_size_bytes)
+        .map_err(|_| PrivateHnswClientError::InvalidOramClientConfig("block_size_bytes"))?;
+    let slot_bytes = 1usize.checked_add(block_size_bytes).ok_or(
+        PrivateHnswClientError::InvalidOramClientConfig("block_size_bytes"),
+    )?;
+    let bucket_payload_bytes = bucket_size.checked_mul(slot_bytes).ok_or(
+        PrivateHnswClientError::InvalidOramClientConfig("bucket_size"),
+    )?;
+    let plaintext_header_bytes = BUCKET_PLAINTEXT_MAGIC
+        .len()
+        .checked_add(std::mem::size_of::<u16>())
+        .and_then(|len| len.checked_add(std::mem::size_of::<u32>()))
+        .and_then(|len| len.checked_add(std::mem::size_of::<u32>()))
+        .ok_or(PrivateHnswClientError::InvalidOramClientConfig(
+            "block_size_bytes",
+        ))?;
+    let plaintext_bytes = plaintext_header_bytes
+        .checked_add(bucket_payload_bytes)
+        .ok_or(PrivateHnswClientError::InvalidOramClientConfig(
+            "block_size_bytes",
+        ))?;
+    1usize
+        .checked_add(BUCKET_AEAD_NONCE_LEN)
+        .and_then(|len| len.checked_add(plaintext_bytes))
+        .and_then(|len| len.checked_add(BUCKET_AEAD_TAG_LEN))
+        .ok_or(PrivateHnswClientError::InvalidOramClientConfig(
+            "block_size_bytes",
+        ))
 }
 
 pub fn refresh_private_hnsw_oram_manifest_for_commit(
@@ -5531,6 +5584,38 @@ mod tests {
         assert_eq!(
             validate_private_hnsw_oram_upload_bundle(&wrong_commitment),
             Err(PrivateHnswClientError::InvalidBucketCommitment)
+        );
+
+        let mut wrong_size = decoded.clone();
+        let mut wrong_size_raw = BASE64URL_NOPAD
+            .decode(wrong_size.buckets[0].ciphertext.as_bytes())
+            .unwrap();
+        let expected_bytes = wrong_size_raw.len();
+        wrong_size_raw.pop();
+        let wrong_size_hash = base64url_sha256(&wrong_size_raw);
+        let wrong_size_context = PrivateHnswBucketAeadBaseContext {
+            collection_id: &wrong_size.manifest.collection_id,
+            vector_name: &wrong_size.manifest.vector_name,
+            key_id: &wrong_size.manifest.key_id,
+            rk_id: &wrong_size.manifest.rk_id,
+            rk_epoch: wrong_size.manifest.rk_epoch,
+        };
+        let wrong_size_bucket = &mut wrong_size.buckets[0];
+        wrong_size_bucket.ciphertext = BASE64URL_NOPAD.encode(&wrong_size_raw);
+        wrong_size_bucket.ciphertext_sha256 = wrong_size_hash;
+        wrong_size_bucket.bucket_commitment = private_hnsw_bucket_commitment(
+            wrong_size_context
+                .for_bucket(wrong_size_bucket.bucket_id, wrong_size_bucket.index_epoch),
+            &wrong_size_bucket.ciphertext_sha256,
+        )
+        .unwrap();
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle(&wrong_size),
+            Err(PrivateHnswClientError::BucketCiphertextSizeMismatch {
+                bucket_id: 0,
+                expected_bytes,
+                actual_bytes: expected_bytes - 1
+            })
         );
 
         let mut wrong_root = decoded;

@@ -918,8 +918,9 @@ REST/gRPC SDK distribution. `validate_private_hnsw_oram_upload_bundle` and the
 bundle's `validate_initial_upload_contract` method let SDKs preflight decoded
 upload bundles before calling Qdrant: they require a complete bucket set, reject
 duplicate or missing bucket ids, verify bucket ciphertext SHA-256 and bucket
-commitments against the manifest context, and recompute the manifest Merkle
-root. Before submitting an ORAM writeback, clients can call
+commitments against the manifest context, require each decoded ciphertext to
+match the manifest-derived fixed bucket ciphertext size, and recompute the
+manifest Merkle root. Before submitting an ORAM writeback, clients can call
 `plan_private_hnsw_oram_commit_for_manifest` to bind commit planning to the
 current signed manifest, updated bucket ciphertext hashes,
 collection/vector/key lineage, and proposed bucket epoch before producing
