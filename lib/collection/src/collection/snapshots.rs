@@ -12,7 +12,8 @@ use qdrant_sec::{
     DistanceKind, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_HNSW_ORAM_BINDING,
     PrivateHnswBucketAeadBaseContext, PrivateHnswOramBucket, PrivateHnswOramManifest,
     PrivateHnswOramSignature, ResultPrivacyMode, private_hnsw_bucket_commitment,
-    validate_private_hnsw_oram_manifest_shape, validate_private_hnsw_oram_manifest_signature_shape,
+    private_hnsw_oram_bucket_ciphertext_bytes, validate_private_hnsw_oram_manifest_shape,
+    validate_private_hnsw_oram_manifest_signature_shape,
 };
 use segment::types::SnapshotFormat;
 use segment::utils::fs::move_all;
@@ -833,30 +834,8 @@ fn validate_private_hnsw_oram_restore_manifest(
 fn private_hnsw_restore_expected_bucket_ciphertext_bytes(
     manifest: &PrivateHnswOramManifest,
 ) -> CollectionResult<usize> {
-    let block_size = usize::try_from(manifest.oram.block_size_bytes).map_err(|_| {
-        CollectionError::bad_request("private HNSW ORAM block_size_bytes exceeds usize")
-    })?;
-    let bucket_size = usize::try_from(manifest.oram.bucket_size)
-        .map_err(|_| CollectionError::bad_request("private HNSW ORAM bucket_size exceeds usize"))?;
-    let slot_bytes = 1usize
-        .checked_add(block_size)
-        .ok_or_else(|| CollectionError::bad_request("private HNSW ORAM bucket size overflows"))?;
-    let bucket_payload_bytes = bucket_size
-        .checked_mul(slot_bytes)
-        .ok_or_else(|| CollectionError::bad_request("private HNSW ORAM bucket size overflows"))?;
-    let plaintext_header_bytes = 4usize
-        .checked_add(std::mem::size_of::<u16>())
-        .and_then(|len| len.checked_add(std::mem::size_of::<u32>()))
-        .and_then(|len| len.checked_add(std::mem::size_of::<u32>()))
-        .ok_or_else(|| CollectionError::bad_request("private HNSW ORAM bucket size overflows"))?;
-    let plaintext_bytes = plaintext_header_bytes
-        .checked_add(bucket_payload_bytes)
-        .ok_or_else(|| CollectionError::bad_request("private HNSW ORAM bucket size overflows"))?;
-    1usize
-        .checked_add(12)
-        .and_then(|len| len.checked_add(plaintext_bytes))
-        .and_then(|len| len.checked_add(16))
-        .ok_or_else(|| CollectionError::bad_request("private HNSW ORAM bucket size overflows"))
+    private_hnsw_oram_bucket_ciphertext_bytes(&manifest.oram)
+        .map_err(|err| CollectionError::bad_request(err.to_string()))
 }
 
 fn validate_private_hnsw_restore_bucket_contract(

@@ -15,8 +15,9 @@ use crate::private_hnsw_oram::{
     DistanceKind, FixedBudgetParams, OramParams, PrivateHnswOramBucket,
     PrivateHnswOramCommitBucketRef, PrivateHnswOramCommitSignatureInput, PrivateHnswOramManifest,
     PrivateHnswOramReadPathsSignatureInput, PrivateHnswOramSignature, PrivateHnswParams,
-    ResultPrivacyMode, private_hnsw_oram_commit_signature_message,
-    private_hnsw_oram_manifest_signature_message, private_hnsw_oram_read_paths_signature_message,
+    ResultPrivacyMode, private_hnsw_oram_bucket_ciphertext_bytes,
+    private_hnsw_oram_commit_signature_message, private_hnsw_oram_manifest_signature_message,
+    private_hnsw_oram_read_paths_signature_message,
 };
 
 pub const PRIVATE_HNSW_NODE_AEAD_DOMAIN: &[u8] = b"qdrant-sec/private-hnsw-node-aead/v1";
@@ -1732,7 +1733,8 @@ pub fn validate_private_hnsw_oram_upload_bundle(
     let bucket_count = usize::try_from(manifest.bucket_count)
         .map_err(|_| PrivateHnswClientError::BucketCountMismatch)?;
     decode_merkle_root(&manifest.root_hash)?;
-    let expected_ciphertext_bytes = expected_private_hnsw_upload_bucket_ciphertext_bytes(manifest)?;
+    let expected_ciphertext_bytes = private_hnsw_oram_bucket_ciphertext_bytes(&manifest.oram)
+        .map_err(|_| PrivateHnswClientError::InvalidOramClientConfig("oram"))?;
 
     let base_context = PrivateHnswBucketAeadBaseContext {
         collection_id: &manifest.collection_id,
@@ -1831,41 +1833,6 @@ fn validate_private_hnsw_upload_bucket(
         return Err(PrivateHnswClientError::InvalidBucketCommitment);
     }
     Ok(())
-}
-
-fn expected_private_hnsw_upload_bucket_ciphertext_bytes(
-    manifest: &PrivateHnswOramManifest,
-) -> Result<usize, PrivateHnswClientError> {
-    let bucket_size = usize::try_from(manifest.oram.bucket_size)
-        .map_err(|_| PrivateHnswClientError::InvalidOramClientConfig("bucket_size"))?;
-    let block_size_bytes = usize::try_from(manifest.oram.block_size_bytes)
-        .map_err(|_| PrivateHnswClientError::InvalidOramClientConfig("block_size_bytes"))?;
-    let slot_bytes = 1usize.checked_add(block_size_bytes).ok_or(
-        PrivateHnswClientError::InvalidOramClientConfig("block_size_bytes"),
-    )?;
-    let bucket_payload_bytes = bucket_size.checked_mul(slot_bytes).ok_or(
-        PrivateHnswClientError::InvalidOramClientConfig("bucket_size"),
-    )?;
-    let plaintext_header_bytes = BUCKET_PLAINTEXT_MAGIC
-        .len()
-        .checked_add(std::mem::size_of::<u16>())
-        .and_then(|len| len.checked_add(std::mem::size_of::<u32>()))
-        .and_then(|len| len.checked_add(std::mem::size_of::<u32>()))
-        .ok_or(PrivateHnswClientError::InvalidOramClientConfig(
-            "block_size_bytes",
-        ))?;
-    let plaintext_bytes = plaintext_header_bytes
-        .checked_add(bucket_payload_bytes)
-        .ok_or(PrivateHnswClientError::InvalidOramClientConfig(
-            "block_size_bytes",
-        ))?;
-    1usize
-        .checked_add(BUCKET_AEAD_NONCE_LEN)
-        .and_then(|len| len.checked_add(plaintext_bytes))
-        .and_then(|len| len.checked_add(BUCKET_AEAD_TAG_LEN))
-        .ok_or(PrivateHnswClientError::InvalidOramClientConfig(
-            "block_size_bytes",
-        ))
 }
 
 pub fn refresh_private_hnsw_oram_manifest_for_commit(

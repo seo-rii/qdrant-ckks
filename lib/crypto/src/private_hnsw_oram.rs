@@ -20,6 +20,8 @@ const PRIVATE_HNSW_ORAM_MANIFEST_VERSION: u16 = 1;
 const PRIVATE_HNSW_NODE_BLOCK_FIXED_BYTES: u64 = 133;
 const PRIVATE_HNSW_NODE_BLOCK_F32_ELEMENT_BYTES: u64 = 4;
 const PRIVATE_HNSW_NODE_BLOCK_NEIGHBOR_SLOT_BYTES: u64 = 33;
+const PRIVATE_HNSW_ORAM_BUCKET_PLAINTEXT_HEADER_BYTES: usize = 4 + 2 + 4 + 4;
+const PRIVATE_HNSW_ORAM_BUCKET_AEAD_OVERHEAD_BYTES: usize = 1 + 12 + 16;
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum PrivateHnswOramError {
@@ -118,6 +120,33 @@ pub struct OramParams {
     pub block_size_bytes: u32,
     pub tree_height: u32,
     pub path_batch_size: u32,
+}
+
+pub fn private_hnsw_oram_bucket_ciphertext_bytes(
+    oram: &OramParams,
+) -> Result<usize, PrivateHnswOramError> {
+    let bucket_size = usize::try_from(oram.bucket_size)
+        .map_err(|_| PrivateHnswOramError::InvalidManifestField("oram.bucket_size"))?;
+    let block_size_bytes = usize::try_from(oram.block_size_bytes)
+        .map_err(|_| PrivateHnswOramError::InvalidManifestField("oram.block_size_bytes"))?;
+    let slot_bytes =
+        1usize
+            .checked_add(block_size_bytes)
+            .ok_or(PrivateHnswOramError::InvalidManifestField(
+                "oram.block_size_bytes",
+            ))?;
+    let bucket_payload_bytes =
+        bucket_size
+            .checked_mul(slot_bytes)
+            .ok_or(PrivateHnswOramError::InvalidManifestField(
+                "oram.bucket_size",
+            ))?;
+    let plaintext_bytes = PRIVATE_HNSW_ORAM_BUCKET_PLAINTEXT_HEADER_BYTES
+        .checked_add(bucket_payload_bytes)
+        .ok_or(PrivateHnswOramError::InvalidManifestField("oram"))?;
+    PRIVATE_HNSW_ORAM_BUCKET_AEAD_OVERHEAD_BYTES
+        .checked_add(plaintext_bytes)
+        .ok_or(PrivateHnswOramError::InvalidManifestField("oram"))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -703,6 +732,18 @@ mod tests {
             owner_signing_key_id: "tenant-a/private-hnsw-signing-v1".to_string(),
             created_at_unix: 1_770_000_000,
         }
+    }
+
+    #[test]
+    fn bucket_ciphertext_size_matches_path_oram_encoding_contract() {
+        let mut manifest = fixture_manifest();
+        manifest.oram.bucket_size = 4;
+        manifest.oram.block_size_bytes = 8192;
+
+        assert_eq!(
+            private_hnsw_oram_bucket_ciphertext_bytes(&manifest.oram).unwrap(),
+            1 + 12 + 16 + 4 + 2 + 4 + 4 + 4 * (1 + 8192)
+        );
     }
 
     fn fixture_context<'a>(

@@ -20,9 +20,10 @@ use qdrant_sec::{
     PrivateHnswOramManifest, PrivateHnswOramReadPathsSignatureInput, PrivateHnswOramSignature,
     PrivateHnswParams, PrivateHnswSignatureVerification, ResultPrivacyMode,
     VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, decode_private_hnsw_oram_leaf_label,
-    private_hnsw_bucket_commitment, private_hnsw_oram_bucket_count,
-    private_hnsw_oram_bucket_ids_for_leaf, validate_private_hnsw_oram_commit_signature,
-    validate_private_hnsw_oram_manifest, validate_private_hnsw_oram_manifest_signature_shape,
+    private_hnsw_bucket_commitment, private_hnsw_oram_bucket_ciphertext_bytes,
+    private_hnsw_oram_bucket_count, private_hnsw_oram_bucket_ids_for_leaf,
+    validate_private_hnsw_oram_commit_signature, validate_private_hnsw_oram_manifest,
+    validate_private_hnsw_oram_manifest_signature_shape,
     validate_private_hnsw_oram_read_paths_signature,
 };
 use segment::types::Distance;
@@ -47,8 +48,6 @@ const FIXED_BUDGET_OPTION: &str = "fixed_budget";
 const ZERO_TRUST_PROFILE_STRICT: &str = "strict";
 const SESSION_LEASE_SECS: u64 = 300;
 const MAX_SESSION_COUNT: usize = 1024;
-const BUCKET_PLAINTEXT_HEADER_BYTES: usize = 4 + 2 + 4 + 4;
-const BUCKET_AEAD_OVERHEAD_BYTES: usize = 1 + 12 + 16;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PrivateHnswManifestRecord {
@@ -1813,21 +1812,8 @@ fn max_bucket_ciphertext_bytes(manifest: &PrivateHnswOramManifest) -> StorageRes
 }
 
 fn expected_bucket_ciphertext_bytes(manifest: &PrivateHnswOramManifest) -> StorageResult<usize> {
-    let block_size = usize::try_from(manifest.oram.block_size_bytes).map_err(|_| {
-        StorageError::bad_request("private HNSW ORAM block_size_bytes exceeds usize")
-    })?;
-    let bucket_size = usize::try_from(manifest.oram.bucket_size)
-        .map_err(|_| StorageError::bad_request("private HNSW ORAM bucket_size exceeds usize"))?;
-    let encoded_plaintext_bytes =
-        bucket_size
-            .checked_mul(block_size.checked_add(1).ok_or_else(|| {
-                StorageError::bad_request("private HNSW ORAM bucket size overflows")
-            })?)
-            .and_then(|size| size.checked_add(BUCKET_PLAINTEXT_HEADER_BYTES))
-            .ok_or_else(|| StorageError::bad_request("private HNSW ORAM bucket size overflows"))?;
-    encoded_plaintext_bytes
-        .checked_add(BUCKET_AEAD_OVERHEAD_BYTES)
-        .ok_or_else(|| StorageError::bad_request("private HNSW ORAM bucket size overflows"))
+    private_hnsw_oram_bucket_ciphertext_bytes(&manifest.oram)
+        .map_err(|err| StorageError::bad_request(err.to_string()))
 }
 
 fn validate_bucket_ciphertext_fixed_size(
