@@ -1445,7 +1445,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("Merkle root mismatch"));
+            assert!(err.message().contains("bucket commitment context mismatch"));
             assert!(
                 !err.message().contains(&computed_mismatch_root),
                 "{}",

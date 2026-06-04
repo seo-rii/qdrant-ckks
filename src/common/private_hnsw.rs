@@ -13,11 +13,12 @@ use collection::private_hnsw_oram_store::{
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     DistanceKind, FixedBudgetParams, OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
-    PRIVATE_HNSW_ORAM_BINDING, PrivateHnswManifestValidationContext, PrivateHnswOramBucket,
-    PrivateHnswOramCommitBucketRef, PrivateHnswOramCommitSignatureInput, PrivateHnswOramManifest,
-    PrivateHnswOramReadPathsSignatureInput, PrivateHnswOramSignature, PrivateHnswParams,
-    PrivateHnswSignatureVerification, ResultPrivacyMode, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
-    decode_private_hnsw_oram_leaf_label, private_hnsw_oram_bucket_count,
+    PRIVATE_HNSW_ORAM_BINDING, PrivateHnswBucketAeadContext, PrivateHnswManifestValidationContext,
+    PrivateHnswOramBucket, PrivateHnswOramCommitBucketRef, PrivateHnswOramCommitSignatureInput,
+    PrivateHnswOramManifest, PrivateHnswOramReadPathsSignatureInput, PrivateHnswOramSignature,
+    PrivateHnswParams, PrivateHnswSignatureVerification, ResultPrivacyMode,
+    VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, decode_private_hnsw_oram_leaf_label,
+    private_hnsw_bucket_commitment, private_hnsw_oram_bucket_count,
     private_hnsw_oram_bucket_ids_for_leaf, validate_private_hnsw_oram_commit_signature,
     validate_private_hnsw_oram_manifest, validate_private_hnsw_oram_manifest_signature_shape,
     validate_private_hnsw_oram_read_paths_signature,
@@ -527,8 +528,6 @@ pub async fn do_upload_private_hnsw_buckets(
         ));
     }
     ensure_no_active_private_hnsw_session(&resolved.collection_crypto_id, vector_name)?;
-    let leaf_commitments =
-        validate_initial_private_hnsw_upload_bundle(&manifest, index_epoch, &root_hash, &buckets)?;
     let max_ciphertext_bytes = max_bucket_ciphertext_bytes(&manifest)?;
     for bucket in &buckets {
         store
@@ -540,6 +539,8 @@ pub async fn do_upload_private_hnsw_buckets(
             )
             .map_err(private_hnsw_upload_store_error)?;
     }
+    let leaf_commitments =
+        validate_initial_private_hnsw_upload_bundle(&manifest, index_epoch, &root_hash, &buckets)?;
     for bucket in &buckets {
         store
             .write_bucket(
@@ -1499,6 +1500,7 @@ fn validate_initial_private_hnsw_upload_bundle(
     }
     let leaf_commitments =
         ordered_initial_bucket_commitments(buckets, index_epoch, manifest.bucket_count)?;
+    validate_initial_bucket_commitment_context(manifest, index_epoch, buckets)?;
     let computed_root = PrivateHnswOramStore::merkle_root_for_commitments(&leaf_commitments)?;
     if computed_root != root_hash {
         return Err(StorageError::bad_request(
@@ -1506,6 +1508,38 @@ fn validate_initial_private_hnsw_upload_bundle(
         ));
     }
     Ok(leaf_commitments)
+}
+
+fn validate_initial_bucket_commitment_context(
+    manifest: &PrivateHnswOramManifest,
+    index_epoch: u64,
+    buckets: &[PrivateHnswOramBucket],
+) -> StorageResult<()> {
+    for bucket in buckets {
+        let expected_commitment = private_hnsw_bucket_commitment(
+            PrivateHnswBucketAeadContext {
+                collection_id: &manifest.collection_id,
+                vector_name: &manifest.vector_name,
+                key_id: &manifest.key_id,
+                rk_id: &manifest.rk_id,
+                rk_epoch: manifest.rk_epoch,
+                bucket_id: bucket.bucket_id,
+                index_epoch,
+            },
+            &bucket.ciphertext_sha256,
+        )
+        .map_err(|_| {
+            StorageError::bad_request(
+                "private HNSW ORAM initial upload bucket commitment context mismatch",
+            )
+        })?;
+        if expected_commitment != bucket.bucket_commitment {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM initial upload bucket commitment context mismatch",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn ordered_initial_bucket_commitments(
@@ -1817,6 +1851,20 @@ mod private_hnsw_tests {
         assert_eq!(
             PrivateHnswOramStore::merkle_root_for_commitments(&leaf_commitments).unwrap(),
             manifest.root_hash,
+        );
+
+        let mut wrong_commitment_buckets = encrypted_build.buckets.clone();
+        wrong_commitment_buckets[0].bucket_commitment = BASE64URL_NOPAD.encode(&[99; 32]);
+        let err = validate_initial_private_hnsw_upload_bundle(
+            &manifest,
+            encrypted_build.index_epoch,
+            &encrypted_build.root_hash,
+            &wrong_commitment_buckets,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("bucket commitment context mismatch")
         );
 
         let first_leaf = encode_private_hnsw_oram_leaf_label(0, config.tree_height).unwrap();

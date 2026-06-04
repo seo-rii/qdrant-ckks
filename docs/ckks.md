@@ -649,11 +649,14 @@ tree size implied by `tree_height`, so malformed layouts are rejected before a
 session can reach `read_paths`.
 Initial bucket upload also rejects incomplete bucket sets, duplicated bucket
 ids, malformed bucket ciphertext, and ciphertext hash mismatches before
-encrypted bucket files are written. The malformed ciphertext and Merkle root
-mismatch error paths do not echo the submitted ciphertext or computed Merkle
-root into REST response bodies or gRPC status messages, and epoch/root mismatch
-handling does not echo the submitted root hash. Bucket-store layout failures
-during upload are sanitized without exposing collection-local
+encrypted bucket files are written. Bucket commitments must also match the
+server-verifiable commitment over collection/vector/key lineage, bucket id,
+index epoch, and `ciphertext_sha256`. The malformed ciphertext, bucket
+commitment context mismatch, and Merkle root mismatch error paths do not echo
+the submitted ciphertext or computed Merkle root into REST response bodies or
+gRPC status messages, and epoch/root mismatch handling does not echo the
+submitted root hash. Bucket-store layout failures during upload are sanitized
+without exposing collection-local
 `private_hnsw_oram` filesystem paths. Corrupt current-epoch metadata observed
 during bucket upload or session open is sanitized the same way.
 REST and gRPC `read_paths` error handling is checked for non-reflection:

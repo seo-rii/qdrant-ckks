@@ -965,7 +965,7 @@ mod private_hnsw_rest_tests {
             )
             .unwrap();
             assert_ne!(computed_mismatch_root, fixture.encrypted_build.root_hash);
-            let merkle_mismatch_error = post_json_error_contains!(
+            let commitment_context_mismatch_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/buckets",
                 UploadPrivateHnswBucketsRequest {
                     index_epoch: fixture.encrypted_build.index_epoch,
@@ -973,11 +973,11 @@ mod private_hnsw_rest_tests {
                     buckets: merkle_mismatch_buckets,
                 },
                 StatusCode::BAD_REQUEST,
-                "Merkle root mismatch"
+                "bucket commitment context mismatch"
             );
             assert!(
-                !merkle_mismatch_error.contains(&computed_mismatch_root),
-                "{merkle_mismatch_error}"
+                !commitment_context_mismatch_error.contains(&computed_mismatch_root),
+                "{commitment_context_mismatch_error}"
             );
 
             let upload_ciphertext_sentinel = "bucket-upload-ciphertext-sentinel";
