@@ -1833,6 +1833,12 @@ mod tests {
         assert_eq!(proof.leaves[1].bucket_id, 3);
         assert_eq!(proof.leaves[1].leaf_hash, leaf_commitments[3]);
         assert_eq!(proof.leaves[0].siblings.len(), 2);
+
+        let duplicate_proof = store
+            .read_merkle_path_batch(&[1, 3, 1], 42, &root, 4)
+            .unwrap();
+        assert_eq!(duplicate_proof.leaves.len(), 3);
+        assert_eq!(duplicate_proof.leaves[0], duplicate_proof.leaves[2]);
     }
 
     #[test]
