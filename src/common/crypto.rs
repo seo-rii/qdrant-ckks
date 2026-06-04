@@ -3698,10 +3698,17 @@ fn validate_private_hnsw_oram_instance(
     private_hnsw_required_u64(instance_name, instance, PRIVATE_HNSW_DIM_OPTION, 1, 65_536)?;
 
     validate_private_hnsw_hnsw_options(instance_name, instance)?;
-    validate_private_hnsw_oram_options(instance_name, instance)?;
-    let fixed_budget_enabled = validate_private_hnsw_fixed_budget_options(instance_name, instance)?;
+    let oram_shape = validate_private_hnsw_oram_options(instance_name, instance)?;
+    let fixed_budget = validate_private_hnsw_fixed_budget_options(instance_name, instance)?;
     validate_private_hnsw_integrity_options(instance_name, instance)?;
-    if strict_profile && !fixed_budget_enabled {
+    if fixed_budget.paths_per_round != oram_shape.path_batch_size {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: "fixed_budget.paths_per_round".to_string(),
+            reason: "must match oram.path_batch_size for fixed-size read_paths batches".to_string(),
+        });
+    }
+    if strict_profile && !fixed_budget.enabled {
         return Err(CryptoSetupError::InvalidInstanceOption {
             instance: instance_name.to_string(),
             option: "fixed_budget.enabled".to_string(),
@@ -3985,10 +3992,21 @@ fn validate_private_hnsw_hnsw_options(
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PrivateHnswOramRuntimeShape {
+    path_batch_size: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PrivateHnswFixedBudgetRuntimeShape {
+    enabled: bool,
+    paths_per_round: u64,
+}
+
 fn validate_private_hnsw_oram_options(
     instance_name: &str,
     instance: &CryptoInstanceConfig,
-) -> Result<(), CryptoSetupError> {
+) -> Result<PrivateHnswOramRuntimeShape, CryptoSetupError> {
     let oram = private_hnsw_object(instance_name, instance, PRIVATE_HNSW_ORAM_OPTION)?;
     private_hnsw_reject_unknown_object_fields(
         instance_name,
@@ -4040,15 +4058,15 @@ fn validate_private_hnsw_oram_options(
             reason: "expected one of 4096, 8192, 16384, 32768, 65536".to_string(),
         });
     }
-    private_hnsw_object_u64(
+    let tree_height = private_hnsw_object_u64(
         instance_name,
         oram,
         PRIVATE_HNSW_ORAM_OPTION,
         "tree_height",
         1,
-        63,
+        62,
     )?;
-    private_hnsw_object_u64(
+    let path_batch_size = private_hnsw_object_u64(
         instance_name,
         oram,
         PRIVATE_HNSW_ORAM_OPTION,
@@ -4056,13 +4074,33 @@ fn validate_private_hnsw_oram_options(
         1,
         1024,
     )?;
-    Ok(())
+    let leaf_count = 1u64
+        .checked_shl(u32::try_from(tree_height).map_err(|_| {
+            CryptoSetupError::InvalidInstanceOption {
+                instance: instance_name.to_string(),
+                option: "oram.tree_height".to_string(),
+                reason: "tree_height is too large".to_string(),
+            }
+        })?)
+        .ok_or_else(|| CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: "oram.tree_height".to_string(),
+            reason: "tree_height is too large".to_string(),
+        })?;
+    if path_batch_size > leaf_count {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: "oram.path_batch_size".to_string(),
+            reason: "must be less than or equal to the ORAM leaf count".to_string(),
+        });
+    }
+    Ok(PrivateHnswOramRuntimeShape { path_batch_size })
 }
 
 fn validate_private_hnsw_fixed_budget_options(
     instance_name: &str,
     instance: &CryptoInstanceConfig,
-) -> Result<bool, CryptoSetupError> {
+) -> Result<PrivateHnswFixedBudgetRuntimeShape, CryptoSetupError> {
     let fixed_budget =
         private_hnsw_object(instance_name, instance, PRIVATE_HNSW_FIXED_BUDGET_OPTION)?;
     private_hnsw_reject_unknown_object_fields(
@@ -4099,7 +4137,7 @@ fn validate_private_hnsw_fixed_budget_options(
         1,
         1_000_000,
     )?;
-    private_hnsw_object_u64(
+    let paths_per_round = private_hnsw_object_u64(
         instance_name,
         fixed_budget,
         PRIVATE_HNSW_FIXED_BUDGET_OPTION,
@@ -4115,7 +4153,10 @@ fn validate_private_hnsw_fixed_budget_options(
         1,
         10_000,
     )?;
-    Ok(enabled)
+    Ok(PrivateHnswFixedBudgetRuntimeShape {
+        enabled,
+        paths_per_round,
+    })
 }
 
 fn validate_private_hnsw_integrity_options(
@@ -9295,6 +9336,74 @@ mod tests {
         assert!(
             matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
                 if option == "result_privacy" && reason.contains("ids_visible")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
+    fn validate_crypto_settings_rejects_private_hnsw_impossible_path_budget() {
+        let mut settings = CryptoSettings {
+            zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+            allow_inline_key_material: false,
+            instances: HashMap::from([(
+                "docs_private_hnsw_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                    materials: HashMap::new(),
+                    backend_ref: None,
+                    options: private_hnsw_oram_options(),
+                },
+            )]),
+            ..CryptoSettings::default()
+        };
+
+        let options = &mut settings
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options;
+        options["oram"]["tree_height"] = json!(1);
+        options["oram"]["path_batch_size"] = json!(3);
+        options["fixed_budget"]["paths_per_round"] = json!(3);
+        let err = validate_crypto_settings(&settings)
+            .expect_err("path_batch_size cannot exceed available unique ORAM leaves");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "oram.path_batch_size"
+                    && reason.contains("ORAM leaf count")),
+            "unexpected error: {err:?}",
+        );
+
+        let options = &mut settings
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options;
+        options["oram"]["path_batch_size"] = json!(2);
+        options["fixed_budget"]["paths_per_round"] = json!(3);
+        let err = validate_crypto_settings(&settings)
+            .expect_err("fixed_budget.paths_per_round must match path_batch_size");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "fixed_budget.paths_per_round"
+                    && reason.contains("oram.path_batch_size")),
+            "unexpected error: {err:?}",
+        );
+
+        let options = &mut settings
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options;
+        options["oram"]["tree_height"] = json!(63);
+        options["oram"]["path_batch_size"] = json!(1);
+        options["fixed_budget"]["paths_per_round"] = json!(1);
+        let err = validate_crypto_settings(&settings)
+            .expect_err("tree_height must fit Path ORAM bucket/leaf arithmetic");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "oram.tree_height"
+                    && reason.contains("1..=62")),
             "unexpected error: {err:?}",
         );
     }

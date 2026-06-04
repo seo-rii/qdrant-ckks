@@ -557,6 +557,11 @@ buckets must live under private non-symlink directories. Directory creation
 checks symlink/type before chmod so symlink targets are not hardened by mistake,
 and Unix group/world access on bucket directories or files is rejected fail
 closed.
+Runtime and signed-manifest validation keep fixed path budgets executable:
+`oram.path_batch_size` must fit within the Path ORAM leaf count, and
+`fixed_budget.paths_per_round` must equal `oram.path_batch_size`. This prevents
+SDK/server disagreement and avoids configurations that could only be satisfied
+by duplicate `read_paths` labels.
 If a process crashes after bucket or Merkle writeback but before the epoch CAS,
 recovery continues to report the old current epoch and rejects mixed old-root /
 new-bucket reads rather than serving an inconsistent ORAM view.
@@ -842,7 +847,8 @@ neighbor path labels from the client position map, deduplicating real candidate
 leaves and filling the remaining request slots with unique dummy leaves before
 the SDK calls `read_paths`. This keeps SDK-generated batches compatible with
 the server-side duplicate path-label guard while still preserving a fixed path
-count. `plan_private_hnsw_oram_neighbor_clustered_leaves` provides a
+count; runtime and manifest validation reject path budgets larger than the
+available unique ORAM leaves. `plan_private_hnsw_oram_neighbor_clustered_leaves` provides a
 deterministic graph-order leaf assignment helper for bulk builds, so SDK
 experiments can place entry-near neighbor chains on adjacent ORAM leaves before
 calling `build_private_hnsw_oram_plaintext_index_from_blocks`.

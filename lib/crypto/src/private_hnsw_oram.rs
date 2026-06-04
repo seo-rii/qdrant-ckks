@@ -455,6 +455,18 @@ fn validate_manifest_shape(manifest: &PrivateHnswOramManifest) -> Result<(), Pri
     if manifest.bucket_count == 0 {
         return Err(PrivateHnswOramError::InvalidManifestField("bucket_count"));
     }
+    let leaf_count = path_oram_leaf_count(manifest.oram.tree_height)
+        .ok_or(PrivateHnswOramError::InvalidManifestField("oram"))?;
+    if u64::from(manifest.oram.path_batch_size) > leaf_count {
+        return Err(PrivateHnswOramError::InvalidManifestField(
+            "oram.path_batch_size",
+        ));
+    }
+    if manifest.fixed_budget.paths_per_round != manifest.oram.path_batch_size {
+        return Err(PrivateHnswOramError::InvalidManifestField(
+            "fixed_budget.paths_per_round",
+        ));
+    }
     let expected_bucket_count = path_oram_bucket_count(manifest.oram.tree_height)
         .ok_or(PrivateHnswOramError::InvalidManifestField("oram"))?;
     if manifest.bucket_count != expected_bucket_count {
@@ -476,12 +488,16 @@ fn validate_manifest_shape(manifest: &PrivateHnswOramManifest) -> Result<(), Pri
 }
 
 fn path_oram_bucket_count(tree_height: u32) -> Option<u64> {
+    path_oram_leaf_count(tree_height)?
+        .checked_mul(2)
+        .and_then(|count| count.checked_sub(1))
+}
+
+fn path_oram_leaf_count(tree_height: u32) -> Option<u64> {
     if tree_height >= 63 {
         return None;
     }
-    (1u64 << tree_height)
-        .checked_mul(2)
-        .and_then(|count| count.checked_sub(1))
+    Some(1u64 << tree_height)
 }
 
 fn validate_manifest_context(
@@ -852,6 +868,31 @@ mod tests {
         assert_eq!(
             validate_private_hnsw_oram_manifest_shape(&manifest),
             Err(PrivateHnswOramError::InvalidManifestField("bucket_count"))
+        );
+    }
+
+    #[test]
+    fn manifest_shape_rejects_impossible_path_batch_budget() {
+        let mut manifest = fixture_manifest();
+        manifest.oram.tree_height = 1;
+        manifest.bucket_count = 3;
+        manifest.oram.path_batch_size = 3;
+        manifest.fixed_budget.paths_per_round = 3;
+
+        assert_eq!(
+            validate_private_hnsw_oram_manifest_shape(&manifest),
+            Err(PrivateHnswOramError::InvalidManifestField(
+                "oram.path_batch_size"
+            ))
+        );
+
+        manifest = fixture_manifest();
+        manifest.fixed_budget.paths_per_round = manifest.oram.path_batch_size + 1;
+        assert_eq!(
+            validate_private_hnsw_oram_manifest_shape(&manifest),
+            Err(PrivateHnswOramError::InvalidManifestField(
+                "fixed_budget.paths_per_round"
+            ))
         );
     }
 

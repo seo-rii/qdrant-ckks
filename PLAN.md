@@ -371,6 +371,7 @@
 테스트:
 
 - runtime strict mode에서 private provider는 허용되고 server materials/backend, unsupported options, non-client-led search, loose fixed budget, unpinned RK id/epoch은 거부된다.
+- runtime과 signed manifest는 `oram.path_batch_size`가 Path ORAM leaf count를 넘거나 `fixed_budget.paths_per_round`와 다르면 duplicate-label-free `read_paths` budget을 만들 수 없으므로 fail closed 한다.
 - collection config는 `private-hnsw-oram/v1` binding과 rule당 단일 vector name만 허용하고, 같은 vector name에 대한 다른 vector binding overlap, vector dim/distance와 runtime options mismatch를 거부한다.
 - normal `upsert`/`update_vectors` plaintext write와 server-side search/scoring은 private ORAM session API 안내 메시지로 fail closed 된다. 실제 `do_upsert_points`/`do_update_vectors`, legacy search/batch search, root `do_query_points`, universal query prefetch/fusion/context/MMR, recommend/discover, grouped search/query, 그리고 search matrix 경계도 같은 fail-closed 메시지로 고정했다.
 - private HNSW ORAM vector에 대한 `retrieve`/`scroll` `with_vector` 요청은 CKKS sidecar payload 안내가 아니라 private HNSW ORAM session API 안내로 fail closed 된다.
