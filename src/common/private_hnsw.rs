@@ -1283,12 +1283,26 @@ fn validate_client_signature_shape(signature: &PrivateHnswClientSignature) -> St
             "private HNSW ORAM signature key_id and sig are required",
         ));
     }
+    validate_client_signature_key_id_shape(&signature.key_id)?;
     let signature_bytes = BASE64URL_NOPAD
         .decode(signature.sig.as_bytes())
         .map_err(|_| StorageError::bad_request("private HNSW ORAM signature is not base64url"))?;
     if signature_bytes.len() != 64 {
         return Err(StorageError::bad_request(
             "private HNSW ORAM signature must encode 64 bytes",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_client_signature_key_id_shape(key_id: &str) -> StorageResult<()> {
+    if key_id.len() > 128
+        || !key_id.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'/' | b'@' | b'-')
+        })
+    {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM signature key_id is invalid",
         ));
     }
     Ok(())

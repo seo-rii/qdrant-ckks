@@ -634,6 +634,9 @@ upload, `read_paths`, and `commit` are also sanitized without echoing the
 submitted key id. Manifest upload validates the signature algorithm, key-id
 shape, and signature body shape before looking up the configured public key, so
 malformed signed requests do not reach the verifier registry lookup boundary.
+The `read_paths` and `commit` client signatures use the same key-id shape check
+before verifier lookup; invalid key ids are rejected without echoing the
+submitted value.
 Manifest-store layout failures during upload are sanitized without exposing
 collection-local `private_hnsw_oram` filesystem paths.
 Path ORAM manifests must also bind `bucket_count` to the canonical full binary

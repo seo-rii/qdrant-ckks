@@ -1986,6 +1986,38 @@ mod private_hnsw_grpc_tests {
                 err.message()
             );
 
+            let invalid_read_key_id_sentinel = "read-signature-key!sentinel";
+            let err = PrivateHnswOram::read_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramReadPathsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: vec![fixture.entry_leaf_label()],
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    }),
+                    client_signature: Some(grpc::PrivateHnswSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: invalid_read_key_id_sentinel.to_string(),
+                        sig: fixture.client_signature().sig,
+                    }),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("signature key_id is invalid"));
+            assert!(!err.message().contains("not configured"));
+            assert!(
+                !err.message().contains(invalid_read_key_id_sentinel),
+                "{}",
+                err.message()
+            );
+
             let signature_body_sentinel = "signature!sentinel";
             let err = PrivateHnswOram::read_private_hnsw_paths(
                 &service,
@@ -2170,6 +2202,41 @@ mod private_hnsw_grpc_tests {
             assert!(err.message().contains("signature key id is not configured"));
             assert!(
                 !err.message().contains(signature_key_id_sentinel),
+                "{}",
+                err.message()
+            );
+
+            let invalid_commit_key_id_sentinel = "commit-signature-key!sentinel";
+            let err = PrivateHnswOram::commit_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramCommitRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run
+                        .updated_buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                    commit_signature: Some(grpc::PrivateHnswSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: invalid_commit_key_id_sentinel.to_string(),
+                        sig: fixture.client_signature().sig,
+                    }),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("signature key_id is invalid"));
+            assert!(!err.message().contains("not configured"));
+            assert!(
+                !err.message().contains(invalid_commit_key_id_sentinel),
                 "{}",
                 err.message()
             );
