@@ -860,7 +860,9 @@ Automatic dead-replica shard transfer recovery also skips private HNSW ORAM
 collections for the same reason; parity alone is insufficient until bucket
 movement and epoch/root ownership are consensus-backed. As a final guard,
 existing consensus transfer records for private HNSW ORAM collections are
-rejected before the local transfer task starts moving shard data.
+rejected before the local transfer task starts moving shard data or the transfer
+progresses replica state. `Abort` remains allowed so unsupported transfer records
+can be cleaned up without moving encrypted ORAM buckets.
 Distributed private HNSW ORAM sessions themselves fail closed in this MVP until
 epoch/root CAS is backed by consensus rather than node-local files.
 

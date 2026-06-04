@@ -21,6 +21,8 @@ use crate::content_manager::consensus_ops::ConsensusOperations;
 use crate::content_manager::errors::StorageError;
 use crate::content_manager::shard_distribution::ShardDistributionProposal;
 
+const PRIVATE_HNSW_ORAM_BINDING: &str = "private-hnsw-oram/v1";
+
 static CREATE_CUSTOM_SHARDS_IN_INITIALIZING_STATE: LazyLock<semver::Version> =
     LazyLock::new(|| semver::Version::parse("1.14.2-dev").unwrap());
 
@@ -485,6 +487,12 @@ impl TableOfContent {
         transfer_operation: ShardTransferOperations,
     ) -> Result<(), StorageError> {
         let collection = self.get_collection_unchecked(&collection_id).await?;
+        let collection_config = collection.config_snapshot().await;
+        reject_private_hnsw_oram_shard_transfer_until_supported(
+            &collection_id,
+            &collection_config.params,
+            &transfer_operation,
+        )?;
         let Some(proposal_sender) = self.consensus_proposal_sender.clone() else {
             return Err(StorageError::service_error(
                 "Can't handle transfer, this is a single node deployment",
@@ -493,7 +501,6 @@ impl TableOfContent {
 
         match transfer_operation {
             ShardTransferOperations::Start(transfer) => {
-                let collection_config = collection.config_snapshot().await;
                 if collection_params_require_crypto_runtime_transfer_parity(
                     &collection_config.params,
                 ) {
@@ -823,6 +830,34 @@ fn collection_params_require_crypto_runtime_transfer_parity(params: &CollectionP
     params.encryption.is_some()
 }
 
+fn reject_private_hnsw_oram_shard_transfer_until_supported(
+    collection_id: &str,
+    params: &CollectionParams,
+    transfer_operation: &ShardTransferOperations,
+) -> Result<(), StorageError> {
+    if !collection_params_use_private_hnsw_oram(params)
+        || matches!(transfer_operation, ShardTransferOperations::Abort { .. })
+    {
+        return Ok(());
+    }
+
+    Err(StorageError::bad_input(format!(
+        "private HNSW ORAM shard transfer is not supported for collection {collection_id}: \
+         encrypted ORAM bucket transfer and consensus-backed epoch/root ownership are not \
+         implemented; abort the transfer or keep the private HNSW ORAM collection on the current \
+         shard owner",
+    )))
+}
+
+fn collection_params_use_private_hnsw_oram(params: &CollectionParams) -> bool {
+    params.encryption.as_ref().is_some_and(|encryption| {
+        encryption
+            .rules
+            .iter()
+            .any(|rule| rule.binding.as_deref() == Some(PRIVATE_HNSW_ORAM_BINDING))
+    })
+}
+
 fn validate_encrypted_transfer_crypto_runtime_parity(
     collection_id: &str,
     local_peer_id: PeerId,
@@ -922,13 +957,18 @@ mod tests {
     };
     use collection::operations::types::PeerMetadata;
     use collection::shards::shard::PeerId;
+    use collection::shards::transfer::{
+        ShardTransfer, ShardTransferKey, ShardTransferMethod, ShardTransferRestart,
+    };
 
     use super::{
-        collection_params_require_crypto_runtime_transfer_parity,
+        PRIVATE_HNSW_ORAM_BINDING, collection_params_require_crypto_runtime_transfer_parity,
+        reject_private_hnsw_oram_shard_transfer_until_supported,
         validate_encrypted_create_shard_key_crypto_runtime_parity,
         validate_encrypted_resharding_crypto_runtime_parity,
         validate_encrypted_transfer_crypto_runtime_parity,
     };
+    use crate::content_manager::collection_meta_ops::ShardTransferOperations;
 
     #[test]
     fn encrypted_collection_requires_transfer_parity_enforcement() {
@@ -957,6 +997,80 @@ mod tests {
         assert!(collection_params_require_crypto_runtime_transfer_parity(
             &generic
         ));
+    }
+
+    #[test]
+    fn private_hnsw_consensus_transfer_progress_fails_closed_until_bucket_transfer_exists() {
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/vector-private-rk".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "text_private_hnsw".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["text".to_string()],
+                    },
+                    instance: "docs_private_hnsw_v1".to_string(),
+                    binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let transfer = ShardTransfer {
+            shard_id: 1,
+            to_shard_id: None,
+            from: 2,
+            to: 3,
+            sync: false,
+            method: Some(ShardTransferMethod::StreamRecords),
+            filter: None,
+        };
+        let transfer_key = ShardTransferKey {
+            shard_id: 1,
+            to_shard_id: None,
+            from: 2,
+            to: 3,
+        };
+        let progressing_operations = [
+            ShardTransferOperations::Start(transfer.clone()),
+            ShardTransferOperations::Restart(ShardTransferRestart {
+                shard_id: 1,
+                to_shard_id: None,
+                from: 2,
+                to: 3,
+                method: ShardTransferMethod::Snapshot,
+            }),
+            ShardTransferOperations::Finish(transfer),
+            ShardTransferOperations::RecoveryToPartial(transfer_key),
+            ShardTransferOperations::SnapshotRecovered(transfer_key),
+        ];
+
+        for operation in progressing_operations {
+            let err = reject_private_hnsw_oram_shard_transfer_until_supported(
+                "docs", &params, &operation,
+            )
+            .expect_err("private HNSW ORAM transfer progress must fail closed");
+            assert!(
+                err.to_string().contains("private HNSW ORAM shard transfer")
+                    && err
+                        .to_string()
+                        .contains("consensus-backed epoch/root ownership"),
+                "unexpected error for {operation:?}: {err}",
+            );
+        }
+
+        reject_private_hnsw_oram_shard_transfer_until_supported(
+            "docs",
+            &params,
+            &ShardTransferOperations::Abort {
+                transfer: transfer_key,
+                reason: "cleanup unsupported private ORAM transfer".to_string(),
+            },
+        )
+        .expect("abort must remain available to clean up unsupported transfer records");
     }
 
     #[test]
