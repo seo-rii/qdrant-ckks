@@ -17,6 +17,7 @@ use storage::content_manager::toc::{ALIASES_PATH, COLLECTIONS_DIR};
 use crate::common::crypto::validate_recovered_collection_crypto_config;
 #[cfg(test)]
 use crate::common::crypto::validate_recovered_collection_crypto_runtime;
+use crate::common::private_hnsw::validate_recovered_private_hnsw_oram_snapshot_signatures;
 use crate::settings::Settings;
 
 /// Recover snapshots from the given arguments
@@ -187,6 +188,18 @@ fn validate_restored_collection_crypto_runtime(
         format!(
             "Failed to validate private HNSW ORAM snapshot layout for recovered snapshot \
              {collection_name}: {detail}",
+        )
+    })?;
+    validate_recovered_private_hnsw_oram_snapshot_signatures(
+        settings,
+        collection_name,
+        &config,
+        collection_path,
+    )
+    .map_err(|err| {
+        format!(
+            "Failed to validate private HNSW ORAM snapshot manifest signatures for recovered \
+             snapshot {collection_name}: {err}",
         )
     })?;
     validate_private_result_oram_snapshot_restore_not_present(collection_path).map_err(|err| {
@@ -466,6 +479,40 @@ mod tests {
 
         validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
             .expect("valid private HNSW ORAM snapshot layout must pass CLI preflight");
+    }
+
+    #[test]
+    fn cli_snapshot_crypto_preflight_rejects_private_hnsw_manifest_signature_tamper() {
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let collection_dir = TempDir::new().unwrap();
+        write_recovered_private_hnsw_snapshot_fixture(collection_dir.path(), &fixture, false);
+        let store = PrivateHnswOramStore::new(collection_dir.path(), VECTOR_NAME).unwrap();
+        let mut tampered_signature = fixture.manifest_signature.clone();
+        tampered_signature.sig = BASE64URL_NOPAD.encode(&[9; 64]);
+        store
+            .write_manifest(&fixture.manifest, &tampered_signature)
+            .unwrap();
+
+        let err =
+            validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
+                .expect_err("tampered private HNSW manifest signature must fail CLI preflight");
+
+        assert!(
+            err.contains("manifest signature verification failed"),
+            "{err}"
+        );
+        assert!(
+            !err.contains(collection_dir.path().to_string_lossy().as_ref()),
+            "{err}"
+        );
+        assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR), "{err}");
+        assert!(!err.contains(&fixture.encrypted_build.root_hash), "{err}");
+        assert!(
+            !err.contains(&fixture.encrypted_build.buckets[0].ciphertext),
+            "{err}"
+        );
+        assert!(!err.contains(SIGNING_KEY_ID), "{err}");
     }
 
     #[test]

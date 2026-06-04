@@ -743,6 +743,10 @@ cannot bypass bucket/root consistency checks that are enforced by storage-level
 snapshot recovery. Store-originated layout failures in this CLI path are
 sanitized before reporting, so collection-local `private_hnsw_oram` paths and
 stored bucket bodies are not reflected.
+CLI and REST snapshot recovery also validate stored private HNSW ORAM manifest
+signatures against the runtime `signature_public_keys` registry after the
+restore-layout preflight passes, so tampered manifest signatures fail closed
+without exposing bucket roots, ciphertexts, or store paths.
 Storage-level snapshot recovery applies the same sanitization before returning
 private HNSW ORAM layout failures to callers.
 

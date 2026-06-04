@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1132,6 +1133,61 @@ pub async fn do_close_private_hnsw_session(
         ));
     }
     Ok(true)
+}
+
+pub fn validate_recovered_private_hnsw_oram_snapshot_signatures(
+    settings: &Settings,
+    collection_name: &str,
+    config: &CollectionConfigInternal,
+    collection_path: &Path,
+) -> StorageResult<()> {
+    let collection_crypto_id = config.stable_crypto_id(collection_name)?;
+    let Some(encryption) = config.params.effective_encryption() else {
+        return Ok(());
+    };
+
+    let mut checked_vectors = HashSet::new();
+    for rule in encryption
+        .rules
+        .iter()
+        .filter(|rule| rule.binding.as_deref() == Some(PRIVATE_HNSW_ORAM_BINDING))
+    {
+        let instance = private_hnsw_instance(settings, rule)?;
+        let EncryptionSelector::VectorNames { names } = &rule.selector else {
+            return Err(StorageError::bad_request(format!(
+                "private HNSW ORAM snapshot rule {} must use vector_names selector",
+                rule.id,
+            )));
+        };
+        for vector_name in names {
+            if !checked_vectors.insert(vector_name.clone()) {
+                continue;
+            }
+            let store = PrivateHnswOramStore::new(collection_path, vector_name)?;
+            let (manifest, signature) = read_uploaded_manifest(&store)?;
+            let runtime_context = manifest_context_from_runtime(
+                &config.params,
+                &collection_crypto_id,
+                vector_name,
+                instance,
+            )?;
+            let public_key = signature_public_key(instance, &signature.key_id)?;
+            let resolved = ResolvedPrivateHnswContext {
+                collection_path: collection_path.to_path_buf(),
+                public_key,
+                ..runtime_context
+            };
+            validate_private_hnsw_oram_manifest(
+                &manifest,
+                Some(&signature),
+                resolved.manifest_context(&signature.key_id),
+            )
+            .map_err(private_hnsw_error)?;
+            resolved.validate_manifest_runtime_policy(&manifest)?;
+        }
+    }
+
+    Ok(())
 }
 
 async fn resolve_private_hnsw_context(

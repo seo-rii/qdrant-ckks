@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use collection::collection::Collection;
@@ -31,7 +32,7 @@ use crate::rbac::{AccessRequirements, Auth, CollectionPass};
 use crate::{StorageError, TableOfContent};
 
 pub type SnapshotConfigValidator =
-    Arc<dyn Fn(&str, &CollectionConfigInternal) -> Result<(), StorageError> + Send + Sync>;
+    Arc<dyn Fn(&str, &CollectionConfigInternal, &Path) -> Result<(), StorageError> + Send + Sync>;
 
 pub async fn activate_shard(
     toc: &TableOfContent,
@@ -186,15 +187,19 @@ async fn _do_recover_from_snapshot(
 
     let snapshot_config = CollectionConfigInternal::load(tmp_collection_dir.path())?;
     snapshot_config.validate_and_warn();
-    if let Some(validate_snapshot_config) = &snapshot_config_validator {
-        validate_snapshot_config(collection_pass.name(), &snapshot_config)?;
-    }
     Collection::validate_private_hnsw_oram_snapshot_restore_layout(
         collection_pass.name(),
         &snapshot_config,
         tmp_collection_dir.path(),
     )
     .map_err(|err| sanitize_private_hnsw_snapshot_layout_error(tmp_collection_dir.path(), err))?;
+    if let Some(validate_snapshot_config) = &snapshot_config_validator {
+        validate_snapshot_config(
+            collection_pass.name(),
+            &snapshot_config,
+            tmp_collection_dir.path(),
+        )?;
+    }
 
     let payload_index_file = tmp_collection_dir.path().join(PAYLOAD_INDEX_CONFIG_FILE);
 

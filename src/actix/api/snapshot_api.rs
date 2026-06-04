@@ -51,6 +51,7 @@ use crate::common::auth::Auth;
 use crate::common::collections::*;
 use crate::common::crypto::validate_recovered_collection_crypto_config;
 use crate::common::http_client::HttpClient;
+use crate::common::private_hnsw::validate_recovered_private_hnsw_oram_snapshot_signatures;
 use crate::common::snapshots::{
     do_create_full_snapshot, redacted_snapshot_url_for_message,
     try_take_partial_snapshot_recovery_lock, validate_snapshot_peer_base_url_policy,
@@ -308,11 +309,19 @@ async fn upload_snapshot(
                 auth,
                 http_client,
                 Some(Arc::new(
-                    move |collection_name: &str, snapshot_config: &CollectionConfigInternal| {
+                    move |collection_name: &str,
+                          snapshot_config: &CollectionConfigInternal,
+                          snapshot_path: &Path| {
                         validate_recovered_collection_crypto_config(
                             &settings,
                             collection_name,
                             snapshot_config,
+                        )?;
+                        validate_recovered_private_hnsw_oram_snapshot_signatures(
+                            &settings,
+                            collection_name,
+                            snapshot_config,
+                            snapshot_path,
                         )
                     },
                 )),
@@ -367,11 +376,19 @@ async fn recover_from_snapshot(
             auth,
             http_client,
             Some(Arc::new(
-                move |collection_name: &str, snapshot_config: &CollectionConfigInternal| {
+                move |collection_name: &str,
+                      snapshot_config: &CollectionConfigInternal,
+                      snapshot_path: &Path| {
                     validate_recovered_collection_crypto_config(
                         &settings,
                         collection_name,
                         snapshot_config,
+                    )?;
+                    validate_recovered_private_hnsw_oram_snapshot_signatures(
+                        &settings,
+                        collection_name,
+                        snapshot_config,
+                        snapshot_path,
                     )
                 },
             )),
