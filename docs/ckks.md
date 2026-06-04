@@ -540,6 +540,9 @@ query/fusion/context/MMR, recommend/discover, grouped search/query, and search
 matrix paths, fail closed and direct clients to the private HNSW ORAM session
 APIs. Phase 11 implements the encrypted bucket store and session read/commit
 APIs behind this validated control-plane contract.
+The same private-session guidance is returned even when runtime crypto settings
+are absent, so private HNSW ORAM vectors do not fall through to CKKS/OpenFHE
+runtime fallback messages on ordinary query/search/recommend/matrix APIs.
 Point-level `retrieve`/`scroll` requests that ask for this vector with
 `with_vector` also fail closed with the same private HNSW ORAM session guidance;
 Qdrant does not expose a CKKS sidecar payload for this provider.

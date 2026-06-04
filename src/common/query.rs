@@ -785,6 +785,15 @@ pub async fn do_core_search_batch_points(
     )
     .await?;
 
+    if runtime_settings.is_none() {
+        let private_hnsw_vectors =
+            private_hnsw_oram_vector_names_for_collection(toc, collection_name, &auth).await?;
+        ensure_core_search_batch_does_not_use_private_hnsw_oram_vectors(
+            &request,
+            &private_hnsw_vectors,
+        )?;
+    }
+
     if let Some(settings) = runtime_settings
         && let Some(mut results) = try_ckks_vector_search_batch_points(
             toc,
@@ -4305,6 +4314,17 @@ pub async fn do_recommend_batch_points(
     )
     .await?;
 
+    if runtime_settings.is_none() {
+        let private_hnsw_vectors =
+            private_hnsw_oram_vector_names_for_collection(toc, collection_name, &auth).await?;
+        for (request, _) in &requests {
+            ensure_vector_name_is_not_private_hnsw_oram(
+                &private_hnsw_vectors,
+                &recommend_vector_name(request),
+            )?;
+        }
+    }
+
     if let Some(settings) = runtime_settings
         && let Some(mut results) = try_ckks_vector_recommend_batch_points(
             toc,
@@ -5187,6 +5207,17 @@ pub async fn do_discover_batch_points(
         &auth,
     )
     .await?;
+
+    if runtime_settings.is_none() {
+        let private_hnsw_vectors =
+            private_hnsw_oram_vector_names_for_collection(toc, collection_name, &auth).await?;
+        for (request, _) in &requests {
+            ensure_vector_name_is_not_private_hnsw_oram(
+                &private_hnsw_vectors,
+                &discover_vector_name(request),
+            )?;
+        }
+    }
 
     if let Some(settings) = runtime_settings
         && let Some(mut results) = try_ckks_vector_discover_batch_points(
@@ -6170,8 +6201,8 @@ async fn ensure_with_vector_does_not_request_encrypted_vectors(
             let vector_name = request.vector_name();
             if encrypted_vector_return_request_is_private_hnsw_oram(&encryption, vector_name) {
                 return Err(StorageError::bad_input(format!(
-                    "{} does not expose point-level vector '{vector_name}' through {operation}. Use /private-hnsw/{vector_name}/session and compatible SDK traversal APIs.",
-                    qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+                    "{} Point-level vector reads through {operation} are not exposed for this provider.",
+                    private_hnsw_oram_api_required_message(vector_name),
                 )));
             }
 
@@ -6193,6 +6224,13 @@ fn encrypted_vector_return_request_is_private_hnsw_oram(
     encryption: &CollectionEncryptionConfig,
     vector_name: &str,
 ) -> bool {
+    private_hnsw_oram_vector_in_encryption(encryption, vector_name)
+}
+
+fn private_hnsw_oram_vector_in_encryption(
+    encryption: &CollectionEncryptionConfig,
+    vector_name: &str,
+) -> bool {
     encryption.rules.iter().any(|rule| {
         rule.binding.as_deref() == Some(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING)
             && matches!(
@@ -6200,6 +6238,91 @@ fn encrypted_vector_return_request_is_private_hnsw_oram(
                 EncryptionSelector::VectorNames { names } if names.iter().any(|name| name == vector_name)
             )
     })
+}
+
+fn private_hnsw_oram_api_required_message(vector_name: &str) -> String {
+    format!(
+        "{} requires client-led private ORAM sessions for vector '{vector_name}'. Use /private-hnsw/{vector_name}/session and compatible SDK traversal APIs.",
+        qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+    )
+}
+
+fn private_hnsw_oram_api_required_error(vector_name: &str) -> StorageError {
+    StorageError::bad_input(private_hnsw_oram_api_required_message(vector_name))
+}
+
+async fn private_hnsw_oram_vector_names_for_collection(
+    toc: &TableOfContent,
+    collection_name: &str,
+    auth: &Auth,
+) -> Result<Vec<String>, StorageError> {
+    let collection_pass = auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new(),
+        "private_hnsw_oram_vector_guard",
+    )?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let config = collection.config_snapshot().await;
+    let Some(encryption) = config.params.effective_encryption() else {
+        return Ok(Vec::new());
+    };
+
+    Ok(encryption
+        .rules
+        .iter()
+        .filter(|rule| rule.binding.as_deref() == Some(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING))
+        .flat_map(|rule| match &rule.selector {
+            EncryptionSelector::VectorNames { names } => names.clone(),
+            EncryptionSelector::PayloadPaths { .. } | EncryptionSelector::MetadataKeys { .. } => {
+                Vec::new()
+            }
+        })
+        .collect())
+}
+
+fn ensure_vector_name_is_not_private_hnsw_oram(
+    private_hnsw_vectors: &[String],
+    vector_name: &str,
+) -> Result<(), StorageError> {
+    if private_hnsw_vectors
+        .iter()
+        .any(|private_name| private_name == vector_name)
+    {
+        return Err(private_hnsw_oram_api_required_error(vector_name));
+    }
+
+    Ok(())
+}
+
+fn ensure_core_search_batch_does_not_use_private_hnsw_oram_vectors(
+    request: &CoreSearchRequestBatch,
+    private_hnsw_vectors: &[String],
+) -> Result<(), StorageError> {
+    for search in &request.searches {
+        ensure_vector_name_is_not_private_hnsw_oram(
+            private_hnsw_vectors,
+            search.query.get_vector_name(),
+        )?;
+    }
+
+    Ok(())
+}
+
+fn ensure_query_requests_do_not_use_private_hnsw_oram_vectors(
+    requests: &[(CollectionQueryRequest, ShardSelectorInternal)],
+    private_hnsw_vectors: &[String],
+) -> Result<(), StorageError> {
+    for (request, _) in requests {
+        ensure_vector_name_is_not_private_hnsw_oram(private_hnsw_vectors, &request.using)?;
+
+        let mut prefetches = request.prefetch.iter().collect::<Vec<_>>();
+        while let Some(prefetch) = prefetches.pop() {
+            ensure_vector_name_is_not_private_hnsw_oram(private_hnsw_vectors, &prefetch.using)?;
+            prefetches.extend(prefetch.prefetch.iter());
+        }
+    }
+
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6611,6 +6734,15 @@ pub async fn do_query_batch_points(
         &auth,
     )
     .await?;
+
+    if runtime_settings.is_none() {
+        let private_hnsw_vectors =
+            private_hnsw_oram_vector_names_for_collection(toc, collection_name, &auth).await?;
+        ensure_query_requests_do_not_use_private_hnsw_oram_vectors(
+            &requests,
+            &private_hnsw_vectors,
+        )?;
+    }
 
     if let Some(settings) = runtime_settings {
         let collection_pass = auth.check_collection_access(
@@ -8287,6 +8419,9 @@ async fn ensure_encrypted_vector_name_is_unsupported(
                 continue;
             };
             if names.iter().any(|name| name == vector_name) {
+                if private_hnsw_oram_vector_in_encryption(&encryption, vector_name) {
+                    return Err(private_hnsw_oram_api_required_error(vector_name));
+                }
                 return Err(StorageError::bad_input(format!(
                     "cannot {operation} encrypted vector '{vector_name}'; {reason}",
                 )));
@@ -8829,6 +8964,155 @@ mod tests {
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
                         && description.contains("/private-hnsw/text/session")
+            ));
+        });
+    }
+
+    #[test]
+    fn private_hnsw_oram_no_runtime_paths_require_client_led_session() {
+        let (_temp, dispatcher) = test_dispatcher();
+        let auth = Auth::new_internal(Access::full("For test"));
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+            let pass = new_unchecked_verification_pass();
+            let toc = dispatcher.toc(&auth, &pass).clone();
+
+            let err = do_query_points(
+                &toc,
+                COLLECTION_NAME,
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::Vector(VectorInternal::Dense(vec![1.0, 0.0])),
+                    ))),
+                    using: VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/text/session")
+                        && !description.contains("runtime CKKS")
+                        && !description.contains("runtime OpenFHE")
+            ));
+
+            let err = do_search_points(
+                &toc,
+                COLLECTION_NAME,
+                SearchRequestInternal {
+                    vector: api::rest::NamedVectorStruct::Dense(
+                        segment::data_types::vectors::NamedVector {
+                            name: VECTOR_NAME.to_string(),
+                            vector: vec![1.0, 0.0],
+                        },
+                    ),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/text/session")
+                        && !description.contains("runtime CKKS")
+                        && !description.contains("runtime OpenFHE")
+            ));
+
+            let err = do_recommend_points(
+                &toc,
+                COLLECTION_NAME,
+                RecommendRequestInternal {
+                    positive: vec![RecommendExample::Dense(vec![1.0, 0.0])],
+                    negative: Vec::new(),
+                    strategy: Some(RecommendStrategy::AverageVector),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                    using: Some(UsingVector::Name(VECTOR_NAME.to_string())),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/text/session")
+                        && !description.contains("runtime CKKS")
+                        && !description.contains("runtime OpenFHE")
+            ));
+
+            let err = do_search_points_matrix(
+                &toc,
+                COLLECTION_NAME,
+                CollectionSearchMatrixRequest {
+                    sample_size: 2,
+                    limit_per_sample: 1,
+                    filter: None,
+                    using: VECTOR_NAME.to_string(),
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth,
+                None,
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/text/session")
+                        && !description.contains("runtime CKKS")
+                        && !description.contains("runtime OpenFHE")
             ));
         });
     }
