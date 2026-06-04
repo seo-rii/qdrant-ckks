@@ -8750,6 +8750,96 @@ mod tests {
     }
 
     #[test]
+    fn private_hnsw_oram_group_paths_require_client_led_session() {
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let (_temp, dispatcher) = test_dispatcher();
+        let auth = Auth::new_internal(Access::full("For test"));
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+            let pass = new_unchecked_verification_pass();
+            let toc = dispatcher.toc(&auth, &pass).clone();
+            let group_by = "group".parse::<JsonPath>().unwrap();
+
+            let err = do_search_point_groups(
+                &toc,
+                COLLECTION_NAME,
+                SearchGroupsRequestInternal {
+                    vector: api::rest::NamedVectorStruct::Dense(
+                        segment::data_types::vectors::NamedVector {
+                            name: VECTOR_NAME.to_string(),
+                            vector: vec![1.0, 0.0],
+                        },
+                    ),
+                    filter: None,
+                    params: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                    group_request: api::rest::BaseGroupRequest {
+                        group_by: group_by.clone(),
+                        group_size: 1,
+                        limit: 1,
+                        with_lookup: None,
+                    },
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/text/session")
+            ));
+
+            let err = do_query_point_groups(
+                &toc,
+                COLLECTION_NAME,
+                CollectionQueryGroupsRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::Vector(VectorInternal::Dense(vec![1.0, 0.0])),
+                    ))),
+                    using: VECTOR_NAME.to_string(),
+                    filter: None,
+                    params: None,
+                    score_threshold: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                    group_by,
+                    group_size: 1,
+                    limit: 1,
+                    with_lookup: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth,
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/text/session")
+            ));
+        });
+    }
+
+    #[test]
     fn ckks_score_query_source_batch_forwards_query_rk_id_not_key_id() {
         let bridge_dir = tempfile::Builder::new()
             .prefix("qdrant-sec-query-rk-bridge-")
