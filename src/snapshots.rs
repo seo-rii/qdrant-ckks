@@ -490,6 +490,33 @@ mod tests {
         assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn cli_snapshot_crypto_preflight_rejects_reserved_private_result_oram_symlink() {
+        let settings = Settings::new(None).unwrap();
+        let collection_dir = TempDir::new().unwrap();
+        let mut config = recovered_private_hnsw_config();
+        config.params.encryption = None;
+        fs::write(
+            collection_dir.path().join(COLLECTION_CONFIG_FILE),
+            config.to_bytes().unwrap(),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(
+            collection_dir.path().join("missing-result-oram-target"),
+            collection_dir.path().join(PRIVATE_RESULT_ORAM_DIR),
+        )
+        .unwrap();
+
+        let err =
+            validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
+                .expect_err("reserved private result ORAM symlink must fail CLI preflight");
+
+        assert!(err.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
+        assert!(!err.contains(collection_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
+    }
+
     #[test]
     fn cli_snapshot_crypto_preflight_rejects_missing_runtime_material() {
         let settings = Settings {
