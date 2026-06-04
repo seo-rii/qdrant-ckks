@@ -554,7 +554,8 @@ assert that the raw snapshot archive and restored bucket file do not contain the
 sentinel bytes.
 Snapshot creation also refuses to archive orphan private HNSW ORAM vector stores
 whose on-disk store does not match a configured private HNSW ORAM encryption
-rule.
+rule, or configured private HNSW ORAM vector rules whose on-disk store is
+missing.
 Restore preflight rejects result-private manifests, collection/vector context
 mismatches, vector dimension/distance mismatches, manifest signature key-id
 mismatches, Path ORAM tree_height/bucket_count mismatches, current epoch/root
@@ -563,8 +564,9 @@ mismatches, bucket commitment roots that do not reconstruct the manifest
 range before shard restore proceeds. Symlinked vector directories and bucket
 files are rejected by the same restore preflight. If a private HNSW ORAM store
 root exists, every on-disk vector store must match a configured private HNSW
-ORAM encryption rule; orphan stores and parent store symlinks fail closed before
-manifest or bucket data is trusted.
+ORAM encryption rule, and every configured private HNSW ORAM vector must have a
+store. Orphan stores, missing configured stores, and parent store symlinks fail
+closed before manifest or bucket data is trusted.
 The live REST and gRPC fixtures also exercise adversarial commit handling: a
 commit with a non-increasing new epoch is rejected, a validly-shaped but wrong
 Ed25519 signature is rejected, and replaying a previous old epoch/root after a

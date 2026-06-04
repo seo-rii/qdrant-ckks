@@ -645,7 +645,14 @@ fn validate_private_hnsw_oram_snapshot_store_matches_config(
     let private_hnsw_root = collection_dir.join(PRIVATE_HNSW_ORAM_DIR);
     let metadata = match std::fs::symlink_metadata(&private_hnsw_root) {
         Ok(metadata) => metadata,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(err) if err.kind() == ErrorKind::NotFound && configured_vectors.is_empty() => {
+            return Ok(());
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM snapshot store is missing for configured vector rules",
+            ));
+        }
         Err(_) => {
             return Err(CollectionError::bad_request(
                 "private HNSW ORAM snapshot store root cannot be inspected",
@@ -667,6 +674,7 @@ fn validate_private_hnsw_oram_snapshot_store_matches_config(
     let entries = std::fs::read_dir(&private_hnsw_root).map_err(|_| {
         CollectionError::bad_request("private HNSW ORAM snapshot store root cannot be read")
     })?;
+    let mut stored_vectors = HashSet::new();
     for entry in entries {
         let entry = entry.map_err(|_| {
             CollectionError::bad_request("private HNSW ORAM snapshot store entry cannot be read")
@@ -691,6 +699,13 @@ fn validate_private_hnsw_oram_snapshot_store_matches_config(
                 "private HNSW ORAM snapshot contains an unconfigured vector store",
             ));
         }
+        stored_vectors.insert(file_name);
+    }
+
+    if stored_vectors.len() != configured_vectors.len() {
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM snapshot is missing a configured vector store",
+        ));
     }
 
     Ok(())
@@ -1084,6 +1099,53 @@ mod tests {
             temp_dir.path(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_missing_store_for_configured_rule() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-missing-store")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("missing for configured vector rules")
+        );
+        assert!(!err.to_string().contains(PRIVATE_HNSW_ORAM_DIR));
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_missing_configured_vector_store() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-missing-vector-store")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        fs::create_dir(temp_dir.path().join(PRIVATE_HNSW_ORAM_DIR)).unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("missing a configured vector store")
+        );
+        assert!(!err.to_string().contains(PRIVATE_HNSW_ORAM_DIR));
     }
 
     #[test]
