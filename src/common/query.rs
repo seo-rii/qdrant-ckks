@@ -8671,6 +8671,85 @@ mod tests {
     }
 
     #[test]
+    fn private_hnsw_oram_recommend_and_discover_require_client_led_session() {
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let (_temp, dispatcher) = test_dispatcher();
+        let auth = Auth::new_internal(Access::full("For test"));
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+            let pass = new_unchecked_verification_pass();
+            let toc = dispatcher.toc(&auth, &pass).clone();
+
+            let err = do_recommend_points(
+                &toc,
+                COLLECTION_NAME,
+                RecommendRequestInternal {
+                    positive: vec![RecommendExample::Dense(vec![1.0, 0.0])],
+                    negative: Vec::new(),
+                    strategy: Some(RecommendStrategy::AverageVector),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                    using: Some(UsingVector::Name(VECTOR_NAME.to_string())),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/text/session")
+            ));
+
+            let err = do_discover_points(
+                &toc,
+                COLLECTION_NAME,
+                DiscoverRequestInternal {
+                    target: Some(RecommendExample::Dense(vec![1.0, 0.0])),
+                    context: None,
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    using: Some(UsingVector::Name(VECTOR_NAME.to_string())),
+                    lookup_from: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth,
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/text/session")
+            ));
+        });
+    }
+
+    #[test]
     fn ckks_score_query_source_batch_forwards_query_rk_id_not_key_id() {
         let bridge_dir = tempfile::Builder::new()
             .prefix("qdrant-sec-query-rk-bridge-")
