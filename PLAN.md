@@ -366,7 +366,7 @@
 - Phase G: cluster parity fingerprint, private-HNSW transfer fail-closed, shard-local epoch ownership, consensus-backed epoch/root CAS를 설계하고 e2e 테스트한다.
   - cluster parity fingerprint는 기존 crypto runtime capability fingerprint에 private HNSW ORAM options/signing verifier policy가 포함되는 테스트로 고정했다. ORAM tree shape 또는 private HNSW signing verifier drift는 peer parity mismatch로 실패한다.
   - private-HNSW transfer fail-closed는 cluster update 진입점에서 시작형 shard transfer(`move_shard`, `replicate_shard`, `replicate_points`, `restart_transfer`)를 consensus submit 전에 막도록 연결했다. 자동 dead-replica shard transfer recovery도 private HNSW ORAM collection에서는 transfer 제안을 스킵하고, 이미 consensus에 들어온 transfer라도 local transfer task start 전에 다시 fail closed 한다. private ORAM bucket file transfer와 consensus-backed epoch/root ownership이 구현될 때까지 shard transfer를 허용하지 않는다.
-  - 수동 shard snapshot 생성/stream/recovery도 private HNSW ORAM collection에서는 fail closed 한다. 현재 private index는 collection-local `private_hnsw_oram/` bucket store이므로 shard snapshot만으로는 epoch/root parity를 보존할 수 없다.
+  - 수동 shard snapshot 생성/stream/recovery와 partial snapshot manifest 조회도 private HNSW ORAM collection에서는 fail closed 한다. 현재 private index는 collection-local `private_hnsw_oram/` bucket store이므로 shard snapshot만으로는 epoch/root parity를 보존할 수 없다.
   - distributed session open은 consensus-backed epoch/root CAS가 구현될 때까지 fail closed 한다. 현재 MVP의 ORAM commit CAS는 node-local 파일 상태만 원자화하므로 cluster session을 열지 않는다. REST/gRPC route fixtures도 manifest/bucket upload 이후 session open이 같은 consensus-backed CAS guard에서 거부되는지 검증한다.
 
 테스트:

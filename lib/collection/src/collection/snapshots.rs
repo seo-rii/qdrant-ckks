@@ -373,12 +373,8 @@ impl Collection {
         shard_id: ShardId,
         temp_dir: &Path,
     ) -> CollectionResult<SnapshotDescription> {
-        let params = self.collection_config.read().await.params.clone();
-        validate_private_hnsw_oram_shard_snapshot_operation(
-            self.name(),
-            &params,
-            "shard snapshot creation",
-        )?;
+        self.validate_private_hnsw_oram_shard_snapshot_allowed("shard snapshot creation")
+            .await?;
 
         let snapshot_creator = self
             .shards_holder
@@ -399,12 +395,8 @@ impl Collection {
         manifest: Option<SnapshotManifest>,
         temp_dir: &Path,
     ) -> CollectionResult<SnapshotStream> {
-        let params = self.collection_config.read().await.params.clone();
-        validate_private_hnsw_oram_shard_snapshot_operation(
-            self.name(),
-            &params,
-            "shard snapshot streaming",
-        )?;
+        self.validate_private_hnsw_oram_shard_snapshot_allowed("shard snapshot streaming")
+            .await?;
 
         let shard = OwnedRwLockReadGuard::try_map(
             self.shards_holder.clone().read_owned().await,
@@ -496,6 +488,9 @@ impl Collection {
         &self,
         shard_id: ShardId,
     ) -> CollectionResult<SnapshotManifest> {
+        self.validate_private_hnsw_oram_shard_snapshot_allowed("partial shard snapshot manifest")
+            .await?;
+
         self.shards_holder
             .read()
             .await
@@ -503,6 +498,14 @@ impl Collection {
             .ok_or_else(|| shard_not_found_error(shard_id))?
             .get_partial_snapshot_manifest()
             .await
+    }
+
+    pub async fn validate_private_hnsw_oram_shard_snapshot_allowed(
+        &self,
+        operation_name: &str,
+    ) -> CollectionResult<()> {
+        let params = self.collection_config.read().await.params.clone();
+        validate_private_hnsw_oram_shard_snapshot_operation(self.name(), &params, operation_name)
     }
 }
 
@@ -1070,6 +1073,7 @@ mod tests {
             "shard snapshot creation",
             "shard snapshot streaming",
             "shard snapshot recovery",
+            "partial shard snapshot manifest",
         ] {
             let err = validate_private_hnsw_oram_shard_snapshot_operation(
                 "docs",
