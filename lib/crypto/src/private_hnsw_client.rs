@@ -5548,6 +5548,47 @@ mod tests {
             snapshot
         );
 
+        let mut wrong_epoch = encrypted.clone();
+        wrong_epoch.index_epoch = 43;
+        assert_eq!(
+            open_private_hnsw_oram_client_state_snapshot(&keys, context, &wrong_epoch),
+            Err(PrivateHnswClientError::ClientStateOpenFailed)
+        );
+
+        let mut wrong_version = encrypted.clone();
+        wrong_version.version = 2;
+        assert_eq!(
+            open_private_hnsw_oram_client_state_snapshot(&keys, context, &wrong_version),
+            Err(PrivateHnswClientError::UnsupportedClientStateCiphertextVersion(2))
+        );
+
+        let mut malformed_ciphertext = encrypted.clone();
+        malformed_ciphertext.ciphertext = "client-state-ciphertext!sentinel".to_string();
+        assert_eq!(
+            open_private_hnsw_oram_client_state_snapshot(&keys, context, &malformed_ciphertext),
+            Err(PrivateHnswClientError::InvalidClientStateCiphertextEncoding)
+        );
+
+        let mut short_ciphertext = encrypted.clone();
+        short_ciphertext.ciphertext = BASE64URL_NOPAD.encode(&[0, 1, 2, 3]);
+        short_ciphertext.ciphertext_sha256 = base64url_sha256(&[0, 1, 2, 3]);
+        assert_eq!(
+            open_private_hnsw_oram_client_state_snapshot(&keys, context, &short_ciphertext),
+            Err(PrivateHnswClientError::InvalidClientStateCiphertextEncoding)
+        );
+
+        let mut wrong_encoded_version = encrypted.clone();
+        let mut wrong_version_raw = BASE64URL_NOPAD
+            .decode(wrong_encoded_version.ciphertext.as_bytes())
+            .unwrap();
+        wrong_version_raw[0..2].copy_from_slice(&2u16.to_be_bytes());
+        wrong_encoded_version.ciphertext = BASE64URL_NOPAD.encode(&wrong_version_raw);
+        wrong_encoded_version.ciphertext_sha256 = base64url_sha256(&wrong_version_raw);
+        assert_eq!(
+            open_private_hnsw_oram_client_state_snapshot(&keys, context, &wrong_encoded_version),
+            Err(PrivateHnswClientError::UnsupportedClientStateCiphertextVersion(2))
+        );
+
         let mut malformed_snapshot = snapshot.clone();
         malformed_snapshot.stash.push(node_block_with_id(9));
         assert_eq!(
