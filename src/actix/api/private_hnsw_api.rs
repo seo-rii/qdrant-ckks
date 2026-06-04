@@ -1211,6 +1211,27 @@ mod private_hnsw_rest_tests {
             let uploaded_store = PrivateHnswOramStore::new(collection.path(), "text").unwrap();
             let search_run = fixture.run_single_search_collect_writeback();
 
+            let active_snapshot_error = crate::common::collections::do_create_snapshot(
+                dispatcher.toc(&auth, &pass).clone(),
+                &auth,
+                "docs",
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+            assert!(
+                active_snapshot_error.contains("requires no active private ORAM session"),
+                "{active_snapshot_error}"
+            );
+            assert!(
+                !active_snapshot_error.contains(&fixture.encrypted_build.root_hash),
+                "{active_snapshot_error}"
+            );
+            assert!(
+                !active_snapshot_error.contains("private_hnsw_oram"),
+                "{active_snapshot_error}"
+            );
+
             post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/session",
                 OpenPrivateHnswSessionRequest {

@@ -1763,6 +1763,27 @@ mod private_hnsw_grpc_tests {
             let uploaded_store = PrivateHnswOramStore::new(collection.path(), VECTOR_NAME).unwrap();
             let search_run = fixture.run_single_search_collect_writeback();
 
+            let active_snapshot_error = crate::common::collections::do_create_snapshot(
+                dispatcher.toc(&auth, &pass).clone(),
+                &auth,
+                COLLECTION_NAME,
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+            assert!(
+                active_snapshot_error.contains("requires no active private ORAM session"),
+                "{active_snapshot_error}"
+            );
+            assert!(
+                !active_snapshot_error.contains(&fixture.encrypted_build.root_hash),
+                "{active_snapshot_error}"
+            );
+            assert!(
+                !active_snapshot_error.contains("private_hnsw_oram"),
+                "{active_snapshot_error}"
+            );
+
             let err = PrivateHnswOram::open_private_hnsw_session(
                 &service,
                 Request::new(grpc::OpenPrivateHnswSessionRequest {

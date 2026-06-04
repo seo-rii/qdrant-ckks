@@ -578,6 +578,10 @@ JSON artifacts after rejecting non-directory or symlinked private ORAM snapshot
 sources; snapshot tests seal a plaintext sentinel into a client bucket and
 assert that the raw snapshot archive and restored bucket file do not contain the
 sentinel bytes.
+Snapshot creation also fails closed while any active private HNSW ORAM session
+exists for the collection, because a session may be remapping paths and writing
+back buckets. The error is sanitized and does not include collection-local
+`private_hnsw_oram` filesystem paths or bucket roots.
 Snapshot creation also refuses to archive orphan private HNSW ORAM vector stores
 whose on-disk store does not match a configured private HNSW ORAM encryption
 rule, or configured private HNSW ORAM vector rules whose on-disk store is

@@ -410,6 +410,26 @@ pub async fn do_upload_private_hnsw_manifest(
     Ok(epoch_state)
 }
 
+pub(crate) fn ensure_no_active_private_hnsw_collection_snapshot_session(
+    collection_name: &str,
+    config: &CollectionConfigInternal,
+) -> StorageResult<()> {
+    if !collection_uses_private_hnsw_oram(config) {
+        return Ok(());
+    }
+
+    let collection_crypto_id = config.stable_crypto_id(collection_name)?;
+    let now_unix = current_unix_secs()?;
+    let mut registry = session_registry()
+        .lock()
+        .map_err(|_| StorageError::service_error("private HNSW ORAM session registry poisoned"))?;
+    ensure_no_active_private_hnsw_collection_session_in_registry(
+        &mut registry,
+        &collection_crypto_id,
+        now_unix,
+    )
+}
+
 pub async fn do_get_private_hnsw_manifest(
     toc: &TableOfContent,
     auth: &Auth,
@@ -1424,6 +1444,31 @@ fn ensure_no_active_private_hnsw_session(
     Ok(())
 }
 
+fn ensure_no_active_private_hnsw_collection_session_in_registry(
+    registry: &mut PrivateHnswSessionRegistry,
+    collection_id: &str,
+    now_unix: u64,
+) -> StorageResult<()> {
+    if registry.has_active_collection(collection_id, now_unix) {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM collection snapshot requires no active private ORAM session",
+        ));
+    }
+    Ok(())
+}
+
+fn collection_uses_private_hnsw_oram(config: &CollectionConfigInternal) -> bool {
+    config
+        .params
+        .effective_encryption()
+        .is_some_and(|encryption| {
+            encryption
+                .rules
+                .iter()
+                .any(|rule| rule.binding.as_deref() == Some(PRIVATE_HNSW_ORAM_BINDING))
+        })
+}
+
 fn ensure_private_hnsw_commit_current_epoch(
     store: &PrivateHnswOramStore,
     old_epoch: u64,
@@ -2009,6 +2054,34 @@ mod private_hnsw_tests {
         assert!(registry.close("collection-uuid-1", "text", "session-1"));
         assert!(!registry.has_active_collection("collection-uuid-1", now));
         assert!(!registry.has_active_index("collection-uuid-1", "text", now));
+    }
+
+    #[test]
+    fn collection_snapshot_guard_rejects_active_collection_session() {
+        let now = 10;
+        let mut registry = PrivateHnswSessionRegistry::default();
+        registry
+            .open(fixture_session("session-1", 20), now)
+            .unwrap();
+
+        let err = ensure_no_active_private_hnsw_collection_session_in_registry(
+            &mut registry,
+            "collection-uuid-1",
+            now,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("snapshot requires no active private ORAM session")
+        );
+        assert!(
+            ensure_no_active_private_hnsw_collection_session_in_registry(
+                &mut registry,
+                "other-collection",
+                now,
+            )
+            .is_ok()
+        );
     }
 
     #[test]
