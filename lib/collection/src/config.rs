@@ -34,7 +34,7 @@ const PAYLOAD_FIELD_BINDING: &str = "payload-field/v1";
 const CLIENT_PAYLOAD_ENVELOPE_BINDING: &str = "client-payload-envelope/v1";
 const PRIVATE_RESULT_ORAM_BINDING: &str = "private-result-oram/v1";
 const VECTOR_ENVELOPE_BINDING: &str = "vector-envelope/v1";
-const PRIVATE_HNSW_ORAM_BINDING: &str = qdrant_sec::PRIVATE_HNSW_ORAM_BINDING;
+pub const PRIVATE_HNSW_ORAM_BINDING: &str = qdrant_sec::PRIVATE_HNSW_ORAM_BINDING;
 const METADATA_VALUE_BINDING: &str = "metadata-value/v1";
 const METADATA_EXACT_MATCH_TOKEN_BINDING: &str = "metadata-exact-match-token/v1";
 

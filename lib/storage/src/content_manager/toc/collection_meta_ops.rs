@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use collection::collection_state;
-use collection::config::{CollectionParams, ShardingMethod};
+use collection::config::{CollectionParams, PRIVATE_HNSW_ORAM_BINDING, ShardingMethod};
 use collection::events::{CollectionDeletedEvent, IndexCreatedEvent};
 use collection::operations::types::PeerMetadata;
 use collection::shards::collection_shard_distribution::CollectionShardDistribution;
@@ -20,8 +20,6 @@ use crate::content_manager::collections_ops::Checker as _;
 use crate::content_manager::consensus_ops::ConsensusOperations;
 use crate::content_manager::errors::StorageError;
 use crate::content_manager::shard_distribution::ShardDistributionProposal;
-
-const PRIVATE_HNSW_ORAM_BINDING: &str = "private-hnsw-oram/v1";
 
 static CREATE_CUSTOM_SHARDS_IN_INITIALIZING_STATE: LazyLock<semver::Version> =
     LazyLock::new(|| semver::Version::parse("1.14.2-dev").unwrap());
