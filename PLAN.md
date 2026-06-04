@@ -433,7 +433,7 @@
 - REST/gRPC `commit`은 bounded request-size/epoch checks 뒤 Ed25519 request signature를 `new_root_hash` parsing과 Merkle/writeback preparation보다 먼저 검증해 unauthenticated malformed root values를 parser까지 보내지 않는다.
 - REST/gRPC `read_paths`와 `commit` request signature key id는 session manifest의 `owner_signing_key_id`와 달라도 fail closed 한다.
 - active session의 `read_paths`와 `commit`은 session open 이후 runtime instance policy가 바뀌어도 session manifest를 현재 runtime context와 다시 비교하고 drift를 fail closed 한다.
-- REST와 gRPC route fixtures는 active session 이후 runtime `fixed_budget` 또는 `oram` policy가 drift된 settings로 `read_paths`/`commit`을 호출하면 fail closed 되는 경계를 모두 검증한다.
+- REST와 gRPC route fixtures는 active session 이후 runtime `fixed_budget`, `oram`, 또는 reserved `result_privacy` policy가 drift된 settings로 `read_paths`/`commit`을 호출하면 fail closed 되는 경계를 모두 검증한다.
 - snapshot restore preflight는 `private_payload_oram_required` manifest를 payload ORAM provider 구현 전까지 거부하고 `ids_visible`만 허용한다.
 - CLI/startup snapshot mapping recovery도 crypto runtime validation 이후 private HNSW ORAM restore-layout preflight를 실행해 storage-level snapshot recovery와 같은 bucket/root consistency 검증을 적용하고, store-originated layout 오류는 collection-local `private_hnsw_oram` 경로나 bucket body를 반사하지 않도록 sanitize한다.
 - storage-level snapshot recovery도 private HNSW ORAM restore-layout 오류가 collection-local `private_hnsw_oram` 경로나 bucket body를 반사하지 않도록 sanitize한다.

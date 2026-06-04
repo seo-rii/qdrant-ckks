@@ -3099,6 +3099,13 @@ mod private_hnsw_grpc_tests {
             .get_mut("docs_private_hnsw_v1")
             .unwrap()
             .options["fixed_budget"]["fixed_result_k"] = serde_json::json!(2);
+        let mut reserved_privacy_settings = settings.clone();
+        reserved_privacy_settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["result_privacy"] = serde_json::json!("private_payload_oram_required");
 
         let (_temp, dispatcher) = test_dispatcher();
         actix_web::rt::System::new().block_on(async {
@@ -3178,6 +3185,33 @@ mod private_hnsw_grpc_tests {
                     .contains("manifest fixed_budget does not match runtime instance")
             );
 
+            let reserved_privacy_service = PrivateHnswOramService::new(
+                Arc::new(dispatcher.clone()),
+                reserved_privacy_settings,
+            );
+            let reserved_paths = vec![fixture.entry_leaf_label()];
+            let reserved_signature = fixture.sign_read_paths(&reserved_paths, 1, true);
+            let err = PrivateHnswOram::read_private_hnsw_paths(
+                &reserved_privacy_service,
+                Request::new(grpc::OramReadPathsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: reserved_paths,
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    }),
+                    client_signature: Some(signature_to_proto(reserved_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("option result_privacy is invalid"));
+
             let closed = PrivateHnswOram::close_private_hnsw_session(
                 &service,
                 Request::new(grpc::ClosePrivateHnswSessionRequest {
@@ -3211,6 +3245,13 @@ mod private_hnsw_grpc_tests {
             .get_mut("docs_private_hnsw_v1")
             .unwrap()
             .options["fixed_budget"]["paths_per_round"] = serde_json::json!(2);
+        let mut reserved_privacy_settings = settings.clone();
+        reserved_privacy_settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["result_privacy"] = serde_json::json!("private_payload_oram_required");
 
         let (_temp, dispatcher) = test_dispatcher();
         actix_web::rt::System::new().block_on(async {
@@ -3291,6 +3332,35 @@ mod private_hnsw_grpc_tests {
                 err.message()
                     .contains("manifest oram does not match runtime instance")
             );
+
+            let reserved_run = fixture.run_single_search_collect_writeback();
+            let reserved_privacy_service = PrivateHnswOramService::new(
+                Arc::new(dispatcher.clone()),
+                reserved_privacy_settings,
+            );
+            let err = PrivateHnswOram::commit_private_hnsw_paths(
+                &reserved_privacy_service,
+                Request::new(grpc::OramCommitRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.encrypted_build.root_hash.clone(),
+                    new_root_hash: reserved_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: reserved_run
+                        .updated_buckets
+                        .iter()
+                        .cloned()
+                        .map(bucket_to_proto)
+                        .collect(),
+                    commit_signature: Some(signature_to_proto(reserved_run.commit_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("option result_privacy is invalid"));
 
             let closed = PrivateHnswOram::close_private_hnsw_session(
                 &service,

@@ -2200,6 +2200,13 @@ mod private_hnsw_rest_tests {
             .get_mut("docs_private_hnsw_v1")
             .unwrap()
             .options["fixed_budget"]["fixed_result_k"] = serde_json::json!(2);
+        let mut reserved_privacy_settings = settings.clone();
+        reserved_privacy_settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["result_privacy"] = serde_json::json!("private_payload_oram_required");
 
         let (_temp, dispatcher) = test_dispatcher();
         actix_web::rt::System::new().block_on(async {
@@ -2216,6 +2223,14 @@ mod private_hnsw_rest_tests {
                 App::new()
                     .app_data(web::Data::new(dispatcher.clone()))
                     .app_data(web::Data::new(drifted_settings))
+                    .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
+                    .configure(config_private_hnsw_api),
+            )
+            .await;
+            let reserved_privacy_app = actix_test::init_service(
+                App::new()
+                    .app_data(web::Data::new(dispatcher.clone()))
+                    .app_data(web::Data::new(reserved_privacy_settings))
                     .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
                     .configure(config_private_hnsw_api),
             )
@@ -2309,6 +2324,29 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "manifest fixed_budget does not match runtime instance"
             );
+            let reserved_paths = vec![fixture.entry_leaf_label()];
+            let reserved_signature = fixture.sign_read_paths(&reserved_paths, 1, true);
+            post_json_error_contains!(
+                &reserved_privacy_app,
+                "/collections/docs/private-hnsw/text/oram/read_paths",
+                OramReadPathsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: reserved_paths,
+                    padding: OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    },
+                    client_signature: PrivateHnswClientSignature {
+                        alg: reserved_signature.alg,
+                        key_id: reserved_signature.key_id,
+                        sig: reserved_signature.sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "option result_privacy is invalid"
+            );
 
             let close_request = actix_test::TestRequest::post()
                 .uri(&format!(
@@ -2338,6 +2376,13 @@ mod private_hnsw_rest_tests {
             .get_mut("docs_private_hnsw_v1")
             .unwrap()
             .options["fixed_budget"]["paths_per_round"] = serde_json::json!(2);
+        let mut reserved_privacy_settings = settings.clone();
+        reserved_privacy_settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["result_privacy"] = serde_json::json!("private_payload_oram_required");
 
         let (_temp, dispatcher) = test_dispatcher();
         actix_web::rt::System::new().block_on(async {
@@ -2354,6 +2399,14 @@ mod private_hnsw_rest_tests {
                 App::new()
                     .app_data(web::Data::new(dispatcher.clone()))
                     .app_data(web::Data::new(drifted_settings))
+                    .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
+                    .configure(config_private_hnsw_api),
+            )
+            .await;
+            let reserved_privacy_app = actix_test::init_service(
+                App::new()
+                    .app_data(web::Data::new(dispatcher.clone()))
+                    .app_data(web::Data::new(reserved_privacy_settings))
                     .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
                     .configure(config_private_hnsw_api),
             )
@@ -2443,6 +2496,26 @@ mod private_hnsw_rest_tests {
                 },
                 StatusCode::BAD_REQUEST,
                 "manifest oram does not match runtime instance"
+            );
+            let reserved_run = fixture.run_single_search_collect_writeback();
+            post_json_error_contains!(
+                &reserved_privacy_app,
+                "/collections/docs/private-hnsw/text/oram/commit",
+                OramCommitRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.encrypted_build.root_hash.clone(),
+                    new_root_hash: reserved_run.commit_plan.new_root_hash,
+                    updated_buckets: reserved_run.updated_buckets,
+                    commit_signature: PrivateHnswClientSignature {
+                        alg: reserved_run.commit_signature.alg,
+                        key_id: reserved_run.commit_signature.key_id,
+                        sig: reserved_run.commit_signature.sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "option result_privacy is invalid"
             );
 
             let close_request = actix_test::TestRequest::post()
