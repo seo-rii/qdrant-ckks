@@ -11,7 +11,7 @@ use qdrant_sec::{
     SecretKey, build_private_hnsw_oram_plaintext_index_from_f32_points,
     build_private_hnsw_oram_plaintext_index_from_layered_f32_points,
     plan_private_hnsw_oram_directional_neighbor_filter,
-    plan_private_hnsw_oram_graph_traversal_path_batch,
+    plan_private_hnsw_oram_graph_traversal_path_batch_with_stats,
     plan_private_hnsw_oram_neighbor_clustered_leaves, plan_private_hnsw_oram_speculative_prefetch,
     private_hnsw_oram_bucket_ids_for_leaf, private_hnsw_oram_leaf_count,
     seal_private_hnsw_oram_plaintext_index, search_private_hnsw_oram_encrypted,
@@ -521,7 +521,7 @@ fn private_hnsw_oram_bench(c: &mut Criterion) {
             .unwrap();
         b.iter(|| {
             black_box(
-                plan_private_hnsw_oram_graph_traversal_path_batch(
+                plan_private_hnsw_oram_graph_traversal_path_batch_with_stats(
                     black_box(&planning_fixture.state),
                     black_box(planning_fixture.config),
                     black_box(current_block),
