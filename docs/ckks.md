@@ -635,7 +635,9 @@ until the payload ORAM provider exists.
 The startup snapshot mapping recovery path runs the same private HNSW ORAM
 restore-layout preflight after crypto runtime validation, so CLI recovery
 cannot bypass bucket/root consistency checks that are enforced by storage-level
-snapshot recovery.
+snapshot recovery. Store-originated layout failures in this CLI path are
+sanitized before reporting, so collection-local `private_hnsw_oram` paths and
+stored bucket bodies are not reflected.
 
 Current result privacy support is deliberately narrow. `result_privacy:
 ids_visible` is the only accepted runtime mode in the MVP: Qdrant remains blind

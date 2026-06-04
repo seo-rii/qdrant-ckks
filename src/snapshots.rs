@@ -183,12 +183,27 @@ fn validate_restored_collection_crypto_runtime(
         collection_path,
     )
     .map_err(|err| {
+        let detail = sanitize_private_hnsw_snapshot_layout_error(collection_path, err);
         format!(
             "Failed to validate private HNSW ORAM snapshot layout for recovered snapshot \
-             {collection_name}: {err}",
+             {collection_name}: {detail}",
         )
     })?;
     Ok(())
+}
+
+fn sanitize_private_hnsw_snapshot_layout_error(
+    collection_path: &Path,
+    err: collection::operations::types::CollectionError,
+) -> String {
+    let rendered = err.to_string();
+    let collection_path = collection_path.to_string_lossy();
+    if rendered.contains(collection_path.as_ref())
+        || rendered.contains(collection::private_hnsw_oram_store::PRIVATE_HNSW_ORAM_DIR)
+    {
+        return "private HNSW ORAM snapshot layout validation failed".to_string();
+    }
+    rendered
 }
 
 #[cfg(test)]
@@ -216,7 +231,9 @@ mod tests {
     use collection::operations::types::VectorsConfig;
     use collection::operations::vector_params_builder::VectorParamsBuilder;
     use collection::optimizers_builder::OptimizersConfig;
-    use collection::private_hnsw_oram_store::{PrivateHnswOramEpochState, PrivateHnswOramStore};
+    use collection::private_hnsw_oram_store::{
+        PRIVATE_HNSW_ORAM_DIR, PrivateHnswOramEpochState, PrivateHnswOramStore,
+    };
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_sec::{
         LocalMasterKeyProvider, MasterKeyProvider, PRIVATE_HNSW_ORAM_BINDING,
@@ -379,6 +396,42 @@ mod tests {
             "{err}"
         );
         assert!(!err.contains(SIGNING_KEY_ID), "{err}");
+    }
+
+    #[test]
+    fn cli_snapshot_crypto_preflight_sanitizes_private_hnsw_store_paths() {
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let collection_dir = TempDir::new().unwrap();
+        write_recovered_private_hnsw_snapshot_fixture(collection_dir.path(), &fixture, false);
+        fs::remove_file(
+            collection_dir
+                .path()
+                .join(PRIVATE_HNSW_ORAM_DIR)
+                .join(VECTOR_NAME)
+                .join("buckets")
+                .join("00000000.bucket"),
+        )
+        .unwrap();
+
+        let err =
+            validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
+                .expect_err("missing bucket must fail CLI preflight");
+
+        assert!(
+            err.contains("private HNSW ORAM snapshot layout validation failed"),
+            "{err}"
+        );
+        assert!(
+            !err.contains(collection_dir.path().to_string_lossy().as_ref()),
+            "{err}"
+        );
+        assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR), "{err}");
+        assert!(!err.contains(&fixture.encrypted_build.root_hash), "{err}");
+        assert!(
+            !err.contains(&fixture.encrypted_build.buckets[0].ciphertext),
+            "{err}"
+        );
     }
 
     #[test]
