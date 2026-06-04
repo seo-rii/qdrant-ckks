@@ -1120,6 +1120,26 @@ mod private_hnsw_rest_tests {
                 "ConcurrentWriter"
             );
 
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: fixture.manifest.clone(),
+                    signature: fixture.manifest_signature.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "requires no active session"
+            );
+            post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/buckets",
+                UploadPrivateHnswBucketsRequest {
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: fixture.encrypted_build.buckets.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "requires no active session"
+            );
+
             let epoch_root_mismatch_paths = vec![fixture.entry_leaf_label()];
             let epoch_root_mismatch_signature =
                 fixture.sign_read_paths(&epoch_root_mismatch_paths, 1, true);

@@ -162,6 +162,12 @@ impl PrivateHnswSessionRegistry {
             .any(|session| session.collection_id == collection_id)
     }
 
+    fn has_active_index(&mut self, collection_id: &str, vector_name: &str, now_unix: u64) -> bool {
+        self.expire(now_unix);
+        self.active_writer_by_index
+            .contains_key(&session_index_key(collection_id, vector_name))
+    }
+
     fn with_session_mut<T>(
         &mut self,
         collection_id: &str,
@@ -308,6 +314,7 @@ pub async fn do_upload_private_hnsw_manifest(
     )
     .map_err(private_hnsw_error)?;
     resolved.validate_manifest_runtime_policy(&manifest)?;
+    ensure_no_active_private_hnsw_session(&resolved.collection_crypto_id, vector_name)?;
 
     let epoch_state = PrivateHnswOramEpochState {
         index_epoch: epoch.epoch,
@@ -440,6 +447,7 @@ pub async fn do_upload_private_hnsw_buckets(
             "private HNSW ORAM bucket upload epoch/root does not match current manifest epoch",
         ));
     }
+    ensure_no_active_private_hnsw_session(&resolved.collection_crypto_id, vector_name)?;
     let leaf_commitments =
         validate_initial_private_hnsw_upload_bundle(&manifest, index_epoch, &root_hash, &buckets)?;
     let max_ciphertext_bytes = max_bucket_ciphertext_bytes(&manifest)?;
@@ -1252,6 +1260,22 @@ fn validate_private_hnsw_session_cluster_epoch_mode(distributed: bool) -> Storag
     Ok(())
 }
 
+fn ensure_no_active_private_hnsw_session(
+    collection_id: &str,
+    vector_name: &str,
+) -> StorageResult<()> {
+    let now_unix = current_unix_secs()?;
+    let mut registry = session_registry()
+        .lock()
+        .map_err(|_| StorageError::service_error("private HNSW ORAM session registry poisoned"))?;
+    if registry.has_active_index(collection_id, vector_name, now_unix) {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM upload requires no active session for this index",
+        ));
+    }
+    Ok(())
+}
+
 fn ensure_private_hnsw_commit_current_epoch(
     store: &PrivateHnswOramStore,
     old_epoch: u64,
@@ -1734,6 +1758,8 @@ mod private_hnsw_tests {
         registry.open(session.clone(), now).unwrap();
         assert!(registry.has_active_collection("collection-uuid-1", now));
         assert!(!registry.has_active_collection("other-collection", now));
+        assert!(registry.has_active_index("collection-uuid-1", "text", now));
+        assert!(!registry.has_active_index("collection-uuid-1", "other-vector", now));
         let err = registry.open(
             PrivateHnswSession {
                 session_id: "session-2".to_string(),
@@ -1744,5 +1770,6 @@ mod private_hnsw_tests {
         assert!(err.unwrap_err().to_string().contains("ConcurrentWriter"));
         assert!(registry.close("collection-uuid-1", "text", "session-1"));
         assert!(!registry.has_active_collection("collection-uuid-1", now));
+        assert!(!registry.has_active_index("collection-uuid-1", "text", now));
     }
 }
