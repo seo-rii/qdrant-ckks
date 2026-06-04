@@ -9,7 +9,7 @@ use std::time::Duration;
 use chrono::Utc;
 use collection::config::{
     CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams, CryptoMigrationState,
-    EncryptionSelector,
+    EncryptionSelector, private_hnsw_oram_api_required_message,
 };
 use data_encoding::{BASE64, BASE64URL_NOPAD};
 use qdrant_sec::{
@@ -1542,12 +1542,6 @@ impl VectorWritePlan {
 
         Ok(Some(scores))
     }
-}
-
-fn private_hnsw_oram_api_required_message(vector_name: &str) -> String {
-    format!(
-        "{VECTOR_PRIVATE_HNSW_ORAM_PROVIDER} requires client-led private ORAM sessions for vector '{vector_name}'. Use /private-hnsw/{vector_name}/session and compatible SDK traversal APIs."
-    )
 }
 
 pub(crate) fn vector_write_plan_for_collection_with_crypto_id(

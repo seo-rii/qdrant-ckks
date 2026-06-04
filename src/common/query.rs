@@ -21,7 +21,7 @@ use collection::collection::distance_matrix::*;
 use collection::common::batching::batch_requests;
 use collection::config::{
     CollectionEncryptionConfig, EncryptedVectorReturnRequest, EncryptionSelector,
-    encrypted_vector_return_request,
+    encrypted_vector_return_request, private_hnsw_oram_api_required_message,
 };
 use collection::grouping::group_by::GroupRequest;
 use collection::lookup::lookup_ids;
@@ -6238,13 +6238,6 @@ fn private_hnsw_oram_vector_in_encryption(
                 EncryptionSelector::VectorNames { names } if names.iter().any(|name| name == vector_name)
             )
     })
-}
-
-fn private_hnsw_oram_api_required_message(vector_name: &str) -> String {
-    format!(
-        "{} requires client-led private ORAM sessions for vector '{vector_name}'. Use /private-hnsw/{vector_name}/session and compatible SDK traversal APIs.",
-        qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
-    )
 }
 
 fn private_hnsw_oram_api_required_error(vector_name: &str) -> StorageError {
