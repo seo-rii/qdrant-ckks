@@ -391,6 +391,7 @@
 - REST/gRPC manifest upload fixture는 route settings가 reserved `private_payload_oram_required` runtime mode로 drift되어도 runtime option validation에서 fail closed 되는지 검증한다.
 - REST/gRPC ORAM session fixture는 active session이 있는 같은 private index에 대해 두 번째 session open을 `ConcurrentWriter`로 거부한다.
 - session open은 registry에 active session을 등록한 뒤 stored manifest/signature/current epoch가 open 중 바뀌지 않았는지 다시 확인하고, drift가 있으면 방금 연 session을 닫은 뒤 fail closed 한다.
+- session open은 signed manifest/current epoch만 있고 encrypted bucket/Merkle upload가 아직 완료되지 않은 상태도 fail closed 한다.
 - session registry는 lease가 만료된 session을 제거하면서 같은 private index의 single-writer lock도 해제하고, 만료된 session id 재사용은 read/commit/close 모두에서 fail closed 한다.
 - REST/gRPC ORAM session fixture는 active session이 있는 같은 private index에 대해 signed manifest upload와 initial encrypted bucket upload도 거부한다.
 - session registry는 signed manifest upload와 initial encrypted bucket upload가 write window를 잡는 동안 같은 private index의 새 session open과 중복 upload도 거부한다.

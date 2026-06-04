@@ -615,7 +615,9 @@ first session is active, exercising the MVP single-writer lock at the route
 layer. After registering a session, session open rechecks the stored
 manifest/signature/current epoch; if a concurrent manifest or epoch update was
 observed during open, the new session is closed and the request fails before any
-ORAM path reads are served. Session open requests with `fixed_budget=false` in
+ORAM path reads are served. Session open also requires encrypted bucket/Merkle
+metadata for the signed manifest epoch/root, so a manifest-only upload state
+does not open a session. Session open requests with `fixed_budget=false` in
 strict mode, a non-current desired epoch, or the reserved
 `private_payload_oram_required` result privacy mode are rejected before any ORAM
 path reads are served. Client id shape errors are sanitized without echoing the

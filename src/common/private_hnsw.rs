@@ -1243,6 +1243,14 @@ fn ensure_private_hnsw_session_open_storage_matches(
             "private HNSW ORAM session open observed concurrent manifest or epoch update",
         ));
     }
+    store
+        .read_merkle_path_batch(
+            &[0],
+            expected_epoch.index_epoch,
+            &expected_epoch.root_hash,
+            expected_manifest.bucket_count,
+        )
+        .map_err(private_hnsw_read_store_error)?;
     Ok(())
 }
 
@@ -2191,7 +2199,9 @@ mod private_hnsw_tests {
 
     #[test]
     fn session_open_storage_recheck_rejects_manifest_or_epoch_drift() {
-        let session = fixture_session("session-1", 20);
+        let mut session = fixture_session("session-1", 20);
+        session.bucket_count = 1;
+        session.manifest.bucket_count = 1;
         let signature = fixture_signature();
         let expected_epoch = PrivateHnswOramEpochState {
             index_epoch: session.index_epoch,
@@ -2202,6 +2212,13 @@ mod private_hnsw_tests {
         let store = PrivateHnswOramStore::new(temp.path(), "text").unwrap();
         store.write_initial_epoch(&expected_epoch).unwrap();
         store.write_manifest(&session.manifest, &signature).unwrap();
+        store
+            .write_merkle_tree_from_commitments(
+                expected_epoch.index_epoch,
+                expected_epoch.root_hash.clone(),
+                vec![expected_epoch.root_hash.clone()],
+            )
+            .unwrap();
         ensure_private_hnsw_session_open_storage_matches(
             &store,
             &expected_epoch,
@@ -2234,6 +2251,13 @@ mod private_hnsw_tests {
         let store = PrivateHnswOramStore::new(temp.path(), "text").unwrap();
         store.write_initial_epoch(&expected_epoch).unwrap();
         store.write_manifest(&session.manifest, &signature).unwrap();
+        store
+            .write_merkle_tree_from_commitments(
+                expected_epoch.index_epoch,
+                expected_epoch.root_hash.clone(),
+                vec![expected_epoch.root_hash.clone()],
+            )
+            .unwrap();
         let mut changed_manifest = session.manifest.clone();
         changed_manifest.logical_node_count += 1;
         store.write_manifest(&changed_manifest, &signature).unwrap();
@@ -2247,6 +2271,22 @@ mod private_hnsw_tests {
         assert!(
             err.to_string()
                 .contains("session open observed concurrent manifest or epoch update")
+        );
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let store = PrivateHnswOramStore::new(temp.path(), "text").unwrap();
+        store.write_initial_epoch(&expected_epoch).unwrap();
+        store.write_manifest(&session.manifest, &signature).unwrap();
+        let err = ensure_private_hnsw_session_open_storage_matches(
+            &store,
+            &expected_epoch,
+            &session.manifest,
+            &signature,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("encrypted bucket data is unavailable")
         );
     }
 

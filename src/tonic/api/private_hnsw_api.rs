@@ -1309,6 +1309,26 @@ mod private_hnsw_grpc_tests {
                 .sig,
                 fixture.manifest_signature.sig,
             );
+            let err = PrivateHnswOram::open_private_hnsw_session(
+                &service,
+                Request::new(grpc::OpenPrivateHnswSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    client_id: "tenant-a/sdk-instance-manifest-only".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: result_privacy_to_proto(ResultPrivacyMode::IdsVisible),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::NotFound);
+            assert!(
+                err.message()
+                    .contains("encrypted bucket data is unavailable")
+            );
+            assert!(!err.message().contains("private_hnsw_oram"));
+            assert!(!err.message().contains("/tmp"));
 
             std::fs::write(manifest_store.root_path().join("manifest.json"), b"{").unwrap();
             let err = PrivateHnswOram::get_private_hnsw_manifest(

@@ -870,6 +870,25 @@ mod private_hnsw_rest_tests {
                 manifest_read["signature"]["sig"].as_str().unwrap(),
                 fixture.manifest_signature.sig.as_str(),
             );
+            let manifest_only_session_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/session",
+                OpenPrivateHnswSessionRequest {
+                    client_id: "tenant-a/sdk-instance-manifest-only".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
+                },
+                StatusCode::NOT_FOUND,
+                "encrypted bucket data is unavailable"
+            );
+            assert!(
+                !manifest_only_session_error.contains("private_hnsw_oram"),
+                "{manifest_only_session_error}"
+            );
+            assert!(
+                !manifest_only_session_error.contains("/tmp"),
+                "{manifest_only_session_error}"
+            );
 
             std::fs::write(manifest_store.root_path().join("manifest.json"), b"{").unwrap();
             let malformed_manifest_store_error = get_json_error_contains!(
