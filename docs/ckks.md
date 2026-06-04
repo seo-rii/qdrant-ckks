@@ -930,10 +930,11 @@ from `PrivateHnswOramClientState::to_snapshot` alongside their RK/signing-key
 backup and restore it with `PrivateHnswOramClientState::from_snapshot` before
 opening sessions against a pinned epoch/root. For encrypted local backups,
 `seal_private_hnsw_oram_client_state_snapshot` uses the RK-derived
-position-map subkey and binds the ciphertext to collection id, vector name,
-RK id/epoch, index epoch, and root hash; `open_private_hnsw_oram_client_state_snapshot`
-rejects hash tamper or epoch/root context mismatch before returning the
-snapshot.
+position-map subkey, rejects malformed position map/stash snapshots before
+producing ciphertext, and binds the ciphertext to collection id, vector name,
+RK id/epoch, index epoch, and root hash;
+`open_private_hnsw_oram_client_state_snapshot` rejects hash tamper or
+epoch/root context mismatch before returning the snapshot.
 
 The client CKKS vector sidecar signature message is canonical and
 length-prefixed for SDK interop. The byte string is:

@@ -410,6 +410,7 @@
 - REST/gRPC session open client_id shape 오류 응답은 submitted client id sentinel을 반사하지 않는다.
 - SDK helper는 commit plan의 old epoch/root가 현재 manifest와 맞을 때만 refreshed manifest/signature를 만들고, stale old root는 client-side에서 거부한다.
 - SDK/reference commit planning helper는 manifest epoch/root/bucket_count를 old commit context로 사용하고, updated bucket commitment가 ciphertext hash와 collection/vector/key lineage/bucket epoch context에 묶여 있지 않으면 commit 서명 전에 fail closed 한다.
+- SDK encrypted client-state backup helper는 ORAM position map/stash snapshot shape를 seal 전에 검증해 malformed backup ciphertext를 생성하지 않는다.
 - private result ORAM skeleton도 동일하게 commit plan의 old epoch/root와 현재 manifest를 묶어 refreshed manifest/signature를 만들고 stale old root를 거부한다.
 - private result ORAM skeleton의 manifest-aware commit planning helper도 updated bucket commitment가 ciphertext hash와 collection/key lineage/bucket epoch context에 묶여 있지 않으면 future commit 서명 전에 fail closed 한다.
 - private result ORAM store skeleton의 upload bundle, commit, stored Merkle tree root mismatch 오류는 computed Merkle root를 반사하지 않는다.

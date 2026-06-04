@@ -777,6 +777,7 @@ pub fn seal_private_hnsw_oram_client_state_snapshot(
     snapshot: &PrivateHnswOramClientStateSnapshot,
 ) -> Result<PrivateHnswEncryptedClientStateSnapshot, PrivateHnswClientError> {
     validate_client_state_context(context)?;
+    PrivateHnswOramClientState::from_snapshot(snapshot)?;
     let plaintext = serde_json::to_vec(snapshot)
         .map_err(|_| PrivateHnswClientError::InvalidClientStateSnapshot)?;
 
@@ -5545,6 +5546,13 @@ mod tests {
         assert_eq!(
             open_private_hnsw_oram_client_state_snapshot(&keys, context, &encrypted).unwrap(),
             snapshot
+        );
+
+        let mut malformed_snapshot = snapshot.clone();
+        malformed_snapshot.stash.push(node_block_with_id(9));
+        assert_eq!(
+            seal_private_hnsw_oram_client_state_snapshot(&keys, context, &malformed_snapshot),
+            Err(PrivateHnswClientError::InvalidClientStateSnapshot)
         );
 
         let wrong_context = PrivateHnswClientStateAeadContext {
