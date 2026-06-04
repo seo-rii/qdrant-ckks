@@ -2952,6 +2952,81 @@ mod private_hnsw_grpc_tests {
     }
 
     #[test]
+    fn manifest_read_grpc_route_revalidates_runtime_policy_drift() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let mut fixed_budget_drifted_settings = settings.clone();
+        fixed_budget_drifted_settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["fixed_budget"]["fixed_result_k"] = serde_json::json!(2);
+        let mut reserved_privacy_settings = settings.clone();
+        reserved_privacy_settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["result_privacy"] = serde_json::json!("private_payload_oram_required");
+        let (_temp, dispatcher) = test_dispatcher();
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+            let service =
+                PrivateHnswOramService::new(Arc::new(dispatcher.clone()), settings.clone());
+            let fixed_budget_drifted_service = PrivateHnswOramService::new(
+                Arc::new(dispatcher.clone()),
+                fixed_budget_drifted_settings,
+            );
+            let reserved_privacy_service = PrivateHnswOramService::new(
+                Arc::new(dispatcher.clone()),
+                reserved_privacy_settings,
+            );
+
+            PrivateHnswOram::upload_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                    signature: Some(signature_to_proto(fixture.manifest_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap();
+
+            let err = PrivateHnswOram::get_private_hnsw_manifest(
+                &fixed_budget_drifted_service,
+                Request::new(grpc::GetPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("manifest fixed_budget does not match runtime instance")
+            );
+
+            let err = PrivateHnswOram::get_private_hnsw_manifest(
+                &reserved_privacy_service,
+                Request::new(grpc::GetPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("option result_privacy is invalid"));
+            assert!(err.message().contains("expected ids_visible"));
+        });
+    }
+
+    #[test]
     fn read_paths_grpc_service_preserves_fixed_size_bucket_sequence() {
         let _guard = route_e2e_guard();
         let fixture = PrivateHnswRouteWireFixture::build_uploaded_with_path_batch_size(2);
