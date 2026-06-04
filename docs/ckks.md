@@ -558,7 +558,10 @@ mismatches, Path ORAM tree_height/bucket_count mismatches, current epoch/root
 mismatches, bucket commitment roots that do not reconstruct the manifest
 `root_hash`, and missing encrypted bucket files anywhere in the manifest bucket
 range before shard restore proceeds. Symlinked vector directories and bucket
-files are rejected by the same restore preflight.
+files are rejected by the same restore preflight. If a private HNSW ORAM store
+root exists, every on-disk vector store must match a configured private HNSW
+ORAM encryption rule; orphan stores and parent store symlinks fail closed before
+manifest or bucket data is trusted.
 The live REST and gRPC fixtures also exercise adversarial commit handling: a
 commit with a non-increasing new epoch is rejected, a validly-shaped but wrong
 Ed25519 signature is rejected, and replaying a previous old epoch/root after a

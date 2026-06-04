@@ -293,30 +293,40 @@ impl Collection {
         config: &CollectionConfigInternal,
         collection_dir: &Path,
     ) -> CollectionResult<()> {
-        let Some(encryption) = config.params.effective_encryption() else {
-            return Ok(());
-        };
-        let stable_crypto_id = config.stable_crypto_id(collection_name)?;
-
-        for rule in encryption
-            .rules
-            .iter()
-            .filter(|rule| rule.binding.as_deref() == Some(PRIVATE_HNSW_ORAM_BINDING))
-        {
-            let EncryptionSelector::VectorNames { names } = &rule.selector else {
-                return Err(CollectionError::bad_request(format!(
-                    "private HNSW ORAM snapshot rule {} must use vector_names selector",
-                    rule.id,
-                )));
-            };
-            for vector_name in names {
-                validate_private_hnsw_oram_vector_snapshot(
-                    collection_dir,
-                    &stable_crypto_id,
-                    &config.params,
-                    vector_name,
-                )?;
+        let mut configured_vectors = HashSet::new();
+        if let Some(encryption) = config.params.effective_encryption() {
+            for rule in encryption
+                .rules
+                .iter()
+                .filter(|rule| rule.binding.as_deref() == Some(PRIVATE_HNSW_ORAM_BINDING))
+            {
+                let EncryptionSelector::VectorNames { names } = &rule.selector else {
+                    return Err(CollectionError::bad_request(format!(
+                        "private HNSW ORAM snapshot rule {} must use vector_names selector",
+                        rule.id,
+                    )));
+                };
+                configured_vectors.extend(names.iter().cloned());
             }
+        }
+
+        validate_private_hnsw_oram_snapshot_store_matches_config(
+            collection_dir,
+            &configured_vectors,
+        )?;
+
+        if configured_vectors.is_empty() {
+            return Ok(());
+        }
+
+        let stable_crypto_id = config.stable_crypto_id(collection_name)?;
+        for vector_name in configured_vectors {
+            validate_private_hnsw_oram_vector_snapshot(
+                collection_dir,
+                &stable_crypto_id,
+                &config.params,
+                &vector_name,
+            )?;
         }
 
         Ok(())
@@ -606,6 +616,64 @@ fn validate_private_hnsw_oram_vector_snapshot(
         &manifest.root_hash,
         manifest.bucket_count,
     )?;
+
+    Ok(())
+}
+
+fn validate_private_hnsw_oram_snapshot_store_matches_config(
+    collection_dir: &Path,
+    configured_vectors: &HashSet<String>,
+) -> CollectionResult<()> {
+    let private_hnsw_root = collection_dir.join(PRIVATE_HNSW_ORAM_DIR);
+    let metadata = match std::fs::symlink_metadata(&private_hnsw_root) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(_) => {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM snapshot store root cannot be inspected",
+            ));
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM snapshot store root must be a non-symlink directory",
+        ));
+    }
+
+    if configured_vectors.is_empty() {
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM snapshot store is present without a matching collection encryption rule",
+        ));
+    }
+
+    let entries = std::fs::read_dir(&private_hnsw_root).map_err(|_| {
+        CollectionError::bad_request("private HNSW ORAM snapshot store root cannot be read")
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|_| {
+            CollectionError::bad_request("private HNSW ORAM snapshot store entry cannot be read")
+        })?;
+        let file_name = entry.file_name().into_string().map_err(|_| {
+            CollectionError::bad_request(
+                "private HNSW ORAM snapshot contains a non-UTF-8 vector store",
+            )
+        })?;
+        let entry_metadata = std::fs::symlink_metadata(entry.path()).map_err(|_| {
+            CollectionError::bad_request(
+                "private HNSW ORAM snapshot vector store cannot be inspected",
+            )
+        })?;
+        if entry_metadata.file_type().is_symlink() || !entry_metadata.file_type().is_dir() {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM snapshot vector store must be a non-symlink directory",
+            ));
+        }
+        if !configured_vectors.contains(&file_name) {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM snapshot contains an unconfigured vector store",
+            ));
+        }
+    }
 
     Ok(())
 }
@@ -998,6 +1066,82 @@ mod tests {
             temp_dir.path(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_store_without_binding() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-orphan-store")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let mut config = private_hnsw_config(uuid);
+        config.params.encryption.as_mut().unwrap().rules.clear();
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("without a matching collection encryption rule")
+        );
+        assert!(!err.to_string().contains(PRIVATE_HNSW_ORAM_DIR));
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_unconfigured_vector_store() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-unconfigured-vector")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+        fs::create_dir(temp_dir.path().join(PRIVATE_HNSW_ORAM_DIR).join("title")).unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("unconfigured vector store"));
+        assert!(!err.to_string().contains(PRIVATE_HNSW_ORAM_DIR));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_root_dir_symlink() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-root-symlink")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        std::os::unix::fs::symlink(
+            temp_dir.path().join("outside-private-hnsw-root"),
+            temp_dir.path().join(PRIVATE_HNSW_ORAM_DIR),
+        )
+        .unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("non-symlink directory"));
+        assert!(!err.to_string().contains("outside-private-hnsw-root"));
+        assert!(!err.to_string().contains(PRIVATE_HNSW_ORAM_DIR));
     }
 
     #[cfg(unix)]
