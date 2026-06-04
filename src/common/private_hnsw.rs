@@ -1875,9 +1875,7 @@ mod private_hnsw_tests {
         );
     }
 
-    #[test]
-    fn session_registry_enforces_single_writer() {
-        let now = 10;
+    fn fixture_session(session_id: &str, lease_expires_unix: u64) -> PrivateHnswSession {
         let manifest = PrivateHnswOramManifest {
             version: 1,
             provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
@@ -1918,21 +1916,27 @@ mod private_hnsw_tests {
             owner_signing_key_id: "tenant-a/private-hnsw-signing-v1".to_string(),
             created_at_unix: 1,
         };
-        let session = PrivateHnswSession {
-            session_id: "session-1".to_string(),
+        PrivateHnswSession {
+            session_id: session_id.to_string(),
             _client_id: "client".to_string(),
             collection_id: "collection-uuid-1".to_string(),
             collection_path: std::path::PathBuf::from("/tmp/qdrant-private-hnsw-test"),
             vector_name: "text".to_string(),
             index_epoch: 42,
             root_hash: BASE64URL_NOPAD.encode(&[42; 32]),
-            lease_expires_unix: 20,
+            lease_expires_unix,
             bucket_count: 15,
             tree_height: 3,
             path_batch_size: 1,
             max_bucket_ciphertext_bytes: 4096,
-            manifest: manifest.clone(),
-        };
+            manifest,
+        }
+    }
+
+    #[test]
+    fn session_registry_enforces_single_writer() {
+        let now = 10;
+        let session = fixture_session("session-1", 20);
         let mut registry = PrivateHnswSessionRegistry::default();
         registry.open(session.clone(), now).unwrap();
         assert!(registry.has_active_collection("collection-uuid-1", now));
@@ -1950,5 +1954,29 @@ mod private_hnsw_tests {
         assert!(registry.close("collection-uuid-1", "text", "session-1"));
         assert!(!registry.has_active_collection("collection-uuid-1", now));
         assert!(!registry.has_active_index("collection-uuid-1", "text", now));
+    }
+
+    #[test]
+    fn session_registry_expiration_releases_writer_lock() {
+        let now = 10;
+        let expired_at = 20;
+        let mut registry = PrivateHnswSessionRegistry::default();
+        registry
+            .open(fixture_session("session-1", expired_at), now)
+            .unwrap();
+
+        let err = registry
+            .with_session_mut("collection-uuid-1", "text", "session-1", expired_at, |_| {
+                Ok(())
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("session is missing or expired"));
+        assert!(!registry.has_active_collection("collection-uuid-1", expired_at));
+        assert!(!registry.has_active_index("collection-uuid-1", "text", expired_at));
+
+        registry
+            .open(fixture_session("session-2", expired_at + 10), expired_at)
+            .unwrap();
+        assert!(registry.has_active_index("collection-uuid-1", "text", expired_at));
     }
 }
