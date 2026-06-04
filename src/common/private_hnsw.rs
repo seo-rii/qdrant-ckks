@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use collection::config::{
     CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams, EncryptionRuleRef,
-    EncryptionSelector,
+    EncryptionSelector, private_hnsw_oram_api_required_message,
 };
 use collection::operations::types::CollectionError;
 use collection::private_hnsw_oram_store::{
@@ -1249,9 +1249,7 @@ fn private_hnsw_rule<'a>(
                 )
         })
         .ok_or_else(|| {
-            StorageError::bad_request(format!(
-                "vector/private-hnsw-oram@v1 requires client-led private ORAM sessions for vector '{vector_name}'",
-            ))
+            StorageError::bad_request(private_hnsw_oram_api_required_message(vector_name))
         })
 }
 
