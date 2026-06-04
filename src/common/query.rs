@@ -6166,15 +6166,40 @@ async fn ensure_with_vector_does_not_request_encrypted_vectors(
 
     match encrypted_vector_return_request(&encryption, with_vector) {
         None => Ok(()),
-        Some(EncryptedVectorReturnRequest::Any { .. }) => Err(StorageError::bad_input(format!(
-            "cannot {operation} encrypted vectors for collection '{collection_name}'; CKKS vector ciphertext read path returns payload sidecar only",
-        ))),
-        Some(EncryptedVectorReturnRequest::Named { vector_name }) => {
-            Err(StorageError::bad_input(format!(
-                "cannot {operation} encrypted vector '{vector_name}'; CKKS vector ciphertext read path returns payload sidecar only",
-            )))
+        Some(request) => {
+            let vector_name = request.vector_name();
+            if encrypted_vector_return_request_is_private_hnsw_oram(&encryption, vector_name) {
+                return Err(StorageError::bad_input(format!(
+                    "{} does not expose point-level vector '{vector_name}' through {operation}. Use /private-hnsw/{vector_name}/session and compatible SDK traversal APIs.",
+                    qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+                )));
+            }
+
+            match request {
+                EncryptedVectorReturnRequest::Any { .. } => Err(StorageError::bad_input(format!(
+                    "cannot {operation} encrypted vectors for collection '{collection_name}'; CKKS vector ciphertext read path returns payload sidecar only",
+                ))),
+                EncryptedVectorReturnRequest::Named { vector_name } => {
+                    Err(StorageError::bad_input(format!(
+                        "cannot {operation} encrypted vector '{vector_name}'; CKKS vector ciphertext read path returns payload sidecar only",
+                    )))
+                }
+            }
         }
     }
+}
+
+fn encrypted_vector_return_request_is_private_hnsw_oram(
+    encryption: &CollectionEncryptionConfig,
+    vector_name: &str,
+) -> bool {
+    encryption.rules.iter().any(|rule| {
+        rule.binding.as_deref() == Some(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING)
+            && matches!(
+                &rule.selector,
+                EncryptionSelector::VectorNames { names } if names.iter().any(|name| name == vector_name)
+            )
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -8804,6 +8829,72 @@ mod tests {
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
                         && description.contains("/private-hnsw/text/session")
+            ));
+        });
+    }
+
+    #[test]
+    fn private_hnsw_oram_vector_reads_use_private_session_error() {
+        let (_temp, dispatcher) = test_dispatcher();
+        let auth = Auth::new_internal(Access::full("For test"));
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+            let pass = new_unchecked_verification_pass();
+            let toc = dispatcher.toc(&auth, &pass).clone();
+
+            let err = do_get_points(
+                &toc,
+                COLLECTION_NAME,
+                PointRequestInternal {
+                    ids: vec![1.into()],
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: WithVector::Selector(vec![VECTOR_NAME.to_string()]),
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/text/session")
+                        && !description.contains("CKKS vector ciphertext")
+            ));
+
+            let err = do_scroll_points(
+                &toc,
+                COLLECTION_NAME,
+                ScrollRequestInternal {
+                    offset: None,
+                    limit: Some(1),
+                    filter: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: WithVector::Bool(true),
+                    order_by: None,
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                auth,
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/text/session")
+                        && !description.contains("CKKS vector ciphertext")
             ));
         });
     }
