@@ -329,6 +329,7 @@ mod private_hnsw_rest_tests {
     use crate::common::private_hnsw_wire_fixture::{
         BASE_EPOCH, COLLECTION_ID, NEXT_EPOCH, PrivateHnswRouteWireFixture, SESSION_ID,
         SIGNING_KEY_ID, create_private_hnsw_collection, route_e2e_guard, test_dispatcher,
+        test_distributed_dispatcher,
     };
 
     fn json_roundtrip<T>(value: &T) -> T
@@ -2076,6 +2077,71 @@ mod private_hnsw_rest_tests {
                 .to_request();
             let close_response = actix_test::call_service(&app, close_request).await;
             assert_eq!(close_response.status(), StatusCode::OK);
+        });
+    }
+
+    #[test]
+    fn open_session_rest_route_rejects_distributed_epoch_mode() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let (_temp, dispatcher) = test_distributed_dispatcher();
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+            let app = actix_test::init_service(
+                App::new()
+                    .app_data(web::Data::new(dispatcher.clone()))
+                    .app_data(web::Data::new(settings.clone()))
+                    .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
+                    .configure(config_private_hnsw_api),
+            )
+            .await;
+
+            let manifest_response = actix_test::call_service(
+                &app,
+                actix_test::TestRequest::post()
+                    .uri("/collections/docs/private-hnsw/text/manifest")
+                    .set_json(&UploadPrivateHnswManifestRequest {
+                        manifest: fixture.manifest.clone(),
+                        signature: fixture.manifest_signature.clone(),
+                    })
+                    .to_request(),
+            )
+            .await;
+            assert_eq!(manifest_response.status(), StatusCode::OK);
+
+            let bucket_response = actix_test::call_service(
+                &app,
+                actix_test::TestRequest::post()
+                    .uri("/collections/docs/private-hnsw/text/buckets")
+                    .set_json(&UploadPrivateHnswBucketsRequest {
+                        index_epoch: fixture.encrypted_build.index_epoch,
+                        root_hash: fixture.encrypted_build.root_hash.clone(),
+                        buckets: fixture.encrypted_build.buckets.clone(),
+                    })
+                    .to_request(),
+            )
+            .await;
+            assert_eq!(bucket_response.status(), StatusCode::OK);
+
+            let response = actix_test::call_service(
+                &app,
+                actix_test::TestRequest::post()
+                    .uri("/collections/docs/private-hnsw/text/session")
+                    .set_json(&OpenPrivateHnswSessionRequest {
+                        client_id: "tenant-a/distributed-sdk-instance".to_string(),
+                        desired_epoch: BASE_EPOCH,
+                        fixed_budget: true,
+                        result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
+                    })
+                    .to_request(),
+            )
+            .await;
+            let status = response.status();
+            let body_bytes = actix_test::read_body(response).await;
+            let body = String::from_utf8_lossy(&body_bytes);
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert!(body.contains("consensus-backed epoch/root CAS"), "{body}");
         });
     }
 

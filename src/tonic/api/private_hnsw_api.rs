@@ -522,7 +522,7 @@ mod private_hnsw_grpc_tests {
     use crate::common::private_hnsw_wire_fixture::{
         BASE_EPOCH, COLLECTION_ID, COLLECTION_NAME, NEXT_EPOCH, PrivateHnswRouteWireFixture,
         SESSION_ID, SIGNING_KEY_ID, VECTOR_NAME, create_private_hnsw_collection, route_e2e_guard,
-        test_dispatcher,
+        test_dispatcher, test_distributed_dispatcher,
     };
 
     fn sample_manifest() -> PrivateHnswOramManifest {
@@ -2854,6 +2854,66 @@ mod private_hnsw_grpc_tests {
             .unwrap()
             .into_inner();
             assert!(closed.closed);
+        });
+    }
+
+    #[test]
+    fn open_session_grpc_route_rejects_distributed_epoch_mode() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let (_temp, dispatcher) = test_distributed_dispatcher();
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+            let service =
+                PrivateHnswOramService::new(Arc::new(dispatcher.clone()), settings.clone());
+
+            PrivateHnswOram::upload_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                    signature: Some(signature_to_proto(fixture.manifest_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap();
+
+            PrivateHnswOram::upload_private_hnsw_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateHnswBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: fixture
+                        .encrypted_build
+                        .buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            )
+            .await
+            .unwrap();
+
+            let err = PrivateHnswOram::open_private_hnsw_session(
+                &service,
+                Request::new(grpc::OpenPrivateHnswSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    client_id: "tenant-a/distributed-sdk-instance".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: result_privacy_to_proto(ResultPrivacyMode::IdsVisible),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("consensus-backed epoch/root CAS"));
         });
     }
 

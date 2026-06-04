@@ -31,6 +31,7 @@ use serde_json::json;
 use storage::content_manager::collection_meta_ops::{
     CollectionMetaOperations, CreateCollection, CreateCollectionOperation,
 };
+use storage::content_manager::consensus::operation_sender::OperationSender;
 use storage::content_manager::toc::TableOfContent;
 use storage::dispatcher::Dispatcher;
 use storage::rbac::{Access, Auth};
@@ -458,11 +459,23 @@ impl PrivateHnswRouteWireFixture {
 }
 
 pub(crate) fn test_dispatcher() -> (TempDir, Dispatcher) {
+    test_dispatcher_with_consensus_sender(false)
+}
+
+pub(crate) fn test_distributed_dispatcher() -> (TempDir, Dispatcher) {
+    test_dispatcher_with_consensus_sender(true)
+}
+
+fn test_dispatcher_with_consensus_sender(distributed: bool) -> (TempDir, Dispatcher) {
     let temp = TempDir::new().unwrap();
     let mut storage_config = Settings::new(None).unwrap().storage;
     storage_config.storage_path = temp.path().join("storage");
     storage_config.snapshots_path = temp.path().join("snapshots");
     storage_config.temp_path = Some(temp.path().join("tmp"));
+    let consensus_proposal_sender = distributed.then(|| {
+        let (sender, _receiver) = std::sync::mpsc::channel();
+        OperationSender::new(sender)
+    });
     let toc = Arc::new(TableOfContent::new(
         &storage_config,
         Runtime::new().unwrap(),
@@ -471,7 +484,7 @@ pub(crate) fn test_dispatcher() -> (TempDir, Dispatcher) {
         ResourceBudget::default(),
         ChannelService::new(6333, false, None, None),
         0,
-        None,
+        consensus_proposal_sender,
     ));
     (temp, Dispatcher::new(toc))
 }
