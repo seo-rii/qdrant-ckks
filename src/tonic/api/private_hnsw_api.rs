@@ -2140,13 +2140,63 @@ mod private_hnsw_grpc_tests {
                 .unwrap();
             let uploaded_store = PrivateHnswOramStore::new(collection.path(), VECTOR_NAME).unwrap();
             let missing_bucket_id = read_buckets[0].bucket_id;
-            std::fs::remove_file(
-                uploaded_store
-                    .root_path()
-                    .join("buckets")
-                    .join(format!("{missing_bucket_id:08}.bucket")),
+            let bucket_path = uploaded_store
+                .root_path()
+                .join("buckets")
+                .join(format!("{missing_bucket_id:08}.bucket"));
+            let original_bucket_bytes = std::fs::read(&bucket_path).unwrap();
+            let mut mismatched_bucket = read_buckets[0].clone();
+            mismatched_bucket.bucket_id =
+                (missing_bucket_id + 1) % fixture.encrypted_build.bucket_count;
+            mismatched_bucket.ciphertext =
+                "private-hnsw-route-bucket-ciphertext-sentinel".to_string();
+            std::fs::write(
+                &bucket_path,
+                serde_json::to_vec_pretty(&mismatched_bucket).unwrap(),
             )
             .unwrap();
+
+            let mismatched_bucket_paths = vec![fixture.entry_leaf_label()];
+            let mismatched_bucket_signature =
+                fixture.sign_read_paths(&mismatched_bucket_paths, 1, true);
+            let err = PrivateHnswOram::read_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramReadPathsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: mismatched_bucket_paths,
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    }),
+                    client_signature: Some(signature_to_proto(mismatched_bucket_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::Internal);
+            assert!(
+                err.message()
+                    .contains("encrypted bucket store validation failed")
+            );
+            assert!(
+                !err.message()
+                    .contains("private-hnsw-route-bucket-ciphertext-sentinel"),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&mismatched_bucket.ciphertext),
+                "{}",
+                err.message()
+            );
+            assert!(!err.message().contains("private_hnsw_oram"));
+            std::fs::write(&bucket_path, original_bucket_bytes).unwrap();
+
+            std::fs::remove_file(&bucket_path).unwrap();
 
             let missing_bucket_paths = vec![fixture.entry_leaf_label()];
             let missing_bucket_signature = fixture.sign_read_paths(&missing_bucket_paths, 1, true);
