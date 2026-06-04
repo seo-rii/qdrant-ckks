@@ -8,7 +8,9 @@ use collection::collection::payload_index_schema::{
 use collection::common::sha_256::hashes_equal;
 use collection::config::{CollectionConfigInternal, CollectionParams};
 use collection::operations::snapshot_ops::{SnapshotPriority, SnapshotRecover};
+use collection::operations::types::CollectionError;
 use collection::operations::verification::new_unchecked_verification_pass;
+use collection::private_hnsw_oram_store::PRIVATE_HNSW_ORAM_DIR;
 use collection::shards::check_shard_path;
 use collection::shards::replica_set::replica_set_state::{
     MANUAL_RECOVERY_SHARD_STATE_VERSION, ReplicaState,
@@ -191,7 +193,8 @@ async fn _do_recover_from_snapshot(
         collection_pass.name(),
         &snapshot_config,
         tmp_collection_dir.path(),
-    )?;
+    )
+    .map_err(|err| sanitize_private_hnsw_snapshot_layout_error(tmp_collection_dir.path(), err))?;
 
     let payload_index_file = tmp_collection_dir.path().join(PAYLOAD_INDEX_CONFIG_FILE);
 
@@ -482,6 +485,18 @@ async fn _do_recover_from_snapshot(
     Ok(true)
 }
 
+fn sanitize_private_hnsw_snapshot_layout_error(
+    collection_path: &std::path::Path,
+    err: CollectionError,
+) -> StorageError {
+    let rendered = err.to_string();
+    let collection_path = collection_path.to_string_lossy();
+    if rendered.contains(collection_path.as_ref()) || rendered.contains(PRIVATE_HNSW_ORAM_DIR) {
+        return StorageError::bad_input("private HNSW ORAM snapshot layout validation failed");
+    }
+    StorageError::from(err)
+}
+
 fn validate_existing_collection_crypto_identity(
     collection_name: &str,
     existing_uuid: Option<uuid::Uuid>,
@@ -536,9 +551,12 @@ mod tests {
         CollectionEncryptionConfig, CollectionParams, CryptoMigrationState, EncryptionRuleRef,
         EncryptionSelector,
     };
+    use collection::operations::types::CollectionError;
     use uuid::Uuid;
 
-    use super::validate_existing_collection_crypto_identity;
+    use super::{
+        sanitize_private_hnsw_snapshot_layout_error, validate_existing_collection_crypto_identity,
+    };
 
     fn encrypted_params() -> CollectionParams {
         CollectionParams {
@@ -559,6 +577,37 @@ mod tests {
             }),
             ..CollectionParams::empty()
         }
+    }
+
+    #[test]
+    fn private_hnsw_snapshot_recovery_layout_error_is_sanitized() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-storage-recover-sanitize")
+            .tempdir()
+            .unwrap();
+        let leaked_path = temp_dir
+            .path()
+            .join("private_hnsw_oram")
+            .join("text")
+            .join("buckets")
+            .join("00000000.bucket");
+        let err = sanitize_private_hnsw_snapshot_layout_error(
+            temp_dir.path(),
+            CollectionError::not_found(format!("private HNSW ORAM bucket {leaked_path:?}")),
+        );
+
+        let rendered = err.to_string();
+        assert!(rendered.contains("private HNSW ORAM snapshot layout validation failed"));
+        assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!rendered.contains("private_hnsw_oram"));
+
+        let safe = sanitize_private_hnsw_snapshot_layout_error(
+            temp_dir.path(),
+            CollectionError::bad_request(
+                "private HNSW ORAM snapshot contains an unconfigured vector store",
+            ),
+        );
+        assert!(safe.to_string().contains("unconfigured vector store"));
     }
 
     #[test]
