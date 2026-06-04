@@ -724,6 +724,9 @@ collection is configured. The MVP stores the private index as collection-level
 encrypted ORAM buckets, and shard transfer does not yet copy bucket files or
 move epoch/root ownership through consensus, so transfer start operations fail
 closed instead of producing a partial private index on the receiver.
+Automatic dead-replica shard transfer recovery also skips private HNSW ORAM
+collections for the same reason; parity alone is insufficient until bucket
+movement and epoch/root ownership are consensus-backed.
 Distributed private HNSW ORAM sessions themselves fail closed in this MVP until
 epoch/root CAS is backed by consensus rather than node-local files.
 

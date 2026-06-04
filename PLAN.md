@@ -365,7 +365,7 @@
   - graph-traversal tailored ORAM은 `plan_private_hnsw_oram_graph_traversal_path_batch` helper로 시작했다. directional neighbor filter 결과를 client position map과 speculative prefetch padding에 연결해 fixed-size `read_paths` batch를 만든다. `*_with_stats` variant는 directional filter retained count와 실제 position-map-backed path count를 분리해 benchmark가 graph-filter selectivity와 ORAM path volume을 따로 기록할 수 있게 한다.
 - Phase G: cluster parity fingerprint, private-HNSW transfer fail-closed, shard-local epoch ownership, consensus-backed epoch/root CAS를 설계하고 e2e 테스트한다.
   - cluster parity fingerprint는 기존 crypto runtime capability fingerprint에 private HNSW ORAM options/signing verifier policy가 포함되는 테스트로 고정했다. ORAM tree shape 또는 private HNSW signing verifier drift는 peer parity mismatch로 실패한다.
-  - private-HNSW transfer fail-closed는 cluster update 진입점에서 시작형 shard transfer(`move_shard`, `replicate_shard`, `replicate_points`, `restart_transfer`)를 consensus submit 전에 막도록 연결했다. private ORAM bucket file transfer와 consensus-backed epoch/root ownership이 구현될 때까지 shard transfer를 허용하지 않는다.
+  - private-HNSW transfer fail-closed는 cluster update 진입점에서 시작형 shard transfer(`move_shard`, `replicate_shard`, `replicate_points`, `restart_transfer`)를 consensus submit 전에 막도록 연결했다. 자동 dead-replica shard transfer recovery도 private HNSW ORAM collection에서는 transfer 제안을 스킵한다. private ORAM bucket file transfer와 consensus-backed epoch/root ownership이 구현될 때까지 shard transfer를 허용하지 않는다.
   - distributed session open은 consensus-backed epoch/root CAS가 구현될 때까지 fail closed 한다. 현재 MVP의 ORAM commit CAS는 node-local 파일 상태만 원자화하므로 cluster session을 열지 않는다.
 
 테스트:

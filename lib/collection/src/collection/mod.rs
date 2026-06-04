@@ -40,7 +40,9 @@ use crate::common::collection_size_stats::{
     CollectionSizeAtomicStats, CollectionSizeStats, CollectionSizeStatsCache,
 };
 use crate::common::is_ready::IsReady;
-use crate::config::{CollectionConfigInternal, EncryptionSelector, ShardingMethod};
+use crate::config::{
+    CollectionConfigInternal, CollectionEncryptionConfig, EncryptionSelector, ShardingMethod,
+};
 use crate::operations::OperationWithClockTag;
 use crate::operations::config_diff::{DiffConfig, OptimizersConfigDiff};
 use crate::operations::shared_storage_config::SharedStorageConfig;
@@ -935,13 +937,16 @@ impl Collection {
         on_convert_to_listener: ChangePeerState,
         on_convert_from_listener: ChangePeerState,
     ) -> CollectionResult<()> {
-        let encrypted_collection = self
-            .collection_config
-            .read()
-            .await
-            .params
-            .effective_encryption()
-            .is_some();
+        let (encrypted_collection, private_hnsw_oram_collection) = {
+            let config = self.collection_config.read().await;
+            let encryption = config.params.effective_encryption();
+            (
+                encryption.is_some(),
+                encryption
+                    .as_ref()
+                    .is_some_and(collection_encryption_uses_private_hnsw_oram),
+            )
+        };
 
         // Check for disabled replicas
         let shard_holder = self.shards_holder.read().await;
@@ -1036,6 +1041,14 @@ impl Collection {
             // Don't recover replicas if not dead
             let is_dead = this_peer_state == Some(Dead);
             if !is_dead {
+                continue;
+            }
+            if let Err(err) = validate_private_hnsw_automatic_transfer_recovery_until_supported(
+                self.name(),
+                shard_id,
+                private_hnsw_oram_collection,
+            ) {
+                log::warn!("{err}");
                 continue;
             }
 
@@ -1465,6 +1478,29 @@ fn validate_encrypted_automatic_transfer_crypto_runtime_parity(
     Ok(())
 }
 
+fn collection_encryption_uses_private_hnsw_oram(encryption: &CollectionEncryptionConfig) -> bool {
+    encryption
+        .rules
+        .iter()
+        .any(|rule| rule.binding.as_deref() == Some(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING))
+}
+
+fn validate_private_hnsw_automatic_transfer_recovery_until_supported(
+    collection_name: &str,
+    shard_id: ShardId,
+    private_hnsw_oram_collection: bool,
+) -> CollectionResult<()> {
+    if !private_hnsw_oram_collection {
+        return Ok(());
+    }
+
+    Err(CollectionError::bad_input(format!(
+        "automatic shard transfer recovery for private HNSW ORAM collection {collection_name} \
+         shard {shard_id} is disabled until encrypted ORAM bucket transfer and \
+         consensus-backed epoch/root ownership are implemented",
+    )))
+}
+
 struct CollectionVersion;
 
 impl StorageVersion for CollectionVersion {
@@ -1633,6 +1669,44 @@ mod tests {
             validate_encrypted_automatic_transfer_crypto_runtime_parity("docs", 0, 1, 2, &metadata)
                 .unwrap_err();
         assert!(format!("{err:?}").contains("target peer 2"));
+    }
+
+    #[test]
+    fn collection_encryption_detects_private_hnsw_oram_binding() {
+        let mut encryption = CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a/vector-private-rk".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 7,
+            migration_state: crate::config::CryptoMigrationState::Active,
+            rules: vec![crate::config::EncryptionRuleRef {
+                id: "docs_text_private_hnsw".to_string(),
+                selector: EncryptionSelector::VectorNames {
+                    names: vec!["text".to_string()],
+                },
+                instance: "docs_text_private_hnsw".to_string(),
+                binding: Some(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING.to_string()),
+            }],
+        };
+
+        assert!(collection_encryption_uses_private_hnsw_oram(&encryption));
+
+        encryption.rules[0].binding = None;
+        assert!(!collection_encryption_uses_private_hnsw_oram(&encryption));
+    }
+
+    #[test]
+    fn private_hnsw_automatic_transfer_recovery_fails_closed_until_bucket_transfer_supported() {
+        validate_private_hnsw_automatic_transfer_recovery_until_supported("docs", 3, false)
+            .unwrap();
+
+        let err =
+            validate_private_hnsw_automatic_transfer_recovery_until_supported("docs", 3, true)
+                .unwrap_err();
+        let rendered = format!("{err:?}");
+        assert!(rendered.contains("private HNSW ORAM collection docs"));
+        assert!(rendered.contains("encrypted ORAM bucket transfer"));
+        assert!(!rendered.contains("private_hnsw_oram"));
     }
 
     #[cfg(unix)]
