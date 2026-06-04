@@ -767,7 +767,10 @@ collection/vector identity, key lineage, epoch/root, path labels, and padding
 metadata before encrypted buckets are returned.
 Snapshot restore preflight follows the same MVP result-privacy boundary:
 private HNSW ORAM manifests with `private_payload_oram_required` are rejected
-until the payload ORAM provider exists.
+until the payload ORAM provider exists. Restore preflight also checks every
+manifest-range bucket for the manifest-derived fixed ciphertext size and verifies
+each bucket commitment against collection/vector/key lineage, bucket epoch, and
+`ciphertext_sha256` before accepting the Merkle root.
 The startup snapshot mapping recovery path runs the same private HNSW ORAM
 restore-layout preflight after crypto runtime validation, so CLI recovery
 cannot bypass bucket/root consistency checks that are enforced by storage-level

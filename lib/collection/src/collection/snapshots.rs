@@ -6,10 +6,12 @@ use common::fs::read_json;
 use common::storage_version::StorageVersion as _;
 use common::tar_ext::BuilderExt;
 use common::tar_unpack::tar_unpack_file;
+use data_encoding::BASE64URL_NOPAD;
 use fs_err::File;
 use qdrant_sec::{
     DistanceKind, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_HNSW_ORAM_BINDING,
-    PrivateHnswOramManifest, PrivateHnswOramSignature, ResultPrivacyMode,
+    PrivateHnswBucketAeadBaseContext, PrivateHnswOramBucket, PrivateHnswOramManifest,
+    PrivateHnswOramSignature, ResultPrivacyMode, private_hnsw_bucket_commitment,
     validate_private_hnsw_oram_manifest_shape, validate_private_hnsw_oram_manifest_signature_shape,
 };
 use segment::types::SnapshotFormat;
@@ -628,14 +630,20 @@ fn validate_private_hnsw_oram_vector_snapshot(
         )));
     }
 
-    let max_bucket_ciphertext_bytes = private_hnsw_restore_max_bucket_ciphertext_bytes(&manifest)?;
+    let expected_bucket_ciphertext_bytes =
+        private_hnsw_restore_expected_bucket_ciphertext_bytes(&manifest)?;
     let mut bucket_commitments = Vec::new();
     for bucket_id in 0..manifest.bucket_count {
         let bucket = store.read_bucket(
             bucket_id,
             manifest.index_epoch,
             manifest.bucket_count,
-            max_bucket_ciphertext_bytes,
+            expected_bucket_ciphertext_bytes,
+        )?;
+        validate_private_hnsw_restore_bucket_contract(
+            &manifest,
+            &bucket,
+            expected_bucket_ciphertext_bytes,
         )?;
         bucket_commitments.push(bucket.bucket_commitment);
     }
@@ -822,7 +830,7 @@ fn validate_private_hnsw_oram_restore_manifest(
     Ok(())
 }
 
-fn private_hnsw_restore_max_bucket_ciphertext_bytes(
+fn private_hnsw_restore_expected_bucket_ciphertext_bytes(
     manifest: &PrivateHnswOramManifest,
 ) -> CollectionResult<usize> {
     let block_size = usize::try_from(manifest.oram.block_size_bytes).map_err(|_| {
@@ -830,10 +838,66 @@ fn private_hnsw_restore_max_bucket_ciphertext_bytes(
     })?;
     let bucket_size = usize::try_from(manifest.oram.bucket_size)
         .map_err(|_| CollectionError::bad_request("private HNSW ORAM bucket_size exceeds usize"))?;
-    block_size
-        .checked_mul(bucket_size)
-        .and_then(|size| size.checked_add(4096))
+    let slot_bytes = 1usize
+        .checked_add(block_size)
+        .ok_or_else(|| CollectionError::bad_request("private HNSW ORAM bucket size overflows"))?;
+    let bucket_payload_bytes = bucket_size
+        .checked_mul(slot_bytes)
+        .ok_or_else(|| CollectionError::bad_request("private HNSW ORAM bucket size overflows"))?;
+    let plaintext_header_bytes = 4usize
+        .checked_add(std::mem::size_of::<u16>())
+        .and_then(|len| len.checked_add(std::mem::size_of::<u32>()))
+        .and_then(|len| len.checked_add(std::mem::size_of::<u32>()))
+        .ok_or_else(|| CollectionError::bad_request("private HNSW ORAM bucket size overflows"))?;
+    let plaintext_bytes = plaintext_header_bytes
+        .checked_add(bucket_payload_bytes)
+        .ok_or_else(|| CollectionError::bad_request("private HNSW ORAM bucket size overflows"))?;
+    1usize
+        .checked_add(12)
+        .and_then(|len| len.checked_add(plaintext_bytes))
+        .and_then(|len| len.checked_add(16))
         .ok_or_else(|| CollectionError::bad_request("private HNSW ORAM bucket size overflows"))
+}
+
+fn validate_private_hnsw_restore_bucket_contract(
+    manifest: &PrivateHnswOramManifest,
+    bucket: &PrivateHnswOramBucket,
+    expected_ciphertext_bytes: usize,
+) -> CollectionResult<()> {
+    let ciphertext = BASE64URL_NOPAD
+        .decode(bucket.ciphertext.as_bytes())
+        .map_err(|_| {
+            CollectionError::bad_request(format!(
+                "private HNSW ORAM snapshot bucket {} ciphertext is not base64url",
+                bucket.bucket_id,
+            ))
+        })?;
+    if ciphertext.len() != expected_ciphertext_bytes {
+        return Err(CollectionError::bad_request(format!(
+            "private HNSW ORAM snapshot bucket {} ciphertext must match fixed ciphertext size",
+            bucket.bucket_id,
+        )));
+    }
+
+    let expected_commitment = private_hnsw_bucket_commitment(
+        PrivateHnswBucketAeadBaseContext {
+            collection_id: &manifest.collection_id,
+            vector_name: &manifest.vector_name,
+            key_id: &manifest.key_id,
+            rk_id: &manifest.rk_id,
+            rk_epoch: manifest.rk_epoch,
+        }
+        .for_bucket(bucket.bucket_id, bucket.index_epoch),
+        &bucket.ciphertext_sha256,
+    )
+    .map_err(|err| CollectionError::bad_request(err.to_string()))?;
+    if expected_commitment != bucket.bucket_commitment {
+        return Err(CollectionError::bad_request(format!(
+            "private HNSW ORAM snapshot bucket {} commitment context mismatch",
+            bucket.bucket_id,
+        )));
+    }
+    Ok(())
 }
 
 fn private_hnsw_restore_error(err: qdrant_sec::PrivateHnswOramError) -> CollectionError {
@@ -922,10 +986,7 @@ mod tests {
 
     fn private_hnsw_manifest(collection_id: String) -> PrivateHnswOramManifest {
         let bucket_count = 3;
-        let commitments = private_hnsw_snapshot_leaf_commitments(bucket_count);
-        let root_hash = PrivateHnswOramStore::merkle_root_for_commitments(&commitments).unwrap();
-
-        PrivateHnswOramManifest {
+        let mut manifest = PrivateHnswOramManifest {
             version: 1,
             provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
             binding: PRIVATE_HNSW_ORAM_BINDING.to_string(),
@@ -957,20 +1018,60 @@ mod tests {
                 fixed_result_k: 10,
             },
             index_epoch: 42,
-            root_hash,
+            root_hash: String::new(),
             bucket_count,
             logical_node_count: 3,
             dummy_node_count: 1,
             result_privacy: ResultPrivacyMode::IdsVisible,
             owner_signing_key_id: "tenant-a/private-hnsw-signing-v1".to_string(),
             created_at_unix: 1,
-        }
+        };
+        refresh_private_hnsw_snapshot_manifest_root(&mut manifest);
+        manifest
     }
 
-    fn private_hnsw_snapshot_leaf_commitments(bucket_count: u64) -> Vec<String> {
-        (0..bucket_count)
-            .map(|bucket_id| BASE64URL_NOPAD.encode(&[9 + bucket_id as u8; 32]))
+    fn refresh_private_hnsw_snapshot_manifest_root(manifest: &mut PrivateHnswOramManifest) {
+        let commitments = private_hnsw_snapshot_leaf_commitments(manifest);
+        manifest.root_hash =
+            PrivateHnswOramStore::merkle_root_for_commitments(&commitments).unwrap();
+    }
+
+    fn private_hnsw_snapshot_leaf_commitments(manifest: &PrivateHnswOramManifest) -> Vec<String> {
+        (0..manifest.bucket_count)
+            .map(|bucket_id| private_hnsw_snapshot_bucket(manifest, bucket_id).bucket_commitment)
             .collect()
+    }
+
+    fn private_hnsw_snapshot_bucket(
+        manifest: &PrivateHnswOramManifest,
+        bucket_id: u64,
+    ) -> PrivateHnswOramBucket {
+        let expected_bytes =
+            private_hnsw_restore_expected_bucket_ciphertext_bytes(manifest).unwrap();
+        let ciphertext_bytes = vec![9 + bucket_id as u8; expected_bytes];
+        let ciphertext = BASE64URL_NOPAD.encode(&ciphertext_bytes);
+        let ciphertext_sha256 = BASE64URL_NOPAD.encode(Sha256::digest(&ciphertext_bytes).as_ref());
+        let bucket_commitment = private_hnsw_bucket_commitment(
+            PrivateHnswBucketAeadBaseContext {
+                collection_id: &manifest.collection_id,
+                vector_name: &manifest.vector_name,
+                key_id: &manifest.key_id,
+                rk_id: &manifest.rk_id,
+                rk_epoch: manifest.rk_epoch,
+            }
+            .for_bucket(bucket_id, manifest.index_epoch),
+            &ciphertext_sha256,
+        )
+        .unwrap();
+
+        PrivateHnswOramBucket {
+            version: 1,
+            bucket_id,
+            index_epoch: manifest.index_epoch,
+            ciphertext,
+            ciphertext_sha256,
+            bucket_commitment,
+        }
     }
 
     fn write_private_hnsw_snapshot_fixture(
@@ -991,25 +1092,15 @@ mod tests {
             })
             .unwrap();
 
-        let commitments = private_hnsw_snapshot_leaf_commitments(manifest.bucket_count);
-        for (bucket_id, commitment) in commitments.iter().enumerate() {
-            let plaintext = format!("encrypted bucket {bucket_id}");
-            let ciphertext = BASE64URL_NOPAD.encode(plaintext.as_bytes());
-            let ciphertext_sha256 =
-                BASE64URL_NOPAD.encode(Sha256::digest(plaintext.as_bytes()).as_ref());
+        let commitments = private_hnsw_snapshot_leaf_commitments(manifest);
+        for bucket_id in 0..manifest.bucket_count {
+            let bucket = private_hnsw_snapshot_bucket(manifest, bucket_id);
             store
                 .write_bucket(
-                    &PrivateHnswOramBucket {
-                        version: 1,
-                        bucket_id: bucket_id as u64,
-                        index_epoch: manifest.index_epoch,
-                        ciphertext,
-                        ciphertext_sha256,
-                        bucket_commitment: commitment.clone(),
-                    },
+                    &bucket,
                     manifest.index_epoch,
                     manifest.bucket_count,
-                    private_hnsw_restore_max_bucket_ciphertext_bytes(manifest).unwrap(),
+                    private_hnsw_restore_expected_bucket_ciphertext_bytes(manifest).unwrap(),
                 )
                 .unwrap();
         }
@@ -1515,6 +1606,7 @@ mod tests {
             .unwrap();
         let mut manifest = private_hnsw_manifest(uuid.to_string());
         manifest.vector_name = "title".to_string();
+        refresh_private_hnsw_snapshot_manifest_root(&mut manifest);
         write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
         let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
             "docs",
@@ -1606,16 +1698,32 @@ mod tests {
                 1,
                 manifest.index_epoch,
                 manifest.bucket_count,
-                private_hnsw_restore_max_bucket_ciphertext_bytes(&manifest).unwrap(),
+                private_hnsw_restore_expected_bucket_ciphertext_bytes(&manifest).unwrap(),
             )
             .unwrap();
-        bucket.bucket_commitment = BASE64URL_NOPAD.encode(&[99; 32]);
+        let replacement_bytes =
+            vec![77; private_hnsw_restore_expected_bucket_ciphertext_bytes(&manifest).unwrap()];
+        bucket.ciphertext = BASE64URL_NOPAD.encode(&replacement_bytes);
+        bucket.ciphertext_sha256 =
+            BASE64URL_NOPAD.encode(Sha256::digest(&replacement_bytes).as_ref());
+        bucket.bucket_commitment = private_hnsw_bucket_commitment(
+            PrivateHnswBucketAeadBaseContext {
+                collection_id: &manifest.collection_id,
+                vector_name: &manifest.vector_name,
+                key_id: &manifest.key_id,
+                rk_id: &manifest.rk_id,
+                rk_epoch: manifest.rk_epoch,
+            }
+            .for_bucket(bucket.bucket_id, bucket.index_epoch),
+            &bucket.ciphertext_sha256,
+        )
+        .unwrap();
         store
             .write_bucket(
                 &bucket,
                 manifest.index_epoch,
                 manifest.bucket_count,
-                private_hnsw_restore_max_bucket_ciphertext_bytes(&manifest).unwrap(),
+                private_hnsw_restore_expected_bucket_ciphertext_bytes(&manifest).unwrap(),
             )
             .unwrap();
 
@@ -1626,6 +1734,106 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("bucket commitments"));
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_bucket_fixed_size_mismatch() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-bad-bucket-size")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+
+        let store = PrivateHnswOramStore::new(temp_dir.path(), "text").unwrap();
+        let expected_ciphertext_bytes =
+            private_hnsw_restore_expected_bucket_ciphertext_bytes(&manifest).unwrap();
+        let mut bucket = store
+            .read_bucket(
+                0,
+                manifest.index_epoch,
+                manifest.bucket_count,
+                expected_ciphertext_bytes,
+            )
+            .unwrap();
+        let mut ciphertext_bytes = BASE64URL_NOPAD
+            .decode(bucket.ciphertext.as_bytes())
+            .unwrap();
+        ciphertext_bytes.pop();
+        bucket.ciphertext = BASE64URL_NOPAD.encode(&ciphertext_bytes);
+        bucket.ciphertext_sha256 =
+            BASE64URL_NOPAD.encode(Sha256::digest(&ciphertext_bytes).as_ref());
+        bucket.bucket_commitment = private_hnsw_bucket_commitment(
+            PrivateHnswBucketAeadBaseContext {
+                collection_id: &manifest.collection_id,
+                vector_name: &manifest.vector_name,
+                key_id: &manifest.key_id,
+                rk_id: &manifest.rk_id,
+                rk_epoch: manifest.rk_epoch,
+            }
+            .for_bucket(bucket.bucket_id, bucket.index_epoch),
+            &bucket.ciphertext_sha256,
+        )
+        .unwrap();
+        store
+            .write_bucket(
+                &bucket,
+                manifest.index_epoch,
+                manifest.bucket_count,
+                expected_ciphertext_bytes,
+            )
+            .unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("fixed ciphertext size"));
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_bucket_commitment_context_mismatch() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-bad-bucket-context")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+
+        let store = PrivateHnswOramStore::new(temp_dir.path(), "text").unwrap();
+        let expected_ciphertext_bytes =
+            private_hnsw_restore_expected_bucket_ciphertext_bytes(&manifest).unwrap();
+        let mut bucket = store
+            .read_bucket(
+                0,
+                manifest.index_epoch,
+                manifest.bucket_count,
+                expected_ciphertext_bytes,
+            )
+            .unwrap();
+        bucket.bucket_commitment = BASE64URL_NOPAD.encode(&[99; 32]);
+        store
+            .write_bucket(
+                &bucket,
+                manifest.index_epoch,
+                manifest.bucket_count,
+                expected_ciphertext_bytes,
+            )
+            .unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("commitment context mismatch"));
     }
 
     #[test]
@@ -1654,7 +1862,7 @@ mod tests {
             .write_merkle_tree_from_commitments(
                 manifest.index_epoch,
                 manifest.root_hash.clone(),
-                private_hnsw_snapshot_leaf_commitments(manifest.bucket_count),
+                private_hnsw_snapshot_leaf_commitments(&manifest),
             )
             .unwrap();
 
@@ -1702,7 +1910,7 @@ mod tests {
             .write_merkle_tree_from_commitments(
                 manifest.index_epoch,
                 manifest.root_hash.clone(),
-                private_hnsw_snapshot_leaf_commitments(manifest.bucket_count),
+                private_hnsw_snapshot_leaf_commitments(&manifest),
             )
             .unwrap();
 
@@ -1730,9 +1938,7 @@ mod tests {
         let uuid = Uuid::from_u128(7);
         let config = private_hnsw_config(uuid);
         let manifest = private_hnsw_manifest(uuid.to_string());
-        let leaf0 = BASE64URL_NOPAD.encode(&[9; 32]);
-        let leaf1 = BASE64URL_NOPAD.encode(&[10; 32]);
-        let leaf2 = BASE64URL_NOPAD.encode(&[11; 32]);
+        let commitments = private_hnsw_snapshot_leaf_commitments(&manifest);
 
         let store = PrivateHnswOramStore::new(temp_dir.path(), "text").unwrap();
         let signature = PrivateHnswOramSignature {
@@ -1748,25 +1954,14 @@ mod tests {
             })
             .unwrap();
 
-        for (bucket_id, leaf, plaintext) in [
-            (0, leaf0.clone(), b"encrypted bucket 0".as_slice()),
-            (1, leaf1.clone(), b"encrypted bucket 1".as_slice()),
-        ] {
-            let ciphertext = BASE64URL_NOPAD.encode(plaintext);
-            let ciphertext_sha256 = BASE64URL_NOPAD.encode(Sha256::digest(plaintext).as_ref());
+        for bucket_id in [0, 1] {
+            let bucket = private_hnsw_snapshot_bucket(&manifest, bucket_id);
             store
                 .write_bucket(
-                    &PrivateHnswOramBucket {
-                        version: 1,
-                        bucket_id,
-                        index_epoch: manifest.index_epoch,
-                        ciphertext,
-                        ciphertext_sha256,
-                        bucket_commitment: leaf,
-                    },
+                    &bucket,
                     manifest.index_epoch,
                     manifest.bucket_count,
-                    private_hnsw_restore_max_bucket_ciphertext_bytes(&manifest).unwrap(),
+                    private_hnsw_restore_expected_bucket_ciphertext_bytes(&manifest).unwrap(),
                 )
                 .unwrap();
         }
@@ -1774,7 +1969,7 @@ mod tests {
             .write_merkle_tree_from_commitments(
                 manifest.index_epoch,
                 manifest.root_hash.clone(),
-                vec![leaf0, leaf1, leaf2],
+                commitments,
             )
             .unwrap();
 
@@ -1796,9 +1991,7 @@ mod tests {
         let uuid = Uuid::from_u128(7);
         let config = private_hnsw_config(uuid);
         let manifest = private_hnsw_manifest(uuid.to_string());
-        let leaf0 = BASE64URL_NOPAD.encode(&[9; 32]);
-        let leaf1 = BASE64URL_NOPAD.encode(&[10; 32]);
-        let leaf2 = BASE64URL_NOPAD.encode(&[11; 32]);
+        let commitments = private_hnsw_snapshot_leaf_commitments(&manifest);
 
         let store = PrivateHnswOramStore::new(temp_dir.path(), "text").unwrap();
         let signature = PrivateHnswOramSignature {
@@ -1814,25 +2007,14 @@ mod tests {
             })
             .unwrap();
 
-        for (bucket_id, leaf, plaintext) in [
-            (0, leaf0.clone(), b"encrypted bucket 0".as_slice()),
-            (2, leaf2.clone(), b"encrypted bucket 2".as_slice()),
-        ] {
-            let ciphertext = BASE64URL_NOPAD.encode(plaintext);
-            let ciphertext_sha256 = BASE64URL_NOPAD.encode(Sha256::digest(plaintext).as_ref());
+        for bucket_id in [0, 2] {
+            let bucket = private_hnsw_snapshot_bucket(&manifest, bucket_id);
             store
                 .write_bucket(
-                    &PrivateHnswOramBucket {
-                        version: 1,
-                        bucket_id,
-                        index_epoch: manifest.index_epoch,
-                        ciphertext,
-                        ciphertext_sha256,
-                        bucket_commitment: leaf,
-                    },
+                    &bucket,
                     manifest.index_epoch,
                     manifest.bucket_count,
-                    private_hnsw_restore_max_bucket_ciphertext_bytes(&manifest).unwrap(),
+                    private_hnsw_restore_expected_bucket_ciphertext_bytes(&manifest).unwrap(),
                 )
                 .unwrap();
         }
@@ -1840,7 +2022,7 @@ mod tests {
             .write_merkle_tree_from_commitments(
                 manifest.index_epoch,
                 manifest.root_hash.clone(),
-                vec![leaf0, leaf1, leaf2],
+                commitments,
             )
             .unwrap();
 
