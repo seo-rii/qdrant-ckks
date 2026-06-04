@@ -860,6 +860,14 @@ mod tests {
             .unwrap();
     }
 
+    fn private_hnsw_snapshot_bucket_path(collection_dir: &Path, bucket_id: u64) -> PathBuf {
+        collection_dir
+            .join(PRIVATE_HNSW_ORAM_DIR)
+            .join("text")
+            .join("buckets")
+            .join(format!("{bucket_id:08}.bucket"))
+    }
+
     #[test]
     fn snapshot_crypto_migration_state_guard_rejects_in_flight_states() {
         ensure_snapshot_crypto_migration_state_allows_snapshot(
@@ -1003,12 +1011,7 @@ mod tests {
         let config = private_hnsw_config(uuid);
         let manifest = private_hnsw_manifest(uuid.to_string());
         write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
-        let bucket_path = temp_dir
-            .path()
-            .join(PRIVATE_HNSW_ORAM_DIR)
-            .join("text")
-            .join("buckets")
-            .join("00000000.bucket");
+        let bucket_path = private_hnsw_snapshot_bucket_path(temp_dir.path(), 0);
         fs::remove_file(&bucket_path).unwrap();
         std::os::unix::fs::symlink(temp_dir.path().join("outside.bucket"), &bucket_path).unwrap();
 
@@ -1020,6 +1023,35 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("non-symlink regular file"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_world_readable_bucket_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-world-readable-bucket")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+        let bucket_path = private_hnsw_snapshot_bucket_path(temp_dir.path(), 0);
+        fs::set_permissions(&bucket_path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("must not be group/world accessible")
+        );
     }
 
     #[test]
