@@ -935,7 +935,8 @@ or issuing ORAM writeback. SDKs may keep high-level HNSW nodes in a local
 `PrivateHnswClientNodeCache` and call the `*_with_cache` search helpers. A cache
 hit still consumes a padding ORAM access through `padding_node_id`, so fixed-step
 request volume remains constant while the client uses its local upper-layer node
-copy for traversal and distance calculation.
+copy for traversal and distance calculation. The verified cache helper applies
+the same Merkle proof check before bucket decryption, state remap, or writeback.
 `PrivateHnswSearchResult::access_metrics` returns
 `PrivateHnswSearchAccessMetrics` with path-access count, unique leaf count,
 fixed-step budget, and budget-exhaustion status for latency/ORAM-volume
