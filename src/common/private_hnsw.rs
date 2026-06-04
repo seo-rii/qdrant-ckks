@@ -197,6 +197,13 @@ impl PrivateHnswSessionRegistry {
             .contains_key(&session_index_key(collection_id, vector_name))
     }
 
+    fn has_active_upload_collection(&self, collection_id: &str) -> bool {
+        let prefix = format!("{collection_id}\x1f");
+        self.active_upload_by_index
+            .keys()
+            .any(|index_key| index_key.starts_with(&prefix))
+    }
+
     fn begin_collection_snapshot(
         &mut self,
         collection_id: &str,
@@ -1596,6 +1603,11 @@ fn ensure_no_active_private_hnsw_collection_session_in_registry(
             "private HNSW ORAM collection snapshot requires no active private ORAM session",
         ));
     }
+    if registry.has_active_upload_collection(collection_id) {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM collection snapshot requires no active private ORAM upload",
+        ));
+    }
     Ok(())
 }
 
@@ -2320,6 +2332,32 @@ mod private_hnsw_tests {
         registry.release_upload("collection-uuid-1", "text");
         registry
             .open(fixture_session("session-1", 20), now)
+            .unwrap();
+    }
+
+    #[test]
+    fn upload_write_window_rejects_collection_snapshot() {
+        let now = 10;
+        let mut registry = PrivateHnswSessionRegistry::default();
+        registry
+            .begin_upload("collection-uuid-1", "text", now)
+            .unwrap();
+
+        let err = registry
+            .begin_collection_snapshot("collection-uuid-1", now)
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("snapshot requires no active private ORAM upload")
+        );
+        registry
+            .begin_collection_snapshot("other-collection", now)
+            .unwrap();
+        registry.release_collection_snapshot("other-collection");
+
+        registry.release_upload("collection-uuid-1", "text");
+        registry
+            .begin_collection_snapshot("collection-uuid-1", now)
             .unwrap();
     }
 

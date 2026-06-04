@@ -584,6 +584,9 @@ paths and writing back buckets. While a private HNSW ORAM collection/full
 snapshot guard is active, new session opens and manifest/bucket uploads fail
 closed for the same reason. The error is sanitized and does not include
 collection-local `private_hnsw_oram` filesystem paths or bucket roots.
+Snapshot creation also fails closed while a private HNSW ORAM manifest or bucket
+upload write-window guard is active for the collection, because upload writes
+canonical manifest, bucket, Merkle, and epoch files.
 Snapshot creation also refuses to archive orphan private HNSW ORAM vector stores
 whose on-disk store does not match a configured private HNSW ORAM encryption
 rule, or configured private HNSW ORAM vector rules whose on-disk store is
