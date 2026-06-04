@@ -631,8 +631,11 @@ before manifest persistence. Unsupported manifest signature algorithms and
 malformed manifest signature errors are sanitized without echoing the submitted
 algorithm or signature body. Signature key id lookup failures for manifest
 upload, `read_paths`, and `commit` are also sanitized without echoing the
-submitted key id. Manifest-store layout failures during upload are sanitized
-without exposing collection-local `private_hnsw_oram` filesystem paths.
+submitted key id. Manifest upload validates the signature algorithm, key-id
+shape, and signature body shape before looking up the configured public key, so
+malformed signed requests do not reach the verifier registry lookup boundary.
+Manifest-store layout failures during upload are sanitized without exposing
+collection-local `private_hnsw_oram` filesystem paths.
 Path ORAM manifests must also bind `bucket_count` to the canonical full binary
 tree size implied by `tree_height`, so malformed layouts are rejected before a
 session can reach `read_paths`.

@@ -19,7 +19,8 @@ use qdrant_sec::{
     PrivateHnswSignatureVerification, ResultPrivacyMode, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
     decode_private_hnsw_oram_leaf_label, private_hnsw_oram_bucket_count,
     private_hnsw_oram_bucket_ids_for_leaf, validate_private_hnsw_oram_commit_signature,
-    validate_private_hnsw_oram_manifest, validate_private_hnsw_oram_read_paths_signature,
+    validate_private_hnsw_oram_manifest, validate_private_hnsw_oram_manifest_signature_shape,
+    validate_private_hnsw_oram_read_paths_signature,
 };
 use segment::types::Distance;
 use serde::de::DeserializeOwned;
@@ -363,6 +364,7 @@ pub async fn do_upload_private_hnsw_manifest(
     manifest: PrivateHnswOramManifest,
     signature: PrivateHnswOramSignature,
 ) -> StorageResult<PrivateHnswOramEpochState> {
+    validate_private_hnsw_oram_manifest_signature_shape(&signature).map_err(private_hnsw_error)?;
     let resolved = resolve_private_hnsw_context(
         toc,
         auth,

@@ -748,6 +748,29 @@ mod private_hnsw_rest_tests {
             );
 
             let manifest_signature_alg_sentinel = "manifest-signature-alg-sentinel";
+            let unknown_key_malformed_alg_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: fixture.manifest.clone(),
+                    signature: qdrant_sec::PrivateHnswOramSignature {
+                        alg: manifest_signature_alg_sentinel.to_string(),
+                        key_id: signature_key_id_sentinel.to_string(),
+                        sig: fixture.manifest_signature.sig.clone(),
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "signature algorithm must be ed25519"
+            );
+            assert!(!unknown_key_malformed_alg_error.contains("not configured"));
+            assert!(
+                !unknown_key_malformed_alg_error.contains(signature_key_id_sentinel),
+                "{unknown_key_malformed_alg_error}"
+            );
+            assert!(
+                !unknown_key_malformed_alg_error.contains(manifest_signature_alg_sentinel),
+                "{unknown_key_malformed_alg_error}"
+            );
+
             let malformed_manifest_alg_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {
@@ -767,6 +790,29 @@ mod private_hnsw_rest_tests {
             );
 
             let manifest_signature_sentinel = "manifest-signature!sentinel";
+            let unknown_key_malformed_signature_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: fixture.manifest.clone(),
+                    signature: qdrant_sec::PrivateHnswOramSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: signature_key_id_sentinel.to_string(),
+                        sig: manifest_signature_sentinel.to_string(),
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "manifest signature is malformed"
+            );
+            assert!(!unknown_key_malformed_signature_error.contains("not configured"));
+            assert!(
+                !unknown_key_malformed_signature_error.contains(signature_key_id_sentinel),
+                "{unknown_key_malformed_signature_error}"
+            );
+            assert!(
+                !unknown_key_malformed_signature_error.contains(manifest_signature_sentinel),
+                "{unknown_key_malformed_signature_error}"
+            );
+
             let malformed_manifest_signature_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {
