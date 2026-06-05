@@ -914,6 +914,8 @@ mod tests {
         manifest.oram.tree_height = 1;
         manifest.bucket_count = 3;
         manifest.oram.bucket_size = 1;
+        manifest.oram.path_batch_size = 2;
+        manifest.fixed_budget.paths_per_round = 2;
         manifest.logical_node_count = 4;
         manifest.dummy_node_count = 0;
 

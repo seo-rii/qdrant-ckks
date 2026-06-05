@@ -39,6 +39,7 @@ const PRIVATE_HNSW_BUCKET_COMMITMENT_DOMAIN: &str =
 const PRIVATE_HNSW_CLIENT_STATE_AEAD_CONTEXT_DOMAIN: &str =
     "qdrant-sec/private-hnsw-client-state-aead/v1";
 const PRIVATE_HNSW_LEVEL_ASSIGNMENT_DOMAIN: &[u8] = b"qdrant-sec/private-hnsw-level-assignment/v1";
+const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
 const CLIENT_STATE_SNAPSHOT_VERSION: u16 = 1;
 const CLIENT_STATE_AEAD_VERSION: u16 = 1;
 pub const PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND: &str = "merkle_path_batch/v1";
@@ -3251,6 +3252,9 @@ fn sort_hits(hits: &mut [PrivateHnswSearchHit]) {
 }
 
 fn decode_bucket_ciphertext_hash(value: &str) -> Result<[u8; 32], PrivateHnswClientError> {
+    if value.len() != BASE64URL_NOPAD_32_BYTE_LEN {
+        return Err(PrivateHnswClientError::InvalidBucketCiphertextHash);
+    }
     let bytes = BASE64URL_NOPAD
         .decode(value.as_bytes())
         .map_err(|_| PrivateHnswClientError::InvalidBucketCiphertextHash)?;
@@ -3260,6 +3264,9 @@ fn decode_bucket_ciphertext_hash(value: &str) -> Result<[u8; 32], PrivateHnswCli
 }
 
 fn decode_bucket_commitment(value: &str) -> Result<[u8; 32], PrivateHnswClientError> {
+    if value.len() != BASE64URL_NOPAD_32_BYTE_LEN {
+        return Err(PrivateHnswClientError::InvalidBucketCommitment);
+    }
     let bytes = BASE64URL_NOPAD
         .decode(value.as_bytes())
         .map_err(|_| PrivateHnswClientError::InvalidBucketCommitment)?;
@@ -3269,6 +3276,9 @@ fn decode_bucket_commitment(value: &str) -> Result<[u8; 32], PrivateHnswClientEr
 }
 
 fn decode_merkle_root(value: &str) -> Result<[u8; 32], PrivateHnswClientError> {
+    if value.len() != BASE64URL_NOPAD_32_BYTE_LEN {
+        return Err(PrivateHnswClientError::InvalidMerkleRoot);
+    }
     let bytes = BASE64URL_NOPAD
         .decode(value.as_bytes())
         .map_err(|_| PrivateHnswClientError::InvalidMerkleRoot)?;
@@ -5546,10 +5556,24 @@ mod tests {
             Err(PrivateHnswClientError::InvalidBucketCiphertextHash)
         );
 
+        let mut malformed_hash = decoded.clone();
+        malformed_hash.buckets[0].ciphertext_sha256 = "AAAA".to_string();
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle(&malformed_hash),
+            Err(PrivateHnswClientError::InvalidBucketCiphertextHash)
+        );
+
         let mut wrong_commitment = decoded.clone();
         wrong_commitment.buckets[0].bucket_commitment = commitment(99);
         assert_eq!(
             validate_private_hnsw_oram_upload_bundle(&wrong_commitment),
+            Err(PrivateHnswClientError::InvalidBucketCommitment)
+        );
+
+        let mut malformed_commitment = decoded.clone();
+        malformed_commitment.buckets[0].bucket_commitment = "AAAA".to_string();
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle(&malformed_commitment),
             Err(PrivateHnswClientError::InvalidBucketCommitment)
         );
 
@@ -5583,6 +5607,13 @@ mod tests {
                 expected_bytes,
                 actual_bytes: expected_bytes - 1
             })
+        );
+
+        let mut malformed_root = decoded.clone();
+        malformed_root.manifest.root_hash = "AAAA".to_string();
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle(&malformed_root),
+            Err(PrivateHnswClientError::InvalidMerkleRoot)
         );
 
         let mut wrong_root = decoded;
