@@ -479,6 +479,9 @@ pub fn validate_private_result_oram_commit_signature(
     if input.updated_buckets.is_empty() {
         return Err(PrivateResultOramError::EmptyCommit);
     }
+    if input.new_epoch <= input.old_epoch {
+        return Err(PrivateResultOramError::InvalidManifestField("new_epoch"));
+    }
     decode_base64url_32(input.old_root_hash, "old_root_hash")?;
     decode_base64url_32(input.new_root_hash, "new_root_hash")?;
     for bucket in input.updated_buckets {
@@ -2022,6 +2025,19 @@ mod tests {
             public_key: key_pair.public_key().as_ref(),
         };
         validate_private_result_oram_commit_signature(input, &signature, verification).unwrap();
+
+        let stale_epoch_input = PrivateResultOramCommitSignatureInput {
+            new_epoch: input.old_epoch,
+            ..input
+        };
+        assert_eq!(
+            validate_private_result_oram_commit_signature(
+                stale_epoch_input,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateResultOramError::InvalidManifestField("new_epoch"))
+        );
 
         let invalid_context = PrivateResultOramCommitSignatureInput {
             collection_id: "",
