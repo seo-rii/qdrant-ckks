@@ -474,6 +474,9 @@ pub fn validate_private_result_oram_commit_signature(
     verification: PrivateResultOramSignatureVerification<'_>,
 ) -> Result<(), PrivateResultOramError> {
     validate_signature_fields(input.signature_alg, input.signature_key_id, verification)?;
+    if input.updated_buckets.is_empty() {
+        return Err(PrivateResultOramError::EmptyCommit);
+    }
     let signature_bytes = decode_base64url_64(signature)?;
     let message = private_result_oram_commit_signature_message(input);
     UnparsedPublicKey::new(&ED25519, verification.public_key)
@@ -501,6 +504,9 @@ pub fn sign_private_result_oram_commit(
     plan: &PrivateResultOramCommitPlan,
 ) -> Result<PrivateResultOramSignature, PrivateResultOramError> {
     validate_commit_signature_context(context)?;
+    if plan.updated_buckets.is_empty() {
+        return Err(PrivateResultOramError::EmptyCommit);
+    }
     let bucket_refs = plan.signature_bucket_refs();
     let input = PrivateResultOramCommitSignatureInput {
         collection_id: context.collection_id,
@@ -1713,6 +1719,29 @@ mod tests {
             },
         )
         .unwrap();
+
+        let empty_plan = PrivateResultOramCommitPlan {
+            old_epoch: plan.old_epoch,
+            new_epoch: plan.new_epoch,
+            old_root_hash: plan.old_root_hash.clone(),
+            new_root_hash: plan.old_root_hash.clone(),
+            leaf_commitments: plan.leaf_commitments.clone(),
+            updated_buckets: Vec::new(),
+        };
+        assert_eq!(
+            sign_private_result_oram_commit(
+                &key_pair,
+                PrivateResultOramCommitSignatureContext {
+                    collection_id: "collection-uuid-1",
+                    key_id: "tenant-a/payload-private-rk",
+                    rk_id: "tenant-a/payload-private-rk",
+                    rk_epoch: 7,
+                    signing_key_id: "tenant-a/private-result-signing-v1",
+                },
+                &empty_plan,
+            ),
+            Err(PrivateResultOramError::EmptyCommit)
+        );
     }
 
     #[test]
@@ -1935,6 +1964,19 @@ mod tests {
             public_key: key_pair.public_key().as_ref(),
         };
         validate_private_result_oram_commit_signature(input, &signature, verification).unwrap();
+
+        let empty_input = PrivateResultOramCommitSignatureInput {
+            updated_buckets: &[],
+            ..input
+        };
+        assert_eq!(
+            validate_private_result_oram_commit_signature(
+                empty_input,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateResultOramError::EmptyCommit)
+        );
 
         let tampered = PrivateResultOramCommitSignatureInput {
             new_epoch: 44,

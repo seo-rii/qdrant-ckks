@@ -865,7 +865,8 @@ contract used by private HNSW ORAM. Its upload bundle, commit, and stored
 Merkle-tree root mismatch errors do not reflect computed Merkle roots, and its
 writeback helper preflights stale current epochs and manifest epoch/root
 context before bucket/Merkle writes. It rejects empty writebacks before storage
-state changes, and also validates each updated bucket commitment against the
+state changes. SDK commit planning, signing, and verification also reject empty
+commit bucket lists, and validate each updated bucket commitment against the
 bucket ciphertext hash plus collection/key lineage and the proposed bucket epoch
 before preparing Merkle metadata.
 Directory hardening also checks symlink/type before chmod. It also exposes
