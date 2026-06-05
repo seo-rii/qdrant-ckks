@@ -830,7 +830,8 @@ writeback CAS signature input. `validate_private_result_oram_bucket_shape`
 checks bucket version, epoch, range, ciphertext size, ciphertext SHA-256, and
 bucket commitment encoding. `private_result_oram_bucket_commitment` binds a
 bucket commitment to collection/key lineage, bucket id, index epoch, and
-`ciphertext_sha256`, while `private_result_oram_merkle_root_for_commitments`
+`ciphertext_sha256`, while encoded ciphertext length is bounded before decode
+and `private_result_oram_merkle_root_for_commitments`
 fixes the root hash calculation over those commitments.
 `plan_private_result_oram_commit` prepares the future writeback plan by checking
 old-root consistency, bucket epoch/range uniqueness, the next root, and commit

@@ -397,6 +397,13 @@ pub fn validate_private_result_oram_bucket_shape(
     if bucket.index_epoch != context.expected_index_epoch {
         return Err(PrivateResultOramError::InvalidBucketField("index_epoch"));
     }
+    let max_ciphertext_b64_len = max_base64url_nopad_encoded_len(context.max_ciphertext_bytes)
+        .ok_or(PrivateResultOramError::InvalidBucketField(
+            "max_ciphertext_bytes",
+        ))?;
+    if bucket.ciphertext.len() > max_ciphertext_b64_len {
+        return Err(PrivateResultOramError::BucketOversized);
+    }
     let ciphertext = BASE64URL_NOPAD
         .decode(bucket.ciphertext.as_bytes())
         .map_err(|_| PrivateResultOramError::InvalidBucketField("ciphertext"))?;
@@ -412,6 +419,19 @@ pub fn validate_private_result_oram_bucket_shape(
     decode_base64url_32(&bucket.bucket_commitment, "bucket_commitment")
         .map_err(|_| PrivateResultOramError::InvalidBucketField("bucket_commitment"))?;
     Ok(())
+}
+
+fn max_base64url_nopad_encoded_len(byte_len: usize) -> Option<usize> {
+    let full_chunks = byte_len / 3;
+    let remainder = byte_len % 3;
+    full_chunks.checked_mul(4).and_then(|len| {
+        len.checked_add(match remainder {
+            0 => 0,
+            1 => 2,
+            2 => 3,
+            _ => unreachable!("remainder modulo 3"),
+        })
+    })
 }
 
 pub fn validate_private_result_oram_manifest_signature_shape(
@@ -1335,6 +1355,18 @@ mod tests {
         oversized.ciphertext_sha256 = BASE64URL_NOPAD.encode(Sha256::digest([7; 129]).as_ref());
         assert_eq!(
             validate_private_result_oram_bucket_shape(&oversized, bucket_validation_context()),
+            Err(PrivateResultOramError::BucketOversized)
+        );
+
+        let mut encoded_oversized = fixture_bucket();
+        encoded_oversized.ciphertext =
+            "A".repeat(max_base64url_nopad_encoded_len(128).unwrap() + 1);
+        encoded_oversized.ciphertext_sha256 = BASE64URL_NOPAD.encode(&[9; 32]);
+        assert_eq!(
+            validate_private_result_oram_bucket_shape(
+                &encoded_oversized,
+                bucket_validation_context()
+            ),
             Err(PrivateResultOramError::BucketOversized)
         );
     }
