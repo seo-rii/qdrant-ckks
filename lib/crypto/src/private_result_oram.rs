@@ -608,6 +608,19 @@ pub fn validate_private_result_oram_upload_bundle(
     Ok(commitments)
 }
 
+pub fn validate_private_result_oram_upload_bundle_with_signature(
+    bundle: &PrivateResultOramUploadBundle,
+    validation_context: PrivateResultOramManifestValidationContext<'_>,
+) -> Result<Vec<String>, PrivateResultOramError> {
+    let commitments = validate_private_result_oram_upload_bundle(bundle)?;
+    validate_private_result_oram_manifest(
+        &bundle.manifest,
+        Some(&bundle.manifest_signature),
+        validation_context,
+    )?;
+    Ok(commitments)
+}
+
 fn private_result_oram_upload_max_ciphertext_bytes(
     manifest: &PrivateResultOramManifest,
 ) -> Result<usize, PrivateResultOramError> {
@@ -2015,6 +2028,42 @@ mod tests {
             ),
         )
         .unwrap();
+
+        assert_eq!(
+            validate_private_result_oram_upload_bundle_with_signature(
+                &decoded,
+                fixture_context(
+                    key_pair.public_key().as_ref(),
+                    &decoded.manifest_signature.key_id,
+                ),
+            )
+            .unwrap(),
+            ordered_commitments
+        );
+
+        let mut tampered_signature = decoded.clone();
+        tampered_signature.manifest_signature.sig = BASE64URL_NOPAD.encode(&[8; 64]);
+        assert_eq!(
+            validate_private_result_oram_upload_bundle_with_signature(
+                &tampered_signature,
+                fixture_context(
+                    key_pair.public_key().as_ref(),
+                    &tampered_signature.manifest_signature.key_id,
+                ),
+            ),
+            Err(PrivateResultOramError::InvalidManifestSignature)
+        );
+
+        assert_eq!(
+            validate_private_result_oram_upload_bundle_with_signature(
+                &decoded,
+                fixture_context(
+                    key_pair.public_key().as_ref(),
+                    "tenant-a/private-result-wrong"
+                ),
+            ),
+            Err(PrivateResultOramError::SignatureKeyIdMismatch)
+        );
 
         let mut incomplete = decoded.clone();
         incomplete.buckets.pop();

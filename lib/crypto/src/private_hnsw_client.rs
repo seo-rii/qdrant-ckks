@@ -12,13 +12,13 @@ use thiserror::Error;
 use crate::aead::{EncryptionError, SecretKey, validate_resource_key_id};
 use crate::control_plane::{PRIVATE_HNSW_ORAM_BINDING, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER};
 use crate::private_hnsw_oram::{
-    DistanceKind, FixedBudgetParams, OramParams, PrivateHnswOramBucket,
-    PrivateHnswOramCommitBucketRef, PrivateHnswOramCommitSignatureInput, PrivateHnswOramManifest,
-    PrivateHnswOramReadPathsSignatureInput, PrivateHnswOramSignature, PrivateHnswParams,
-    ResultPrivacyMode, private_hnsw_oram_bucket_ciphertext_bytes,
+    DistanceKind, FixedBudgetParams, OramParams, PrivateHnswManifestValidationContext,
+    PrivateHnswOramBucket, PrivateHnswOramCommitBucketRef, PrivateHnswOramCommitSignatureInput,
+    PrivateHnswOramManifest, PrivateHnswOramReadPathsSignatureInput, PrivateHnswOramSignature,
+    PrivateHnswParams, ResultPrivacyMode, private_hnsw_oram_bucket_ciphertext_bytes,
     private_hnsw_oram_commit_signature_message, private_hnsw_oram_manifest_signature_message,
-    private_hnsw_oram_read_paths_signature_message, validate_private_hnsw_oram_manifest_shape,
-    validate_private_hnsw_oram_manifest_signature_shape,
+    private_hnsw_oram_read_paths_signature_message, validate_private_hnsw_oram_manifest,
+    validate_private_hnsw_oram_manifest_shape, validate_private_hnsw_oram_manifest_signature_shape,
 };
 
 pub const PRIVATE_HNSW_NODE_AEAD_DOMAIN: &[u8] = b"qdrant-sec/private-hnsw-node-aead/v1";
@@ -1792,6 +1792,20 @@ pub fn validate_private_hnsw_oram_upload_bundle(
     if private_hnsw_oram_merkle_root_for_commitments(&commitments)? != manifest.root_hash {
         return Err(PrivateHnswClientError::MerkleRootMismatch);
     }
+    Ok(commitments)
+}
+
+pub fn validate_private_hnsw_oram_upload_bundle_with_signature(
+    bundle: &PrivateHnswOramUploadBundle,
+    validation_context: PrivateHnswManifestValidationContext<'_>,
+) -> Result<Vec<String>, PrivateHnswClientError> {
+    let commitments = validate_private_hnsw_oram_upload_bundle(bundle)?;
+    validate_private_hnsw_oram_manifest(
+        &bundle.manifest,
+        Some(&bundle.manifest_signature),
+        validation_context,
+    )
+    .map_err(|_| PrivateHnswClientError::InvalidManifestSignatureContext("manifest_signature"))?;
     Ok(commitments)
 }
 
@@ -5827,13 +5841,58 @@ mod tests {
             ))
         );
 
+        let validation_context = || PrivateHnswManifestValidationContext {
+            expected_collection_id: "collection-uuid-1",
+            expected_vector_name: "text",
+            expected_key_id: "tenant-a/vector-private-rk",
+            expected_rk_id: "tenant-a/vector-private-rk",
+            min_rk_epoch: 7,
+            max_rk_epoch: 7,
+            expected_dim: 2,
+            expected_distance: DistanceKind::Euclid,
+            signature_verification: PrivateHnswSignatureVerification {
+                expected_key_id: "tenant-a/private-hnsw-signing-v1",
+                public_key: key_pair.public_key().as_ref(),
+            },
+        };
+
         let epoch = validate_private_hnsw_oram_manifest(
             &decoded.manifest,
             Some(&decoded.manifest_signature),
+            validation_context(),
+        )
+        .unwrap();
+
+        assert_eq!(epoch.epoch, 42);
+        assert_eq!(
+            epoch.root_hash,
+            decode_merkle_root(&encrypted_build.root_hash).unwrap()
+        );
+
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle_with_signature(&decoded, validation_context())
+                .unwrap(),
+            ordered_commitments
+        );
+
+        let mut tampered_signature = decoded.clone();
+        tampered_signature.manifest_signature.sig = BASE64URL_NOPAD.encode(&[8; 64]);
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle_with_signature(
+                &tampered_signature,
+                validation_context()
+            ),
+            Err(PrivateHnswClientError::InvalidManifestSignatureContext(
+                "manifest_signature"
+            ))
+        );
+
+        let wrong_context = validate_private_hnsw_oram_upload_bundle_with_signature(
+            &decoded,
             PrivateHnswManifestValidationContext {
                 expected_collection_id: "collection-uuid-1",
                 expected_vector_name: "text",
-                expected_key_id: "tenant-a/vector-private-rk",
+                expected_key_id: "tenant-a/vector-private-rk-v2",
                 expected_rk_id: "tenant-a/vector-private-rk",
                 min_rk_epoch: 7,
                 max_rk_epoch: 7,
@@ -5845,12 +5904,10 @@ mod tests {
                 },
             },
         )
-        .unwrap();
-
-        assert_eq!(epoch.epoch, 42);
+        .unwrap_err();
         assert_eq!(
-            epoch.root_hash,
-            decode_merkle_root(&encrypted_build.root_hash).unwrap()
+            wrong_context,
+            PrivateHnswClientError::InvalidManifestSignatureContext("manifest_signature")
         );
 
         let mut incomplete = decoded.clone();

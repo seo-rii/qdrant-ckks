@@ -97,7 +97,8 @@ pub use private_hnsw_client::{
     search_private_hnsw_oram_plaintext_with_cache, sign_private_hnsw_oram_commit,
     sign_private_hnsw_oram_manifest, sign_private_hnsw_oram_manifest_refresh,
     sign_private_hnsw_oram_read_paths, validate_private_hnsw_oram_upload_bundle,
-    verify_private_hnsw_oram_merkle_proof, verify_private_hnsw_oram_merkle_proof_json,
+    validate_private_hnsw_oram_upload_bundle_with_signature, verify_private_hnsw_oram_merkle_proof,
+    verify_private_hnsw_oram_merkle_proof_json,
 };
 pub use private_hnsw_oram::{
     DistanceKind, FixedBudgetParams, OramKind, OramParams,
@@ -136,8 +137,9 @@ pub use private_result_oram::{
     validate_private_result_oram_manifest, validate_private_result_oram_manifest_shape,
     validate_private_result_oram_manifest_signature,
     validate_private_result_oram_manifest_signature_shape,
-    validate_private_result_oram_upload_bundle, verify_private_result_oram_merkle_proof,
-    verify_private_result_oram_merkle_proof_json,
+    validate_private_result_oram_upload_bundle,
+    validate_private_result_oram_upload_bundle_with_signature,
+    verify_private_result_oram_merkle_proof, verify_private_result_oram_merkle_proof_json,
 };
 pub use vector::{
     CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_PUBLIC_MATERIAL_MAX_CRYPTO_CONTEXT_BYTES,
