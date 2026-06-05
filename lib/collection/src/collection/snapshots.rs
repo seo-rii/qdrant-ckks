@@ -533,12 +533,49 @@ fn private_oram_snapshot_source_dir(
                 "{dir_name} snapshot source must be a non-symlink directory",
             )))
         }
-        Ok(_) => Ok(Some(source_dir)),
+        Ok(_) => {
+            validate_private_oram_snapshot_source_tree(&source_dir, private_oram_label(dir_name))?;
+            Ok(Some(source_dir))
+        }
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
         Err(err) => Err(CollectionError::service_error(format!(
             "failed to inspect {dir_name} snapshot source: {err}"
         ))),
     }
+}
+
+fn private_oram_label(dir_name: &str) -> &'static str {
+    match dir_name {
+        PRIVATE_HNSW_ORAM_DIR => "private HNSW ORAM",
+        PRIVATE_RESULT_ORAM_DIR => "private result ORAM",
+        _ => "private ORAM",
+    }
+}
+
+fn validate_private_oram_snapshot_source_tree(
+    source_dir: &Path,
+    label: &str,
+) -> CollectionResult<()> {
+    let entries = std::fs::read_dir(source_dir).map_err(|_| {
+        CollectionError::service_error(format!("{label} snapshot source cannot be read"))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|_| {
+            CollectionError::service_error(format!("{label} snapshot source cannot be read"))
+        })?;
+        let metadata = std::fs::symlink_metadata(entry.path()).map_err(|_| {
+            CollectionError::service_error(format!("{label} snapshot source cannot be inspected"))
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(CollectionError::service_error(format!(
+                "{label} snapshot source contains a symlink",
+            )));
+        }
+        if metadata.file_type().is_dir() {
+            validate_private_oram_snapshot_source_tree(&entry.path(), label)?;
+        }
+    }
+    Ok(())
 }
 
 fn ensure_snapshot_crypto_migration_state_allows_snapshot(
@@ -1233,6 +1270,35 @@ mod tests {
 
         assert!(err.to_string().contains("non-symlink directory"));
         assert!(!err.to_string().contains("outside-private-result-oram"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_result_oram_snapshot_source_dir_rejects_nested_symlink_without_target_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-snapshot-source-nested-symlink")
+            .tempdir()
+            .unwrap();
+        let buckets_dir = temp_dir
+            .path()
+            .join(PRIVATE_RESULT_ORAM_DIR)
+            .join("buckets");
+        fs::create_dir_all(&buckets_dir).unwrap();
+        fs::write(temp_dir.path().join("outside-result-bucket"), b"outside").unwrap();
+        std::os::unix::fs::symlink(
+            temp_dir.path().join("outside-result-bucket"),
+            buckets_dir.join("00000000.bucket"),
+        )
+        .unwrap();
+
+        let err =
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_RESULT_ORAM_DIR).unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("private result ORAM snapshot source contains a symlink"));
+        assert!(!rendered.contains("outside-result-bucket"));
+        assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!rendered.contains("00000000.bucket"));
     }
 
     #[test]

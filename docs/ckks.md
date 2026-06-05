@@ -877,6 +877,8 @@ only and are not wired into runtime upload/session APIs yet.
 Collection snapshots include the `private_result_oram/` directory if it is
 present, but current restore fail-closes when that directory or a symlink at
 that path appears because `payload/private-result-oram@v1` is still reserved.
+Snapshot creation also rejects nested symlinks inside the reserved result ORAM
+source tree without reflecting symlink targets or bucket filenames.
 The CLI/startup snapshot mapping preflight applies the same reserved-directory
 guard before accepting a recovered collection.
 Cluster runtime parity uses the existing crypto capability fingerprint for this
