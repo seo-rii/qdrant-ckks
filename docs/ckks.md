@@ -744,9 +744,11 @@ sanitized the same way.
 REST and gRPC `read_paths` error handling is checked for non-reflection:
 epoch/root mismatches and malformed path labels fail without echoing the
 submitted root hash, submitted path label, or any stored bucket ciphertext into
-the response body/status message. Exact duplicate path labels are rejected
-before bucket reads so a larger path batch cannot satisfy the fixed budget by
-repeating the same leaf. Missing encrypted bucket/proof data is
+the response body/status message. The path-to-bucket derivation helper also
+maps lower-level leaf-label decode failures to the same fixed message. Exact
+duplicate path labels are rejected before bucket reads so a larger path batch
+cannot satisfy the fixed budget by repeating the same leaf. Missing encrypted
+bucket/proof data is
 reported as sanitized unavailable bucket data without exposing collection-local
 `private_hnsw_oram` filesystem paths.
 Before returning a `read_paths` response, Qdrant also checks that each encrypted

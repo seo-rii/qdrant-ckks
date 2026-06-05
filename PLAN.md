@@ -436,7 +436,7 @@
 - private HNSW와 private result ORAM Merkle proof store generator는 empty bucket batch를 거부한다. SDK JSON verifier도 proof body를 파싱 전에 크기 제한하고, empty proof/bucket set을 거부하며, fixed-size path batch를 위해 반복 bucket/proof entry가 byte-identical인 경우만 허용하고 conflicting duplicate는 fail-closed로 거부한다.
 - SDK verified encrypted search는 upper-layer client cache hit 경로에서도 Merkle proof를 bucket decrypt, state remap, ORAM writeback보다 먼저 검증한다.
 - slow request log/request hash redaction은 private HNSW ORAM path labels, session ids, client-state fields, point/payload fetch tokens를 숨긴다.
-- REST/gRPC `read_paths` 오류 응답은 mismatched root hash sentinel, malformed path label sentinel, stored bucket ciphertext를 반사하지 않는다.
+- REST/gRPC `read_paths` 오류 응답은 mismatched root hash sentinel, malformed path label sentinel, stored bucket ciphertext를 반사하지 않는다. path-to-bucket derivation helper도 하위 leaf-label decode 오류를 그대로 반사하지 않는다.
 - REST/gRPC `read_paths` missing encrypted bucket/proof 오류 응답은 collection-local `private_hnsw_oram` filesystem path를 반사하지 않는다.
 - REST/gRPC `read_paths`는 store current epoch/root가 active session과 맞지 않으면 bucket을 읽기 전에 fail closed 하고 stale root, stored bucket ciphertext, collection-local `private_hnsw_oram` path를 반사하지 않는다.
 - REST/gRPC `read_paths`는 응답 직전에 각 bucket commitment가 같은 순서의 Merkle proof leaf와 일치하는지 검증하고, mismatch가 있으면 ciphertext나 store path를 반사하지 않고 fail closed 한다.

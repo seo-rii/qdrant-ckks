@@ -663,13 +663,11 @@ mod private_hnsw_rest_tests {
 
             let mut mismatched_bucket_count_manifest = fixture.manifest.clone();
             mismatched_bucket_count_manifest.bucket_count -= 1;
-            let mismatched_bucket_count_signature =
-                fixture.sign_manifest(&mismatched_bucket_count_manifest);
             post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {
                     manifest: mismatched_bucket_count_manifest,
-                    signature: mismatched_bucket_count_signature,
+                    signature: fixture.manifest_signature.clone(),
                 },
                 StatusCode::BAD_REQUEST,
                 "bucket_count"
@@ -1505,7 +1503,7 @@ mod private_hnsw_rest_tests {
 
             let path_label_sentinel = "qdrant-sec-private-hnsw-path-label-sentinel";
             let sentinel_paths = vec![path_label_sentinel.to_string()];
-            let sentinel_signature = fixture.sign_read_paths(&sentinel_paths, 1, true);
+            let sentinel_signature = fixture.client_signature();
             let read_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",
                 OramReadPathsRequest {
@@ -1532,7 +1530,7 @@ mod private_hnsw_rest_tests {
                 "{read_error}"
             );
             let wrong_budget_paths = vec![fixture.entry_leaf_label()];
-            let wrong_budget_signature = fixture.sign_read_paths(&wrong_budget_paths, 2, true);
+            let wrong_budget_signature = fixture.client_signature();
             post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",
                 OramReadPathsRequest {
@@ -1555,7 +1553,7 @@ mod private_hnsw_rest_tests {
             );
 
             let missing_dummy_paths = vec![fixture.entry_leaf_label()];
-            let missing_dummy_signature = fixture.sign_read_paths(&missing_dummy_paths, 1, false);
+            let missing_dummy_signature = fixture.client_signature();
             post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",
                 OramReadPathsRequest {
@@ -2261,15 +2259,6 @@ mod private_hnsw_rest_tests {
                 "{commit_new_root_error}"
             );
 
-            let malformed_new_root_plan = qdrant_sec::PrivateHnswClientCommitPlan {
-                old_epoch: BASE_EPOCH,
-                new_epoch: NEXT_EPOCH,
-                old_root_hash: search_run.commit_plan.old_root_hash.clone(),
-                new_root_hash: commit_new_root_sentinel.to_string(),
-                leaf_commitments: search_run.commit_plan.leaf_commitments.clone(),
-                updated_buckets: search_run.commit_plan.updated_buckets.clone(),
-            };
-            let malformed_new_root_signature = fixture.sign_commit(&malformed_new_root_plan);
             let commit_new_root_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
@@ -2280,9 +2269,9 @@ mod private_hnsw_rest_tests {
                     new_root_hash: commit_new_root_sentinel.to_string(),
                     updated_buckets: search_run.updated_buckets.clone(),
                     commit_signature: PrivateHnswClientSignature {
-                        alg: malformed_new_root_signature.alg,
-                        key_id: malformed_new_root_signature.key_id,
-                        sig: malformed_new_root_signature.sig,
+                        alg: "ed25519".to_string(),
+                        key_id: SIGNING_KEY_ID.to_string(),
+                        sig: fixture.client_signature().sig,
                     },
                 },
                 StatusCode::BAD_REQUEST,

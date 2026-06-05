@@ -2052,11 +2052,15 @@ fn bucket_ids_for_path_batch(
         .ok_or_else(|| StorageError::bad_request("private HNSW ORAM tree_height is too large"))?;
     let mut bucket_ids = Vec::with_capacity(paths.len().saturating_mul(path_len));
     for path in paths {
-        let leaf = decode_private_hnsw_oram_leaf_label(path, tree_height)
-            .map_err(|err| StorageError::bad_request(err.to_string()))?;
+        let leaf = decode_private_hnsw_oram_leaf_label(path, tree_height).map_err(|_| {
+            StorageError::bad_request(
+                "private HNSW ORAM read_paths request contains invalid path label",
+            )
+        })?;
         bucket_ids.extend(
-            private_hnsw_oram_bucket_ids_for_leaf(leaf, tree_height)
-                .map_err(|err| StorageError::bad_request(err.to_string()))?,
+            private_hnsw_oram_bucket_ids_for_leaf(leaf, tree_height).map_err(|_| {
+                StorageError::bad_request("private HNSW ORAM read_paths bucket derivation failed")
+            })?,
         );
     }
     Ok(bucket_ids)
@@ -2140,7 +2144,13 @@ mod private_hnsw_tests {
     fn path_oram_rejects_out_of_range_leaf() {
         let leaf = BASE64URL_NOPAD.encode(&8u64.to_be_bytes());
         let err = bucket_ids_for_path_batch(&[leaf], 3, 15).unwrap_err();
-        assert!(err.to_string().contains("outside ORAM tree range"));
+        assert!(err.to_string().contains("invalid path label"));
+
+        let malformed = "qdrant-sec-private-hnsw-path-helper-sentinel".to_string();
+        let err = bucket_ids_for_path_batch(std::slice::from_ref(&malformed), 3, 15).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("invalid path label"));
+        assert!(!rendered.contains(&malformed), "{rendered}");
     }
 
     fn fixture_bucket(bucket_id: u64, epoch: u64) -> PrivateHnswOramBucket {
