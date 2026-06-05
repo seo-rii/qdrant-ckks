@@ -1014,6 +1014,7 @@ pub async fn do_commit_private_hnsw_paths(
                     "private HNSW ORAM commit updated_buckets contains duplicate bucket id",
                 ));
             }
+            validate_root_hash_string(&bucket.ciphertext_sha256, "ciphertext_sha256")?;
         }
         let commit_bucket_refs = updated_buckets
             .iter()

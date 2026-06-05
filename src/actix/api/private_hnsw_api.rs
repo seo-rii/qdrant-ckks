@@ -2310,6 +2310,35 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "updated_buckets must contain"
             );
+            let commit_hash_sentinel = "AAAA";
+            let mut malformed_hash_buckets = search_run.updated_buckets.clone();
+            malformed_hash_buckets[0].ciphertext_sha256 = commit_hash_sentinel.to_string();
+            let commit_hash_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/commit",
+                OramCommitRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: malformed_hash_buckets,
+                    commit_signature: PrivateHnswClientSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: SIGNING_KEY_ID.to_string(),
+                        sig: fixture.client_signature().sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "ciphertext_sha256 must encode 32 bytes"
+            );
+            assert!(
+                !commit_hash_error.contains(commit_hash_sentinel),
+                "{commit_hash_error}"
+            );
+            assert!(
+                !commit_hash_error.contains("commit signature verification failed"),
+                "{commit_hash_error}"
+            );
             let duplicate_commit_bucket = search_run.updated_buckets[0].clone();
             let duplicate_commit_buckets = vec![
                 duplicate_commit_bucket.clone(),
