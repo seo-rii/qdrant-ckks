@@ -611,6 +611,13 @@ impl PrivateHnswOramUploadBundle {
     pub fn validate_initial_upload_contract(&self) -> Result<Vec<String>, PrivateHnswClientError> {
         validate_private_hnsw_oram_upload_bundle(self)
     }
+
+    pub fn validate_initial_upload_contract_with_signature(
+        &self,
+        validation_context: PrivateHnswManifestValidationContext<'_>,
+    ) -> Result<Vec<String>, PrivateHnswClientError> {
+        validate_private_hnsw_oram_upload_bundle_with_signature(self, validation_context)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -5871,6 +5878,12 @@ mod tests {
 
         assert_eq!(
             validate_private_hnsw_oram_upload_bundle_with_signature(&decoded, validation_context())
+                .unwrap(),
+            ordered_commitments
+        );
+        assert_eq!(
+            decoded
+                .validate_initial_upload_contract_with_signature(validation_context())
                 .unwrap(),
             ordered_commitments
         );

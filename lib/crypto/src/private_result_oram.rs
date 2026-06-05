@@ -189,6 +189,13 @@ impl PrivateResultOramUploadBundle {
     pub fn validate_initial_upload_contract(&self) -> Result<Vec<String>, PrivateResultOramError> {
         validate_private_result_oram_upload_bundle(self)
     }
+
+    pub fn validate_initial_upload_contract_with_signature(
+        &self,
+        validation_context: PrivateResultOramManifestValidationContext<'_>,
+    ) -> Result<Vec<String>, PrivateResultOramError> {
+        validate_private_result_oram_upload_bundle_with_signature(self, validation_context)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2038,6 +2045,15 @@ mod tests {
                 ),
             )
             .unwrap(),
+            ordered_commitments
+        );
+        assert_eq!(
+            decoded
+                .validate_initial_upload_contract_with_signature(fixture_context(
+                    key_pair.public_key().as_ref(),
+                    &decoded.manifest_signature.key_id,
+                ))
+                .unwrap(),
             ordered_commitments
         );
 

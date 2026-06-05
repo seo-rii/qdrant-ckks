@@ -887,12 +887,12 @@ complete ordered bucket set whose commitments match the manifest root.
 result bundles before any runtime upload API exists: they validate manifest
 shape, ordered bucket ids, bucket ciphertext hash/size, context-bound bucket
 commitments, and the manifest Merkle root.
-`validate_private_result_oram_upload_bundle_with_signature` adds the owner
-Ed25519 verification context to that preflight so future upload APIs do not have
-to stitch shape validation and manifest signature verification together by
-hand. The collection-local result ORAM store uses the shape helper for initial
-bundle ingest, then applies its runtime ciphertext size cap before writing
-files.
+`validate_private_result_oram_upload_bundle_with_signature` and the bundle's
+`validate_initial_upload_contract_with_signature` method add the owner Ed25519
+verification context to that preflight so future upload APIs do not have to
+stitch shape validation and manifest signature verification together by hand.
+The collection-local result ORAM store uses the shape helper for initial bundle
+ingest, then applies its runtime ciphertext size cap before writing files.
 `refresh_private_result_oram_manifest_for_commit` and
 `sign_private_result_oram_manifest_refresh` mirror the private HNSW helper by
 deriving the next signed manifest only when a commit plan's old epoch/root
@@ -1007,7 +1007,8 @@ duplicate or missing bucket ids, verify bucket ciphertext SHA-256 and bucket
 commitments against the manifest context, require the manifest signature shape
 and owner key id to match the manifest, require each decoded ciphertext to match
 the manifest-derived fixed bucket ciphertext size, and recompute the manifest
-Merkle root. `validate_private_hnsw_oram_upload_bundle_with_signature` adds the
+Merkle root. `validate_private_hnsw_oram_upload_bundle_with_signature` and the
+bundle's `validate_initial_upload_contract_with_signature` method add the
 runtime manifest validation context and Ed25519 verification to that preflight.
 Before submitting an ORAM writeback, clients can call
 `plan_private_hnsw_oram_commit_for_manifest` to bind commit planning to the
