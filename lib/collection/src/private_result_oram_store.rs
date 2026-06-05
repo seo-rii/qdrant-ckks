@@ -1262,6 +1262,18 @@ mod tests {
         )
     }
 
+    fn max_base64url_nopad_encoded_len_for_test(byte_len: usize) -> usize {
+        let full_chunks = byte_len / 3;
+        let remainder = byte_len % 3;
+        full_chunks * 4
+            + match remainder {
+                0 => 0,
+                1 => 2,
+                2 => 3,
+                _ => unreachable!("remainder modulo 3"),
+            }
+    }
+
     fn fixture_store(temp: &TempDir) -> PrivateResultOramStore {
         PrivateResultOramStore::new(temp.path())
     }
@@ -1605,6 +1617,18 @@ mod tests {
         assert!(err.to_string().contains("exceeds maximum size"));
         let err = store.write_bucket(&oversized, 42, 16, 64).unwrap_err();
         assert!(err.to_string().contains("exceeds maximum size"));
+
+        let mut encoded_oversized = bucket.clone();
+        encoded_oversized.bucket_id = 5;
+        encoded_oversized.ciphertext = "A".repeat(max_base64url_nopad_encoded_len_for_test(64) + 1);
+        encoded_oversized.ciphertext_sha256 = root_hash(2);
+        let err = store
+            .validate_bucket_for_write(&encoded_oversized, 42, 16, 64)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("exceeds maximum size"));
+        assert!(!rendered.contains("ciphertext_sha256 mismatch"));
+        assert!(!rendered.contains(&encoded_oversized.ciphertext));
 
         let out_of_range = fixture_bucket(99, 42, b"out of range result bucket");
         let err = store
