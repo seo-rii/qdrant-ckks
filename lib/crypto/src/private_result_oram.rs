@@ -477,6 +477,8 @@ pub fn validate_private_result_oram_commit_signature(
     if input.updated_buckets.is_empty() {
         return Err(PrivateResultOramError::EmptyCommit);
     }
+    decode_base64url_32(input.old_root_hash, "old_root_hash")?;
+    decode_base64url_32(input.new_root_hash, "new_root_hash")?;
     for bucket in input.updated_buckets {
         decode_base64url_32(bucket.ciphertext_sha256, "ciphertext_sha256")
             .map_err(|_| PrivateResultOramError::InvalidBucketField("ciphertext_sha256"))?;
@@ -1980,6 +1982,21 @@ mod tests {
                 verification,
             ),
             Err(PrivateResultOramError::EmptyCommit)
+        );
+
+        let malformed_root_input = PrivateResultOramCommitSignatureInput {
+            old_root_hash: "AAAA",
+            ..input
+        };
+        assert_eq!(
+            validate_private_result_oram_commit_signature(
+                malformed_root_input,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateResultOramError::InvalidManifestField(
+                "old_root_hash"
+            ))
         );
 
         let malformed_hash_buckets = [PrivateResultOramCommitBucketRef {

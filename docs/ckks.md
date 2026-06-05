@@ -765,7 +765,9 @@ enough to authorize ORAM read or commit requests for that private index.
 For `read_paths`, after the fixed-budget and session epoch/root checks, the
 server first bounds each ORAM leaf label to the canonical fixed-length
 base64url form without reflecting malformed labels, then verifies the Ed25519
-request signature before computing bucket paths.
+request signature before computing bucket paths. The SDK/server read-path
+signature validator also shape-checks the root hash and path labels before
+signature body parsing.
 For `commit`, the server verifies the Ed25519 request signature before parsing
 the proposed `new_root_hash` or preparing Merkle/writeback metadata, after the
 bounded request-size and epoch checks.
@@ -779,10 +781,10 @@ is reported without exposing
 collection-local `private_hnsw_oram` filesystem paths. Empty and oversized
 `updated_buckets` commits are rejected by fixed writeback request-size
 validation before bucket writes are attempted; the SDK/server commit signature
-validator also rejects empty commit bucket lists before signature body parsing.
-Each updated bucket `ciphertext_sha256` is shape-checked before signature message
-construction, and each updated bucket must also carry exactly the
-manifest-derived fixed ciphertext size.
+validator also rejects empty commit bucket lists and malformed root hashes
+before signature body parsing. Each updated bucket `ciphertext_sha256` is
+shape-checked before signature message construction, and each updated bucket
+must also carry exactly the manifest-derived fixed ciphertext size.
 Commit writebacks also validate every updated bucket commitment against the
 bucket ciphertext hash plus collection/vector/key lineage and the proposed
 bucket epoch before Merkle metadata is prepared or bucket files are written.

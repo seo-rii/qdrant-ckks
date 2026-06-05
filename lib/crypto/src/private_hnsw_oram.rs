@@ -14,6 +14,7 @@ pub const PRIVATE_HNSW_ORAM_READ_PATHS_SIGNATURE_DOMAIN: &str =
     "qdrant-sec/private-hnsw-oram-read-paths-signature/v1";
 
 const PRIVATE_HNSW_ORAM_SIGNATURE_ALGORITHM: &str = "ed25519";
+const BASE64URL_NOPAD_8_BYTE_LEN: usize = 11;
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
 const BASE64URL_NOPAD_64_BYTE_LEN: usize = 86;
 const PRIVATE_HNSW_ORAM_MANIFEST_VERSION: u16 = 1;
@@ -335,6 +336,8 @@ pub fn validate_private_hnsw_oram_commit_signature(
     if input.updated_buckets.is_empty() {
         return Err(PrivateHnswOramError::EmptyCommit);
     }
+    decode_base64url_32(input.old_root_hash, "old_root_hash")?;
+    decode_base64url_32(input.new_root_hash, "new_root_hash")?;
     for bucket in input.updated_buckets {
         decode_base64url_32(bucket.ciphertext_sha256, "ciphertext_sha256")?;
     }
@@ -351,6 +354,13 @@ pub fn validate_private_hnsw_oram_read_paths_signature(
     verification: PrivateHnswSignatureVerification<'_>,
 ) -> Result<(), PrivateHnswOramError> {
     validate_signature_fields(input.signature_alg, input.signature_key_id, verification)?;
+    decode_base64url_32(input.root_hash, "root_hash")?;
+    if input.paths.is_empty() {
+        return Err(PrivateHnswOramError::InvalidReadPathsSignature);
+    }
+    for path in input.paths {
+        decode_base64url_8(path).map_err(|_| PrivateHnswOramError::InvalidReadPathsSignature)?;
+    }
     let signature_bytes = decode_base64url_64(signature)?;
     let message = private_hnsw_oram_read_paths_signature_message(input);
     UnparsedPublicKey::new(&ED25519, verification.public_key)
@@ -652,6 +662,18 @@ fn decode_base64url_32(value: &str, field: &'static str) -> Result<[u8; 32], Pri
         .map_err(|_| PrivateHnswOramError::InvalidManifestField(field))
 }
 
+fn decode_base64url_8(value: &str) -> Result<[u8; 8], PrivateHnswOramError> {
+    if value.len() != BASE64URL_NOPAD_8_BYTE_LEN {
+        return Err(PrivateHnswOramError::InvalidReadPathsSignature);
+    }
+    let bytes = BASE64URL_NOPAD
+        .decode(value.as_bytes())
+        .map_err(|_| PrivateHnswOramError::InvalidReadPathsSignature)?;
+    bytes
+        .try_into()
+        .map_err(|_| PrivateHnswOramError::InvalidReadPathsSignature)
+}
+
 fn decode_base64url_64(value: &str) -> Result<[u8; 64], PrivateHnswOramError> {
     if value.len() != BASE64URL_NOPAD_64_BYTE_LEN {
         return Err(PrivateHnswOramError::MalformedSignature);
@@ -879,6 +901,46 @@ mod tests {
         };
         validate_private_hnsw_oram_read_paths_signature(input, &signature, verification).unwrap();
 
+        let malformed_root = PrivateHnswOramReadPathsSignatureInput {
+            root_hash: "AAAA",
+            ..input
+        };
+        assert_eq!(
+            validate_private_hnsw_oram_read_paths_signature(
+                malformed_root,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateHnswOramError::InvalidManifestField("root_hash"))
+        );
+
+        let empty_paths = PrivateHnswOramReadPathsSignatureInput {
+            paths: &[],
+            ..input
+        };
+        assert_eq!(
+            validate_private_hnsw_oram_read_paths_signature(
+                empty_paths,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateHnswOramError::InvalidReadPathsSignature)
+        );
+
+        let malformed_paths = ["AAAA"];
+        let malformed_path = PrivateHnswOramReadPathsSignatureInput {
+            paths: &malformed_paths,
+            ..input
+        };
+        assert_eq!(
+            validate_private_hnsw_oram_read_paths_signature(
+                malformed_path,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateHnswOramError::InvalidReadPathsSignature)
+        );
+
         let tampered = PrivateHnswOramReadPathsSignatureInput {
             requested_paths: 2,
             ..input
@@ -1062,6 +1124,19 @@ mod tests {
                 verification,
             ),
             Err(PrivateHnswOramError::EmptyCommit)
+        );
+
+        let malformed_root_input = PrivateHnswOramCommitSignatureInput {
+            old_root_hash: "AAAA",
+            ..input
+        };
+        assert_eq!(
+            validate_private_hnsw_oram_commit_signature(
+                malformed_root_input,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateHnswOramError::InvalidManifestField("old_root_hash"))
         );
 
         let malformed_hash_buckets = [PrivateHnswOramCommitBucketRef {
