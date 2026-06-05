@@ -554,7 +554,10 @@ does not score, traverse HNSW, or delete point-level CKKS sidecar vectors
 server-side; normal vector writes, `delete_points`, `delete_vectors`, and
 server scoring, including legacy search/batch search, ordinary query/fusion/context/MMR,
 recommend/discover, grouped search/query, and search matrix paths, fail closed
-and direct clients to the private HNSW ORAM session APIs. Phase 11 implements
+and direct clients to the private HNSW ORAM session APIs. Collection peer
+`SyncPoints` batches are also rejected for private HNSW ORAM collections because
+v1 shard transfer must preserve encrypted bucket/epoch parity instead of
+replaying point-level sync. Phase 11 implements
 the encrypted bucket store and session read/commit APIs behind this validated
 control-plane contract.
 Collection config and runtime validation require `vector/private-hnsw-oram@v1`
@@ -564,7 +567,7 @@ bindings for the same vector name.
 The same private-session guidance is returned even when runtime crypto settings
 are absent, so private HNSW ORAM vectors do not fall through to CKKS/OpenFHE
 runtime fallback messages on ordinary vector upsert/update, inference-derived
-vector writes, point delete, `delete_vectors`,
+vector writes, point delete, peer `SyncPoints`, `delete_vectors`,
 query/search/recommend/discover/group/matrix APIs, or lower-level collection
 peer/internal write guards.
 Collection-internal direct query/search/search-matrix entrypoints make the same

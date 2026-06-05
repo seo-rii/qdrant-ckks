@@ -35,8 +35,8 @@ use shard::scroll::ScrollRequestInternal;
 
 use super::Collection;
 use crate::config::{
-    CryptoMigrationCheckpoint, CryptoMigrationCheckpointStatus, CryptoMigrationState,
-    EncryptionRuleRef, EncryptionSelector, encrypted_vector_return_request,
+    CollectionEncryptionConfig, CryptoMigrationCheckpoint, CryptoMigrationCheckpointStatus,
+    CryptoMigrationState, EncryptionRuleRef, EncryptionSelector, encrypted_vector_return_request,
     encryption_rule_uses_private_hnsw_oram, private_hnsw_oram_api_required_message,
 };
 use crate::operations::consistency_params::ReadConsistency;
@@ -110,6 +110,58 @@ fn plaintext_vector_write_error_for_encryption_rule(
             "cannot write plaintext vector '{encrypted_name}' for encrypted vector rule; configure runtime CKKS vector encryption before writing this vector",
         ))
     }
+}
+
+fn private_hnsw_oram_read_only_point_operation_violation<'a>(
+    operation: &CollectionUpdateOperations,
+    encryption: &'a CollectionEncryptionConfig,
+) -> Option<(&'a str, &'static str)> {
+    let operation_kind = match operation {
+        CollectionUpdateOperations::PointOperation(PointOperations::DeletePoints { .. }) => {
+            "delete points"
+        }
+        CollectionUpdateOperations::PointOperation(PointOperations::DeletePointsByFilter(_)) => {
+            "delete points by filter"
+        }
+        CollectionUpdateOperations::PointOperation(PointOperations::SyncPoints(_)) => "sync points",
+        _ => return None,
+    };
+
+    encryption
+        .rules
+        .iter()
+        .filter(|rule| encryption_rule_uses_private_hnsw_oram(rule))
+        .find_map(|rule| match &rule.selector {
+            EncryptionSelector::VectorNames { names } => names.first().map(String::as_str),
+            EncryptionSelector::PayloadPaths { .. } | EncryptionSelector::MetadataKeys { .. } => {
+                None
+            }
+        })
+        .map(|vector_name| (vector_name, operation_kind))
+}
+
+fn reject_private_hnsw_oram_read_only_point_operation(
+    operation: &CollectionUpdateOperations,
+    encryption: &CollectionEncryptionConfig,
+    peer_update: bool,
+) -> CollectionResult<()> {
+    let Some((vector_name, operation_kind)) =
+        private_hnsw_oram_read_only_point_operation_violation(operation, encryption)
+    else {
+        return Ok(());
+    };
+
+    let prefix = if peer_update {
+        format!(
+            "peer update cannot {operation_kind} for read-only private HNSW ORAM vector '{vector_name}'",
+        )
+    } else {
+        format!("cannot {operation_kind} for read-only private HNSW ORAM vector '{vector_name}'",)
+    };
+    Err(CollectionError::bad_input(format!(
+        "{prefix}; {}",
+        private_hnsw_oram_api_required_message(vector_name),
+    )))
 }
 
 impl Collection {
@@ -712,6 +764,8 @@ impl Collection {
         let Some(encryption) = encryption else {
             return Ok(());
         };
+
+        reject_private_hnsw_oram_read_only_point_operation(operation, &encryption, true)?;
 
         match operation {
             CollectionUpdateOperations::PointOperation(
@@ -1354,6 +1408,9 @@ impl Collection {
             )
         {
             return Err(err);
+        }
+        if let Some(encryption) = encryption.as_ref() {
+            reject_private_hnsw_oram_read_only_point_operation(&operation, encryption, false)?;
         }
         if encryption.is_some() {
             match &operation {
@@ -3868,6 +3925,17 @@ mod tests {
         }
     }
 
+    fn private_hnsw_encryption(name: &str) -> CollectionEncryptionConfig {
+        CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a:vector-private-rk".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 7,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![private_hnsw_vector_rule(name)],
+        }
+    }
+
     #[test]
     fn private_hnsw_plaintext_vector_write_error_uses_session_api() {
         let rule = private_hnsw_vector_rule("embedding");
@@ -3884,6 +3952,53 @@ mod tests {
         assert!(peer_message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
         assert!(peer_message.contains("/private-hnsw/embedding/session"));
         assert!(!peer_message.contains("CKKS vector encryption"));
+    }
+
+    #[test]
+    fn private_hnsw_read_only_point_operations_require_session_api() {
+        let encryption = private_hnsw_encryption("embedding");
+        let operations = [
+            (
+                CollectionUpdateOperations::PointOperation(PointOperations::DeletePoints {
+                    ids: vec![1.into()],
+                }),
+                "delete points",
+            ),
+            (
+                CollectionUpdateOperations::PointOperation(PointOperations::DeletePointsByFilter(
+                    Filter::new(),
+                )),
+                "delete points by filter",
+            ),
+            (
+                CollectionUpdateOperations::PointOperation(PointOperations::SyncPoints(
+                    shard::operations::point_ops::PointSyncOperation {
+                        from_id: None,
+                        to_id: None,
+                        points: vec![],
+                    },
+                )),
+                "sync points",
+            ),
+        ];
+
+        for (operation, expected_kind) in operations {
+            let err =
+                reject_private_hnsw_oram_read_only_point_operation(&operation, &encryption, false)
+                    .unwrap_err();
+            let message = format!("{err}");
+            assert!(message.contains(expected_kind), "{message}");
+            assert!(message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
+            assert!(message.contains("/private-hnsw/embedding/session"));
+
+            let peer_err =
+                reject_private_hnsw_oram_read_only_point_operation(&operation, &encryption, true)
+                    .unwrap_err();
+            let peer_message = format!("{peer_err}");
+            assert!(peer_message.contains("peer update"), "{peer_message}");
+            assert!(peer_message.contains(expected_kind), "{peer_message}");
+            assert!(peer_message.contains("/private-hnsw/embedding/session"));
+        }
     }
 
     #[test]
