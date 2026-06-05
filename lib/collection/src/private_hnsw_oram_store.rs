@@ -208,10 +208,9 @@ impl PrivateHnswOramStore {
         self.ensure_layout()?;
         match self.read_current_epoch() {
             Ok(current) if current == *epoch => Ok(()),
-            Ok(current) => Err(CollectionError::bad_request(format!(
-                "private HNSW ORAM current epoch/root does not match uploaded manifest epoch {}",
-                current.index_epoch,
-            ))),
+            Ok(_) => Err(CollectionError::bad_request(
+                "private HNSW ORAM current epoch/root does not match uploaded manifest epoch",
+            )),
             Err(CollectionError::NotFound { .. }) => self.write_initial_epoch(epoch),
             Err(err) => Err(err),
         }
@@ -242,10 +241,9 @@ impl PrivateHnswOramStore {
                 }
                 Err(err) => Err(err),
             },
-            Ok(current) => Err(CollectionError::bad_request(format!(
-                "private HNSW ORAM current epoch/root does not match uploaded manifest epoch {}",
-                current.index_epoch,
-            ))),
+            Ok(_) => Err(CollectionError::bad_request(
+                "private HNSW ORAM current epoch/root does not match uploaded manifest epoch",
+            )),
             Err(CollectionError::NotFound { .. }) => {
                 self.write_manifest(manifest, signature)?;
                 self.write_initial_epoch(epoch)
@@ -277,10 +275,9 @@ impl PrivateHnswOramStore {
 
         let current = self.read_current_epoch()?;
         if &current != old {
-            return Err(CollectionError::bad_request(format!(
-                "private HNSW ORAM RootHashMismatch: current epoch/root does not match old epoch {}",
-                old.index_epoch,
-            )));
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM RootHashMismatch: current epoch/root does not match old epoch",
+            ));
         }
 
         write_json_atomic(
@@ -498,10 +495,9 @@ impl PrivateHnswPreparedMerkleCommit {
 
 fn validate_merkle_tree(tree: &PrivateHnswOramMerkleTree) -> CollectionResult<()> {
     if tree.version != 1 {
-        return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM Merkle tree has unsupported version {}",
-            tree.version,
-        )));
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM Merkle tree has unsupported version",
+        ));
     }
     if tree.bucket_count == 0 {
         return Err(CollectionError::bad_request(
@@ -530,10 +526,9 @@ fn validate_merkle_tree_context(
 ) -> CollectionResult<()> {
     validate_merkle_tree(tree)?;
     if tree.index_epoch != expected_epoch {
-        return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM Merkle tree epoch mismatch: expected {expected_epoch}, found {}",
-            tree.index_epoch,
-        )));
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM Merkle tree epoch mismatch",
+        ));
     }
     if tree.root_hash != expected_root_hash {
         return Err(CollectionError::bad_request(
@@ -541,10 +536,9 @@ fn validate_merkle_tree_context(
         ));
     }
     if tree.bucket_count != expected_bucket_count {
-        return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM Merkle tree bucket_count mismatch: expected {expected_bucket_count}, found {}",
-            tree.bucket_count,
-        )));
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM Merkle tree bucket_count mismatch",
+        ));
     }
     Ok(())
 }
@@ -656,44 +650,36 @@ fn validate_bucket_shape(
     max_ciphertext_bytes: usize,
 ) -> CollectionResult<()> {
     if bucket.version != 1 {
-        return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM bucket {} has unsupported version {}",
-            bucket.bucket_id, bucket.version,
-        )));
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM bucket version is unsupported",
+        ));
     }
     if bucket.bucket_id >= bucket_count {
-        return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM bucket {} is out of range",
-            bucket.bucket_id,
-        )));
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM bucket is out of range",
+        ));
     }
     let max_ciphertext_b64_len = max_base64url_nopad_encoded_len(max_ciphertext_bytes)?;
     if bucket.ciphertext.len() > max_ciphertext_b64_len {
-        return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM bucket {} ciphertext exceeds maximum size",
-            bucket.bucket_id,
-        )));
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM bucket ciphertext exceeds maximum size",
+        ));
     }
     let ciphertext = BASE64URL_NOPAD
         .decode(bucket.ciphertext.as_bytes())
         .map_err(|_| {
-            CollectionError::bad_request(format!(
-                "private HNSW ORAM bucket {} ciphertext is not base64url",
-                bucket.bucket_id,
-            ))
+            CollectionError::bad_request("private HNSW ORAM bucket ciphertext is not base64url")
         })?;
     if ciphertext.len() > max_ciphertext_bytes {
-        return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM bucket {} ciphertext exceeds maximum size",
-            bucket.bucket_id,
-        )));
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM bucket ciphertext exceeds maximum size",
+        ));
     }
     let sha256 = BASE64URL_NOPAD.encode(Sha256::digest(&ciphertext).as_ref());
     if sha256 != bucket.ciphertext_sha256 {
-        return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM bucket {} ciphertext_sha256 mismatch",
-            bucket.bucket_id,
-        )));
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM bucket ciphertext_sha256 mismatch",
+        ));
     }
     decode_base64url_32(&bucket.bucket_commitment, "bucket_commitment")?;
     Ok(())
@@ -1214,9 +1200,13 @@ mod tests {
         let err = store
             .write_initial_epoch_if_absent_or_matching(&conflicting_epoch)
             .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("current epoch/root does not match uploaded manifest"));
+        assert!(!rendered.contains("42"), "{rendered}");
+        assert!(!rendered.contains(&epoch.root_hash), "{rendered}");
         assert!(
-            err.to_string()
-                .contains("current epoch/root does not match uploaded manifest")
+            !rendered.contains(&conflicting_epoch.root_hash),
+            "{rendered}"
         );
         assert_eq!(store.read_current_epoch().unwrap(), epoch);
     }
@@ -1871,7 +1861,14 @@ mod tests {
             root_hash: root_hash(44),
         };
         let err = store.compare_and_swap_epoch(&old, &newer).unwrap_err();
-        assert!(err.to_string().contains("RootHashMismatch"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("RootHashMismatch"));
+        assert!(!rendered.contains("42"), "{rendered}");
+        assert!(!rendered.contains("43"), "{rendered}");
+        assert!(!rendered.contains("44"), "{rendered}");
+        assert!(!rendered.contains(&old.root_hash), "{rendered}");
+        assert!(!rendered.contains(&new.root_hash), "{rendered}");
+        assert!(!rendered.contains(&newer.root_hash), "{rendered}");
     }
 
     #[test]

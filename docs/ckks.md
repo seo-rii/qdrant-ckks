@@ -742,7 +742,10 @@ exposing collection-local `private_hnsw_oram` filesystem paths. Corrupt
 current-epoch metadata observed during bucket upload or session open is
 sanitized the same way.
 The collection-local private HNSW ORAM store also avoids reflecting bucket ids
-or bucket epochs in bucket read/proof/commit validation errors.
+or bucket epochs in bucket read/proof/commit validation errors, and its
+current-epoch, Merkle tree context, and bucket-shape errors are fixed messages
+without stored/requested epoch, bucket-count, bucket-id, or unsupported-version
+values.
 REST and gRPC `read_paths` error handling is checked for non-reflection:
 epoch/root mismatches and malformed path labels fail without echoing the
 submitted root hash, submitted path label, or any stored bucket ciphertext into
@@ -883,7 +886,9 @@ contract used by private HNSW ORAM. Its upload bundle preflight validates
 manifest signature shape and owner key id before store writes. Upload bundle,
 commit, and stored Merkle-tree root mismatch errors do not reflect computed
 Merkle roots; bucket read/proof/commit validation errors also avoid reflecting
-bucket ids or bucket epochs. The writeback helper preflights stale current
+bucket ids or bucket epochs. Current-epoch and Merkle tree context errors are
+also fixed messages without stored/requested epoch, bucket-count, or
+unsupported-version values. The writeback helper preflights stale current
 epochs and manifest epoch/root context before bucket/Merkle writes. It rejects
 empty writebacks before storage state changes. SDK commit planning, signing,
 and verification also reject empty commit bucket lists and malformed updated

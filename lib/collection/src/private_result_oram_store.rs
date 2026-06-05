@@ -164,9 +164,8 @@ impl PrivateResultOramStore {
         self.ensure_layout()?;
         match self.read_current_epoch() {
             Ok(current) if current == *epoch => Ok(InitialEpochStatus::Matching),
-            Ok(current) => Err(CollectionError::bad_request(format!(
-                "private result ORAM current epoch/root does not match {operation} epoch {}",
-                current.index_epoch,
+            Ok(_) => Err(CollectionError::bad_request(format!(
+                "private result ORAM current epoch/root does not match {operation} epoch",
             ))),
             Err(CollectionError::NotFound { .. }) => Ok(InitialEpochStatus::Absent),
             Err(err) => Err(err),
@@ -269,10 +268,9 @@ impl PrivateResultOramStore {
         self.ensure_layout()?;
         match self.read_current_epoch() {
             Ok(current) if current == *epoch => Ok(()),
-            Ok(current) => Err(CollectionError::bad_request(format!(
-                "private result ORAM current epoch/root does not match uploaded manifest epoch {}",
-                current.index_epoch,
-            ))),
+            Ok(_) => Err(CollectionError::bad_request(
+                "private result ORAM current epoch/root does not match uploaded manifest epoch",
+            )),
             Err(CollectionError::NotFound { .. }) => self.write_initial_epoch(epoch),
             Err(err) => Err(err),
         }
@@ -301,10 +299,9 @@ impl PrivateResultOramStore {
 
         let current = self.read_current_epoch()?;
         if &current != old {
-            return Err(CollectionError::bad_request(format!(
-                "private result ORAM RootHashMismatch: current epoch/root does not match old epoch {}",
-                old.index_epoch,
-            )));
+            return Err(CollectionError::bad_request(
+                "private result ORAM RootHashMismatch: current epoch/root does not match old epoch",
+            ));
         }
 
         write_json_atomic(
@@ -564,10 +561,9 @@ impl PrivateResultOramStore {
     ) -> CollectionResult<()> {
         let current = self.read_current_epoch()?;
         if &current != expected {
-            return Err(CollectionError::bad_request(format!(
-                "private result ORAM RootHashMismatch: current epoch/root does not match old epoch {}",
-                expected.index_epoch,
-            )));
+            return Err(CollectionError::bad_request(
+                "private result ORAM RootHashMismatch: current epoch/root does not match old epoch",
+            ));
         }
         Ok(())
     }
@@ -581,10 +577,9 @@ impl PrivateResultPreparedMerkleCommit {
 
 fn validate_merkle_tree(tree: &PrivateResultOramMerkleTree) -> CollectionResult<()> {
     if tree.version != 1 {
-        return Err(CollectionError::bad_request(format!(
-            "private result ORAM Merkle tree has unsupported version {}",
-            tree.version,
-        )));
+        return Err(CollectionError::bad_request(
+            "private result ORAM Merkle tree has unsupported version",
+        ));
     }
     if tree.bucket_count == 0 {
         return Err(CollectionError::bad_request(
@@ -613,10 +608,9 @@ fn validate_merkle_tree_context(
 ) -> CollectionResult<()> {
     validate_merkle_tree(tree)?;
     if tree.index_epoch != expected_epoch {
-        return Err(CollectionError::bad_request(format!(
-            "private result ORAM Merkle tree epoch mismatch: expected {expected_epoch}, found {}",
-            tree.index_epoch,
-        )));
+        return Err(CollectionError::bad_request(
+            "private result ORAM Merkle tree epoch mismatch",
+        ));
     }
     if tree.root_hash != expected_root_hash {
         return Err(CollectionError::bad_request(
@@ -624,10 +618,9 @@ fn validate_merkle_tree_context(
         ));
     }
     if tree.bucket_count != expected_bucket_count {
-        return Err(CollectionError::bad_request(format!(
-            "private result ORAM Merkle tree bucket_count mismatch: expected {expected_bucket_count}, found {}",
-            tree.bucket_count,
-        )));
+        return Err(CollectionError::bad_request(
+            "private result ORAM Merkle tree bucket_count mismatch",
+        ));
     }
     Ok(())
 }
@@ -1293,9 +1286,13 @@ mod tests {
         let err = store
             .write_initial_epoch_if_absent_or_matching(&conflicting_epoch)
             .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("current epoch/root does not match uploaded manifest"));
+        assert!(!rendered.contains("42"), "{rendered}");
+        assert!(!rendered.contains(&epoch.root_hash), "{rendered}");
         assert!(
-            err.to_string()
-                .contains("current epoch/root does not match uploaded manifest")
+            !rendered.contains(&conflicting_epoch.root_hash),
+            "{rendered}"
         );
         assert_eq!(store.read_current_epoch().unwrap(), epoch);
     }
@@ -1744,7 +1741,12 @@ mod tests {
             )
             .unwrap_err();
 
-        assert!(err.to_string().contains("RootHashMismatch"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("RootHashMismatch"));
+        assert!(!rendered.contains("42"), "{rendered}");
+        assert!(!rendered.contains("43"), "{rendered}");
+        assert!(!rendered.contains(&old.root_hash), "{rendered}");
+        assert!(!rendered.contains(&stale_current.root_hash), "{rendered}");
         assert_eq!(
             store
                 .read_bucket(0, old.index_epoch, bundle.bucket_count(), 128)
@@ -2194,7 +2196,14 @@ mod tests {
 
         store.write_initial_epoch(&old).unwrap();
         let err = store.compare_and_swap_epoch(&stale, &new).unwrap_err();
-        assert!(err.to_string().contains("RootHashMismatch"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("RootHashMismatch"));
+        assert!(!rendered.contains("41"), "{rendered}");
+        assert!(!rendered.contains("42"), "{rendered}");
+        assert!(!rendered.contains("43"), "{rendered}");
+        assert!(!rendered.contains(&old.root_hash), "{rendered}");
+        assert!(!rendered.contains(&stale.root_hash), "{rendered}");
+        assert!(!rendered.contains(&new.root_hash), "{rendered}");
 
         store.compare_and_swap_epoch(&old, &new).unwrap();
         assert_eq!(store.read_current_epoch().unwrap(), new);
