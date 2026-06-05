@@ -880,12 +880,13 @@ payload/result layer. It writes `private_result_oram/manifest.json`,
 contract used by private HNSW ORAM. Its upload bundle preflight validates
 manifest signature shape and owner key id before store writes. Upload bundle,
 commit, and stored Merkle-tree root mismatch errors do not reflect computed
-Merkle roots, and its writeback helper preflights stale current epochs and
-manifest epoch/root context before bucket/Merkle writes. It rejects empty
-writebacks before storage state changes. SDK commit planning, signing, and
-verification also reject empty commit bucket lists and malformed updated bucket
-ciphertext hashes, and validate each updated bucket commitment against the
-bucket ciphertext hash plus
+Merkle roots; bucket read/proof/commit validation errors also avoid reflecting
+bucket ids or bucket epochs. The writeback helper preflights stale current
+epochs and manifest epoch/root context before bucket/Merkle writes. It rejects
+empty writebacks before storage state changes. SDK commit planning, signing,
+and verification also reject empty commit bucket lists and malformed updated
+bucket ciphertext hashes, and validate each updated bucket commitment against
+the bucket ciphertext hash plus
 collection/key lineage and the proposed bucket epoch before preparing Merkle
 metadata.
 Directory hardening also checks symlink/type before chmod. It also exposes

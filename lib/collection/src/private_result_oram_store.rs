@@ -242,10 +242,9 @@ impl PrivateResultOramStore {
         let bucket: PrivateResultOramBucket =
             read_json_private_file(&self.bucket_path(bucket_id), max_bucket_file_bytes)?;
         if bucket.bucket_id != bucket_id {
-            return Err(CollectionError::service_error(format!(
-                "private result ORAM bucket file id mismatch: requested {bucket_id}, found {}",
-                bucket.bucket_id,
-            )));
+            return Err(CollectionError::service_error(
+                "private result ORAM bucket file id mismatch",
+            ));
         }
         validate_bucket_for_read(&bucket, expected_epoch, bucket_count, max_ciphertext_bytes)?;
         Ok(bucket)
@@ -415,9 +414,9 @@ impl PrivateResultOramStore {
         let mut leaves = Vec::with_capacity(bucket_ids.len());
         for &bucket_id in bucket_ids {
             if bucket_id >= tree.bucket_count {
-                return Err(CollectionError::bad_request(format!(
-                    "private result ORAM Merkle proof bucket {bucket_id} is out of range",
-                )));
+                return Err(CollectionError::bad_request(
+                    "private result ORAM Merkle proof bucket is out of range",
+                ));
             }
             let bucket_index = usize::try_from(bucket_id).map_err(|_| {
                 CollectionError::bad_request(
@@ -464,22 +463,19 @@ impl PrivateResultOramStore {
         let mut seen_bucket_ids = std::collections::BTreeSet::new();
         for bucket in updated_buckets {
             if !seen_bucket_ids.insert(bucket.bucket_id) {
-                return Err(CollectionError::bad_request(format!(
-                    "private result ORAM Merkle commit repeats bucket {}",
-                    bucket.bucket_id,
-                )));
+                return Err(CollectionError::bad_request(
+                    "private result ORAM Merkle commit repeats a bucket",
+                ));
             }
             if bucket.index_epoch != new_epoch {
-                return Err(CollectionError::bad_request(format!(
-                    "private result ORAM Merkle commit bucket {} has stale epoch {}",
-                    bucket.bucket_id, bucket.index_epoch,
-                )));
+                return Err(CollectionError::bad_request(
+                    "private result ORAM Merkle commit bucket has stale epoch",
+                ));
             }
             if bucket.bucket_id >= bucket_count {
-                return Err(CollectionError::bad_request(format!(
-                    "private result ORAM Merkle commit bucket {} is out of range",
-                    bucket.bucket_id,
-                )));
+                return Err(CollectionError::bad_request(
+                    "private result ORAM Merkle commit bucket is out of range",
+                ));
             }
             decode_base64url_32(&bucket.bucket_commitment, "bucket_commitment")?;
             let bucket_index = usize::try_from(bucket.bucket_id).map_err(|_| {
@@ -715,10 +711,9 @@ fn validate_bucket(
 ) -> CollectionResult<()> {
     validate_bucket_shape(bucket, bucket_count, max_ciphertext_bytes)?;
     if bucket.index_epoch != expected_epoch {
-        return Err(CollectionError::bad_request(format!(
-            "private result ORAM bucket {} has stale epoch {}",
-            bucket.bucket_id, bucket.index_epoch,
-        )));
+        return Err(CollectionError::bad_request(
+            "private result ORAM bucket has stale epoch",
+        ));
     }
     Ok(())
 }
@@ -780,10 +775,9 @@ fn validate_bucket_for_read(
 ) -> CollectionResult<()> {
     validate_bucket_shape(bucket, bucket_count, max_ciphertext_bytes)?;
     if bucket.index_epoch > expected_epoch {
-        return Err(CollectionError::bad_request(format!(
-            "private result ORAM bucket {} is newer than requested epoch {}",
-            bucket.bucket_id, expected_epoch,
-        )));
+        return Err(CollectionError::bad_request(
+            "private result ORAM bucket is newer than requested epoch",
+        ));
     }
     Ok(())
 }
@@ -1352,6 +1346,8 @@ mod tests {
         let err = err.to_string();
 
         assert!(err.contains("bucket file id mismatch"));
+        assert!(!err.contains("requested"));
+        assert!(!err.contains("found"));
         assert!(!err.contains("private-result-bucket-ciphertext-sentinel"));
         assert!(!err.contains(&mismatched_bucket.ciphertext));
     }
@@ -1702,7 +1698,9 @@ mod tests {
         let err = store
             .read_bucket(1, old.index_epoch, bundle.bucket_count(), 128)
             .unwrap_err();
-        assert!(err.to_string().contains("newer than requested epoch"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("newer than requested epoch"));
+        assert!(!rendered.contains("43"), "{rendered}");
         let proof = store
             .read_merkle_path_batch(&[1], new.index_epoch, &new.root_hash, bundle.bucket_count())
             .unwrap();
@@ -2093,7 +2091,9 @@ mod tests {
             .prepare_merkle_commit(42, &old_root, 43, &root_hash(43), 2, &[first, second])
             .unwrap_err();
 
-        assert!(err.to_string().contains("repeats bucket 1"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("repeats a bucket"));
+        assert!(!rendered.contains("1"), "{rendered}");
     }
 
     #[test]
@@ -2151,7 +2151,9 @@ mod tests {
         let err = store
             .read_merkle_path_batch(&[3], 42, &root, 3)
             .unwrap_err();
-        assert!(err.to_string().contains("out of range"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("out of range"));
+        assert!(!rendered.contains("3"), "{rendered}");
     }
 
     #[test]
