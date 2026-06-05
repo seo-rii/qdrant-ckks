@@ -749,7 +749,9 @@ path's full bucket sequence instead of collapsing the response to a unique
 bucket set. Shared prefix buckets may therefore appear more than once in the
 response, and the SDK Merkle verifier accepts only byte-identical repeated
 bucket/proof entries. This keeps the encrypted bucket response length fixed at
-`requested_paths * (tree_height + 1)`.
+`requested_paths * (tree_height + 1)`. SDK proof JSON verification bounds the
+proof body before parsing so oversized proof responses fail as malformed proof
+JSON rather than reaching the JSON parser.
 Active sessions do not keep serving under stale runtime policy. Each `read_paths`
 and `commit` call compares the session manifest against the current runtime
 context, including collection/vector identity, key lineage, vector metadata,
@@ -873,8 +875,9 @@ SDK-side `verify_private_result_oram_merkle_proof` and JSON helper validate
 proof kind, epoch/root, bucket count, sibling level/position, and bucket
 commitment matches against the same DTO emitted by the collection store. They
 preserve fixed-size path-batch semantics by allowing repeated bucket/proof
-entries only when the duplicate entries are byte-identical; conflicting
-duplicates fail closed. `write_initial_upload_bundle` validates an SDK-packaged
+entries only when the duplicate entries are byte-identical, reject oversized
+proof JSON before parsing, and fail closed on conflicting duplicates.
+`write_initial_upload_bundle` validates an SDK-packaged
 signed manifest plus complete ordered bucket set, writes the manifest, Merkle
 metadata, encrypted buckets, and initial epoch state, and keeps root mismatch
 failures fail-closed. Repeated initial epoch writes are idempotent only for the

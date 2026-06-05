@@ -18,6 +18,7 @@ pub const PRIVATE_RESULT_ORAM_BUCKET_COMMITMENT_DOMAIN: &str =
 const PRIVATE_RESULT_ORAM_SIGNATURE_ALGORITHM: &str = "ed25519";
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
 const BASE64URL_NOPAD_64_BYTE_LEN: usize = 86;
+const PRIVATE_RESULT_ORAM_MERKLE_PROOF_JSON_MAX_BYTES: usize = 4 * 1024 * 1024;
 const PRIVATE_RESULT_ORAM_MANIFEST_VERSION: u16 = 1;
 const PRIVATE_RESULT_ORAM_BUCKET_VERSION: u16 = 1;
 
@@ -717,6 +718,9 @@ pub fn verify_private_result_oram_merkle_proof_json(
     expected_bucket_count: u64,
     buckets: &[PrivateResultOramBucket],
 ) -> Result<(), PrivateResultOramError> {
+    if proof_value.len() > PRIVATE_RESULT_ORAM_MERKLE_PROOF_JSON_MAX_BYTES {
+        return Err(PrivateResultOramError::InvalidMerkleProofJson);
+    }
     let proof: PrivateResultOramMerkleProof = serde_json::from_str(proof_value)
         .map_err(|_| PrivateResultOramError::InvalidMerkleProofJson)?;
     verify_private_result_oram_merkle_proof(
@@ -1495,6 +1499,11 @@ mod tests {
         );
         assert_eq!(
             verify_private_result_oram_merkle_proof_json("not-json", 42, &root, 2, &[]),
+            Err(PrivateResultOramError::InvalidMerkleProofJson)
+        );
+        let oversized_proof_json = " ".repeat(PRIVATE_RESULT_ORAM_MERKLE_PROOF_JSON_MAX_BYTES + 1);
+        assert_eq!(
+            verify_private_result_oram_merkle_proof_json(&oversized_proof_json, 42, &root, 2, &[]),
             Err(PrivateResultOramError::InvalidMerkleProofJson)
         );
     }

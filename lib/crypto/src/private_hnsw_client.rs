@@ -42,6 +42,7 @@ const PRIVATE_HNSW_LEVEL_ASSIGNMENT_DOMAIN: &[u8] = b"qdrant-sec/private-hnsw-le
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
 const PRIVATE_HNSW_BUCKET_CIPHERTEXT_OPEN_MAX_BYTES: usize = 64 * 1024 * 1024;
 const PRIVATE_HNSW_CLIENT_STATE_CIPHERTEXT_MAX_BYTES: usize = 256 * 1024 * 1024;
+const PRIVATE_HNSW_MERKLE_PROOF_JSON_MAX_BYTES: usize = 4 * 1024 * 1024;
 const CLIENT_STATE_SNAPSHOT_VERSION: u16 = 1;
 const CLIENT_STATE_AEAD_VERSION: u16 = 1;
 pub const PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND: &str = "merkle_path_batch/v1";
@@ -2440,6 +2441,9 @@ pub fn verify_private_hnsw_oram_merkle_proof_json(
     expected_bucket_count: u64,
     buckets: &[PrivateHnswOramBucket],
 ) -> Result<(), PrivateHnswClientError> {
+    if proof_value.len() > PRIVATE_HNSW_MERKLE_PROOF_JSON_MAX_BYTES {
+        return Err(PrivateHnswClientError::InvalidMerkleProofJson);
+    }
     let proof: PrivateHnswOramMerkleProof = serde_json::from_str(proof_value)
         .map_err(|_| PrivateHnswClientError::InvalidMerkleProofJson)?;
     verify_private_hnsw_oram_merkle_proof(
@@ -4667,6 +4671,12 @@ mod tests {
         )
         .unwrap();
         verify_private_hnsw_oram_merkle_proof(&proof, 42, &root, 4, &[bucket]).unwrap();
+
+        let oversized_proof_json = " ".repeat(PRIVATE_HNSW_MERKLE_PROOF_JSON_MAX_BYTES + 1);
+        assert_eq!(
+            verify_private_hnsw_oram_merkle_proof_json(&oversized_proof_json, 42, &root, 4, &[]),
+            Err(PrivateHnswClientError::InvalidMerkleProofJson)
+        );
     }
 
     #[test]
