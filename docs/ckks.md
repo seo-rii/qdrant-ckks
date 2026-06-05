@@ -901,12 +901,13 @@ same epoch/root and leave the stored current epoch untouched on mismatch.
 Repeated initial upload bundles with that same epoch/root are accepted as no-op
 only when the stored manifest/signature, Merkle tree, and bucket set already
 match the incoming bundle.
-`commit_writeback` mirrors the private HNSW ORAM commit order by preflighting
-current epoch/root and stored manifest context, validating updated bucket
-ciphertext/hash plus context-bound commitments, preparing the Merkle update,
-writing updated encrypted buckets, writing Merkle metadata, then applying
-epoch/root CAS. These types and storage primitives are contract scaffolding
-only and are not wired into runtime upload/session APIs yet.
+`commit_writeback` mirrors the private HNSW ORAM commit order by rejecting empty
+or non-advancing writebacks, preflighting current epoch/root and stored manifest
+context, validating updated bucket ciphertext/hash plus context-bound
+commitments, preparing the Merkle update, writing updated encrypted buckets,
+writing Merkle metadata, then applying epoch/root CAS. These types and storage
+primitives are contract scaffolding only and are not wired into runtime
+upload/session APIs yet.
 Collection snapshots include the `private_result_oram/` directory if it is
 present, but current restore fail-closes when that directory or a symlink at
 that path appears because `payload/private-result-oram@v1` is still reserved.

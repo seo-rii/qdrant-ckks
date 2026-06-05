@@ -335,6 +335,11 @@ impl PrivateResultOramStore {
                 "private result ORAM commit must update at least one bucket",
             ));
         }
+        if new.index_epoch <= old.index_epoch {
+            return Err(CollectionError::bad_request(
+                "private result ORAM commit new epoch must be greater than old epoch",
+            ));
+        }
         self.ensure_current_epoch_matches(old)?;
         let (manifest, _) = self.read_manifest()?;
         validate_commit_manifest_context(&manifest, old, bucket_count)?;
@@ -1710,6 +1715,47 @@ mod tests {
             proof.leaves[0].leaf_hash,
             bundle.buckets[0].bucket_commitment
         );
+    }
+
+    #[test]
+    fn writeback_commit_rejects_non_advancing_epoch_before_writes() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let bundle = fixture_upload_bundle();
+        let old = store.write_initial_upload_bundle(&bundle, 128).unwrap();
+        let original_bucket = bundle.buckets[0].clone();
+        let updated_bucket =
+            fixture_bucket(0, old.index_epoch, b"private-result-non-advancing-sentinel");
+        let non_advancing_new = PrivateResultOramEpochState {
+            index_epoch: old.index_epoch,
+            root_hash: root_hash(99),
+        };
+
+        let err = store
+            .commit_writeback(
+                &old,
+                &non_advancing_new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&updated_bucket),
+                128,
+            )
+            .unwrap_err();
+        let err = err.to_string();
+
+        assert!(err.contains("new epoch must be greater than old epoch"));
+        assert!(!err.contains("private-result-non-advancing-sentinel"));
+        assert!(!err.contains(&updated_bucket.ciphertext));
+        assert_eq!(store.read_current_epoch().unwrap(), old);
+        assert_eq!(
+            store
+                .read_bucket(0, old.index_epoch, bundle.bucket_count(), 128)
+                .unwrap(),
+            original_bucket
+        );
+        let proof = store
+            .read_merkle_path_batch(&[0], old.index_epoch, &old.root_hash, bundle.bucket_count())
+            .unwrap();
+        assert_eq!(proof.leaves[0].leaf_hash, original_bucket.bucket_commitment);
     }
 
     #[test]
