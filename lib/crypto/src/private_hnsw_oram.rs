@@ -26,7 +26,7 @@ const PRIVATE_HNSW_ORAM_BUCKET_AEAD_OVERHEAD_BYTES: usize = 1 + 12 + 16;
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum PrivateHnswOramError {
-    #[error("private HNSW ORAM manifest uses unsupported version {0}")]
+    #[error("private HNSW ORAM manifest uses unsupported version")]
     UnsupportedManifestVersion(u16),
     #[error("private HNSW ORAM manifest provider is invalid")]
     InvalidProvider,
@@ -38,7 +38,7 @@ pub enum PrivateHnswOramError {
     ManifestContextMismatch(&'static str),
     #[error("private HNSW ORAM manifest signature is missing")]
     MissingManifestSignature,
-    #[error("private HNSW ORAM manifest signature uses unsupported algorithm {0}")]
+    #[error("private HNSW ORAM manifest signature uses unsupported algorithm")]
     UnsupportedSignatureAlgorithm(String),
     #[error("private HNSW ORAM manifest signature key id does not match runtime context")]
     SignatureKeyIdMismatch,
@@ -755,6 +755,20 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::*;
+
+    #[test]
+    fn private_hnsw_oram_error_display_does_not_reflect_structured_values() {
+        let cases = [
+            PrivateHnswOramError::UnsupportedManifestVersion(99).to_string(),
+            PrivateHnswOramError::UnsupportedSignatureAlgorithm("rsa-pss-sentinel".to_string())
+                .to_string(),
+        ];
+
+        for rendered in cases {
+            assert!(!rendered.contains("rsa-pss-sentinel"), "{rendered}");
+            assert!(!rendered.contains("99"), "{rendered}");
+        }
+    }
 
     fn fixture_manifest() -> PrivateHnswOramManifest {
         PrivateHnswOramManifest {

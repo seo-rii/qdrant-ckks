@@ -467,7 +467,7 @@
 - collection-level private HNSW ORAM snapshot manifest/bucket-contract mismatch 오류도 manifest ids, vector name, dimension, bucket id, bucket ciphertext를 반사하지 않는다.
 - REST/gRPC session open의 stale requested epoch 오류는 requested/current epoch 값을 반사하지 않고, private HNSW runtime `result_privacy` unsupported-value 오류도 submitted option value를 반사하지 않는다.
 - collection/runtime vector dim/distance mismatch 오류는 실제 dim/distance 값을 반사하지 않는다.
-- `qdrant-sec` private HNSW client와 private result ORAM helper의 `Display` 오류 문자열은 structured enum fields를 보존하되 bucket id, epoch, version, ciphertext length, leaf, unsupported algorithm 같은 값은 반사하지 않도록 고정 메시지화한다.
+- `qdrant-sec` private HNSW provider/client와 private result ORAM helper의 `Display` 오류 문자열은 structured enum fields를 보존하되 bucket id, epoch, version, ciphertext length, leaf, unsupported algorithm 같은 값은 반사하지 않도록 고정 메시지화한다.
 - snapshot creation/restore preflight는 on-disk private HNSW ORAM vector store가 collection encryption rule에 매칭되지 않거나, configured vector store가 없거나, parent store가 symlink이면 fail-closed로 거부한다.
 - manifest signature, manifest ORAM capacity, bucket hash, stale epoch, invalid commit signature, symlink/permission hardening, snapshot leakage, crash recovery는 현재 provider/store/API fixture에 추가되어 있다.
 
