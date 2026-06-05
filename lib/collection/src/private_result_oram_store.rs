@@ -242,6 +242,16 @@ impl PrivateResultOramStore {
         )
     }
 
+    pub fn validate_bucket_for_write(
+        &self,
+        bucket: &PrivateResultOramBucket,
+        expected_epoch: u64,
+        bucket_count: u64,
+        max_ciphertext_bytes: usize,
+    ) -> CollectionResult<()> {
+        validate_bucket(bucket, expected_epoch, bucket_count, max_ciphertext_bytes)
+    }
+
     pub fn read_bucket(
         &self,
         bucket_id: u64,
@@ -285,6 +295,42 @@ impl PrivateResultOramStore {
                 "private result ORAM current epoch/root does not match uploaded manifest epoch",
             )),
             Err(CollectionError::NotFound { .. }) => self.write_initial_epoch(epoch),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub fn write_manifest_with_initial_epoch_if_absent_or_matching(
+        &self,
+        manifest: &PrivateResultOramManifest,
+        signature: &PrivateResultOramSignature,
+        epoch: &PrivateResultOramEpochState,
+    ) -> CollectionResult<()> {
+        self.ensure_layout()?;
+        match self.read_current_epoch() {
+            Ok(current) if current == *epoch => match self.read_manifest() {
+                Ok((stored_manifest, stored_signature))
+                    if stored_manifest.index_epoch == current.index_epoch
+                        && stored_manifest.root_hash == current.root_hash =>
+                {
+                    if stored_manifest != *manifest || stored_signature != *signature {
+                        return Err(CollectionError::bad_request(
+                            "private result ORAM manifest upload does not match existing current manifest",
+                        ));
+                    }
+                    Ok(())
+                }
+                Ok(_) | Err(CollectionError::NotFound { .. }) => {
+                    self.write_manifest(manifest, signature)
+                }
+                Err(err) => Err(err),
+            },
+            Ok(_) => Err(CollectionError::bad_request(
+                "private result ORAM current epoch/root does not match uploaded manifest epoch",
+            )),
+            Err(CollectionError::NotFound { .. }) => {
+                self.write_manifest(manifest, signature)?;
+                self.write_initial_epoch(epoch)
+            }
             Err(err) => Err(err),
         }
     }
@@ -1420,24 +1466,154 @@ mod tests {
     }
 
     #[test]
+    fn current_manifest_reupload_requires_existing_manifest_to_match() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let manifest = fixture_manifest();
+        let signature = fixture_signature();
+        let epoch = PrivateResultOramEpochState {
+            index_epoch: manifest.index_epoch,
+            root_hash: manifest.root_hash.clone(),
+        };
+
+        store
+            .write_manifest_with_initial_epoch_if_absent_or_matching(&manifest, &signature, &epoch)
+            .unwrap();
+        store
+            .write_manifest_with_initial_epoch_if_absent_or_matching(&manifest, &signature, &epoch)
+            .unwrap();
+
+        let mut replacement = manifest.clone();
+        replacement.logical_result_count += 1;
+        replacement.dummy_result_count -= 1;
+        let replacement_signature = PrivateResultOramSignature {
+            sig: BASE64URL_NOPAD.encode(&[8; 64]),
+            ..signature.clone()
+        };
+        let rendered = store
+            .write_manifest_with_initial_epoch_if_absent_or_matching(
+                &replacement,
+                &replacement_signature,
+                &epoch,
+            )
+            .unwrap_err()
+            .to_string();
+
+        assert!(rendered.contains("manifest upload does not match existing current manifest"));
+        assert_eq!(store.read_current_epoch().unwrap(), epoch);
+        assert_eq!(store.read_manifest().unwrap(), (manifest, signature));
+    }
+
+    #[test]
+    fn post_commit_manifest_refresh_allows_current_epoch_ahead_of_stored_manifest() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let old_manifest = fixture_manifest();
+        let old_signature = fixture_signature();
+        let old_epoch = PrivateResultOramEpochState {
+            index_epoch: old_manifest.index_epoch,
+            root_hash: old_manifest.root_hash.clone(),
+        };
+        let mut new_manifest = old_manifest.clone();
+        new_manifest.index_epoch = old_manifest.index_epoch + 1;
+        new_manifest.root_hash = root_hash(43);
+        let new_signature = PrivateResultOramSignature {
+            sig: BASE64URL_NOPAD.encode(&[8; 64]),
+            ..old_signature.clone()
+        };
+        let new_epoch = PrivateResultOramEpochState {
+            index_epoch: new_manifest.index_epoch,
+            root_hash: new_manifest.root_hash.clone(),
+        };
+
+        store
+            .write_manifest_with_initial_epoch_if_absent_or_matching(
+                &old_manifest,
+                &old_signature,
+                &old_epoch,
+            )
+            .unwrap();
+        store
+            .compare_and_swap_epoch(&old_epoch, &new_epoch)
+            .unwrap();
+        store
+            .write_manifest_with_initial_epoch_if_absent_or_matching(
+                &new_manifest,
+                &new_signature,
+                &new_epoch,
+            )
+            .unwrap();
+
+        assert_eq!(store.read_current_epoch().unwrap(), new_epoch);
+        assert_eq!(
+            store.read_manifest().unwrap(),
+            (new_manifest, new_signature)
+        );
+    }
+
+    #[test]
+    fn manifest_initial_epoch_publish_requires_manifest_write_success() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let manifest = fixture_manifest();
+        let signature = fixture_signature();
+        let epoch = PrivateResultOramEpochState {
+            index_epoch: manifest.index_epoch,
+            root_hash: manifest.root_hash.clone(),
+        };
+        store.ensure_layout().unwrap();
+        fs::create_dir(store.root_path().join(MANIFEST_SIGNATURE_FILE)).unwrap();
+
+        store
+            .write_manifest_with_initial_epoch_if_absent_or_matching(&manifest, &signature, &epoch)
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                store.read_current_epoch().unwrap_err(),
+                CollectionError::NotFound { .. }
+            ),
+            "failed initial manifest upload must not publish current epoch",
+        );
+    }
+
+    #[test]
     fn bucket_write_rejects_hash_mismatch_and_oversize() {
         let temp = TempDir::new().unwrap();
         let store = fixture_store(&temp);
         let bucket = fixture_bucket(3, 42, b"encrypted result bucket");
 
+        store
+            .validate_bucket_for_write(&bucket, 42, 16, 64)
+            .unwrap();
         store.write_bucket(&bucket, 42, 16, 64).unwrap();
         assert_eq!(store.read_bucket(3, 42, 16, 64).unwrap(), bucket);
 
         let mut bad_hash = bucket.clone();
         bad_hash.ciphertext_sha256 = root_hash(1);
+        let err = store
+            .validate_bucket_for_write(&bad_hash, 42, 16, 64)
+            .unwrap_err();
+        assert!(err.to_string().contains("ciphertext_sha256 mismatch"));
         let err = store.write_bucket(&bad_hash, 42, 16, 64).unwrap_err();
         assert!(err.to_string().contains("ciphertext_sha256 mismatch"));
 
         let oversized = fixture_bucket(4, 42, &[8; 65]);
+        let err = store
+            .validate_bucket_for_write(&oversized, 42, 16, 64)
+            .unwrap_err();
+        assert!(err.to_string().contains("exceeds maximum size"));
         let err = store.write_bucket(&oversized, 42, 16, 64).unwrap_err();
         assert!(err.to_string().contains("exceeds maximum size"));
 
         let out_of_range = fixture_bucket(99, 42, b"out of range result bucket");
+        let err = store
+            .validate_bucket_for_write(&out_of_range, 42, 16, 64)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("out of range"));
+        assert!(!rendered.contains("99"), "{rendered}");
+        assert!(!rendered.contains("16"), "{rendered}");
         let err = store.write_bucket(&out_of_range, 42, 16, 64).unwrap_err();
         let rendered = err.to_string();
         assert!(rendered.contains("out of range"));

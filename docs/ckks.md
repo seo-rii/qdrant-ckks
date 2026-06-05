@@ -899,6 +899,11 @@ ingest, then applies its runtime ciphertext size cap before writing files. Its
 signed ingest entrypoint uses the combined upload-bundle/manifest-signature
 helper before creating the private result ORAM layout, so a bad owner Ed25519
 signature leaves `epochs/current.json` absent and does not write bucket files.
+The separate manifest upload helper publishes the initial epoch only after the
+manifest/signature write succeeds, accepts current manifest reupload only when
+the stored manifest and signature are byte-identical, and allows a post-commit
+manifest refresh when `current.json` has already advanced to the new
+epoch/root.
 `refresh_private_result_oram_manifest_for_commit` and
 `sign_private_result_oram_manifest_refresh` mirror the private HNSW helper by
 deriving the next signed manifest only when a commit plan's old epoch/root
