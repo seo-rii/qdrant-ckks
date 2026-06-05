@@ -356,7 +356,11 @@ pub fn validate_private_hnsw_oram_read_paths_signature(
 ) -> Result<(), PrivateHnswOramError> {
     validate_signature_fields(input.signature_alg, input.signature_key_id, verification)?;
     decode_base64url_32(input.root_hash, "root_hash")?;
-    if input.paths.is_empty() {
+    if input.paths.is_empty()
+        || input.requested_paths == 0
+        || input.paths.len() > u32::MAX as usize
+        || input.requested_paths as usize != input.paths.len()
+    {
         return Err(PrivateHnswOramError::InvalidReadPathsSignature);
     }
     for path in input.paths {
@@ -948,6 +952,23 @@ mod tests {
         };
         assert_eq!(
             validate_private_hnsw_oram_read_paths_signature(tampered, &signature, verification),
+            Err(PrivateHnswOramError::InvalidReadPathsSignature)
+        );
+
+        let mismatched = PrivateHnswOramReadPathsSignatureInput {
+            requested_paths: 2,
+            ..input
+        };
+        let mismatched_signature = sign_b64(
+            &key_pair,
+            &private_hnsw_oram_read_paths_signature_message(mismatched),
+        );
+        assert_eq!(
+            validate_private_hnsw_oram_read_paths_signature(
+                mismatched,
+                &mismatched_signature,
+                verification,
+            ),
             Err(PrivateHnswOramError::InvalidReadPathsSignature)
         );
     }
