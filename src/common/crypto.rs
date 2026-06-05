@@ -2716,7 +2716,7 @@ pub fn validate_crypto_runtime_capability_parity<'a>(
     for (peer_id, peer_fingerprint) in peer_fingerprints {
         if peer_fingerprint != local_fingerprint {
             return Err(StorageError::bad_input(format!(
-                "crypto runtime capability mismatch for peer {peer_id}: local fingerprint {local_fingerprint} does not match peer fingerprint {peer_fingerprint}; encrypted shard transfer and replication must fail closed",
+                "crypto runtime capability mismatch for peer {peer_id}; encrypted shard transfer and replication must fail closed",
             )));
         }
     }
@@ -11523,6 +11523,11 @@ mod tests {
                 .contains("crypto runtime capability mismatch")
         );
         assert!(err.to_string().contains("peer-b"));
+        assert!(!err.to_string().contains(&local_fingerprint), "{err:?}");
+        assert!(
+            !err.to_string().contains(&peer_epoch_fingerprint),
+            "{err:?}"
+        );
     }
 
     #[test]

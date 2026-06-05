@@ -952,7 +952,9 @@ provider as well. The fingerprint includes non-secret private HNSW ORAM policy
 such as tree shape, fixed budget, result privacy mode, and signing verifier
 digests, while redacting raw verifier public keys. A peer with a different ORAM
 shape or signing verifier fails runtime capability parity before it can be
-treated as an equivalent private-HNSW-capable node.
+treated as an equivalent private-HNSW-capable node. The mismatch diagnostic
+names the peer and fail-closed condition but does not echo the local or peer
+fingerprint strings.
 Shard transfer start operations are also blocked while a private HNSW ORAM
 collection is configured. The MVP stores the private index as collection-level
 encrypted ORAM buckets, and shard transfer does not yet copy bucket files or
