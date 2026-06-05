@@ -919,10 +919,13 @@ unsupported-version values. Its file/directory hardening helpers also avoid
 reflecting collection-local paths, temp filenames, symlink targets, or OS error
 strings. The writeback helper preflights stale current
 epochs and manifest epoch/root context before bucket/Merkle writes. It rejects
-empty writebacks before storage state changes. SDK commit planning, signing,
-and verification also reject empty commit bucket lists and malformed updated
-bucket ciphertext hashes, and validate each updated bucket commitment against
-the bucket ciphertext hash plus
+empty writebacks before storage state changes. Its signed writeback entrypoint
+verifies the SDK Ed25519 commit signature against the stored manifest lineage
+before delegating to that helper, so an invalid commit signature leaves the
+current epoch, buckets, and Merkle metadata unchanged. SDK commit planning,
+signing, and verification also reject empty commit bucket lists and malformed
+updated bucket ciphertext hashes, and validate each updated bucket commitment
+against the bucket ciphertext hash plus
 collection/key lineage and the proposed bucket epoch before preparing Merkle
 metadata.
 Directory hardening also checks symlink/type before chmod. It also exposes
@@ -951,7 +954,9 @@ context, validating updated bucket ciphertext/hash plus context-bound
 commitments, preparing the Merkle update, writing updated encrypted buckets,
 writing Merkle metadata, then applying epoch/root CAS. These types and storage
 primitives are contract scaffolding only and are not wired into runtime
-upload/session APIs yet.
+upload/session APIs yet. `commit_writeback_with_signature` adds the future API
+preflight by validating the canonical Ed25519 commit signature before the same
+writeback path can touch bucket or epoch files.
 Collection snapshots include the `private_result_oram/` directory if it is
 present, but current restore fail-closes when that directory or a symlink at
 that path appears because `payload/private-result-oram@v1` is still reserved.

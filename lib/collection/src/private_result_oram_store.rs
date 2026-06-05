@@ -7,11 +7,13 @@ use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND, PrivateResultOramBucket,
     PrivateResultOramBucketCommitmentContext, PrivateResultOramBucketValidationContext,
+    PrivateResultOramCommitBucketRef, PrivateResultOramCommitSignatureInput,
     PrivateResultOramManifest, PrivateResultOramManifestValidationContext,
     PrivateResultOramMerkleProof, PrivateResultOramMerkleProofLeaf, PrivateResultOramMerkleSibling,
     PrivateResultOramMerkleSiblingPosition, PrivateResultOramSignature,
-    PrivateResultOramUploadBundle, private_result_oram_bucket_commitment,
-    validate_private_result_oram_bucket_shape, validate_private_result_oram_upload_bundle,
+    PrivateResultOramSignatureVerification, PrivateResultOramUploadBundle,
+    private_result_oram_bucket_commitment, validate_private_result_oram_bucket_shape,
+    validate_private_result_oram_commit_signature, validate_private_result_oram_upload_bundle,
     validate_private_result_oram_upload_bundle_with_signature,
 };
 use serde::{Deserialize, Serialize};
@@ -368,6 +370,51 @@ impl PrivateResultOramStore {
         prepared_merkle_commit.write()?;
         self.compare_and_swap_epoch(old, new)?;
         Ok(new.clone())
+    }
+
+    pub fn commit_writeback_with_signature(
+        &self,
+        old: &PrivateResultOramEpochState,
+        new: &PrivateResultOramEpochState,
+        bucket_count: u64,
+        updated_buckets: &[PrivateResultOramBucket],
+        max_ciphertext_bytes: usize,
+        commit_signature: &PrivateResultOramSignature,
+        signature_verification: PrivateResultOramSignatureVerification<'_>,
+    ) -> CollectionResult<PrivateResultOramEpochState> {
+        let (manifest, _) = self.read_manifest()?;
+        let updated_bucket_refs = updated_buckets
+            .iter()
+            .map(|bucket| PrivateResultOramCommitBucketRef {
+                bucket_id: bucket.bucket_id,
+                ciphertext_sha256: bucket.ciphertext_sha256.as_str(),
+            })
+            .collect::<Vec<_>>();
+        validate_private_result_oram_commit_signature(
+            PrivateResultOramCommitSignatureInput {
+                collection_id: &manifest.collection_id,
+                key_id: &manifest.key_id,
+                rk_id: &manifest.rk_id,
+                rk_epoch: manifest.rk_epoch,
+                old_epoch: old.index_epoch,
+                new_epoch: new.index_epoch,
+                old_root_hash: &old.root_hash,
+                new_root_hash: &new.root_hash,
+                updated_buckets: &updated_bucket_refs,
+                signature_alg: &commit_signature.alg,
+                signature_key_id: &commit_signature.key_id,
+            },
+            &commit_signature.sig,
+            signature_verification,
+        )
+        .map_err(private_result_oram_error)?;
+        self.commit_writeback(
+            old,
+            new,
+            bucket_count,
+            updated_buckets,
+            max_ciphertext_bytes,
+        )
     }
 
     pub fn merkle_root_for_commitments(commitments: &[String]) -> CollectionResult<String> {
@@ -1091,8 +1138,10 @@ fn sync_dir(path: &Path) -> CollectionResult<()> {
 mod tests {
     use qdrant_sec::{
         OramKind, OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_RESULT_ORAM_BINDING,
-        PrivateResultOramBucketCommitmentContext, PrivateResultOramSignatureVerification,
-        private_result_oram_bucket_commitment, private_result_oram_merkle_root_for_commitments,
+        PrivateResultOramBucketCommitmentContext, PrivateResultOramClientCommitBucketRef,
+        PrivateResultOramCommitPlan, PrivateResultOramCommitSignatureContext,
+        PrivateResultOramSignatureVerification, private_result_oram_bucket_commitment,
+        private_result_oram_merkle_root_for_commitments, sign_private_result_oram_commit,
         sign_private_result_oram_manifest, verify_private_result_oram_merkle_proof,
     };
     use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -1774,6 +1823,110 @@ mod tests {
             .commit_writeback(&old, &new, bundle.bucket_count(), &[], 128)
             .unwrap_err();
         assert!(err.to_string().contains("must update at least one bucket"));
+    }
+
+    #[test]
+    fn writeback_commit_with_signature_verifies_before_writes() {
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[23; 32]).unwrap();
+        let bundle = fixture_upload_bundle();
+        let updated_bucket = fixture_bucket(1, 43, b"updated signed result bucket 1");
+        let mut next_commitments = bundle.bucket_commitments();
+        next_commitments[1] = updated_bucket.bucket_commitment.clone();
+        let new = PrivateResultOramEpochState {
+            index_epoch: 43,
+            root_hash: PrivateResultOramStore::merkle_root_for_commitments(&next_commitments)
+                .unwrap(),
+        };
+        let plan = PrivateResultOramCommitPlan {
+            old_epoch: bundle.manifest.index_epoch,
+            new_epoch: new.index_epoch,
+            old_root_hash: bundle.manifest.root_hash.clone(),
+            new_root_hash: new.root_hash.clone(),
+            leaf_commitments: next_commitments,
+            updated_buckets: vec![PrivateResultOramClientCommitBucketRef {
+                bucket_id: updated_bucket.bucket_id,
+                ciphertext_sha256: updated_bucket.ciphertext_sha256.clone(),
+            }],
+        };
+        let signature = sign_private_result_oram_commit(
+            &key_pair,
+            PrivateResultOramCommitSignatureContext {
+                collection_id: "collection-uuid-1",
+                key_id: "tenant-a/result-private-rk",
+                rk_id: "tenant-a/result-private-rk",
+                rk_epoch: 7,
+                signing_key_id: "tenant-a/private-result-signing-v1",
+            },
+            &plan,
+        )
+        .unwrap();
+
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let old = store.write_initial_upload_bundle(&bundle, 128).unwrap();
+        let committed = store
+            .commit_writeback_with_signature(
+                &old,
+                &new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&updated_bucket),
+                128,
+                &signature,
+                PrivateResultOramSignatureVerification {
+                    expected_key_id: "tenant-a/private-result-signing-v1",
+                    public_key: key_pair.public_key().as_ref(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(committed, new);
+        assert_eq!(store.read_current_epoch().unwrap(), new);
+        assert_eq!(
+            store
+                .read_bucket(1, new.index_epoch, bundle.bucket_count(), 128)
+                .unwrap(),
+            updated_bucket,
+        );
+
+        let temp = TempDir::new().unwrap();
+        let tampered_store = fixture_store(&temp);
+        let old = tampered_store
+            .write_initial_upload_bundle(&bundle, 128)
+            .unwrap();
+        let mut tampered_signature = signature.clone();
+        tampered_signature.sig = BASE64URL_NOPAD.encode(&[8; 64]);
+        let rendered = tampered_store
+            .commit_writeback_with_signature(
+                &old,
+                &new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&updated_bucket),
+                128,
+                &tampered_signature,
+                PrivateResultOramSignatureVerification {
+                    expected_key_id: "tenant-a/private-result-signing-v1",
+                    public_key: key_pair.public_key().as_ref(),
+                },
+            )
+            .unwrap_err()
+            .to_string();
+
+        assert!(rendered.contains("commit signature verification failed"));
+        assert!(!rendered.contains(&tampered_signature.sig), "{rendered}");
+        assert_eq!(tampered_store.read_current_epoch().unwrap(), old);
+        assert_eq!(
+            tampered_store
+                .read_bucket(1, old.index_epoch, bundle.bucket_count(), 128)
+                .unwrap(),
+            bundle.buckets[1],
+        );
+        let proof = tampered_store
+            .read_merkle_path_batch(&[1], old.index_epoch, &old.root_hash, bundle.bucket_count())
+            .unwrap();
+        assert_eq!(
+            proof.leaves[0].leaf_hash,
+            bundle.buckets[1].bucket_commitment
+        );
     }
 
     #[test]
