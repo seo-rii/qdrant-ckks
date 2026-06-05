@@ -2026,14 +2026,13 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("leaf label"));
+            assert!(err.message().contains("invalid path label"));
             assert!(!err.message().contains(path_label_sentinel));
             assert!(
                 !err.message()
                     .contains(&fixture.encrypted_build.buckets[0].ciphertext)
             );
-            let unauthenticated_path_label_sentinel =
-                "qdrant-sec-private-hnsw-unauthenticated-path-label-sentinel";
+            let unauthenticated_path_label_sentinel = fixture.entry_leaf_label();
             let err = PrivateHnswOram::read_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramReadPathsRequest {
@@ -2042,7 +2041,7 @@ mod private_hnsw_grpc_tests {
                     session_id: session.session_id.clone(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
-                    paths: vec![unauthenticated_path_label_sentinel.to_string()],
+                    paths: vec![unauthenticated_path_label_sentinel.clone()],
                     padding: Some(grpc::OramReadPadding {
                         requested_paths: 1,
                         dummy_paths_included: true,
@@ -2059,7 +2058,7 @@ mod private_hnsw_grpc_tests {
             );
             assert!(!err.message().contains("leaf label"));
             assert!(
-                !err.message().contains(unauthenticated_path_label_sentinel),
+                !err.message().contains(&unauthenticated_path_label_sentinel),
                 "{}",
                 err.message()
             );
@@ -2258,6 +2257,46 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+
+            let oversized_read_session_id = "s".repeat(129);
+            let malformed_read_session_id = "bad/session-id";
+            for invalid_session_id in [
+                oversized_read_session_id.as_str(),
+                malformed_read_session_id,
+            ] {
+                let read_paths = vec![fixture.entry_leaf_label()];
+                let read_signature = fixture.sign_read_paths(&read_paths, 1, true);
+                let err = PrivateHnswOram::read_private_hnsw_paths(
+                    &service,
+                    Request::new(grpc::OramReadPathsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        vector_name: VECTOR_NAME.to_string(),
+                        session_id: invalid_session_id.to_string(),
+                        index_epoch: BASE_EPOCH,
+                        root_hash: fixture.encrypted_build.root_hash.clone(),
+                        paths: read_paths,
+                        padding: Some(grpc::OramReadPadding {
+                            requested_paths: 1,
+                            dummy_paths_included: true,
+                        }),
+                        client_signature: Some(signature_to_proto(read_signature)),
+                    }),
+                )
+                .await
+                .unwrap_err();
+                assert_eq!(err.code(), Code::InvalidArgument);
+                assert!(err.message().contains("session_id is invalid"));
+                assert!(
+                    !err.message().contains(invalid_session_id),
+                    "{}",
+                    err.message()
+                );
+                assert!(
+                    !err.message().contains("session is missing or expired"),
+                    "{}",
+                    err.message()
+                );
+            }
 
             let read_paths = vec![fixture.entry_leaf_label()];
             let read_signature = fixture.sign_read_paths(&read_paths, 1, true);
@@ -2703,6 +2742,49 @@ mod private_hnsw_grpc_tests {
                 err.message()
             );
 
+            let oversized_commit_session_id = "s".repeat(129);
+            let malformed_commit_session_id = "bad/session-id";
+            for invalid_session_id in [
+                oversized_commit_session_id.as_str(),
+                malformed_commit_session_id,
+            ] {
+                let err = PrivateHnswOram::commit_private_hnsw_paths(
+                    &service,
+                    Request::new(grpc::OramCommitRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        vector_name: VECTOR_NAME.to_string(),
+                        session_id: invalid_session_id.to_string(),
+                        old_epoch: BASE_EPOCH,
+                        new_epoch: NEXT_EPOCH,
+                        old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                        new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                        updated_buckets: search_run
+                            .updated_buckets
+                            .clone()
+                            .into_iter()
+                            .map(bucket_to_proto)
+                            .collect(),
+                        commit_signature: Some(signature_to_proto(
+                            search_run.commit_signature.clone(),
+                        )),
+                    }),
+                )
+                .await
+                .unwrap_err();
+                assert_eq!(err.code(), Code::InvalidArgument);
+                assert!(err.message().contains("session_id is invalid"));
+                assert!(
+                    !err.message().contains(invalid_session_id),
+                    "{}",
+                    err.message()
+                );
+                assert!(
+                    !err.message().contains("session is missing or expired"),
+                    "{}",
+                    err.message()
+                );
+            }
+
             let commit_old_root_sentinel = "commit-old-root-sentinel";
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
@@ -3140,6 +3222,37 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+
+            let oversized_close_session_id = "s".repeat(129);
+            let malformed_close_session_id = "bad.session-id";
+            for invalid_session_id in [
+                oversized_close_session_id.as_str(),
+                malformed_close_session_id,
+            ] {
+                let err = PrivateHnswOram::close_private_hnsw_session(
+                    &service,
+                    Request::new(grpc::ClosePrivateHnswSessionRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        vector_name: VECTOR_NAME.to_string(),
+                        session_id: invalid_session_id.to_string(),
+                    }),
+                )
+                .await
+                .unwrap_err();
+                assert_eq!(err.code(), Code::InvalidArgument);
+                assert!(err.message().contains("session_id is invalid"));
+                assert!(
+                    !err.message().contains(invalid_session_id),
+                    "{}",
+                    err.message()
+                );
+                assert!(
+                    !err.message()
+                        .contains("session is missing or already closed"),
+                    "{}",
+                    err.message()
+                );
+            }
 
             let closed_read_paths = vec![fixture.entry_leaf_label()];
             let closed_read_signature = fixture.sign_read_paths(&closed_read_paths, 1, true);

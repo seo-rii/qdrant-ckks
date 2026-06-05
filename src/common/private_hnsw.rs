@@ -49,6 +49,7 @@ const ZERO_TRUST_PROFILE_STRICT: &str = "strict";
 const SESSION_LEASE_SECS: u64 = 300;
 const MAX_SESSION_COUNT: usize = 1024;
 const PRIVATE_HNSW_ORAM_LEAF_LABEL_B64_LEN: usize = 11;
+const PRIVATE_HNSW_ORAM_SESSION_ID_MAX_LEN: usize = 128;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PrivateHnswManifestRecord {
@@ -842,6 +843,7 @@ pub async fn do_read_private_hnsw_paths(
     client_signature: PrivateHnswClientSignature,
 ) -> StorageResult<PrivateHnswReadPathsResponse> {
     validate_client_signature_shape(&client_signature)?;
+    validate_private_hnsw_session_id_shape(session_id)?;
     let request_context = collection_context_for_request(
         toc,
         auth,
@@ -969,6 +971,7 @@ pub async fn do_commit_private_hnsw_paths(
     commit_signature: PrivateHnswClientSignature,
 ) -> StorageResult<PrivateHnswOramEpochState> {
     validate_client_signature_shape(&commit_signature)?;
+    validate_private_hnsw_session_id_shape(session_id)?;
     let request_context = collection_context_for_request(
         toc,
         auth,
@@ -1111,6 +1114,7 @@ pub async fn do_close_private_hnsw_session(
     vector_name: &str,
     session_id: &str,
 ) -> StorageResult<bool> {
+    validate_private_hnsw_session_id_shape(session_id)?;
     let request_context = collection_context_for_request(
         toc,
         auth,
@@ -1591,6 +1595,20 @@ fn validate_client_signature_key_id_shape(key_id: &str) -> StorageResult<()> {
     {
         return Err(StorageError::bad_request(
             "private HNSW ORAM signature key_id is invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_private_hnsw_session_id_shape(session_id: &str) -> StorageResult<()> {
+    if session_id.is_empty()
+        || session_id.len() > PRIVATE_HNSW_ORAM_SESSION_ID_MAX_LEN
+        || !session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM session_id is invalid",
         ));
     }
     Ok(())
@@ -2339,6 +2357,24 @@ mod private_hnsw_tests {
 
         let err = validate_private_hnsw_session_cluster_epoch_mode(true).unwrap_err();
         assert!(err.to_string().contains("consensus-backed epoch/root CAS"));
+    }
+
+    #[test]
+    fn session_id_shape_rejects_oversized_or_malformed_values_without_reflecting_value() {
+        validate_private_hnsw_session_id_shape("missing-session-id-sentinel").unwrap();
+        validate_private_hnsw_session_id_shape(&uuid::Uuid::new_v4().to_string()).unwrap();
+
+        let oversized = "s".repeat(PRIVATE_HNSW_ORAM_SESSION_ID_MAX_LEN + 1);
+        let err = validate_private_hnsw_session_id_shape(&oversized).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("session_id is invalid"));
+        assert!(!rendered.contains(&oversized));
+
+        let malformed = "bad/session-id";
+        let err = validate_private_hnsw_session_id_shape(malformed).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("session_id is invalid"));
+        assert!(!rendered.contains(malformed));
     }
 
     #[test]

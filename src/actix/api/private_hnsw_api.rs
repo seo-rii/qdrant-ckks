@@ -1448,7 +1448,7 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "leaf label"
+                "invalid path label"
             );
             assert!(!read_error.contains(path_label_sentinel), "{read_error}");
             assert!(
@@ -1629,6 +1629,38 @@ mod private_hnsw_rest_tests {
                 !unknown_read_session_error.contains(unknown_read_session_sentinel),
                 "{unknown_read_session_error}"
             );
+
+            let oversized_read_session_id = "s".repeat(129);
+            let malformed_read_session_id = "bad/session-id";
+            for invalid_session_id in [
+                oversized_read_session_id.as_str(),
+                malformed_read_session_id,
+            ] {
+                let invalid_session_read_paths = vec![fixture.entry_leaf_label()];
+                let read_signature = fixture.sign_read_paths(&invalid_session_read_paths, 1, true);
+                let error = post_json_error_contains!(
+                    "/collections/docs/private-hnsw/text/oram/read_paths",
+                    OramReadPathsRequest {
+                        session_id: invalid_session_id.to_string(),
+                        index_epoch: BASE_EPOCH,
+                        root_hash: fixture.encrypted_build.root_hash.clone(),
+                        padding: OramReadPadding {
+                            requested_paths: 1,
+                            dummy_paths_included: true,
+                        },
+                        paths: invalid_session_read_paths,
+                        client_signature: PrivateHnswClientSignature {
+                            alg: read_signature.alg,
+                            key_id: read_signature.key_id,
+                            sig: read_signature.sig,
+                        },
+                    },
+                    StatusCode::BAD_REQUEST,
+                    "session_id is invalid"
+                );
+                assert!(!error.contains(invalid_session_id), "{error}");
+                assert!(!error.contains("session is missing or expired"), "{error}");
+            }
 
             let ok_read_paths = vec![fixture.entry_leaf_label()];
             let read_signature = fixture.sign_read_paths(&ok_read_paths, 1, true);
@@ -2028,6 +2060,34 @@ mod private_hnsw_rest_tests {
                 "{unknown_commit_session_error}"
             );
 
+            let oversized_commit_session_id = "s".repeat(129);
+            let malformed_commit_session_id = "bad/session-id";
+            for invalid_session_id in [
+                oversized_commit_session_id.as_str(),
+                malformed_commit_session_id,
+            ] {
+                let error = post_json_error_contains!(
+                    "/collections/docs/private-hnsw/text/oram/commit",
+                    OramCommitRequest {
+                        session_id: invalid_session_id.to_string(),
+                        old_epoch: BASE_EPOCH,
+                        new_epoch: NEXT_EPOCH,
+                        old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                        new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                        updated_buckets: search_run.updated_buckets.clone(),
+                        commit_signature: PrivateHnswClientSignature {
+                            alg: search_run.commit_signature.alg.clone(),
+                            key_id: search_run.commit_signature.key_id.clone(),
+                            sig: search_run.commit_signature.sig.clone(),
+                        },
+                    },
+                    StatusCode::BAD_REQUEST,
+                    "session_id is invalid"
+                );
+                assert!(!error.contains(invalid_session_id), "{error}");
+                assert!(!error.contains("session is missing or expired"), "{error}");
+            }
+
             let commit_old_root_sentinel = "commit-old-root-sentinel";
             let commit_old_root_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
@@ -2379,6 +2439,33 @@ mod private_hnsw_rest_tests {
                 !missing_close_body.contains(missing_close_session_id),
                 "{missing_close_body}"
             );
+
+            let oversized_close_session_id = "s".repeat(129);
+            let malformed_close_session_id = "bad.session-id";
+            for invalid_session_id in [
+                oversized_close_session_id.as_str(),
+                malformed_close_session_id,
+            ] {
+                let invalid_close_request = actix_test::TestRequest::post()
+                    .uri(&format!(
+                        "/collections/docs/private-hnsw/text/session/{invalid_session_id}/close"
+                    ))
+                    .to_request();
+                let invalid_close_response =
+                    actix_test::call_service(&app, invalid_close_request).await;
+                assert_eq!(invalid_close_response.status(), StatusCode::BAD_REQUEST);
+                let invalid_close_body = actix_test::read_body(invalid_close_response).await;
+                let invalid_close_body = String::from_utf8_lossy(&invalid_close_body);
+                assert!(invalid_close_body.contains("session_id is invalid"));
+                assert!(
+                    !invalid_close_body.contains(invalid_session_id),
+                    "{invalid_close_body}"
+                );
+                assert!(
+                    !invalid_close_body.contains("session is missing or already closed"),
+                    "{invalid_close_body}"
+                );
+            }
 
             let closed_read_paths = vec![fixture.entry_leaf_label()];
             let closed_read_signature = fixture.sign_read_paths(&closed_read_paths, 1, true);

@@ -655,6 +655,9 @@ submitted client id.
 Expired sessions are purged from the registry before use and release the
 single-writer lock for that private index; using an expired session id for
 `read_paths`, `commit`, or `close` fails closed.
+Oversized or malformed session ids are rejected before registry lookup without
+reflecting the submitted value, while unknown well-shaped session ids still use
+the sanitized missing/expired-session error.
 Signed manifest upload and initial encrypted bucket upload are also rejected
 while an active session holds the same private index, so a bulk upload cannot
 race a client-led traversal/writeback session. The upload path also holds a
