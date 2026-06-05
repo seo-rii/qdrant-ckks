@@ -212,17 +212,11 @@ fn validate_restored_collection_crypto_runtime(
 }
 
 fn sanitize_private_hnsw_snapshot_layout_error(
-    collection_path: &Path,
+    _collection_path: &Path,
     err: collection::operations::types::CollectionError,
 ) -> String {
-    let rendered = err.to_string();
-    let collection_path = collection_path.to_string_lossy();
-    if rendered.contains(collection_path.as_ref())
-        || rendered.contains(collection::private_hnsw_oram_store::PRIVATE_HNSW_ORAM_DIR)
-    {
-        return "private HNSW ORAM snapshot layout validation failed".to_string();
-    }
-    rendered
+    let _ = err;
+    "private HNSW ORAM snapshot layout validation failed".to_string()
 }
 
 fn validate_private_result_oram_snapshot_restore_not_present(
@@ -417,10 +411,9 @@ mod tests {
                 .expect_err("private HNSW ORAM restore layout mismatch must fail CLI preflight");
 
         assert!(err.contains("private HNSW ORAM snapshot layout"), "{err}");
-        assert!(
-            err.contains("bucket commitments do not match manifest root_hash"),
-            "{err}"
-        );
+        assert!(err.contains("snapshot layout validation failed"), "{err}");
+        assert!(!err.contains("bucket 0"), "{err}");
+        assert!(!err.contains("commitment context mismatch"), "{err}");
         assert!(
             !err.contains(collection_dir.path().to_string_lossy().as_ref()),
             "{err}"

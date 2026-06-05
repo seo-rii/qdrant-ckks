@@ -733,6 +733,8 @@ bound the base64url ciphertext length before decode and then check that decoded
 bucket ciphertext length exactly matches the fixed Path ORAM bucket size implied
 by `oram.bucket_size` and `oram.block_size_bytes`; a shorter or longer
 ciphertext is rejected even when its hash and commitment are self-consistent.
+The initial upload ordering and fixed-size ciphertext ingress errors are fixed
+messages and do not echo bucket ids, bucket epochs, or bucket ciphertexts.
 The malformed ciphertext, fixed-size mismatch, bucket hash/commitment/root hash
 shape, bucket commitment context mismatch, and Merkle root mismatch error paths
 do not echo the submitted ciphertext or computed Merkle root into REST response bodies or gRPC
@@ -823,7 +825,8 @@ restore-layout preflight after crypto runtime validation, so CLI recovery
 cannot bypass bucket/root consistency checks that are enforced by storage-level
 snapshot recovery. Store-originated layout failures in this CLI path are
 sanitized before reporting, so collection-local `private_hnsw_oram` paths and
-stored bucket bodies are not reflected.
+stored bucket bodies are not reflected; CLI layout failures are fixed messages
+that also avoid bucket ids and bucket commitment mismatch details.
 CLI and REST snapshot recovery also validate stored private HNSW ORAM manifest
 signatures against the runtime `signature_public_keys` registry after the
 restore-layout preflight passes, so tampered manifest signatures fail closed

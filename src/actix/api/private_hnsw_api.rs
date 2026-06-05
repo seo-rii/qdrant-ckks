@@ -1078,7 +1078,7 @@ mod private_hnsw_rest_tests {
                     buckets: missing_bucket_set,
                 },
                 StatusCode::BAD_REQUEST,
-                "exactly"
+                "configured bucket count"
             );
 
             let mut duplicate_bucket_set = fixture.encrypted_build.buckets.clone();
@@ -1095,7 +1095,7 @@ mod private_hnsw_rest_tests {
                     buckets: duplicate_bucket_set,
                 },
                 StatusCode::BAD_REQUEST,
-                "duplicated"
+                "duplicate bucket"
             );
 
             let auth = Auth::new_internal(Access::full("private HNSW ORAM upload route test"));

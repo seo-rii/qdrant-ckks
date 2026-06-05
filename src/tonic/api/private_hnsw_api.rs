@@ -1594,7 +1594,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("exactly"));
+            assert!(err.message().contains("configured bucket count"));
 
             let mut duplicate_bucket_set = fixture.encrypted_build.buckets.clone();
             assert!(
@@ -1618,7 +1618,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("duplicated"));
+            assert!(err.message().contains("duplicate bucket"));
 
             let auth = Auth::new_internal(Access::full("private HNSW ORAM upload grpc test"));
             let collection_pass = auth

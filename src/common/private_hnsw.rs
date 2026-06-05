@@ -1870,16 +1870,12 @@ fn validate_bucket_ciphertext_fixed_size(
     let ciphertext = BASE64URL_NOPAD
         .decode(bucket.ciphertext.as_bytes())
         .map_err(|_| {
-            StorageError::bad_request(format!(
-                "private HNSW ORAM bucket {} ciphertext is not base64url",
-                bucket.bucket_id,
-            ))
+            StorageError::bad_request("private HNSW ORAM bucket ciphertext is not base64url")
         })?;
     if ciphertext.len() != expected {
-        return Err(StorageError::bad_request(format!(
-            "private HNSW ORAM bucket {} ciphertext must match fixed ciphertext size",
-            bucket.bucket_id,
-        )));
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM bucket ciphertext must match fixed ciphertext size",
+        ));
     }
     Ok(())
 }
@@ -1961,44 +1957,39 @@ fn ordered_initial_bucket_commitments(
         StorageError::bad_request("private HNSW ORAM bucket_count exceeds supported range")
     })?;
     if buckets.len() != bucket_count_usize {
-        return Err(StorageError::bad_request(format!(
-            "private HNSW ORAM initial upload must include exactly {bucket_count} buckets",
-        )));
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM initial upload must include the configured bucket count",
+        ));
     }
     let mut commitments = vec![None; bucket_count_usize];
     for bucket in buckets {
         if bucket.index_epoch != expected_epoch {
-            return Err(StorageError::bad_request(format!(
-                "private HNSW ORAM initial upload bucket {} has stale epoch {}",
-                bucket.bucket_id, bucket.index_epoch,
-            )));
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM initial upload bucket has stale epoch",
+            ));
         }
         if bucket.bucket_id >= bucket_count {
-            return Err(StorageError::bad_request(format!(
-                "private HNSW ORAM initial upload bucket {} is out of range",
-                bucket.bucket_id,
-            )));
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM initial upload bucket is out of range",
+            ));
         }
         validate_root_hash_string(&bucket.bucket_commitment, "bucket_commitment")?;
         let bucket_index = usize::try_from(bucket.bucket_id).map_err(|_| {
             StorageError::bad_request("private HNSW ORAM bucket id exceeds supported range")
         })?;
         if commitments[bucket_index].is_some() {
-            return Err(StorageError::bad_request(format!(
-                "private HNSW ORAM initial upload bucket {} is duplicated",
-                bucket.bucket_id,
-            )));
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM initial upload contains duplicate bucket",
+            ));
         }
         commitments[bucket_index] = Some(bucket.bucket_commitment.clone());
     }
     commitments
         .into_iter()
         .enumerate()
-        .map(|(bucket_id, commitment)| {
+        .map(|(_bucket_id, commitment)| {
             commitment.ok_or_else(|| {
-                StorageError::bad_request(format!(
-                    "private HNSW ORAM initial upload missing bucket {bucket_id}",
-                ))
+                StorageError::bad_request("private HNSW ORAM initial upload is missing a bucket")
             })
         })
         .collect()
@@ -2177,7 +2168,9 @@ mod private_hnsw_tests {
         );
 
         let err = ordered_initial_bucket_commitments(&buckets[..1], 42, 2).unwrap_err();
-        assert!(err.to_string().contains("exactly 2 buckets"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("configured bucket count"));
+        assert!(!rendered.contains("2"), "{rendered}");
 
         let err = ordered_initial_bucket_commitments(
             &[fixture_bucket(0, 42), fixture_bucket(0, 42)],
@@ -2185,10 +2178,26 @@ mod private_hnsw_tests {
             2,
         )
         .unwrap_err();
-        assert!(err.to_string().contains("duplicated"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("duplicate bucket"));
+        assert!(!rendered.contains("0"), "{rendered}");
 
         let err = ordered_initial_bucket_commitments(&[fixture_bucket(0, 41)], 42, 1).unwrap_err();
-        assert!(err.to_string().contains("stale epoch"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("stale epoch"));
+        assert!(!rendered.contains("0"), "{rendered}");
+        assert!(!rendered.contains("41"), "{rendered}");
+        assert!(!rendered.contains("42"), "{rendered}");
+
+        let err = ordered_initial_bucket_commitments(
+            &[fixture_bucket(0, 42), fixture_bucket(2, 42)],
+            42,
+            2,
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("out of range"));
+        assert!(!rendered.contains("2"), "{rendered}");
     }
 
     #[test]
@@ -2353,10 +2362,12 @@ mod private_hnsw_tests {
             BASE64URL_NOPAD.encode(Sha256::digest(&short_raw).as_ref());
         let err =
             validate_bucket_ciphertext_fixed_size(&short_ciphertext_bucket, &manifest).unwrap_err();
-        assert!(err.to_string().contains("fixed ciphertext size"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("fixed ciphertext size"));
+        assert!(!rendered.contains("0"), "{rendered}");
         assert!(
-            !err.to_string()
-                .contains(&short_ciphertext_bucket.ciphertext)
+            !rendered.contains(&short_ciphertext_bucket.ciphertext),
+            "{rendered}"
         );
 
         let mut wrong_commitment_buckets = encrypted_build.buckets.clone();
