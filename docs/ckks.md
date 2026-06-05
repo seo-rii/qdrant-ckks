@@ -664,6 +664,8 @@ root hashes as canonical 32-byte base64url values before registry/storage
 epoch comparisons, without reflecting malformed values.
 `read_paths` and `commit` client signatures are length-checked as fixed
 64-byte Ed25519 base64url values before decode/verification.
+Runtime `signature_public_keys` verifier entries are likewise treated as fixed
+32-byte Ed25519 base64url public keys before signature verification.
 Signed manifest upload and initial encrypted bucket upload are also rejected
 while an active session holds the same private index, so a bulk upload cannot
 race a client-led traversal/writeback session. The upload path also holds a

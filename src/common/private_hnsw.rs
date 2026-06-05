@@ -1510,6 +1510,11 @@ fn signature_public_keys(
 }
 
 fn decode_signature_public_key(public_key_b64: &str) -> StorageResult<Vec<u8>> {
+    if public_key_b64.len() != PRIVATE_HNSW_ORAM_ROOT_HASH_B64_LEN {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM public key must be 32 bytes",
+        ));
+    }
     let public_key = BASE64URL_NOPAD
         .decode(public_key_b64.as_bytes())
         .map_err(|_| StorageError::bad_request("private HNSW ORAM public key is not base64url"))?;
@@ -2473,6 +2478,24 @@ mod private_hnsw_tests {
         .unwrap_err();
         let rendered = err.to_string();
         assert!(rendered.contains("signature is not base64url"));
+        assert!(!rendered.contains(&malformed));
+    }
+
+    #[test]
+    fn signature_public_key_shape_rejects_oversized_or_malformed_values_without_reflecting_value() {
+        decode_signature_public_key(&BASE64URL_NOPAD.encode(&[7; 32])).unwrap();
+
+        let oversized = format!("{}{}", BASE64URL_NOPAD.encode(&[7; 32]), "A".repeat(64));
+        let err = decode_signature_public_key(&oversized).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("public key must be 32 bytes"));
+        assert!(!rendered.contains(&oversized));
+
+        let mut malformed = BASE64URL_NOPAD.encode(&[7; 32]);
+        malformed.replace_range(0..1, "!");
+        let err = decode_signature_public_key(&malformed).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("public key is not base64url"));
         assert!(!rendered.contains(&malformed));
     }
 
