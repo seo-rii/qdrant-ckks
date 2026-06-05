@@ -837,33 +837,29 @@ fn validate_private_hnsw_oram_restore_manifest(
         )));
     }
     if signature.key_id != manifest.owner_signing_key_id {
-        return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM snapshot manifest signature key_id {} does not match owner_signing_key_id {}",
-            signature.key_id, manifest.owner_signing_key_id,
-        )));
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM snapshot manifest signature key_id does not match owner_signing_key_id",
+        ));
     }
     if manifest.collection_id != stable_crypto_id {
-        return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM snapshot manifest collection_id mismatch: expected {stable_crypto_id}, found {}",
-            manifest.collection_id,
-        )));
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM snapshot manifest collection_id mismatch",
+        ));
     }
     if manifest.vector_name != vector_name {
-        return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM snapshot manifest vector_name mismatch: expected {vector_name}, found {}",
-            manifest.vector_name,
-        )));
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM snapshot manifest vector_name mismatch",
+        ));
     }
     if manifest.dim != expected_dim {
-        return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM snapshot manifest dim mismatch for vector '{vector_name}': expected {expected_dim}, found {}",
-            manifest.dim,
-        )));
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM snapshot manifest dim mismatch",
+        ));
     }
     if manifest.distance != expected_distance {
-        return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM snapshot manifest distance mismatch for vector '{vector_name}'",
-        )));
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM snapshot manifest distance mismatch",
+        ));
     }
     Ok(())
 }
@@ -883,16 +879,14 @@ fn validate_private_hnsw_restore_bucket_contract(
     let ciphertext = BASE64URL_NOPAD
         .decode(bucket.ciphertext.as_bytes())
         .map_err(|_| {
-            CollectionError::bad_request(format!(
-                "private HNSW ORAM snapshot bucket {} ciphertext is not base64url",
-                bucket.bucket_id,
-            ))
+            CollectionError::bad_request(
+                "private HNSW ORAM snapshot bucket ciphertext is not base64url",
+            )
         })?;
     if ciphertext.len() != expected_ciphertext_bytes {
-        return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM snapshot bucket {} ciphertext must match fixed ciphertext size",
-            bucket.bucket_id,
-        )));
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM snapshot bucket ciphertext must match fixed ciphertext size",
+        ));
     }
 
     let expected_commitment = private_hnsw_bucket_commitment(
@@ -906,12 +900,15 @@ fn validate_private_hnsw_restore_bucket_contract(
         .for_bucket(bucket.bucket_id, bucket.index_epoch),
         &bucket.ciphertext_sha256,
     )
-    .map_err(|err| CollectionError::bad_request(err.to_string()))?;
+    .map_err(|_| {
+        CollectionError::bad_request(
+            "private HNSW ORAM snapshot bucket commitment context mismatch",
+        )
+    })?;
     if expected_commitment != bucket.bucket_commitment {
-        return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM snapshot bucket {} commitment context mismatch",
-            bucket.bucket_id,
-        )));
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM snapshot bucket commitment context mismatch",
+        ));
     }
     Ok(())
 }
@@ -1617,7 +1614,16 @@ mod tests {
             temp_dir.path(),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("signature key_id"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("signature key_id"));
+        assert!(
+            !rendered.contains("tenant-a/private-hnsw-signing-v2"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains(&manifest.owner_signing_key_id),
+            "{rendered}"
+        );
     }
 
     #[test]
@@ -1637,7 +1643,10 @@ mod tests {
             temp_dir.path(),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("collection_id mismatch"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("collection_id mismatch"));
+        assert!(!rendered.contains(&manifest.collection_id), "{rendered}");
+        assert!(!rendered.contains(&uuid.to_string()), "{rendered}");
     }
 
     #[test]
@@ -1659,7 +1668,9 @@ mod tests {
             temp_dir.path(),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("vector_name mismatch"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("vector_name mismatch"));
+        assert!(!rendered.contains("title"), "{rendered}");
 
         let temp_dir = tempfile::Builder::new()
             .prefix("private-hnsw-restore-bad-dim")
@@ -1674,7 +1685,9 @@ mod tests {
             temp_dir.path(),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("dim mismatch"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("dim mismatch"));
+        assert!(!rendered.contains("768"), "{rendered}");
 
         let temp_dir = tempfile::Builder::new()
             .prefix("private-hnsw-restore-bad-distance")
@@ -1689,7 +1702,10 @@ mod tests {
             temp_dir.path(),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("distance mismatch"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("distance mismatch"));
+        assert!(!rendered.contains("Dot"), "{rendered}");
+        assert!(!rendered.contains("text"), "{rendered}");
     }
 
     #[test]
@@ -1837,7 +1853,9 @@ mod tests {
             temp_dir.path(),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("fixed ciphertext size"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("fixed ciphertext size"));
+        assert!(!rendered.contains("0"), "{rendered}");
     }
 
     #[test]
@@ -1878,7 +1896,9 @@ mod tests {
             temp_dir.path(),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("commitment context mismatch"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("commitment context mismatch"));
+        assert!(!rendered.contains("0"), "{rendered}");
     }
 
     #[test]
@@ -1917,7 +1937,9 @@ mod tests {
             temp_dir.path(),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("00000000.bucket"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("private HNSW ORAM file"));
+        assert!(!rendered.contains("00000000.bucket"), "{rendered}");
     }
 
     #[test]
@@ -2024,7 +2046,9 @@ mod tests {
             temp_dir.path(),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("00000002.bucket"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("private HNSW ORAM file"));
+        assert!(!rendered.contains("00000002.bucket"), "{rendered}");
     }
 
     #[test]
@@ -2077,6 +2101,8 @@ mod tests {
             temp_dir.path(),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("00000001.bucket"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("private HNSW ORAM file"));
+        assert!(!rendered.contains("00000001.bucket"), "{rendered}");
     }
 }

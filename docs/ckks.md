@@ -833,7 +833,9 @@ restore-layout preflight passes, so tampered manifest signatures fail closed
 without exposing bucket roots, ciphertexts, or store paths.
 Storage-level `Collection::restore_snapshot` also runs the private HNSW ORAM
 restore-layout preflight before shard restore begins and applies the same
-sanitization before returning layout failures to callers.
+sanitization before returning layout failures to callers. Collection-level
+snapshot manifest and bucket-contract mismatch errors also avoid reflecting
+manifest ids, vector names, dimensions, bucket ids, or bucket ciphertexts.
 
 Current result privacy support is deliberately narrow. `result_privacy:
 ids_visible` is the only accepted runtime mode in the MVP: Qdrant remains blind
