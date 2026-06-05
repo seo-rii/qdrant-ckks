@@ -1015,6 +1015,10 @@ the manifest-derived fixed bucket ciphertext size, and recompute the manifest
 Merkle root. `validate_private_hnsw_oram_upload_bundle_with_signature` and the
 bundle's `validate_initial_upload_contract_with_signature` method add the
 runtime manifest validation context and Ed25519 verification to that preflight.
+The collection-local private HNSW ORAM store exposes matching initial upload
+bundle entrypoints; the signed variant verifies the owner Ed25519 manifest
+signature before creating the private index layout, so a bad signature leaves
+`epochs/current.json` absent and does not write bucket files.
 Before submitting an ORAM writeback, clients can call
 `plan_private_hnsw_oram_commit_for_manifest` to bind commit planning to the
 current signed manifest, updated bucket ciphertext hashes,

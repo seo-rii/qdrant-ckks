@@ -5,7 +5,12 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use data_encoding::BASE64URL_NOPAD;
-use qdrant_sec::{PrivateHnswOramBucket, PrivateHnswOramManifest, PrivateHnswOramSignature};
+use qdrant_sec::{
+    PrivateHnswManifestValidationContext, PrivateHnswOramBucket, PrivateHnswOramManifest,
+    PrivateHnswOramSignature, PrivateHnswOramUploadBundle,
+    validate_private_hnsw_oram_upload_bundle,
+    validate_private_hnsw_oram_upload_bundle_with_signature,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -81,6 +86,12 @@ struct PrivateHnswOramMerkleTree {
     leaf_hashes: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InitialEpochStatus {
+    Absent,
+    Matching,
+}
+
 #[derive(Clone, Debug)]
 pub struct PrivateHnswPreparedMerkleCommit {
     store: PrivateHnswOramStore,
@@ -140,6 +151,112 @@ impl PrivateHnswOramStore {
         let signature =
             read_json_private_file(&self.manifest_signature_path(), MAX_SIGNATURE_BYTES)?;
         Ok((manifest, signature))
+    }
+
+    pub fn write_initial_upload_bundle(
+        &self,
+        bundle: &PrivateHnswOramUploadBundle,
+        max_ciphertext_bytes: usize,
+    ) -> CollectionResult<PrivateHnswOramEpochState> {
+        let leaf_commitments = validate_upload_bundle(bundle, max_ciphertext_bytes)?;
+        let epoch = PrivateHnswOramEpochState {
+            index_epoch: bundle.manifest.index_epoch,
+            root_hash: bundle.manifest.root_hash.clone(),
+        };
+
+        match self.initial_epoch_status(&epoch, "upload bundle")? {
+            InitialEpochStatus::Absent => {}
+            InitialEpochStatus::Matching => {
+                self.validate_existing_initial_upload_bundle(
+                    bundle,
+                    &leaf_commitments,
+                    max_ciphertext_bytes,
+                )?;
+                return Ok(epoch);
+            }
+        }
+        self.write_manifest(&bundle.manifest, &bundle.manifest_signature)?;
+        self.write_merkle_tree_from_commitments(
+            bundle.manifest.index_epoch,
+            bundle.manifest.root_hash.clone(),
+            leaf_commitments,
+        )?;
+        for bucket in &bundle.buckets {
+            self.write_bucket(
+                bucket,
+                bundle.manifest.index_epoch,
+                bundle.manifest.bucket_count,
+                max_ciphertext_bytes,
+            )?;
+        }
+        self.write_initial_epoch_if_absent_or_matching(&epoch)?;
+        Ok(epoch)
+    }
+
+    pub fn write_initial_upload_bundle_with_signature(
+        &self,
+        bundle: &PrivateHnswOramUploadBundle,
+        max_ciphertext_bytes: usize,
+        validation_context: PrivateHnswManifestValidationContext<'_>,
+    ) -> CollectionResult<PrivateHnswOramEpochState> {
+        validate_upload_bundle_with_signature(bundle, max_ciphertext_bytes, validation_context)?;
+        self.write_initial_upload_bundle(bundle, max_ciphertext_bytes)
+    }
+
+    fn initial_epoch_status(
+        &self,
+        epoch: &PrivateHnswOramEpochState,
+        operation: &str,
+    ) -> CollectionResult<InitialEpochStatus> {
+        self.ensure_layout()?;
+        match self.read_current_epoch() {
+            Ok(current) if current == *epoch => Ok(InitialEpochStatus::Matching),
+            Ok(_) => Err(CollectionError::bad_request(format!(
+                "private HNSW ORAM current epoch/root does not match {operation} epoch",
+            ))),
+            Err(CollectionError::NotFound { .. }) => Ok(InitialEpochStatus::Absent),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn validate_existing_initial_upload_bundle(
+        &self,
+        bundle: &PrivateHnswOramUploadBundle,
+        leaf_commitments: &[String],
+        max_ciphertext_bytes: usize,
+    ) -> CollectionResult<()> {
+        let (stored_manifest, stored_signature) = self.read_manifest()?;
+        if stored_manifest != bundle.manifest || stored_signature != bundle.manifest_signature {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM initial upload bundle does not match existing manifest",
+            ));
+        }
+
+        let stored_tree = self.read_merkle_tree()?;
+        if stored_tree.index_epoch != bundle.manifest.index_epoch
+            || stored_tree.root_hash != bundle.manifest.root_hash
+            || stored_tree.bucket_count != bundle.manifest.bucket_count
+            || stored_tree.leaf_hashes.as_slice() != leaf_commitments
+        {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM initial upload bundle does not match existing Merkle tree",
+            ));
+        }
+
+        for bucket in &bundle.buckets {
+            let stored_bucket = self.read_bucket(
+                bucket.bucket_id,
+                bundle.manifest.index_epoch,
+                bundle.manifest.bucket_count,
+                max_ciphertext_bytes,
+            )?;
+            if stored_bucket != *bucket {
+                return Err(CollectionError::bad_request(
+                    "private HNSW ORAM initial upload bundle does not match existing bucket set",
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub fn write_bucket(
@@ -685,6 +802,46 @@ fn validate_bucket_shape(
     Ok(())
 }
 
+fn validate_upload_bundle(
+    bundle: &PrivateHnswOramUploadBundle,
+    max_ciphertext_bytes: usize,
+) -> CollectionResult<Vec<String>> {
+    let leaf_commitments =
+        validate_private_hnsw_oram_upload_bundle(bundle).map_err(private_hnsw_client_error)?;
+    for bucket in &bundle.buckets {
+        validate_bucket(
+            bucket,
+            bundle.manifest.index_epoch,
+            bundle.manifest.bucket_count,
+            max_ciphertext_bytes,
+        )?;
+    }
+    Ok(leaf_commitments)
+}
+
+fn validate_upload_bundle_with_signature(
+    bundle: &PrivateHnswOramUploadBundle,
+    max_ciphertext_bytes: usize,
+    validation_context: PrivateHnswManifestValidationContext<'_>,
+) -> CollectionResult<Vec<String>> {
+    let leaf_commitments =
+        validate_private_hnsw_oram_upload_bundle_with_signature(bundle, validation_context)
+            .map_err(private_hnsw_client_error)?;
+    for bucket in &bundle.buckets {
+        validate_bucket(
+            bucket,
+            bundle.manifest.index_epoch,
+            bundle.manifest.bucket_count,
+            max_ciphertext_bytes,
+        )?;
+    }
+    Ok(leaf_commitments)
+}
+
+fn private_hnsw_client_error(err: qdrant_sec::PrivateHnswClientError) -> CollectionError {
+    CollectionError::bad_request(err.to_string())
+}
+
 fn max_base64url_nopad_encoded_len(byte_len: usize) -> CollectionResult<usize> {
     let full_chunks = byte_len / 3;
     let remainder = byte_len % 3;
@@ -947,17 +1104,20 @@ mod tests {
         DistanceKind, FixedBudgetParams, OramKind, OramParams, PRIVATE_HNSW_ORAM_BINDING,
         PrivateHnswBucketAeadBaseContext, PrivateHnswBucketAeadContext, PrivateHnswBuildPoint,
         PrivateHnswClientError, PrivateHnswClientKeys, PrivateHnswEncryptedPathBatch,
-        PrivateHnswManifestBuildContext, PrivateHnswNodeBlockPlaintext,
-        PrivateHnswOramClientConfig, PrivateHnswOramPlaintextBucket, PrivateHnswParams,
-        PrivateHnswSearchParams, PrivateHnswVectorEncoding, ResultPrivacyMode, SecretKey,
-        VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, build_private_hnsw_oram_manifest_from_encrypted_index,
+        PrivateHnswManifestBuildContext, PrivateHnswManifestValidationContext,
+        PrivateHnswNodeBlockPlaintext, PrivateHnswOramClientConfig, PrivateHnswOramPlaintextBucket,
+        PrivateHnswParams, PrivateHnswSearchParams, PrivateHnswSignatureVerification,
+        PrivateHnswVectorEncoding, ResultPrivacyMode, SecretKey, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+        build_private_hnsw_oram_manifest_from_encrypted_index,
         build_private_hnsw_oram_plaintext_index_from_auto_layered_f32_points,
         decode_private_hnsw_oram_bucket_plaintext, empty_private_hnsw_oram_plaintext_bucket,
         encode_private_hnsw_oram_bucket_plaintext, open_private_hnsw_oram_bucket,
-        plan_private_hnsw_oram_commit, private_hnsw_oram_bucket_ids_for_leaf,
-        private_hnsw_oram_merkle_root_for_commitments, seal_private_hnsw_oram_bucket,
-        seal_private_hnsw_oram_plaintext_index, search_private_hnsw_oram_encrypted_verified,
+        package_private_hnsw_oram_upload_bundle, plan_private_hnsw_oram_commit,
+        private_hnsw_oram_bucket_ids_for_leaf, private_hnsw_oram_merkle_root_for_commitments,
+        seal_private_hnsw_oram_bucket, seal_private_hnsw_oram_plaintext_index,
+        search_private_hnsw_oram_encrypted_verified,
     };
+    use ring::signature::{Ed25519KeyPair, KeyPair};
     use tempfile::TempDir;
 
     use super::*;
@@ -1063,6 +1223,102 @@ mod tests {
         }
     }
 
+    fn fixture_upload_bundle(key_pair: &Ed25519KeyPair) -> PrivateHnswOramUploadBundle {
+        let keys =
+            PrivateHnswClientKeys::derive_from_resource_key(&SecretKey::from_bytes([13; 32]))
+                .unwrap();
+        let config = client_oram_config();
+        let points = vec![
+            PrivateHnswBuildPoint {
+                node_id: [1; 32],
+                point_token: [11; 32],
+                vector: vec![1.0, 0.0],
+                payload_fetch_token: None,
+            },
+            PrivateHnswBuildPoint {
+                node_id: [2; 32],
+                point_token: [22; 32],
+                vector: vec![0.0, 1.0],
+                payload_fetch_token: None,
+            },
+        ];
+        let plaintext_build = build_private_hnsw_oram_plaintext_index_from_auto_layered_f32_points(
+            config,
+            DistanceKind::Euclid,
+            1,
+            1,
+            1,
+            &points,
+            &[0, 1],
+        )
+        .unwrap();
+        let encrypted_build = seal_private_hnsw_oram_plaintext_index(
+            &keys,
+            client_bucket_base_context(),
+            42,
+            &plaintext_build,
+            config,
+        )
+        .unwrap();
+
+        package_private_hnsw_oram_upload_bundle(
+            key_pair,
+            PrivateHnswManifestBuildContext {
+                collection_id: "collection-uuid-1",
+                vector_name: "text",
+                key_id: "tenant-a/vector-private-rk",
+                rk_id: "tenant-a/vector-private-rk",
+                rk_epoch: 7,
+                dim: 2,
+                distance: DistanceKind::Euclid,
+                hnsw: PrivateHnswParams {
+                    m: 1,
+                    ef_construction: 2,
+                    max_layers: 1,
+                    fixed_neighbor_slots: config.fixed_neighbor_slots as u32,
+                },
+                oram: OramParams {
+                    kind: OramKind::PathOram,
+                    bucket_size: config.bucket_size as u32,
+                    block_size_bytes: config.block_size_bytes as u32,
+                    tree_height: config.tree_height,
+                    path_batch_size: 2,
+                },
+                fixed_budget: FixedBudgetParams {
+                    enabled: true,
+                    upper_layer_steps: 1,
+                    base_layer_steps: 2,
+                    paths_per_round: 2,
+                    fixed_result_k: 1,
+                },
+                result_privacy: ResultPrivacyMode::IdsVisible,
+                owner_signing_key_id: "tenant-a/private-hnsw-signing-v1",
+                created_at_unix: 1_770_000_000,
+            },
+            &encrypted_build,
+        )
+        .unwrap()
+    }
+
+    fn fixture_validation_context<'a>(
+        public_key: &'a [u8],
+    ) -> PrivateHnswManifestValidationContext<'a> {
+        PrivateHnswManifestValidationContext {
+            expected_collection_id: "collection-uuid-1",
+            expected_vector_name: "text",
+            expected_key_id: "tenant-a/vector-private-rk",
+            expected_rk_id: "tenant-a/vector-private-rk",
+            min_rk_epoch: 7,
+            max_rk_epoch: 7,
+            expected_dim: 2,
+            expected_distance: DistanceKind::Euclid,
+            signature_verification: PrivateHnswSignatureVerification {
+                expected_key_id: "tenant-a/private-hnsw-signing-v1",
+                public_key,
+            },
+        }
+    }
+
     fn client_node_block() -> PrivateHnswNodeBlockPlaintext {
         PrivateHnswNodeBlockPlaintext {
             version: 1,
@@ -1077,6 +1333,61 @@ mod tests {
             generation: 1,
             payload_fetch_token: None,
         }
+    }
+
+    #[test]
+    fn initial_upload_bundle_with_signature_verifies_manifest_before_writes() {
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[17; 32]).unwrap();
+        let bundle = fixture_upload_bundle(&key_pair);
+
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let epoch = store
+            .write_initial_upload_bundle_with_signature(
+                &bundle,
+                4096,
+                fixture_validation_context(key_pair.public_key().as_ref()),
+            )
+            .unwrap();
+        assert_eq!(epoch.index_epoch, bundle.manifest.index_epoch);
+        assert_eq!(epoch.root_hash, bundle.manifest.root_hash);
+        assert_eq!(
+            store.read_manifest().unwrap(),
+            (bundle.manifest.clone(), bundle.manifest_signature.clone()),
+        );
+        assert_eq!(store.read_current_epoch().unwrap(), epoch);
+        assert_eq!(
+            store.write_initial_upload_bundle(&bundle, 4096).unwrap(),
+            epoch
+        );
+
+        let mut mismatched_signature = bundle.clone();
+        mismatched_signature.manifest_signature.sig = BASE64URL_NOPAD.encode(&[9; 64]);
+        let rendered = store
+            .write_initial_upload_bundle(&mismatched_signature, 4096)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("does not match existing manifest"));
+        assert!(!rendered.contains(&mismatched_signature.manifest_signature.sig));
+
+        let mut tampered = bundle.clone();
+        tampered.manifest_signature.sig = BASE64URL_NOPAD.encode(&[8; 64]);
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let rendered = store
+            .write_initial_upload_bundle_with_signature(
+                &tampered,
+                4096,
+                fixture_validation_context(key_pair.public_key().as_ref()),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("manifest signature context"));
+        assert!(!rendered.contains(&tampered.manifest_signature.sig));
+        assert!(matches!(
+            store.read_current_epoch(),
+            Err(CollectionError::NotFound { .. })
+        ));
     }
 
     #[test]
