@@ -608,6 +608,7 @@ pub async fn do_upload_private_hnsw_buckets(
     root_hash: String,
     buckets: Vec<PrivateHnswOramBucket>,
 ) -> StorageResult<PrivateHnswOramEpochState> {
+    validate_root_hash_string(&root_hash, "root_hash")?;
     let pass = auth.check_collection_access(
         collection_name,
         AccessRequirements::new(),
@@ -844,6 +845,7 @@ pub async fn do_read_private_hnsw_paths(
 ) -> StorageResult<PrivateHnswReadPathsResponse> {
     validate_client_signature_shape(&client_signature)?;
     validate_private_hnsw_session_id_shape(session_id)?;
+    validate_root_hash_string(root_hash, "root_hash")?;
     let request_context = collection_context_for_request(
         toc,
         auth,
@@ -972,6 +974,8 @@ pub async fn do_commit_private_hnsw_paths(
 ) -> StorageResult<PrivateHnswOramEpochState> {
     validate_client_signature_shape(&commit_signature)?;
     validate_private_hnsw_session_id_shape(session_id)?;
+    validate_root_hash_string(&old_root_hash, "old_root_hash")?;
+    validate_root_hash_string(&new_root_hash, "new_root_hash")?;
     let request_context = collection_context_for_request(
         toc,
         auth,
@@ -1043,7 +1047,6 @@ pub async fn do_commit_private_hnsw_paths(
             },
         )
         .map_err(private_hnsw_error)?;
-        validate_root_hash_string(&new_root_hash, "new_root_hash")?;
 
         let store = PrivateHnswOramStore::new(&session.collection_path, vector_name)?;
         ensure_private_hnsw_active_session_current_epoch(

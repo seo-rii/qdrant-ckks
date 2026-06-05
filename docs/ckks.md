@@ -658,6 +658,9 @@ single-writer lock for that private index; using an expired session id for
 Oversized or malformed session ids are rejected before registry lookup without
 reflecting the submitted value, while unknown well-shaped session ids still use
 the sanitized missing/expired-session error.
+`read_paths`, `commit`, and encrypted bucket upload also validate submitted
+root hashes as canonical 32-byte base64url values before registry/storage
+epoch comparisons, without reflecting malformed values.
 Signed manifest upload and initial encrypted bucket upload are also rejected
 while an active session holds the same private index, so a bulk upload cannot
 race a client-led traversal/writeback session. The upload path also holds a

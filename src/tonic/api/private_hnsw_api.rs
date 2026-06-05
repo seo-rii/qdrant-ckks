@@ -1389,7 +1389,37 @@ mod private_hnsw_grpc_tests {
             assert!(!err.message().contains("/tmp"));
             std::fs::write(&current_epoch_path, &current_epoch_json).unwrap();
 
-            let bucket_upload_root_sentinel = "bucket-upload-root-sentinel";
+            let bucket_upload_wrong_root = BASE64URL_NOPAD.encode(&[9; 32]);
+            let err = PrivateHnswOram::upload_private_hnsw_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateHnswBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: bucket_upload_wrong_root.clone(),
+                    buckets: fixture
+                        .encrypted_build
+                        .buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("bucket upload epoch/root does not match current manifest epoch")
+            );
+            assert!(
+                !err.message().contains(&bucket_upload_wrong_root),
+                "{}",
+                err.message()
+            );
+
+            let bucket_upload_root_sentinel = "AAAA";
             let err = PrivateHnswOram::upload_private_hnsw_buckets(
                 &service,
                 Request::new(grpc::UploadPrivateHnswBucketsRequest {
@@ -1409,12 +1439,15 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(
-                err.message()
-                    .contains("bucket upload epoch/root does not match current manifest epoch")
-            );
+            assert!(err.message().contains("root_hash must encode 32 bytes"));
             assert!(
                 !err.message().contains(bucket_upload_root_sentinel),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains("bucket upload epoch/root does not match current manifest epoch"),
                 "{}",
                 err.message()
             );
@@ -1977,7 +2010,7 @@ mod private_hnsw_grpc_tests {
             let epoch_root_mismatch_paths = vec![fixture.entry_leaf_label()];
             let epoch_root_mismatch_signature =
                 fixture.sign_read_paths(&epoch_root_mismatch_paths, 1, true);
-            let read_root_sentinel = "read-root-sentinel";
+            let read_wrong_root = BASE64URL_NOPAD.encode(&[9; 32]);
             let err = PrivateHnswOram::read_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramReadPathsRequest {
@@ -1985,7 +2018,7 @@ mod private_hnsw_grpc_tests {
                     vector_name: VECTOR_NAME.to_string(),
                     session_id: session.session_id.clone(),
                     index_epoch: BASE_EPOCH,
-                    root_hash: read_root_sentinel.to_string(),
+                    root_hash: read_wrong_root.clone(),
                     paths: epoch_root_mismatch_paths,
                     padding: Some(grpc::OramReadPadding {
                         requested_paths: 1,
@@ -1999,7 +2032,42 @@ mod private_hnsw_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("session epoch/root mismatch"));
             assert!(
-                !err.message().contains(read_root_sentinel),
+                !err.message().contains(&read_wrong_root),
+                "{}",
+                err.message()
+            );
+
+            let malformed_read_root_sentinel = "AAAA";
+            let malformed_read_root_paths = vec![fixture.entry_leaf_label()];
+            let malformed_read_root_signature =
+                fixture.sign_read_paths(&malformed_read_root_paths, 1, true);
+            let err = PrivateHnswOram::read_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramReadPathsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: malformed_read_root_sentinel.to_string(),
+                    paths: malformed_read_root_paths,
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    }),
+                    client_signature: Some(signature_to_proto(malformed_read_root_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("root_hash must encode 32 bytes"));
+            assert!(
+                !err.message().contains(malformed_read_root_sentinel),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains("session epoch/root mismatch"),
                 "{}",
                 err.message()
             );
@@ -2785,7 +2853,40 @@ mod private_hnsw_grpc_tests {
                 );
             }
 
-            let commit_old_root_sentinel = "commit-old-root-sentinel";
+            let commit_wrong_old_root = BASE64URL_NOPAD.encode(&[9; 32]);
+            let err = PrivateHnswOram::commit_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramCommitRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: commit_wrong_old_root.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run
+                        .updated_buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                    commit_signature: Some(signature_to_proto(fixture.client_signature())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("commit old epoch/root does not match active session")
+            );
+            assert!(
+                !err.message().contains(&commit_wrong_old_root),
+                "{}",
+                err.message()
+            );
+
+            let commit_old_root_sentinel = "AAAA";
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
@@ -2808,12 +2909,15 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(
-                err.message()
-                    .contains("commit old epoch/root does not match active session")
-            );
+            assert!(err.message().contains("old_root_hash must encode 32 bytes"));
             assert!(
                 !err.message().contains(commit_old_root_sentinel),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains("commit old epoch/root does not match active session"),
                 "{}",
                 err.message()
             );
@@ -2845,7 +2949,8 @@ mod private_hnsw_grpc_tests {
                     .contains("new_epoch must be greater than old_epoch")
             );
 
-            let commit_new_root_sentinel = "commit-new-root-sentinel";
+            let commit_new_root_sentinel = "AAAA";
+            let commit_wrong_new_root = BASE64URL_NOPAD.encode(&[17; 32]);
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
@@ -2855,7 +2960,7 @@ mod private_hnsw_grpc_tests {
                     old_epoch: BASE_EPOCH,
                     new_epoch: NEXT_EPOCH,
                     old_root_hash: search_run.commit_plan.old_root_hash.clone(),
-                    new_root_hash: commit_new_root_sentinel.to_string(),
+                    new_root_hash: commit_wrong_new_root.clone(),
                     updated_buckets: search_run
                         .updated_buckets
                         .clone()
@@ -2874,7 +2979,7 @@ mod private_hnsw_grpc_tests {
             );
             assert!(!err.message().contains("new_root_hash"));
             assert!(
-                !err.message().contains(commit_new_root_sentinel),
+                !err.message().contains(&commit_wrong_new_root),
                 "{}",
                 err.message()
             );

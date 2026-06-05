@@ -938,8 +938,24 @@ mod private_hnsw_rest_tests {
             );
             std::fs::write(&current_epoch_path, &current_epoch_json).unwrap();
 
-            let bucket_upload_root_sentinel = "bucket-upload-root-sentinel";
+            let bucket_upload_wrong_root = data_encoding::BASE64URL_NOPAD.encode(&[9; 32]);
             let bucket_upload_epoch_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/buckets",
+                UploadPrivateHnswBucketsRequest {
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: bucket_upload_wrong_root.clone(),
+                    buckets: fixture.encrypted_build.buckets.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "bucket upload epoch/root does not match current manifest epoch"
+            );
+            assert!(
+                !bucket_upload_epoch_error.contains(&bucket_upload_wrong_root),
+                "{bucket_upload_epoch_error}"
+            );
+
+            let bucket_upload_root_sentinel = "AAAA";
+            let bucket_upload_root_shape_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/buckets",
                 UploadPrivateHnswBucketsRequest {
                     index_epoch: fixture.encrypted_build.index_epoch,
@@ -947,11 +963,16 @@ mod private_hnsw_rest_tests {
                     buckets: fixture.encrypted_build.buckets.clone(),
                 },
                 StatusCode::BAD_REQUEST,
-                "bucket upload epoch/root does not match current manifest epoch"
+                "root_hash must encode 32 bytes"
             );
             assert!(
-                !bucket_upload_epoch_error.contains(bucket_upload_root_sentinel),
-                "{bucket_upload_epoch_error}"
+                !bucket_upload_root_shape_error.contains(bucket_upload_root_sentinel),
+                "{bucket_upload_root_shape_error}"
+            );
+            assert!(
+                !bucket_upload_root_shape_error
+                    .contains("bucket upload epoch/root does not match current manifest epoch"),
+                "{bucket_upload_root_shape_error}"
             );
 
             let mut hash_mismatch_buckets = fixture.encrypted_build.buckets.clone();
@@ -1401,13 +1422,13 @@ mod private_hnsw_rest_tests {
             let epoch_root_mismatch_paths = vec![fixture.entry_leaf_label()];
             let epoch_root_mismatch_signature =
                 fixture.sign_read_paths(&epoch_root_mismatch_paths, 1, true);
-            let read_root_sentinel = "read-root-sentinel";
+            let read_wrong_root = data_encoding::BASE64URL_NOPAD.encode(&[9; 32]);
             let epoch_root_mismatch_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",
                 OramReadPathsRequest {
                     session_id: session_id.clone(),
                     index_epoch: BASE_EPOCH,
-                    root_hash: read_root_sentinel.to_string(),
+                    root_hash: read_wrong_root.clone(),
                     paths: epoch_root_mismatch_paths,
                     padding: OramReadPadding {
                         requested_paths: 1,
@@ -1423,8 +1444,41 @@ mod private_hnsw_rest_tests {
                 "session epoch/root mismatch"
             );
             assert!(
-                !epoch_root_mismatch_error.contains(read_root_sentinel),
+                !epoch_root_mismatch_error.contains(&read_wrong_root),
                 "{epoch_root_mismatch_error}"
+            );
+
+            let malformed_read_root_sentinel = "AAAA";
+            let malformed_read_root_paths = vec![fixture.entry_leaf_label()];
+            let malformed_read_root_signature =
+                fixture.sign_read_paths(&malformed_read_root_paths, 1, true);
+            let malformed_read_root_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/read_paths",
+                OramReadPathsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: malformed_read_root_sentinel.to_string(),
+                    paths: malformed_read_root_paths,
+                    padding: OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    },
+                    client_signature: PrivateHnswClientSignature {
+                        alg: malformed_read_root_signature.alg,
+                        key_id: malformed_read_root_signature.key_id,
+                        sig: malformed_read_root_signature.sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "root_hash must encode 32 bytes"
+            );
+            assert!(
+                !malformed_read_root_error.contains(malformed_read_root_sentinel),
+                "{malformed_read_root_error}"
+            );
+            assert!(
+                !malformed_read_root_error.contains("session epoch/root mismatch"),
+                "{malformed_read_root_error}"
             );
 
             let path_label_sentinel = "qdrant-sec-private-hnsw-path-label-sentinel";
@@ -2088,8 +2142,32 @@ mod private_hnsw_rest_tests {
                 assert!(!error.contains("session is missing or expired"), "{error}");
             }
 
-            let commit_old_root_sentinel = "commit-old-root-sentinel";
+            let commit_wrong_old_root = data_encoding::BASE64URL_NOPAD.encode(&[9; 32]);
             let commit_old_root_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/commit",
+                OramCommitRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: commit_wrong_old_root.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run.updated_buckets.clone(),
+                    commit_signature: PrivateHnswClientSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: SIGNING_KEY_ID.to_string(),
+                        sig: fixture.client_signature().sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "commit old epoch/root does not match active session"
+            );
+            assert!(
+                !commit_old_root_error.contains(&commit_wrong_old_root),
+                "{commit_old_root_error}"
+            );
+
+            let commit_old_root_sentinel = "AAAA";
+            let commit_old_root_shape_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
                     session_id: session_id.clone(),
@@ -2105,11 +2183,16 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "commit old epoch/root does not match active session"
+                "old_root_hash must encode 32 bytes"
             );
             assert!(
-                !commit_old_root_error.contains(commit_old_root_sentinel),
-                "{commit_old_root_error}"
+                !commit_old_root_shape_error.contains(commit_old_root_sentinel),
+                "{commit_old_root_shape_error}"
+            );
+            assert!(
+                !commit_old_root_shape_error
+                    .contains("commit old epoch/root does not match active session"),
+                "{commit_old_root_shape_error}"
             );
 
             post_json_error_contains!(
@@ -2130,7 +2213,8 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "new_epoch must be greater than old_epoch"
             );
-            let commit_new_root_sentinel = "commit-new-root-sentinel";
+            let commit_new_root_sentinel = "AAAA";
+            let commit_wrong_new_root = data_encoding::BASE64URL_NOPAD.encode(&[17; 32]);
             let commit_new_root_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
@@ -2138,7 +2222,7 @@ mod private_hnsw_rest_tests {
                     old_epoch: BASE_EPOCH,
                     new_epoch: NEXT_EPOCH,
                     old_root_hash: search_run.commit_plan.old_root_hash.clone(),
-                    new_root_hash: commit_new_root_sentinel.to_string(),
+                    new_root_hash: commit_wrong_new_root.clone(),
                     updated_buckets: search_run.updated_buckets.clone(),
                     commit_signature: PrivateHnswClientSignature {
                         alg: "ed25519".to_string(),
@@ -2151,7 +2235,7 @@ mod private_hnsw_rest_tests {
             );
             assert!(!commit_new_root_error.contains("new_root_hash"));
             assert!(
-                !commit_new_root_error.contains(commit_new_root_sentinel),
+                !commit_new_root_error.contains(&commit_wrong_new_root),
                 "{commit_new_root_error}"
             );
 
