@@ -3616,8 +3616,10 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("option result_privacy is invalid"));
-            assert!(err.message().contains("expected ids_visible"));
+            assert!(
+                err.message()
+                    .contains("private HNSW ORAM instance docs_private_hnsw_v1 is invalid")
+            );
         });
     }
 
@@ -3691,8 +3693,10 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("option result_privacy is invalid"));
-            assert!(err.message().contains("expected ids_visible"));
+            assert!(
+                err.message()
+                    .contains("private HNSW ORAM instance docs_private_hnsw_v1 is invalid")
+            );
         });
     }
 
@@ -3773,8 +3777,10 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("option result_privacy is invalid"));
-            assert!(err.message().contains("expected ids_visible"));
+            assert!(
+                err.message()
+                    .contains("private HNSW ORAM instance docs_private_hnsw_v1 is invalid")
+            );
 
             PrivateHnswOram::upload_private_hnsw_buckets(&service, Request::new(bucket_request()))
                 .await
@@ -4041,7 +4047,10 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("option result_privacy is invalid"));
+            assert!(
+                err.message()
+                    .contains("private HNSW ORAM instance docs_private_hnsw_v1 is invalid")
+            );
 
             let closed = PrivateHnswOram::close_private_hnsw_session(
                 &service,
@@ -4191,7 +4200,10 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("option result_privacy is invalid"));
+            assert!(
+                err.message()
+                    .contains("private HNSW ORAM instance docs_private_hnsw_v1 is invalid")
+            );
 
             let closed = PrivateHnswOram::close_private_hnsw_session(
                 &service,

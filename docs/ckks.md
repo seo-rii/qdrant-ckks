@@ -507,7 +507,10 @@ accepts only `key_id`, `material_fingerprint_id`, `profile`,
 `min_rk_epoch`, `max_rk_epoch`, `search_execution`, `search_mode`,
 `result_privacy`, `distance`, `dim`, `hnsw`, `oram`, `fixed_budget`,
 `integrity`, and `signature_public_keys`. Unknown options fail startup/runtime
-validation instead of being silently ignored.
+validation instead of being silently ignored. Collection-facing private HNSW
+ORAM runtime validation errors use fixed descriptions and do not append the
+inner setup error detail, so unsupported option names, option values, and reason
+strings are not reflected through collection API failures.
 
 Provider `materials` roles are also allowlisted. Server-side payload AEAD and
 OpenFHE CKKS vector-envelope providers accept only `materials.sym_key`;

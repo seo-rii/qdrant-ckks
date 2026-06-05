@@ -1612,15 +1612,15 @@ fn generic_vector_write_plan(
                 instance,
                 runtime_settings.zero_trust_profile.as_deref() == Some(ZERO_TRUST_PROFILE_STRICT),
             )
-            .map_err(|err| {
+            .map_err(|_| {
                 StorageError::bad_input(format!(
-                    "collection {collection_name} private HNSW ORAM instance {} is invalid: {err}",
+                    "collection {collection_name} private HNSW ORAM instance {} is invalid",
                     rule.instance
                 ))
             })?;
-            let private_distance = private_hnsw_distance(&rule.instance, instance).map_err(|err| {
+            let private_distance = private_hnsw_distance(&rule.instance, instance).map_err(|_| {
                 StorageError::bad_input(format!(
-                    "collection {collection_name} private HNSW ORAM instance {} distance option is invalid: {err}",
+                    "collection {collection_name} private HNSW ORAM instance {} distance option is invalid",
                     rule.instance
                 ))
             })?;
@@ -1631,9 +1631,9 @@ fn generic_vector_write_plan(
                 1,
                 65_536,
             )
-            .map_err(|err| {
+            .map_err(|_| {
                 StorageError::bad_input(format!(
-                    "collection {collection_name} private HNSW ORAM instance {} dim option is invalid: {err}",
+                    "collection {collection_name} private HNSW ORAM instance {} dim option is invalid",
                     rule.instance
                 ))
             })?;
@@ -6490,15 +6490,15 @@ fn validate_generic_collection_crypto_runtime(
                 instance,
                 runtime_settings.zero_trust_profile.as_deref() == Some(ZERO_TRUST_PROFILE_STRICT),
             )
-            .map_err(|err| {
+            .map_err(|_| {
                 StorageError::bad_input(format!(
-                    "collection {collection_name} private HNSW ORAM instance {} is invalid: {err}",
+                    "collection {collection_name} private HNSW ORAM instance {} is invalid",
                     rule.instance
                 ))
             })?;
-            let private_distance = private_hnsw_distance(&rule.instance, instance).map_err(|err| {
+            let private_distance = private_hnsw_distance(&rule.instance, instance).map_err(|_| {
                 StorageError::bad_input(format!(
-                    "collection {collection_name} private HNSW ORAM instance {} distance option is invalid: {err}",
+                    "collection {collection_name} private HNSW ORAM instance {} distance option is invalid",
                     rule.instance
                 ))
             })?;
@@ -6509,9 +6509,9 @@ fn validate_generic_collection_crypto_runtime(
                 1,
                 65_536,
             )
-            .map_err(|err| {
+            .map_err(|_| {
                 StorageError::bad_input(format!(
-                    "collection {collection_name} private HNSW ORAM instance {} dim option is invalid: {err}",
+                    "collection {collection_name} private HNSW ORAM instance {} dim option is invalid",
                     rule.instance
                 ))
             })?;
@@ -20127,6 +20127,70 @@ mod tests {
             matches!(err, StorageError::BadInput { ref description }
                 if description.contains("dimension") && description.contains("does not match runtime policy")
                     && !description.contains('2') && !description.contains('3')),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_sanitizes_private_hnsw_instance_errors() {
+        let mut settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+                allow_inline_key_material: false,
+                instances: HashMap::from([(
+                    "docs_private_hnsw_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: private_hnsw_oram_options(),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let secret_option = "client_secret";
+        let secret_value = "qdrant-sec-private-hnsw-collection-runtime-secret-sentinel";
+        settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(secret_option.to_string(), json!(secret_value));
+        let params = with_embedding_vector(
+            CollectionParams {
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 7,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "embedding_private_hnsw".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec!["embedding".to_string()],
+                        },
+                        instance: "docs_private_hnsw_v1".to_string(),
+                        binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            },
+            Distance::Cosine,
+        );
+
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params)
+            .expect_err("collection runtime must reject invalid private HNSW instance");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("private HNSW ORAM instance docs_private_hnsw_v1 is invalid")
+                    && !description.contains(secret_option)
+                    && !description.contains(secret_value)
+                    && !description.contains("unsupported option")),
             "unexpected error: {err:?}",
         );
     }

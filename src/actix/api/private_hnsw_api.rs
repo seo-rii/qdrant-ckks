@@ -2786,8 +2786,10 @@ mod private_hnsw_rest_tests {
             let body_bytes = actix_test::read_body(response).await;
             let body = String::from_utf8_lossy(&body_bytes);
             assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-            assert!(body.contains("option result_privacy is invalid"), "{body}");
-            assert!(body.contains("expected ids_visible"), "{body}");
+            assert!(
+                body.contains("private HNSW ORAM instance docs_private_hnsw_v1 is invalid"),
+                "{body}"
+            );
         });
     }
 
@@ -2878,8 +2880,10 @@ mod private_hnsw_rest_tests {
             let body_bytes = actix_test::read_body(response).await;
             let body = String::from_utf8_lossy(&body_bytes);
             assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-            assert!(body.contains("option result_privacy is invalid"), "{body}");
-            assert!(body.contains("expected ids_visible"), "{body}");
+            assert!(
+                body.contains("private HNSW ORAM instance docs_private_hnsw_v1 is invalid"),
+                "{body}"
+            );
         });
     }
 
@@ -2977,8 +2981,10 @@ mod private_hnsw_rest_tests {
             let body_bytes = actix_test::read_body(response).await;
             let body = String::from_utf8_lossy(&body_bytes);
             assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-            assert!(body.contains("option result_privacy is invalid"), "{body}");
-            assert!(body.contains("expected ids_visible"), "{body}");
+            assert!(
+                body.contains("private HNSW ORAM instance docs_private_hnsw_v1 is invalid"),
+                "{body}"
+            );
 
             let response = actix_test::call_service(
                 &app,
@@ -3152,7 +3158,7 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "option result_privacy is invalid"
+                "private HNSW ORAM instance docs_private_hnsw_v1 is invalid"
             );
 
             let close_request = actix_test::TestRequest::post()
@@ -3322,7 +3328,7 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "option result_privacy is invalid"
+                "private HNSW ORAM instance docs_private_hnsw_v1 is invalid"
             );
 
             let close_request = actix_test::TestRequest::post()
