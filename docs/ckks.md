@@ -864,9 +864,10 @@ payload/result layer. It writes `private_result_oram/manifest.json`,
 contract used by private HNSW ORAM. Its upload bundle, commit, and stored
 Merkle-tree root mismatch errors do not reflect computed Merkle roots, and its
 writeback helper preflights stale current epochs and manifest epoch/root
-context before bucket/Merkle writes. It also validates each updated bucket
-commitment against the bucket ciphertext hash plus collection/key lineage and
-the proposed bucket epoch before preparing Merkle metadata.
+context before bucket/Merkle writes. It rejects empty writebacks before storage
+state changes, and also validates each updated bucket commitment against the
+bucket ciphertext hash plus collection/key lineage and the proposed bucket epoch
+before preparing Merkle metadata.
 Directory hardening also checks symlink/type before chmod. It also exposes
 `read_merkle_path_batch` with the canonical qdrant-sec
 `merkle_path_batch/v1` proof DTO so a future result ORAM read API can return

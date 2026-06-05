@@ -330,6 +330,11 @@ impl PrivateResultOramStore {
         updated_buckets: &[PrivateResultOramBucket],
         max_ciphertext_bytes: usize,
     ) -> CollectionResult<PrivateResultOramEpochState> {
+        if updated_buckets.is_empty() {
+            return Err(CollectionError::bad_request(
+                "private result ORAM commit must update at least one bucket",
+            ));
+        }
         self.ensure_current_epoch_matches(old)?;
         let (manifest, _) = self.read_manifest()?;
         validate_commit_manifest_context(&manifest, old, bucket_count)?;
@@ -437,6 +442,11 @@ impl PrivateResultOramStore {
         if new_epoch <= old_epoch {
             return Err(CollectionError::bad_request(
                 "private result ORAM Merkle commit new epoch must be greater than old epoch",
+            ));
+        }
+        if updated_buckets.is_empty() {
+            return Err(CollectionError::bad_request(
+                "private result ORAM Merkle commit must update at least one bucket",
             ));
         }
         let mut tree = self.read_merkle_tree()?;
@@ -1605,6 +1615,15 @@ mod tests {
                 .unwrap(),
         };
 
+        let empty_new = PrivateResultOramEpochState {
+            index_epoch: 43,
+            root_hash: old.root_hash.clone(),
+        };
+        let err = store
+            .commit_writeback(&old, &empty_new, bundle.bucket_count(), &[], 128)
+            .unwrap_err();
+        assert!(err.to_string().contains("must update at least one bucket"));
+
         let committed = store
             .commit_writeback(
                 &old,
@@ -1642,7 +1661,7 @@ mod tests {
         let err = store
             .commit_writeback(&old, &new, bundle.bucket_count(), &[], 128)
             .unwrap_err();
-        assert!(err.to_string().contains("RootHashMismatch"));
+        assert!(err.to_string().contains("must update at least one bucket"));
     }
 
     #[test]
@@ -1936,6 +1955,11 @@ mod tests {
         let wrong_new_root = root_hash(99);
         assert_ne!(wrong_new_root, new_root);
         let err = store
+            .prepare_merkle_commit(42, &old_root, 43, &old_root, 4, &[])
+            .unwrap_err();
+        assert!(err.to_string().contains("must update at least one bucket"));
+
+        let err = store
             .prepare_merkle_commit(
                 42,
                 &old_root,
@@ -1957,7 +1981,7 @@ mod tests {
         let err = store
             .prepare_merkle_commit(42, &old_root, 43, &new_root, 4, &[])
             .unwrap_err();
-        assert!(err.to_string().contains("epoch mismatch"));
+        assert!(err.to_string().contains("must update at least one bucket"));
     }
 
     #[test]

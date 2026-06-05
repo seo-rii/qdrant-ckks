@@ -78,6 +78,8 @@ pub enum PrivateResultOramError {
     },
     #[error("private result ORAM commit repeats bucket {bucket_id}")]
     DuplicateUpdatedBucket { bucket_id: u64 },
+    #[error("private result ORAM commit must update at least one bucket")]
+    EmptyCommit,
     #[error("private result ORAM Merkle proof is malformed")]
     InvalidMerkleProof,
     #[error("private result ORAM Merkle proof JSON is malformed")]
@@ -835,6 +837,9 @@ pub fn plan_private_result_oram_commit(
 ) -> Result<PrivateResultOramCommitPlan, PrivateResultOramError> {
     if new_epoch <= old_epoch {
         return Err(PrivateResultOramError::InvalidManifestField("new_epoch"));
+    }
+    if updated_buckets.is_empty() {
+        return Err(PrivateResultOramError::EmptyCommit);
     }
     let computed_old_root =
         private_result_oram_merkle_root_for_commitments(current_leaf_commitments)?;
@@ -1598,6 +1603,11 @@ mod tests {
         let leaf_commitments = vec![commitment(1), commitment(2), commitment(3), commitment(4)];
         let old_root = private_result_oram_merkle_root_for_commitments(&leaf_commitments).unwrap();
         let updated_bucket = fixture_commit_bucket(2, 43, 9);
+
+        assert_eq!(
+            plan_private_result_oram_commit(42, 43, &old_root, &leaf_commitments, &[]),
+            Err(PrivateResultOramError::EmptyCommit)
+        );
 
         assert_eq!(
             plan_private_result_oram_commit(
