@@ -771,10 +771,9 @@ pub async fn do_open_private_hnsw_session(
         ));
     }
     if desired_epoch != current_epoch.index_epoch {
-        return Err(StorageError::bad_request(format!(
-            "private HNSW ORAM requested epoch {desired_epoch} is not current epoch {}",
-            current_epoch.index_epoch,
-        )));
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM requested epoch is not current epoch",
+        ));
     }
     if manifest.result_privacy != result_privacy {
         return Err(StorageError::bad_request(
@@ -1470,8 +1469,8 @@ fn result_privacy_from_runtime(
         "private_payload_oram_required" => Err(StorageError::bad_request(format!(
             "private HNSW ORAM result_privacy=private_payload_oram_required requires {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}, which is not implemented in this MVP"
         ))),
-        value => Err(StorageError::bad_request(format!(
-            "private HNSW ORAM option {RESULT_PRIVACY_OPTION} has unsupported value {value}",
+        _ => Err(StorageError::bad_request(format!(
+            "private HNSW ORAM option {RESULT_PRIVACY_OPTION} has unsupported value",
         ))),
     }
 }
@@ -2142,6 +2141,26 @@ mod private_hnsw_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("invalid path label"));
         assert!(!rendered.contains(&malformed), "{rendered}");
+    }
+
+    #[test]
+    fn result_privacy_runtime_option_rejects_unsupported_value_without_reflecting_value() {
+        let unsupported = "tenant-a-private-result-mode-sentinel";
+        let instance = CryptoInstanceConfig {
+            provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+            materials: HashMap::new(),
+            backend_ref: None,
+            options: serde_json::json!({
+                RESULT_PRIVACY_OPTION: unsupported,
+            }),
+        };
+
+        let rendered = result_privacy_from_runtime(&instance)
+            .unwrap_err()
+            .to_string();
+
+        assert!(rendered.contains("option result_privacy has unsupported value"));
+        assert!(!rendered.contains(unsupported), "{rendered}");
     }
 
     fn fixture_bucket(bucket_id: u64, epoch: u64) -> PrivateHnswOramBucket {

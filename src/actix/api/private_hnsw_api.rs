@@ -1219,7 +1219,7 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "strict mode requires fixed_budget=true"
             );
-            post_json_error_contains!(
+            let stale_epoch_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/session",
                 OpenPrivateHnswSessionRequest {
                     client_id: "tenant-a/sdk-instance-stale-epoch".to_string(),
@@ -1229,6 +1229,14 @@ mod private_hnsw_rest_tests {
                 },
                 StatusCode::BAD_REQUEST,
                 "requested epoch"
+            );
+            assert!(
+                !stale_epoch_error.contains(&NEXT_EPOCH.to_string()),
+                "{stale_epoch_error}"
+            );
+            assert!(
+                !stale_epoch_error.contains(&BASE_EPOCH.to_string()),
+                "{stale_epoch_error}"
             );
             post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/session",

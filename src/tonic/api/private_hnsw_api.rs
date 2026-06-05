@@ -1794,6 +1794,8 @@ mod private_hnsw_grpc_tests {
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("requested epoch"));
+            assert!(!err.message().contains(&NEXT_EPOCH.to_string()));
+            assert!(!err.message().contains(&BASE_EPOCH.to_string()));
 
             let err = PrivateHnswOram::open_private_hnsw_session(
                 &service,
