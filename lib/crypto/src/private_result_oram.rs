@@ -495,6 +495,7 @@ pub fn sign_private_result_oram_manifest(
     key_pair: &Ed25519KeyPair,
     manifest: &PrivateResultOramManifest,
 ) -> Result<PrivateResultOramSignature, PrivateResultOramError> {
+    validate_private_result_oram_manifest_shape(manifest)?;
     validate_resource_id(&manifest.owner_signing_key_id)?;
     let message = private_result_oram_manifest_signature_message(manifest);
     let signature = key_pair.sign(&message);
@@ -1811,6 +1812,13 @@ mod tests {
 
         assert_eq!(epoch.epoch, 42);
         assert_eq!(epoch.root_hash, [42; 32]);
+
+        let mut malformed = manifest;
+        malformed.root_hash = "AAAA".to_string();
+        assert_eq!(
+            sign_private_result_oram_manifest(&key_pair, &malformed),
+            Err(PrivateResultOramError::InvalidManifestField("root_hash"))
+        );
     }
 
     #[test]

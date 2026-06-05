@@ -17,7 +17,7 @@ use crate::private_hnsw_oram::{
     PrivateHnswOramReadPathsSignatureInput, PrivateHnswOramSignature, PrivateHnswParams,
     ResultPrivacyMode, private_hnsw_oram_bucket_ciphertext_bytes,
     private_hnsw_oram_commit_signature_message, private_hnsw_oram_manifest_signature_message,
-    private_hnsw_oram_read_paths_signature_message,
+    private_hnsw_oram_read_paths_signature_message, validate_private_hnsw_oram_manifest_shape,
 };
 
 pub const PRIVATE_HNSW_NODE_AEAD_DOMAIN: &[u8] = b"qdrant-sec/private-hnsw-node-aead/v1";
@@ -40,6 +40,7 @@ const PRIVATE_HNSW_CLIENT_STATE_AEAD_CONTEXT_DOMAIN: &str =
     "qdrant-sec/private-hnsw-client-state-aead/v1";
 const PRIVATE_HNSW_LEVEL_ASSIGNMENT_DOMAIN: &[u8] = b"qdrant-sec/private-hnsw-level-assignment/v1";
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
+const BASE64URL_NOPAD_8_BYTE_LEN: usize = 11;
 const PRIVATE_HNSW_BUCKET_CIPHERTEXT_OPEN_MAX_BYTES: usize = 64 * 1024 * 1024;
 const PRIVATE_HNSW_CLIENT_STATE_CIPHERTEXT_MAX_BYTES: usize = 256 * 1024 * 1024;
 const PRIVATE_HNSW_MERKLE_PROOF_JSON_MAX_BYTES: usize = 4 * 1024 * 1024;
@@ -912,12 +913,7 @@ pub fn decode_private_hnsw_oram_leaf_label(
     label: &str,
     tree_height: u32,
 ) -> Result<u64, PrivateHnswClientError> {
-    let bytes = BASE64URL_NOPAD
-        .decode(label.as_bytes())
-        .map_err(|_| PrivateHnswClientError::InvalidLeafLabelEncoding)?;
-    let bytes: [u8; 8] = bytes
-        .try_into()
-        .map_err(|_| PrivateHnswClientError::InvalidLeafLabelLength)?;
+    let bytes = decode_private_hnsw_oram_leaf_label_shape(label)?;
     let leaf = u64::from_be_bytes(bytes);
     validate_private_hnsw_oram_leaf(leaf, tree_height)?;
     Ok(leaf)
@@ -2665,6 +2661,17 @@ pub fn sign_private_hnsw_oram_commit(
     plan: &PrivateHnswClientCommitPlan,
 ) -> Result<PrivateHnswOramSignature, PrivateHnswClientError> {
     validate_commit_signature_context(context)?;
+    if plan.updated_buckets.is_empty() {
+        return Err(PrivateHnswClientError::EmptyCommit);
+    }
+    if plan.new_epoch <= plan.old_epoch {
+        return Err(PrivateHnswClientError::InvalidCommitEpoch);
+    }
+    decode_merkle_root(&plan.old_root_hash)?;
+    decode_merkle_root(&plan.new_root_hash)?;
+    for bucket in &plan.updated_buckets {
+        decode_bucket_ciphertext_hash(&bucket.ciphertext_sha256)?;
+    }
     let bucket_refs = plan.signature_bucket_refs();
     let input = PrivateHnswOramCommitSignatureInput {
         collection_id: context.collection_id,
@@ -2699,6 +2706,19 @@ pub fn sign_private_hnsw_oram_read_paths(
     dummy_paths_included: bool,
 ) -> Result<PrivateHnswOramSignature, PrivateHnswClientError> {
     validate_commit_signature_context(context)?;
+    decode_merkle_root(root_hash)?;
+    if paths.is_empty()
+        || requested_paths == 0
+        || paths.len() > u32::MAX as usize
+        || requested_paths as usize != paths.len()
+    {
+        return Err(PrivateHnswClientError::InvalidCommitSignatureContext(
+            "requested_paths",
+        ));
+    }
+    for path in paths {
+        decode_private_hnsw_oram_leaf_label_shape(path)?;
+    }
     let path_refs = paths.iter().map(String::as_str).collect::<Vec<_>>();
     let input = PrivateHnswOramReadPathsSignatureInput {
         collection_id: context.collection_id,
@@ -2730,6 +2750,8 @@ pub fn sign_private_hnsw_oram_manifest(
     validate_resource_key_id(&manifest.owner_signing_key_id).map_err(|_| {
         PrivateHnswClientError::InvalidManifestSignatureContext("owner_signing_key_id")
     })?;
+    validate_private_hnsw_oram_manifest_shape(manifest)
+        .map_err(|_| PrivateHnswClientError::InvalidManifestSignatureContext("manifest"))?;
     let message = private_hnsw_oram_manifest_signature_message(manifest);
     let signature = key_pair.sign(&message);
     Ok(PrivateHnswOramSignature {
@@ -3179,6 +3201,20 @@ fn validate_private_hnsw_oram_leaf(
         return Err(PrivateHnswClientError::LeafOutOfRange);
     }
     Ok(())
+}
+
+fn decode_private_hnsw_oram_leaf_label_shape(
+    label: &str,
+) -> Result<[u8; 8], PrivateHnswClientError> {
+    if label.len() != BASE64URL_NOPAD_8_BYTE_LEN {
+        return Err(PrivateHnswClientError::InvalidLeafLabelLength);
+    }
+    let bytes = BASE64URL_NOPAD
+        .decode(label.as_bytes())
+        .map_err(|_| PrivateHnswClientError::InvalidLeafLabelEncoding)?;
+    bytes
+        .try_into()
+        .map_err(|_| PrivateHnswClientError::InvalidLeafLabelLength)
 }
 
 fn decode_f32_le_vector(
@@ -3699,6 +3735,10 @@ mod tests {
         );
         assert_eq!(
             decode_private_hnsw_oram_leaf_label("not-base64", 3),
+            Err(PrivateHnswClientError::InvalidLeafLabelLength)
+        );
+        assert_eq!(
+            decode_private_hnsw_oram_leaf_label("!!!!!!!!!!!", 3),
             Err(PrivateHnswClientError::InvalidLeafLabelEncoding)
         );
         let label = BASE64URL_NOPAD.encode(&7u64.to_be_bytes());
@@ -4429,19 +4469,15 @@ mod tests {
         )
         .unwrap();
 
-        let signature = sign_private_hnsw_oram_commit(
-            &key_pair,
-            PrivateHnswCommitSignatureContext {
-                collection_id: "collection-uuid-1",
-                vector_name: "text",
-                key_id: "tenant-a/vector-private-rk",
-                rk_id: "tenant-a/vector-private-rk",
-                rk_epoch: 7,
-                signing_key_id: "tenant-a/private-hnsw-signing-v1",
-            },
-            &plan,
-        )
-        .unwrap();
+        let context = PrivateHnswCommitSignatureContext {
+            collection_id: "collection-uuid-1",
+            vector_name: "text",
+            key_id: "tenant-a/vector-private-rk",
+            rk_id: "tenant-a/vector-private-rk",
+            rk_epoch: 7,
+            signing_key_id: "tenant-a/private-hnsw-signing-v1",
+        };
+        let signature = sign_private_hnsw_oram_commit(&key_pair, context, &plan).unwrap();
 
         let bucket_refs = plan.signature_bucket_refs();
         validate_private_hnsw_oram_commit_signature(
@@ -4466,6 +4502,114 @@ mod tests {
             },
         )
         .unwrap();
+
+        let mut empty_plan = plan.clone();
+        empty_plan.updated_buckets.clear();
+        assert_eq!(
+            sign_private_hnsw_oram_commit(&key_pair, context, &empty_plan),
+            Err(PrivateHnswClientError::EmptyCommit)
+        );
+
+        let mut malformed_root_plan = plan.clone();
+        malformed_root_plan.old_root_hash = "AAAA".to_string();
+        assert_eq!(
+            sign_private_hnsw_oram_commit(&key_pair, context, &malformed_root_plan),
+            Err(PrivateHnswClientError::InvalidMerkleRoot)
+        );
+
+        let mut malformed_hash_plan = plan.clone();
+        malformed_hash_plan.updated_buckets[0].ciphertext_sha256 = "AAAA".to_string();
+        assert_eq!(
+            sign_private_hnsw_oram_commit(&key_pair, context, &malformed_hash_plan),
+            Err(PrivateHnswClientError::InvalidBucketCiphertextHash)
+        );
+    }
+
+    #[test]
+    fn read_paths_signature_signer_rejects_malformed_request_shape() {
+        use ring::signature::{Ed25519KeyPair, KeyPair};
+
+        use crate::private_hnsw_oram::{
+            PrivateHnswOramReadPathsSignatureInput, PrivateHnswSignatureVerification,
+            validate_private_hnsw_oram_read_paths_signature,
+        };
+
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[7; 32]).unwrap();
+        let context = PrivateHnswCommitSignatureContext {
+            collection_id: "collection-uuid-1",
+            vector_name: "text",
+            key_id: "tenant-a/vector-private-rk",
+            rk_id: "tenant-a/vector-private-rk",
+            rk_epoch: 7,
+            signing_key_id: "tenant-a/private-hnsw-signing-v1",
+        };
+        let root_hash = commitment(42);
+        let paths = vec![BASE64URL_NOPAD.encode(&0u64.to_be_bytes())];
+        let signature =
+            sign_private_hnsw_oram_read_paths(&key_pair, context, 42, &root_hash, &paths, 1, true)
+                .unwrap();
+        let path_refs = paths.iter().map(String::as_str).collect::<Vec<_>>();
+        validate_private_hnsw_oram_read_paths_signature(
+            PrivateHnswOramReadPathsSignatureInput {
+                collection_id: "collection-uuid-1",
+                vector_name: "text",
+                key_id: "tenant-a/vector-private-rk",
+                rk_id: "tenant-a/vector-private-rk",
+                rk_epoch: 7,
+                index_epoch: 42,
+                root_hash: &root_hash,
+                paths: &path_refs,
+                requested_paths: 1,
+                dummy_paths_included: true,
+                signature_alg: &signature.alg,
+                signature_key_id: &signature.key_id,
+            },
+            &signature.sig,
+            PrivateHnswSignatureVerification {
+                expected_key_id: "tenant-a/private-hnsw-signing-v1",
+                public_key: key_pair.public_key().as_ref(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            sign_private_hnsw_oram_read_paths(&key_pair, context, 42, &root_hash, &paths, 2, true,),
+            Err(PrivateHnswClientError::InvalidCommitSignatureContext(
+                "requested_paths"
+            ))
+        );
+        assert_eq!(
+            sign_private_hnsw_oram_read_paths(&key_pair, context, 42, "AAAA", &paths, 1, true),
+            Err(PrivateHnswClientError::InvalidMerkleRoot)
+        );
+
+        let malformed_length_paths = vec!["AAAA".to_string()];
+        assert_eq!(
+            sign_private_hnsw_oram_read_paths(
+                &key_pair,
+                context,
+                42,
+                &root_hash,
+                &malformed_length_paths,
+                1,
+                true,
+            ),
+            Err(PrivateHnswClientError::InvalidLeafLabelLength)
+        );
+
+        let malformed_encoding_paths = vec!["!!!!!!!!!!!".to_string()];
+        assert_eq!(
+            sign_private_hnsw_oram_read_paths(
+                &key_pair,
+                context,
+                42,
+                &root_hash,
+                &malformed_encoding_paths,
+                1,
+                true,
+            ),
+            Err(PrivateHnswClientError::InvalidLeafLabelEncoding)
+        );
     }
 
     #[test]
@@ -4505,6 +4649,15 @@ mod tests {
         assert_eq!(signature.key_id, manifest.owner_signing_key_id);
         assert_eq!(epoch.epoch, manifest.index_epoch);
         assert_eq!(epoch.root_hash, [42; 32]);
+
+        let mut malformed = manifest;
+        malformed.root_hash = "AAAA".to_string();
+        assert_eq!(
+            sign_private_hnsw_oram_manifest(&key_pair, &malformed),
+            Err(PrivateHnswClientError::InvalidManifestSignatureContext(
+                "manifest"
+            ))
+        );
     }
 
     #[test]
