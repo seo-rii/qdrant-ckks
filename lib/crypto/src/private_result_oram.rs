@@ -516,6 +516,15 @@ pub fn sign_private_result_oram_commit(
     if plan.updated_buckets.is_empty() {
         return Err(PrivateResultOramError::EmptyCommit);
     }
+    if plan.new_epoch <= plan.old_epoch {
+        return Err(PrivateResultOramError::InvalidManifestField("new_epoch"));
+    }
+    decode_base64url_32(&plan.old_root_hash, "old_root_hash")?;
+    decode_base64url_32(&plan.new_root_hash, "new_root_hash")?;
+    for bucket in &plan.updated_buckets {
+        decode_base64url_32(&bucket.ciphertext_sha256, "ciphertext_sha256")
+            .map_err(|_| PrivateResultOramError::InvalidBucketField("ciphertext_sha256"))?;
+    }
     let bucket_refs = plan.signature_bucket_refs();
     let input = PrivateResultOramCommitSignatureInput {
         collection_id: context.collection_id,
@@ -1704,18 +1713,14 @@ mod tests {
         )
         .unwrap();
 
-        let signature = sign_private_result_oram_commit(
-            &key_pair,
-            PrivateResultOramCommitSignatureContext {
-                collection_id: "collection-uuid-1",
-                key_id: "tenant-a/payload-private-rk",
-                rk_id: "tenant-a/payload-private-rk",
-                rk_epoch: 7,
-                signing_key_id: "tenant-a/private-result-signing-v1",
-            },
-            &plan,
-        )
-        .unwrap();
+        let context = PrivateResultOramCommitSignatureContext {
+            collection_id: "collection-uuid-1",
+            key_id: "tenant-a/payload-private-rk",
+            rk_id: "tenant-a/payload-private-rk",
+            rk_epoch: 7,
+            signing_key_id: "tenant-a/private-result-signing-v1",
+        };
+        let signature = sign_private_result_oram_commit(&key_pair, context, &plan).unwrap();
 
         let bucket_refs = plan.signature_bucket_refs();
         validate_private_result_oram_commit_signature(
@@ -1749,18 +1754,33 @@ mod tests {
             updated_buckets: Vec::new(),
         };
         assert_eq!(
-            sign_private_result_oram_commit(
-                &key_pair,
-                PrivateResultOramCommitSignatureContext {
-                    collection_id: "collection-uuid-1",
-                    key_id: "tenant-a/payload-private-rk",
-                    rk_id: "tenant-a/payload-private-rk",
-                    rk_epoch: 7,
-                    signing_key_id: "tenant-a/private-result-signing-v1",
-                },
-                &empty_plan,
-            ),
+            sign_private_result_oram_commit(&key_pair, context, &empty_plan),
             Err(PrivateResultOramError::EmptyCommit)
+        );
+
+        let mut stale_epoch_plan = plan.clone();
+        stale_epoch_plan.new_epoch = stale_epoch_plan.old_epoch;
+        assert_eq!(
+            sign_private_result_oram_commit(&key_pair, context, &stale_epoch_plan),
+            Err(PrivateResultOramError::InvalidManifestField("new_epoch"))
+        );
+
+        let mut malformed_root_plan = plan.clone();
+        malformed_root_plan.old_root_hash = "AAAA".to_string();
+        assert_eq!(
+            sign_private_result_oram_commit(&key_pair, context, &malformed_root_plan),
+            Err(PrivateResultOramError::InvalidManifestField(
+                "old_root_hash"
+            ))
+        );
+
+        let mut malformed_hash_plan = plan.clone();
+        malformed_hash_plan.updated_buckets[0].ciphertext_sha256 = "AAAA".to_string();
+        assert_eq!(
+            sign_private_result_oram_commit(&key_pair, context, &malformed_hash_plan),
+            Err(PrivateResultOramError::InvalidBucketField(
+                "ciphertext_sha256"
+            ))
         );
     }
 

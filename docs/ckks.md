@@ -709,7 +709,8 @@ malformed signed requests do not reach the verifier registry lookup boundary.
 The SDK/server manifest signature validators also validate manifest shape before
 canonical manifest signature message construction. SDK signing helpers reject
 malformed manifests, path-count mismatches, malformed path labels/roots, and
-empty commits before constructing canonical signature messages.
+malformed commit hashes, non-advancing commit epochs, and empty commits before
+constructing canonical signature messages.
 The `read_paths` and `commit` client signatures use the same key-id shape check
 before verifier lookup; invalid key ids are rejected without echoing the
 submitted value. For active sessions, the request key id must match the session
