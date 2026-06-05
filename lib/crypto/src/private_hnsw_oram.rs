@@ -315,6 +315,7 @@ pub fn validate_private_hnsw_oram_manifest_signature(
     verification: PrivateHnswSignatureVerification<'_>,
 ) -> Result<(), PrivateHnswOramError> {
     let signature = signature.ok_or(PrivateHnswOramError::MissingManifestSignature)?;
+    validate_manifest_shape(manifest)?;
     validate_signature_header(
         signature,
         manifest.owner_signing_key_id.as_str(),
@@ -975,6 +976,17 @@ mod tests {
         assert_eq!(
             validate_private_hnsw_oram_manifest(&tampered, Some(&signature), context),
             Err(PrivateHnswOramError::InvalidManifestSignature)
+        );
+
+        let mut malformed = fixture_manifest();
+        malformed.root_hash = "AAAA".to_string();
+        assert_eq!(
+            validate_private_hnsw_oram_manifest_signature(
+                &malformed,
+                Some(&signature),
+                context.signature_verification,
+            ),
+            Err(PrivateHnswOramError::InvalidManifestField("root_hash"))
         );
     }
 

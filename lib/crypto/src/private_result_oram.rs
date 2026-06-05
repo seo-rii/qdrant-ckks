@@ -456,6 +456,7 @@ pub fn validate_private_result_oram_manifest_signature(
     verification: PrivateResultOramSignatureVerification<'_>,
 ) -> Result<(), PrivateResultOramError> {
     let signature = signature.ok_or(PrivateResultOramError::MissingManifestSignature)?;
+    validate_private_result_oram_manifest_shape(manifest)?;
     validate_signature_header(
         signature,
         manifest.owner_signing_key_id.as_str(),
@@ -1781,6 +1782,17 @@ mod tests {
         assert_eq!(
             validate_private_result_oram_manifest_signature(&manifest, None, verification),
             Err(PrivateResultOramError::MissingManifestSignature)
+        );
+
+        let mut malformed = fixture_manifest();
+        malformed.root_hash = "AAAA".to_string();
+        assert_eq!(
+            validate_private_result_oram_manifest_signature(
+                &malformed,
+                Some(&signature),
+                verification,
+            ),
+            Err(PrivateResultOramError::InvalidManifestField("root_hash"))
         );
     }
 
