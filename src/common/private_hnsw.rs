@@ -49,6 +49,7 @@ const ZERO_TRUST_PROFILE_STRICT: &str = "strict";
 const SESSION_LEASE_SECS: u64 = 300;
 const MAX_SESSION_COUNT: usize = 1024;
 const PRIVATE_HNSW_ORAM_LEAF_LABEL_B64_LEN: usize = 11;
+const PRIVATE_HNSW_ORAM_CLIENT_ID_MAX_LEN: usize = 256;
 const PRIVATE_HNSW_ORAM_SESSION_ID_MAX_LEN: usize = 128;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -706,11 +707,7 @@ pub async fn do_open_private_hnsw_session(
     fixed_budget: bool,
     result_privacy: ResultPrivacyMode,
 ) -> StorageResult<PrivateHnswSessionResponse> {
-    if client_id.is_empty() || client_id.len() > 256 {
-        return Err(StorageError::bad_request(
-            "private HNSW ORAM client_id must be non-empty and at most 256 bytes",
-        ));
-    }
+    validate_private_hnsw_client_id_shape(&client_id)?;
     validate_private_hnsw_session_cluster_epoch_mode(toc.is_distributed())?;
     if is_strict(settings) && !fixed_budget {
         return Err(StorageError::bad_request(
@@ -1603,6 +1600,22 @@ fn validate_client_signature_key_id_shape(key_id: &str) -> StorageResult<()> {
     Ok(())
 }
 
+fn validate_private_hnsw_client_id_shape(client_id: &str) -> StorageResult<()> {
+    if client_id.is_empty() || client_id.len() > PRIVATE_HNSW_ORAM_CLIENT_ID_MAX_LEN {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM client_id must be non-empty and at most 256 bytes",
+        ));
+    }
+    if !client_id.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'/' | b'@' | b'-')
+    }) {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM client_id is invalid",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_private_hnsw_session_id_shape(session_id: &str) -> StorageResult<()> {
     if session_id.is_empty()
         || session_id.len() > PRIVATE_HNSW_ORAM_SESSION_ID_MAX_LEN
@@ -2377,6 +2390,26 @@ mod private_hnsw_tests {
         let err = validate_private_hnsw_session_id_shape(malformed).unwrap_err();
         let rendered = err.to_string();
         assert!(rendered.contains("session_id is invalid"));
+        assert!(!rendered.contains(malformed));
+    }
+
+    #[test]
+    fn client_id_shape_rejects_oversized_or_malformed_values_without_reflecting_value() {
+        validate_private_hnsw_client_id_shape("tenant-a/sdk.instance_1@host:1").unwrap();
+
+        let oversized = format!(
+            "client-id-sentinel{}",
+            "x".repeat(PRIVATE_HNSW_ORAM_CLIENT_ID_MAX_LEN)
+        );
+        let err = validate_private_hnsw_client_id_shape(&oversized).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("client_id must be non-empty and at most 256 bytes"));
+        assert!(!rendered.contains("client-id-sentinel"));
+
+        let malformed = "client-id!sentinel";
+        let err = validate_private_hnsw_client_id_shape(malformed).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("client_id is invalid"));
         assert!(!rendered.contains(malformed));
     }
 

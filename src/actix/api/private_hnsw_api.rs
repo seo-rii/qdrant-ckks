@@ -1188,6 +1188,28 @@ mod private_hnsw_rest_tests {
                 "{oversized_client_id_error}"
             );
 
+            let malformed_client_id_sentinel = "session-client-id!sentinel";
+            let malformed_client_id_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/session",
+                OpenPrivateHnswSessionRequest {
+                    client_id: malformed_client_id_sentinel.to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
+                },
+                StatusCode::BAD_REQUEST,
+                "client_id is invalid"
+            );
+            assert!(
+                !malformed_client_id_error.contains(malformed_client_id_sentinel),
+                "{malformed_client_id_error}"
+            );
+            assert!(
+                !malformed_client_id_error
+                    .contains("client_id must be non-empty and at most 256 bytes"),
+                "{malformed_client_id_error}"
+            );
+
             post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/session",
                 OpenPrivateHnswSessionRequest {

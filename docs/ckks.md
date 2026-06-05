@@ -651,7 +651,8 @@ does not open a session. Session open requests with `fixed_budget=false` in
 strict mode, a non-current desired epoch, or the reserved
 `private_payload_oram_required` result privacy mode are rejected before any ORAM
 path reads are served. Client id shape errors are sanitized without echoing the
-submitted client id.
+submitted client id; session clients must use non-empty safe ASCII resource-id
+characters within the configured length bound.
 Expired sessions are purged from the registry before use and release the
 single-writer lock for that private index; using an expired session id for
 `read_paths`, `commit`, or `close` fails closed.
