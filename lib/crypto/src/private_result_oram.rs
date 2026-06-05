@@ -477,6 +477,10 @@ pub fn validate_private_result_oram_commit_signature(
     if input.updated_buckets.is_empty() {
         return Err(PrivateResultOramError::EmptyCommit);
     }
+    for bucket in input.updated_buckets {
+        decode_base64url_32(bucket.ciphertext_sha256, "ciphertext_sha256")
+            .map_err(|_| PrivateResultOramError::InvalidBucketField("ciphertext_sha256"))?;
+    }
     let signature_bytes = decode_base64url_64(signature)?;
     let message = private_result_oram_commit_signature_message(input);
     UnparsedPublicKey::new(&ED25519, verification.public_key)
@@ -1976,6 +1980,25 @@ mod tests {
                 verification,
             ),
             Err(PrivateResultOramError::EmptyCommit)
+        );
+
+        let malformed_hash_buckets = [PrivateResultOramCommitBucketRef {
+            bucket_id: 9,
+            ciphertext_sha256: "AAAA",
+        }];
+        let malformed_hash_input = PrivateResultOramCommitSignatureInput {
+            updated_buckets: &malformed_hash_buckets,
+            ..input
+        };
+        assert_eq!(
+            validate_private_result_oram_commit_signature(
+                malformed_hash_input,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateResultOramError::InvalidBucketField(
+                "ciphertext_sha256"
+            ))
         );
 
         let tampered = PrivateResultOramCommitSignatureInput {

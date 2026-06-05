@@ -869,9 +869,10 @@ Merkle-tree root mismatch errors do not reflect computed Merkle roots, and its
 writeback helper preflights stale current epochs and manifest epoch/root
 context before bucket/Merkle writes. It rejects empty writebacks before storage
 state changes. SDK commit planning, signing, and verification also reject empty
-commit bucket lists, and validate each updated bucket commitment against the
-bucket ciphertext hash plus collection/key lineage and the proposed bucket epoch
-before preparing Merkle metadata.
+commit bucket lists and malformed updated bucket ciphertext hashes, and validate
+each updated bucket commitment against the bucket ciphertext hash plus
+collection/key lineage and the proposed bucket epoch before preparing Merkle
+metadata.
 Directory hardening also checks symlink/type before chmod. It also exposes
 `read_merkle_path_batch` with the canonical qdrant-sec
 `merkle_path_batch/v1` proof DTO so a future result ORAM read API can return
