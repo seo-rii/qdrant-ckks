@@ -963,11 +963,15 @@ match the incoming bundle.
 or non-advancing writebacks, preflighting current epoch/root and stored manifest
 context, validating updated bucket ciphertext/hash plus context-bound
 commitments, preparing the Merkle update, writing updated encrypted buckets,
-writing Merkle metadata, then applying epoch/root CAS. These types and storage
-primitives are contract scaffolding only and are not wired into runtime
-upload/session APIs yet. `commit_writeback_with_signature` adds the future API
-preflight by validating the canonical Ed25519 commit signature before the same
-writeback path can touch bucket or epoch files.
+writing Merkle metadata, then applying epoch/root CAS. The live private HNSW
+REST/gRPC commit handlers delegate their signed writeback to
+`commit_writeback_with_signature`, so the canonical Ed25519 commit signature,
+fixed ciphertext size, context-bound bucket commitment, Merkle update, and
+epoch/root CAS now share one storage boundary. Invalid signatures, malformed
+ciphertext, stale roots, and commitment-context mismatches fail before bucket,
+Merkle, or epoch state changes; runtime error mapping preserves only safe
+failure categories such as `ciphertext` or `commit signature` without echoing
+ciphertext bodies, bucket ids, or root hashes.
 Collection snapshots include the `private_result_oram/` directory if it is
 present, but current restore fail-closes when that directory or a symlink at
 that path appears because `payload/private-result-oram@v1` is still reserved.

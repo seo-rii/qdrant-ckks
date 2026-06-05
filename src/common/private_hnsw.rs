@@ -16,14 +16,12 @@ use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     DistanceKind, FixedBudgetParams, OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
     PRIVATE_HNSW_ORAM_BINDING, PrivateHnswBucketAeadContext, PrivateHnswManifestValidationContext,
-    PrivateHnswOramBucket, PrivateHnswOramCommitBucketRef, PrivateHnswOramCommitSignatureInput,
-    PrivateHnswOramManifest, PrivateHnswOramReadPathsSignatureInput, PrivateHnswOramSignature,
-    PrivateHnswParams, PrivateHnswSignatureVerification, ResultPrivacyMode,
-    VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, decode_private_hnsw_oram_leaf_label,
+    PrivateHnswOramBucket, PrivateHnswOramManifest, PrivateHnswOramReadPathsSignatureInput,
+    PrivateHnswOramSignature, PrivateHnswParams, PrivateHnswSignatureVerification,
+    ResultPrivacyMode, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, decode_private_hnsw_oram_leaf_label,
     private_hnsw_bucket_commitment, private_hnsw_oram_bucket_ciphertext_bytes,
     private_hnsw_oram_bucket_count, private_hnsw_oram_bucket_ids_for_leaf,
-    validate_private_hnsw_oram_commit_signature, validate_private_hnsw_oram_manifest,
-    validate_private_hnsw_oram_manifest_signature_shape,
+    validate_private_hnsw_oram_manifest, validate_private_hnsw_oram_manifest_signature_shape,
     validate_private_hnsw_oram_read_paths_signature,
 };
 use segment::types::Distance;
@@ -998,37 +996,8 @@ pub async fn do_commit_private_hnsw_paths(
             }
             validate_root_hash_string(&bucket.ciphertext_sha256, "ciphertext_sha256")?;
         }
-        let commit_bucket_refs = updated_buckets
-            .iter()
-            .map(|bucket| PrivateHnswOramCommitBucketRef {
-                bucket_id: bucket.bucket_id,
-                ciphertext_sha256: bucket.ciphertext_sha256.as_str(),
-            })
-            .collect::<Vec<_>>();
         validate_session_signature_owner_key(session, &commit_signature.key_id)?;
         let public_key = request_context.signature_public_key(&commit_signature.key_id)?;
-        validate_private_hnsw_oram_commit_signature(
-            PrivateHnswOramCommitSignatureInput {
-                collection_id: &session.collection_id,
-                vector_name,
-                key_id: &session.manifest.key_id,
-                rk_id: &session.manifest.rk_id,
-                rk_epoch: session.manifest.rk_epoch,
-                old_epoch,
-                new_epoch,
-                old_root_hash: &old_root_hash,
-                new_root_hash: &new_root_hash,
-                updated_buckets: &commit_bucket_refs,
-                signature_alg: &commit_signature.alg,
-                signature_key_id: &commit_signature.key_id,
-            },
-            &commit_signature.sig,
-            PrivateHnswSignatureVerification {
-                expected_key_id: &commit_signature.key_id,
-                public_key: &public_key,
-            },
-        )
-        .map_err(private_hnsw_error)?;
 
         let store = PrivateHnswOramStore::new(&session.collection_path, vector_name)?;
         ensure_private_hnsw_active_session_current_epoch(
@@ -1037,42 +1006,6 @@ pub async fn do_commit_private_hnsw_paths(
             &old_root_hash,
             "commit",
         )?;
-        for bucket in &updated_buckets {
-            store
-                .validate_bucket_for_write(
-                    bucket,
-                    new_epoch,
-                    session.bucket_count,
-                    session.max_bucket_ciphertext_bytes,
-                )
-                .map_err(private_hnsw_commit_bucket_store_error)?;
-            validate_bucket_ciphertext_fixed_size(bucket, &session.manifest)?;
-        }
-        validate_bucket_commitment_context(
-            &session.manifest,
-            new_epoch,
-            &updated_buckets,
-            "commit",
-        )?;
-        let prepared_merkle_commit = store.prepare_merkle_commit(
-            old_epoch,
-            &old_root_hash,
-            new_epoch,
-            &new_root_hash,
-            session.bucket_count,
-            &updated_buckets,
-        ).map_err(private_hnsw_commit_metadata_store_error)?;
-        for bucket in &updated_buckets {
-            store.write_bucket(
-                bucket,
-                new_epoch,
-                session.bucket_count,
-                session.max_bucket_ciphertext_bytes,
-            ).map_err(private_hnsw_commit_bucket_store_error)?;
-        }
-        prepared_merkle_commit
-            .write()
-            .map_err(private_hnsw_commit_metadata_store_error)?;
         let old = PrivateHnswOramEpochState {
             index_epoch: old_epoch,
             root_hash: old_root_hash,
@@ -1081,13 +1014,29 @@ pub async fn do_commit_private_hnsw_paths(
             index_epoch: new_epoch,
             root_hash: new_root_hash,
         };
-        store
-            .compare_and_swap_epoch(&old, &new)
-            .map_err(private_hnsw_commit_metadata_store_error)?;
-        session.index_epoch = new.index_epoch;
-        session.root_hash = new.root_hash.clone();
+        let store_commit_signature = PrivateHnswOramSignature {
+            alg: commit_signature.alg.clone(),
+            key_id: commit_signature.key_id.clone(),
+            sig: commit_signature.sig.clone(),
+        };
+        let committed = store
+            .commit_writeback_with_signature(
+                &old,
+                &new,
+                session.bucket_count,
+                &updated_buckets,
+                session.max_bucket_ciphertext_bytes,
+                &store_commit_signature,
+                PrivateHnswSignatureVerification {
+                    expected_key_id: &commit_signature.key_id,
+                    public_key: &public_key,
+                },
+            )
+            .map_err(private_hnsw_commit_writeback_store_error)?;
+        session.index_epoch = committed.index_epoch;
+        session.root_hash = committed.root_hash.clone();
         session.lease_expires_unix = now_unix.saturating_add(SESSION_LEASE_SECS);
-        Ok(new)
+        Ok(committed)
     })
 }
 
@@ -1387,28 +1336,38 @@ fn private_hnsw_upload_store_error(err: CollectionError) -> StorageError {
     }
 }
 
-fn private_hnsw_commit_metadata_store_error(err: CollectionError) -> StorageError {
+fn private_hnsw_commit_writeback_store_error(err: CollectionError) -> StorageError {
     match err {
         CollectionError::NotFound { .. } => StorageError::not_found(
             "private HNSW ORAM encrypted bucket store metadata is unavailable",
         ),
+        CollectionError::BadRequest { description }
+            if description.contains("commit signature verification failed") =>
+        {
+            StorageError::bad_request("private HNSW ORAM commit signature verification failed")
+        }
+        CollectionError::BadRequest { description }
+            if description.contains("commit bucket commitment context mismatch") =>
+        {
+            StorageError::bad_request("private HNSW ORAM commit bucket commitment context mismatch")
+        }
+        CollectionError::BadRequest { description }
+            if description.contains("bucket ciphertext must match fixed ciphertext size") =>
+        {
+            StorageError::bad_request(
+                "private HNSW ORAM bucket ciphertext must match fixed ciphertext size",
+            )
+        }
+        CollectionError::BadRequest { description }
+            if description.contains("bucket ciphertext") =>
+        {
+            StorageError::bad_request("private HNSW ORAM bucket ciphertext validation failed")
+        }
         CollectionError::BadRequest { .. } => StorageError::bad_request(
             "private HNSW ORAM encrypted bucket store metadata validation failed",
         ),
         CollectionError::ServiceError { .. } => StorageError::service_error(
             "private HNSW ORAM encrypted bucket store metadata validation failed",
-        ),
-        other => StorageError::from(other),
-    }
-}
-
-fn private_hnsw_commit_bucket_store_error(err: CollectionError) -> StorageError {
-    match err {
-        CollectionError::NotFound { .. } => {
-            StorageError::not_found("private HNSW ORAM encrypted bucket store is unavailable")
-        }
-        CollectionError::ServiceError { .. } => StorageError::service_error(
-            "private HNSW ORAM encrypted bucket store validation failed",
         ),
         other => StorageError::from(other),
     }

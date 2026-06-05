@@ -6,9 +6,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
-    PrivateHnswManifestValidationContext, PrivateHnswOramBucket, PrivateHnswOramManifest,
-    PrivateHnswOramSignature, PrivateHnswOramUploadBundle,
-    validate_private_hnsw_oram_upload_bundle,
+    PrivateHnswBucketAeadContext, PrivateHnswManifestValidationContext, PrivateHnswOramBucket,
+    PrivateHnswOramCommitBucketRef, PrivateHnswOramCommitSignatureInput, PrivateHnswOramManifest,
+    PrivateHnswOramSignature, PrivateHnswOramUploadBundle, PrivateHnswSignatureVerification,
+    private_hnsw_bucket_commitment, private_hnsw_oram_bucket_ciphertext_bytes,
+    validate_private_hnsw_oram_commit_signature, validate_private_hnsw_oram_upload_bundle,
     validate_private_hnsw_oram_upload_bundle_with_signature,
 };
 use serde::{Deserialize, Serialize};
@@ -410,6 +412,94 @@ impl PrivateHnswOramStore {
             new,
         )?;
         Ok(())
+    }
+
+    pub fn commit_writeback(
+        &self,
+        old: &PrivateHnswOramEpochState,
+        new: &PrivateHnswOramEpochState,
+        bucket_count: u64,
+        updated_buckets: &[PrivateHnswOramBucket],
+        max_ciphertext_bytes: usize,
+    ) -> CollectionResult<PrivateHnswOramEpochState> {
+        if updated_buckets.is_empty() {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM commit must update at least one bucket",
+            ));
+        }
+        if new.index_epoch <= old.index_epoch {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM commit new epoch must be greater than old epoch",
+            ));
+        }
+        self.ensure_current_epoch_matches(old)?;
+        let (manifest, _) = self.read_manifest()?;
+        validate_commit_manifest_context(&manifest, old, bucket_count)?;
+        for bucket in updated_buckets {
+            validate_bucket(bucket, new.index_epoch, bucket_count, max_ciphertext_bytes)?;
+            validate_bucket_ciphertext_fixed_size(bucket, &manifest)?;
+        }
+        validate_bucket_commitment_context(&manifest, new.index_epoch, updated_buckets)?;
+        let prepared_merkle_commit = self.prepare_merkle_commit(
+            old.index_epoch,
+            &old.root_hash,
+            new.index_epoch,
+            &new.root_hash,
+            bucket_count,
+            updated_buckets,
+        )?;
+        for bucket in updated_buckets {
+            self.write_bucket(bucket, new.index_epoch, bucket_count, max_ciphertext_bytes)?;
+        }
+        prepared_merkle_commit.write()?;
+        self.compare_and_swap_epoch(old, new)?;
+        Ok(new.clone())
+    }
+
+    pub fn commit_writeback_with_signature(
+        &self,
+        old: &PrivateHnswOramEpochState,
+        new: &PrivateHnswOramEpochState,
+        bucket_count: u64,
+        updated_buckets: &[PrivateHnswOramBucket],
+        max_ciphertext_bytes: usize,
+        commit_signature: &PrivateHnswOramSignature,
+        signature_verification: PrivateHnswSignatureVerification<'_>,
+    ) -> CollectionResult<PrivateHnswOramEpochState> {
+        let (manifest, _) = self.read_manifest()?;
+        let updated_bucket_refs = updated_buckets
+            .iter()
+            .map(|bucket| PrivateHnswOramCommitBucketRef {
+                bucket_id: bucket.bucket_id,
+                ciphertext_sha256: bucket.ciphertext_sha256.as_str(),
+            })
+            .collect::<Vec<_>>();
+        validate_private_hnsw_oram_commit_signature(
+            PrivateHnswOramCommitSignatureInput {
+                collection_id: &manifest.collection_id,
+                vector_name: &manifest.vector_name,
+                key_id: &manifest.key_id,
+                rk_id: &manifest.rk_id,
+                rk_epoch: manifest.rk_epoch,
+                old_epoch: old.index_epoch,
+                new_epoch: new.index_epoch,
+                old_root_hash: &old.root_hash,
+                new_root_hash: &new.root_hash,
+                updated_buckets: &updated_bucket_refs,
+                signature_alg: &commit_signature.alg,
+                signature_key_id: &commit_signature.key_id,
+            },
+            &commit_signature.sig,
+            signature_verification,
+        )
+        .map_err(private_hnsw_oram_error)?;
+        self.commit_writeback(
+            old,
+            new,
+            bucket_count,
+            updated_buckets,
+            max_ciphertext_bytes,
+        )
     }
 
     pub fn merkle_root_for_commitments(commitments: &[String]) -> CollectionResult<String> {
@@ -815,6 +905,75 @@ fn validate_bucket(
     Ok(())
 }
 
+fn validate_commit_manifest_context(
+    manifest: &PrivateHnswOramManifest,
+    old: &PrivateHnswOramEpochState,
+    bucket_count: u64,
+) -> CollectionResult<()> {
+    if manifest.index_epoch != old.index_epoch || manifest.root_hash != old.root_hash {
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM manifest epoch/root does not match commit old epoch/root",
+        ));
+    }
+    if manifest.bucket_count != bucket_count {
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM manifest bucket_count does not match commit bucket_count",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_bucket_commitment_context(
+    manifest: &PrivateHnswOramManifest,
+    index_epoch: u64,
+    buckets: &[PrivateHnswOramBucket],
+) -> CollectionResult<()> {
+    for bucket in buckets {
+        let expected_commitment = private_hnsw_bucket_commitment(
+            PrivateHnswBucketAeadContext {
+                collection_id: &manifest.collection_id,
+                vector_name: &manifest.vector_name,
+                key_id: &manifest.key_id,
+                rk_id: &manifest.rk_id,
+                rk_epoch: manifest.rk_epoch,
+                bucket_id: bucket.bucket_id,
+                index_epoch,
+            },
+            &bucket.ciphertext_sha256,
+        )
+        .map_err(|_| {
+            CollectionError::bad_request(
+                "private HNSW ORAM commit bucket commitment context mismatch",
+            )
+        })?;
+        if expected_commitment != bucket.bucket_commitment {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM commit bucket commitment context mismatch",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_bucket_ciphertext_fixed_size(
+    bucket: &PrivateHnswOramBucket,
+    manifest: &PrivateHnswOramManifest,
+) -> CollectionResult<()> {
+    let expected = private_hnsw_oram_bucket_ciphertext_bytes(&manifest.oram)
+        .map_err(private_hnsw_oram_error)?;
+    let ciphertext = BASE64URL_NOPAD
+        .decode(bucket.ciphertext.as_bytes())
+        .map_err(|_| {
+            CollectionError::bad_request("private HNSW ORAM bucket ciphertext is not base64url")
+        })?;
+    if ciphertext.len() != expected {
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM bucket ciphertext must match fixed ciphertext size",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_bucket_for_read(
     bucket: &PrivateHnswOramBucket,
     expected_epoch: u64,
@@ -909,6 +1068,25 @@ fn validate_upload_bundle_with_signature(
 
 fn private_hnsw_client_error(err: qdrant_sec::PrivateHnswClientError) -> CollectionError {
     CollectionError::bad_request(err.to_string())
+}
+
+fn private_hnsw_oram_error(err: qdrant_sec::PrivateHnswOramError) -> CollectionError {
+    use qdrant_sec::PrivateHnswOramError;
+
+    let message = match err {
+        PrivateHnswOramError::UnsupportedManifestVersion(_) => {
+            "private HNSW ORAM manifest version is unsupported"
+        }
+        PrivateHnswOramError::UnsupportedSignatureAlgorithm(_) => {
+            "private HNSW ORAM signature algorithm must be ed25519"
+        }
+        PrivateHnswOramError::InvalidCommitSignature => {
+            "private HNSW ORAM commit signature verification failed"
+        }
+        PrivateHnswOramError::MalformedSignature => "private HNSW ORAM signature is malformed",
+        other => return CollectionError::bad_request(other.to_string()),
+    };
+    CollectionError::bad_request(message)
 }
 
 fn max_base64url_nopad_encoded_len(byte_len: usize) -> CollectionResult<usize> {
@@ -1172,7 +1350,8 @@ mod tests {
     use qdrant_sec::{
         DistanceKind, FixedBudgetParams, OramKind, OramParams, PRIVATE_HNSW_ORAM_BINDING,
         PrivateHnswBucketAeadBaseContext, PrivateHnswBucketAeadContext, PrivateHnswBuildPoint,
-        PrivateHnswClientError, PrivateHnswClientKeys, PrivateHnswEncryptedPathBatch,
+        PrivateHnswClientCommitBucketRef, PrivateHnswClientCommitPlan, PrivateHnswClientError,
+        PrivateHnswClientKeys, PrivateHnswCommitSignatureContext, PrivateHnswEncryptedPathBatch,
         PrivateHnswManifestBuildContext, PrivateHnswManifestValidationContext,
         PrivateHnswNodeBlockPlaintext, PrivateHnswOramClientConfig, PrivateHnswOramPlaintextBucket,
         PrivateHnswParams, PrivateHnswSearchParams, PrivateHnswSignatureVerification,
@@ -1184,7 +1363,7 @@ mod tests {
         package_private_hnsw_oram_upload_bundle, plan_private_hnsw_oram_commit,
         private_hnsw_oram_bucket_ids_for_leaf, private_hnsw_oram_merkle_root_for_commitments,
         seal_private_hnsw_oram_bucket, seal_private_hnsw_oram_plaintext_index,
-        search_private_hnsw_oram_encrypted_verified,
+        search_private_hnsw_oram_encrypted_verified, sign_private_hnsw_oram_commit,
     };
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use tempfile::TempDir;
@@ -1367,6 +1546,64 @@ mod tests {
             &encrypted_build,
         )
         .unwrap()
+    }
+
+    fn fixture_signed_commit_update(
+        key_pair: &Ed25519KeyPair,
+    ) -> (
+        PrivateHnswOramUploadBundle,
+        PrivateHnswOramBucket,
+        PrivateHnswOramEpochState,
+        PrivateHnswOramSignature,
+    ) {
+        let bundle = fixture_upload_bundle(key_pair);
+        let keys =
+            PrivateHnswClientKeys::derive_from_resource_key(&SecretKey::from_bytes([13; 32]))
+                .unwrap();
+        let config = client_oram_config();
+        let plaintext_bucket = empty_private_hnsw_oram_plaintext_bucket(0, config).unwrap();
+        let encoded_bucket =
+            encode_private_hnsw_oram_bucket_plaintext(&plaintext_bucket, config).unwrap();
+        let updated_bucket = seal_private_hnsw_oram_bucket(
+            &keys,
+            client_bucket_base_context().for_bucket(0, 43),
+            &encoded_bucket,
+        )
+        .unwrap();
+
+        let mut next_commitments = bundle.bucket_commitments();
+        let bucket_index = usize::try_from(updated_bucket.bucket_id).unwrap();
+        next_commitments[bucket_index] = updated_bucket.bucket_commitment.clone();
+        let new_epoch = PrivateHnswOramEpochState {
+            index_epoch: 43,
+            root_hash: PrivateHnswOramStore::merkle_root_for_commitments(&next_commitments)
+                .unwrap(),
+        };
+        let plan = PrivateHnswClientCommitPlan {
+            old_epoch: bundle.manifest.index_epoch,
+            new_epoch: new_epoch.index_epoch,
+            old_root_hash: bundle.manifest.root_hash.clone(),
+            new_root_hash: new_epoch.root_hash.clone(),
+            leaf_commitments: next_commitments,
+            updated_buckets: vec![PrivateHnswClientCommitBucketRef {
+                bucket_id: updated_bucket.bucket_id,
+                ciphertext_sha256: updated_bucket.ciphertext_sha256.clone(),
+            }],
+        };
+        let signature = sign_private_hnsw_oram_commit(
+            key_pair,
+            PrivateHnswCommitSignatureContext {
+                collection_id: "collection-uuid-1",
+                vector_name: "text",
+                key_id: "tenant-a/vector-private-rk",
+                rk_id: "tenant-a/vector-private-rk",
+                rk_epoch: 7,
+                signing_key_id: "tenant-a/private-hnsw-signing-v1",
+            },
+            &plan,
+        )
+        .unwrap();
+        (bundle, updated_bucket, new_epoch, signature)
     }
 
     fn fixture_validation_context<'a>(
@@ -1876,6 +2113,128 @@ mod tests {
         assert!(rendered.contains("newer than requested epoch"));
         assert!(!rendered.contains("42"), "{rendered}");
         assert!(!rendered.contains("1"), "{rendered}");
+    }
+
+    #[test]
+    fn writeback_commit_with_signature_verifies_before_writes() {
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[23; 32]).unwrap();
+        let (bundle, updated_bucket, new, signature) = fixture_signed_commit_update(&key_pair);
+
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let old = store.write_initial_upload_bundle(&bundle, 4096).unwrap();
+        let committed = store
+            .commit_writeback_with_signature(
+                &old,
+                &new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&updated_bucket),
+                4096,
+                &signature,
+                PrivateHnswSignatureVerification {
+                    expected_key_id: "tenant-a/private-hnsw-signing-v1",
+                    public_key: key_pair.public_key().as_ref(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(committed, new);
+        assert_eq!(store.read_current_epoch().unwrap(), new);
+        assert_eq!(
+            store
+                .read_bucket(0, new.index_epoch, bundle.bucket_count(), 4096)
+                .unwrap(),
+            updated_bucket,
+        );
+        let proof = store
+            .read_merkle_path_batch(&[0], new.index_epoch, &new.root_hash, bundle.bucket_count())
+            .unwrap();
+        assert_eq!(proof.leaves[0].leaf_hash, updated_bucket.bucket_commitment);
+
+        let temp = TempDir::new().unwrap();
+        let tampered_store = fixture_store(&temp);
+        let old = tampered_store
+            .write_initial_upload_bundle(&bundle, 4096)
+            .unwrap();
+        let mut tampered_signature = signature.clone();
+        tampered_signature.sig = BASE64URL_NOPAD.encode(&[8; 64]);
+        let rendered = tampered_store
+            .commit_writeback_with_signature(
+                &old,
+                &new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&updated_bucket),
+                4096,
+                &tampered_signature,
+                PrivateHnswSignatureVerification {
+                    expected_key_id: "tenant-a/private-hnsw-signing-v1",
+                    public_key: key_pair.public_key().as_ref(),
+                },
+            )
+            .unwrap_err()
+            .to_string();
+
+        assert!(rendered.contains("commit signature verification failed"));
+        assert!(!rendered.contains(&tampered_signature.sig), "{rendered}");
+        assert_eq!(tampered_store.read_current_epoch().unwrap(), old);
+        assert_eq!(
+            tampered_store
+                .read_bucket(0, old.index_epoch, bundle.bucket_count(), 4096)
+                .unwrap(),
+            bundle.buckets[0],
+        );
+        let proof = tampered_store
+            .read_merkle_path_batch(&[0], old.index_epoch, &old.root_hash, bundle.bucket_count())
+            .unwrap();
+        assert_eq!(
+            proof.leaves[0].leaf_hash,
+            bundle.buckets[0].bucket_commitment
+        );
+    }
+
+    #[test]
+    fn writeback_commit_rejects_bucket_commitment_context_before_writes() {
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[29; 32]).unwrap();
+        let (bundle, updated_bucket, _, _) = fixture_signed_commit_update(&key_pair);
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let old = store.write_initial_upload_bundle(&bundle, 4096).unwrap();
+
+        let mut tampered_bucket = updated_bucket.clone();
+        tampered_bucket.bucket_commitment = root_hash(88);
+        let mut next_commitments = bundle.bucket_commitments();
+        next_commitments[0] = tampered_bucket.bucket_commitment.clone();
+        let tampered_new = PrivateHnswOramEpochState {
+            index_epoch: 43,
+            root_hash: PrivateHnswOramStore::merkle_root_for_commitments(&next_commitments)
+                .unwrap(),
+        };
+        let rendered = store
+            .commit_writeback(
+                &old,
+                &tampered_new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&tampered_bucket),
+                4096,
+            )
+            .unwrap_err()
+            .to_string();
+
+        assert!(rendered.contains("commit bucket commitment context mismatch"));
+        assert_eq!(store.read_current_epoch().unwrap(), old);
+        assert_eq!(
+            store
+                .read_bucket(0, old.index_epoch, bundle.bucket_count(), 4096)
+                .unwrap(),
+            bundle.buckets[0],
+        );
+        let proof = store
+            .read_merkle_path_batch(&[0], old.index_epoch, &old.root_hash, bundle.bucket_count())
+            .unwrap();
+        assert_eq!(
+            proof.leaves[0].leaf_hash,
+            bundle.buckets[0].bucket_commitment
+        );
     }
 
     #[test]
