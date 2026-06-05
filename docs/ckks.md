@@ -778,9 +778,10 @@ base64url form without reflecting malformed labels, then verifies the Ed25519
 request signature before computing bucket paths. The SDK/server read-path
 signature validator also shape-checks the root hash and path labels before
 signature body parsing.
-For `commit`, the server verifies the Ed25519 request signature before parsing
-the proposed `new_root_hash` or preparing Merkle/writeback metadata, after the
-bounded request-size and epoch checks.
+For `commit`, after the bounded request-size and epoch checks, the server first
+bounds `old_root_hash` and `new_root_hash` to canonical 32-byte base64url
+strings, then verifies the Ed25519 request signature before preparing
+Merkle/writeback metadata.
 Malformed client signature shape errors for `read_paths` and `commit` are also
 sanitized so submitted signature bodies are not echoed.
 Commit error handling follows the same boundary: malformed updated bucket
