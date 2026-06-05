@@ -2183,6 +2183,49 @@ mod tests {
             proof.leaves[0].leaf_hash,
             bundle.buckets[1].bucket_commitment
         );
+
+        let temp = TempDir::new().unwrap();
+        let unsupported_alg_store = fixture_store(&temp);
+        let old = unsupported_alg_store
+            .write_initial_upload_bundle(&bundle, 128)
+            .unwrap();
+        let mut unsupported_alg_signature = signature.clone();
+        unsupported_alg_signature.alg = "rsa-pss-result-sentinel".to_string();
+        let rendered = unsupported_alg_store
+            .commit_writeback_with_signature(
+                &old,
+                &new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&updated_bucket),
+                128,
+                &unsupported_alg_signature,
+                PrivateResultOramSignatureVerification {
+                    expected_key_id: "tenant-a/private-result-signing-v1",
+                    public_key: key_pair.public_key().as_ref(),
+                },
+            )
+            .unwrap_err()
+            .to_string();
+
+        assert!(rendered.contains("signature algorithm must be ed25519"));
+        assert!(
+            !rendered.contains(&unsupported_alg_signature.alg),
+            "{rendered}"
+        );
+        assert_eq!(unsupported_alg_store.read_current_epoch().unwrap(), old);
+        assert_eq!(
+            unsupported_alg_store
+                .read_bucket(1, old.index_epoch, bundle.bucket_count(), 128)
+                .unwrap(),
+            bundle.buckets[1],
+        );
+        let proof = unsupported_alg_store
+            .read_merkle_path_batch(&[1], old.index_epoch, &old.root_hash, bundle.bucket_count())
+            .unwrap();
+        assert_eq!(
+            proof.leaves[0].leaf_hash,
+            bundle.buckets[1].bucket_commitment
+        );
     }
 
     #[test]
