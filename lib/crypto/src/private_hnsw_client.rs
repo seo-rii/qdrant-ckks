@@ -40,6 +40,8 @@ const PRIVATE_HNSW_CLIENT_STATE_AEAD_CONTEXT_DOMAIN: &str =
     "qdrant-sec/private-hnsw-client-state-aead/v1";
 const PRIVATE_HNSW_LEVEL_ASSIGNMENT_DOMAIN: &[u8] = b"qdrant-sec/private-hnsw-level-assignment/v1";
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
+const PRIVATE_HNSW_BUCKET_CIPHERTEXT_OPEN_MAX_BYTES: usize = 64 * 1024 * 1024;
+const PRIVATE_HNSW_CLIENT_STATE_CIPHERTEXT_MAX_BYTES: usize = 256 * 1024 * 1024;
 const CLIENT_STATE_SNAPSHOT_VERSION: u16 = 1;
 const CLIENT_STATE_AEAD_VERSION: u16 = 1;
 pub const PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND: &str = "merkle_path_batch/v1";
@@ -835,6 +837,15 @@ pub fn open_private_hnsw_oram_client_state_snapshot(
     if encrypted.index_epoch != context.index_epoch || encrypted.root_hash != context.root_hash {
         return Err(PrivateHnswClientError::ClientStateOpenFailed);
     }
+    if encrypted.ciphertext_sha256.len() != BASE64URL_NOPAD_32_BYTE_LEN {
+        return Err(PrivateHnswClientError::InvalidClientStateCiphertextHash);
+    }
+    let Some(decoded_len) = base64url_nopad_decoded_len(encrypted.ciphertext.len()) else {
+        return Err(PrivateHnswClientError::InvalidClientStateCiphertextEncoding);
+    };
+    if decoded_len > PRIVATE_HNSW_CLIENT_STATE_CIPHERTEXT_MAX_BYTES {
+        return Err(PrivateHnswClientError::InvalidClientStateCiphertextEncoding);
+    }
 
     let raw_ciphertext = BASE64URL_NOPAD
         .decode(encrypted.ciphertext.as_bytes())
@@ -912,6 +923,9 @@ pub fn decode_private_hnsw_oram_leaf_label(
 }
 
 fn decode_client_state_snapshot_node_id(value: &str) -> Result<[u8; 32], PrivateHnswClientError> {
+    if value.len() != BASE64URL_NOPAD_32_BYTE_LEN {
+        return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
+    }
     let bytes = BASE64URL_NOPAD
         .decode(value.as_bytes())
         .map_err(|_| PrivateHnswClientError::InvalidClientStateSnapshot)?;
@@ -1805,16 +1819,19 @@ fn validate_private_hnsw_upload_bucket(
         });
     }
 
-    let raw_ciphertext = BASE64URL_NOPAD
-        .decode(bucket.ciphertext.as_bytes())
-        .map_err(|_| PrivateHnswClientError::InvalidBucketCiphertextEncoding)?;
-    if raw_ciphertext.len() != expected_ciphertext_bytes {
+    let Some(decoded_len) = base64url_nopad_decoded_len(bucket.ciphertext.len()) else {
+        return Err(PrivateHnswClientError::InvalidBucketCiphertextEncoding);
+    };
+    if decoded_len != expected_ciphertext_bytes {
         return Err(PrivateHnswClientError::BucketCiphertextSizeMismatch {
             bucket_id: bucket.bucket_id,
             expected_bytes: expected_ciphertext_bytes,
-            actual_bytes: raw_ciphertext.len(),
+            actual_bytes: decoded_len,
         });
     }
+    let raw_ciphertext = BASE64URL_NOPAD
+        .decode(bucket.ciphertext.as_bytes())
+        .map_err(|_| PrivateHnswClientError::InvalidBucketCiphertextEncoding)?;
     if raw_ciphertext.len() < 1 + BUCKET_AEAD_NONCE_LEN + BUCKET_AEAD_TAG_LEN {
         return Err(PrivateHnswClientError::InvalidBucketCiphertextEncoding);
     }
@@ -2913,6 +2930,12 @@ pub fn open_private_hnsw_oram_bucket(
         return Err(PrivateHnswClientError::BucketMetadataMismatch);
     }
 
+    let Some(decoded_len) = base64url_nopad_decoded_len(bucket.ciphertext.len()) else {
+        return Err(PrivateHnswClientError::InvalidBucketCiphertextEncoding);
+    };
+    if decoded_len > PRIVATE_HNSW_BUCKET_CIPHERTEXT_OPEN_MAX_BYTES {
+        return Err(PrivateHnswClientError::InvalidBucketCiphertextEncoding);
+    }
     let raw_ciphertext = BASE64URL_NOPAD
         .decode(bucket.ciphertext.as_bytes())
         .map_err(|_| PrivateHnswClientError::InvalidBucketCiphertextEncoding)?;
@@ -3287,7 +3310,21 @@ fn decode_merkle_root(value: &str) -> Result<[u8; 32], PrivateHnswClientError> {
         .map_err(|_| PrivateHnswClientError::InvalidMerkleRoot)
 }
 
+fn base64url_nopad_decoded_len(encoded_len: usize) -> Option<usize> {
+    let full_quads = encoded_len / 4;
+    let base_len = full_quads.checked_mul(3)?;
+    match encoded_len % 4 {
+        0 => Some(base_len),
+        2 => base_len.checked_add(1),
+        3 => base_len.checked_add(2),
+        _ => None,
+    }
+}
+
 fn decode_merkle_proof_hash(value: &str) -> Result<[u8; 32], PrivateHnswClientError> {
+    if value.len() != BASE64URL_NOPAD_32_BYTE_LEN {
+        return Err(PrivateHnswClientError::InvalidMerkleProof);
+    }
     let bytes = BASE64URL_NOPAD
         .decode(value.as_bytes())
         .map_err(|_| PrivateHnswClientError::InvalidMerkleProof)?;
@@ -5609,6 +5646,25 @@ mod tests {
             })
         );
 
+        let mut malformed_ciphertext_len = decoded.clone();
+        malformed_ciphertext_len.buckets[0].ciphertext = "A".to_string();
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle(&malformed_ciphertext_len),
+            Err(PrivateHnswClientError::InvalidBucketCiphertextEncoding)
+        );
+
+        let mut oversized_ciphertext = decoded.clone();
+        let oversized_raw = vec![0; expected_bytes + 1];
+        oversized_ciphertext.buckets[0].ciphertext = BASE64URL_NOPAD.encode(&oversized_raw);
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle(&oversized_ciphertext),
+            Err(PrivateHnswClientError::BucketCiphertextSizeMismatch {
+                bucket_id: 0,
+                expected_bytes,
+                actual_bytes: expected_bytes + 1
+            })
+        );
+
         let mut malformed_root = decoded.clone();
         malformed_root.manifest.root_hash = "AAAA".to_string();
         assert_eq!(
@@ -5654,6 +5710,13 @@ mod tests {
         assert_eq!(
             PrivateHnswOramClientState::from_snapshot(&bad_version),
             Err(PrivateHnswClientError::UnsupportedClientStateSnapshotVersion(2))
+        );
+
+        let mut bad_node_id = decoded.clone();
+        bad_node_id.positions[0].node_id = "AAAA".to_string();
+        assert_eq!(
+            PrivateHnswOramClientState::from_snapshot(&bad_node_id),
+            Err(PrivateHnswClientError::InvalidClientStateSnapshot)
         );
 
         let mut bad_stash = decoded;
@@ -5754,6 +5817,13 @@ mod tests {
         tampered_hash.ciphertext_sha256 = BASE64URL_NOPAD.encode(&[9; 32]);
         assert_eq!(
             open_private_hnsw_oram_client_state_snapshot(&keys, context, &tampered_hash),
+            Err(PrivateHnswClientError::InvalidClientStateCiphertextHash)
+        );
+
+        let mut malformed_hash = encrypted.clone();
+        malformed_hash.ciphertext_sha256 = "AAAA".to_string();
+        assert_eq!(
+            open_private_hnsw_oram_client_state_snapshot(&keys, context, &malformed_hash),
             Err(PrivateHnswClientError::InvalidClientStateCiphertextHash)
         );
 
@@ -6527,6 +6597,13 @@ mod tests {
             Err(PrivateHnswClientError::InvalidBucketCiphertextHash)
         );
 
+        let mut malformed_ciphertext = bucket.clone();
+        malformed_ciphertext.ciphertext = "A".to_string();
+        assert_eq!(
+            open_private_hnsw_oram_bucket(&keys, context, &malformed_ciphertext),
+            Err(PrivateHnswClientError::InvalidBucketCiphertextEncoding)
+        );
+
         let mut wrong_ciphertext = bucket;
         let mut raw = BASE64URL_NOPAD
             .decode(wrong_ciphertext.ciphertext.as_bytes())
@@ -6541,5 +6618,15 @@ mod tests {
             open_private_hnsw_oram_bucket(&keys, context, &wrong_ciphertext),
             Err(PrivateHnswClientError::BucketOpenFailed)
         );
+    }
+
+    #[test]
+    fn base64url_nopad_decoded_len_rejects_impossible_shapes() {
+        assert_eq!(base64url_nopad_decoded_len(0), Some(0));
+        assert_eq!(base64url_nopad_decoded_len(2), Some(1));
+        assert_eq!(base64url_nopad_decoded_len(3), Some(2));
+        assert_eq!(base64url_nopad_decoded_len(4), Some(3));
+        assert_eq!(base64url_nopad_decoded_len(1), None);
+        assert_eq!(base64url_nopad_decoded_len(5), None);
     }
 }

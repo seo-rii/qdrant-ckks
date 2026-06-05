@@ -1035,10 +1035,12 @@ opening sessions against a pinned epoch/root. For encrypted local backups,
 position-map subkey, rejects malformed position map/stash snapshots before
 producing ciphertext, and binds the ciphertext to collection id, vector name,
 RK id/epoch, index epoch, and root hash;
-`open_private_hnsw_oram_client_state_snapshot` rejects hash tamper or
-epoch/root context mismatch before returning the snapshot. The encrypted backup
-DTO does not serialize plaintext position-map entries, leaf labels, stash blocks,
-point tokens, or payload fetch tokens outside the AEAD ciphertext.
+`open_private_hnsw_oram_client_state_snapshot` bounds the encoded ciphertext
+length and validates the ciphertext hash shape before decode, then rejects hash
+tamper or epoch/root context mismatch before returning the snapshot. The
+encrypted backup DTO does not serialize plaintext position-map entries, leaf
+labels, stash blocks, point tokens, or payload fetch tokens outside the AEAD
+ciphertext.
 
 The client CKKS vector sidecar signature message is canonical and
 length-prefixed for SDK interop. The byte string is:
