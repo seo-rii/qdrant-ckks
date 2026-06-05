@@ -827,7 +827,30 @@ fn validate_epoch_state(epoch: &PrivateResultOramEpochState) -> CollectionResult
 }
 
 fn private_result_oram_error(err: qdrant_sec::PrivateResultOramError) -> CollectionError {
-    CollectionError::bad_request(err.to_string())
+    use qdrant_sec::PrivateResultOramError;
+
+    let message = match err {
+        PrivateResultOramError::UnsupportedManifestVersion(_) => {
+            "private result ORAM manifest version is unsupported"
+        }
+        PrivateResultOramError::UnsupportedSignatureAlgorithm(_) => {
+            "private result ORAM signature algorithm must be ed25519"
+        }
+        PrivateResultOramError::UnsupportedBucketVersion(_) => {
+            "private result ORAM bucket version is unsupported"
+        }
+        PrivateResultOramError::BucketOutOfRange { .. } => {
+            "private result ORAM bucket is out of range"
+        }
+        PrivateResultOramError::StaleBucketEpoch { .. } => {
+            "private result ORAM bucket epoch does not match expected epoch"
+        }
+        PrivateResultOramError::DuplicateUpdatedBucket { .. } => {
+            "private result ORAM commit repeats a bucket"
+        }
+        other => return CollectionError::bad_request(other.to_string()),
+    };
+    CollectionError::bad_request(message)
 }
 
 fn decode_base64url_32(value: &str, field: &str) -> CollectionResult<[u8; 32]> {
@@ -1300,6 +1323,13 @@ mod tests {
         let oversized = fixture_bucket(4, 42, &[8; 65]);
         let err = store.write_bucket(&oversized, 42, 16, 64).unwrap_err();
         assert!(err.to_string().contains("exceeds maximum size"));
+
+        let out_of_range = fixture_bucket(99, 42, b"out of range result bucket");
+        let err = store.write_bucket(&out_of_range, 42, 16, 64).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("out of range"));
+        assert!(!rendered.contains("99"), "{rendered}");
+        assert!(!rendered.contains("16"), "{rendered}");
     }
 
     #[test]
@@ -1408,6 +1438,16 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let store = fixture_store(&temp);
         let bundle = fixture_upload_bundle();
+
+        let mut bad_alg_bundle = bundle.clone();
+        let signature_alg_sentinel = "private-result-signature-alg-sentinel";
+        bad_alg_bundle.manifest_signature.alg = signature_alg_sentinel.to_string();
+        let err = store
+            .write_initial_upload_bundle(&bad_alg_bundle, 128)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("signature algorithm must be ed25519"));
+        assert!(!rendered.contains(signature_alg_sentinel), "{rendered}");
 
         let epoch = store.write_initial_upload_bundle(&bundle, 128).unwrap();
 

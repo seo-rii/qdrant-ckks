@@ -571,6 +571,10 @@ pub fn validate_private_result_oram_upload_bundle(
 ) -> Result<Vec<String>, PrivateResultOramError> {
     let manifest = &bundle.manifest;
     validate_private_result_oram_manifest_shape(manifest)?;
+    validate_private_result_oram_manifest_signature_shape(&bundle.manifest_signature)?;
+    if bundle.manifest_signature.key_id != manifest.owner_signing_key_id {
+        return Err(PrivateResultOramError::SignatureKeyIdMismatch);
+    }
     let bucket_count = usize::try_from(manifest.bucket_count)
         .map_err(|_| PrivateResultOramError::InvalidManifestField("bucket_count"))?;
     if bundle.buckets.len() != bucket_count {
@@ -1958,6 +1962,23 @@ mod tests {
         assert_eq!(
             validate_private_result_oram_upload_bundle(&decoded).unwrap(),
             ordered_commitments
+        );
+
+        let mut malformed_signature = decoded.clone();
+        malformed_signature.manifest_signature.alg = "ed25519-sentinel".to_string();
+        assert_eq!(
+            validate_private_result_oram_upload_bundle(&malformed_signature),
+            Err(PrivateResultOramError::UnsupportedSignatureAlgorithm(
+                "ed25519-sentinel".to_string()
+            ))
+        );
+
+        let mut wrong_signature_key = decoded.clone();
+        wrong_signature_key.manifest_signature.key_id =
+            "tenant-a/private-result-signing-v2".to_string();
+        assert_eq!(
+            validate_private_result_oram_upload_bundle(&wrong_signature_key),
+            Err(PrivateResultOramError::SignatureKeyIdMismatch)
         );
 
         validate_private_result_oram_manifest(

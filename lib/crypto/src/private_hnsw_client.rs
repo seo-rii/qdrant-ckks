@@ -18,6 +18,7 @@ use crate::private_hnsw_oram::{
     ResultPrivacyMode, private_hnsw_oram_bucket_ciphertext_bytes,
     private_hnsw_oram_commit_signature_message, private_hnsw_oram_manifest_signature_message,
     private_hnsw_oram_read_paths_signature_message, validate_private_hnsw_oram_manifest_shape,
+    validate_private_hnsw_oram_manifest_signature_shape,
 };
 
 pub const PRIVATE_HNSW_NODE_AEAD_DOMAIN: &[u8] = b"qdrant-sec/private-hnsw-node-aead/v1";
@@ -1738,6 +1739,16 @@ pub fn validate_private_hnsw_oram_upload_bundle(
     bundle: &PrivateHnswOramUploadBundle,
 ) -> Result<Vec<String>, PrivateHnswClientError> {
     let manifest = &bundle.manifest;
+    validate_private_hnsw_oram_manifest_shape(manifest)
+        .map_err(|_| PrivateHnswClientError::InvalidManifestSignatureContext("manifest"))?;
+    validate_private_hnsw_oram_manifest_signature_shape(&bundle.manifest_signature).map_err(
+        |_| PrivateHnswClientError::InvalidManifestSignatureContext("manifest_signature"),
+    )?;
+    if bundle.manifest_signature.key_id != manifest.owner_signing_key_id {
+        return Err(PrivateHnswClientError::InvalidManifestSignatureContext(
+            "owner_signing_key_id",
+        ));
+    }
     let expected_bucket_count = private_hnsw_oram_bucket_count(manifest.oram.tree_height)?;
     if manifest.bucket_count != expected_bucket_count {
         return Err(PrivateHnswClientError::BucketCountMismatch);
@@ -5756,6 +5767,25 @@ mod tests {
             ordered_commitments
         );
 
+        let mut malformed_signature = decoded.clone();
+        malformed_signature.manifest_signature.alg = "ed25519-sentinel".to_string();
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle(&malformed_signature),
+            Err(PrivateHnswClientError::InvalidManifestSignatureContext(
+                "manifest_signature"
+            ))
+        );
+
+        let mut wrong_signature_key = decoded.clone();
+        wrong_signature_key.manifest_signature.key_id =
+            "tenant-a/private-hnsw-signing-v2".to_string();
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle(&wrong_signature_key),
+            Err(PrivateHnswClientError::InvalidManifestSignatureContext(
+                "owner_signing_key_id"
+            ))
+        );
+
         let epoch = validate_private_hnsw_oram_manifest(
             &decoded.manifest,
             Some(&decoded.manifest_signature),
@@ -5882,7 +5912,9 @@ mod tests {
         malformed_root.manifest.root_hash = "AAAA".to_string();
         assert_eq!(
             validate_private_hnsw_oram_upload_bundle(&malformed_root),
-            Err(PrivateHnswClientError::InvalidMerkleRoot)
+            Err(PrivateHnswClientError::InvalidManifestSignatureContext(
+                "manifest"
+            ))
         );
 
         let mut wrong_root = decoded;

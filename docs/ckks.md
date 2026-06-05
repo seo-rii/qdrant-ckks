@@ -877,13 +877,15 @@ collection crate also has a `PrivateResultOramStore` skeleton for the future
 payload/result layer. It writes `private_result_oram/manifest.json`,
 `manifest.sig`, encrypted bucket files, Merkle commitment metadata, and
 `epochs/current.json` with the same private directory hardening and epoch CAS
-contract used by private HNSW ORAM. Its upload bundle, commit, and stored
-Merkle-tree root mismatch errors do not reflect computed Merkle roots, and its
-writeback helper preflights stale current epochs and manifest epoch/root
-context before bucket/Merkle writes. It rejects empty writebacks before storage
-state changes. SDK commit planning, signing, and verification also reject empty
-commit bucket lists and malformed updated bucket ciphertext hashes, and validate
-each updated bucket commitment against the bucket ciphertext hash plus
+contract used by private HNSW ORAM. Its upload bundle preflight validates
+manifest signature shape and owner key id before store writes. Upload bundle,
+commit, and stored Merkle-tree root mismatch errors do not reflect computed
+Merkle roots, and its writeback helper preflights stale current epochs and
+manifest epoch/root context before bucket/Merkle writes. It rejects empty
+writebacks before storage state changes. SDK commit planning, signing, and
+verification also reject empty commit bucket lists and malformed updated bucket
+ciphertext hashes, and validate each updated bucket commitment against the
+bucket ciphertext hash plus
 collection/key lineage and the proposed bucket epoch before preparing Merkle
 metadata.
 Directory hardening also checks symlink/type before chmod. It also exposes
@@ -971,9 +973,10 @@ REST/gRPC SDK distribution. `validate_private_hnsw_oram_upload_bundle` and the
 bundle's `validate_initial_upload_contract` method let SDKs preflight decoded
 upload bundles before calling Qdrant: they require a complete bucket set, reject
 duplicate or missing bucket ids, verify bucket ciphertext SHA-256 and bucket
-commitments against the manifest context, require each decoded ciphertext to
-match the manifest-derived fixed bucket ciphertext size, and recompute the
-manifest Merkle root. Before submitting an ORAM writeback, clients can call
+commitments against the manifest context, require the manifest signature shape
+and owner key id to match the manifest, require each decoded ciphertext to match
+the manifest-derived fixed bucket ciphertext size, and recompute the manifest
+Merkle root. Before submitting an ORAM writeback, clients can call
 `plan_private_hnsw_oram_commit_for_manifest` to bind commit planning to the
 current signed manifest, updated bucket ciphertext hashes,
 collection/vector/key lineage, and proposed bucket epoch before producing
