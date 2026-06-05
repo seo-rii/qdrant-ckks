@@ -750,6 +750,14 @@ without stored/requested epoch, bucket-count, bucket-id, or unsupported-version
 values. Its file/directory hardening helpers also use fixed messages instead of
 reflecting collection-local paths, temp filenames, symlink targets, or OS error
 strings.
+Session-open stale epoch errors do not echo the requested or current epoch.
+Unsupported runtime `result_privacy` values and collection/runtime vector
+dim/distance mismatches are also fixed messages that keep the structured
+failure reason without reflecting submitted option values or actual vector
+shape values. The `qdrant-sec` private HNSW client and private result ORAM
+helper error `Display` implementations keep structured enum fields for callers
+while avoiding bucket ids, epochs, versions, ciphertext lengths, leaf labels, or
+unsupported algorithm values in rendered strings.
 REST and gRPC `read_paths` error handling is checked for non-reflection:
 epoch/root mismatches and malformed path labels fail without echoing the
 submitted root hash, submitted path label, or any stored bucket ciphertext into
