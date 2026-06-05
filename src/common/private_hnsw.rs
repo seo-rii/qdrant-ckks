@@ -49,6 +49,8 @@ const ZERO_TRUST_PROFILE_STRICT: &str = "strict";
 const SESSION_LEASE_SECS: u64 = 300;
 const MAX_SESSION_COUNT: usize = 1024;
 const PRIVATE_HNSW_ORAM_LEAF_LABEL_B64_LEN: usize = 11;
+const PRIVATE_HNSW_ORAM_ROOT_HASH_B64_LEN: usize = 43;
+const PRIVATE_HNSW_ORAM_SIGNATURE_B64_LEN: usize = 86;
 const PRIVATE_HNSW_ORAM_CLIENT_ID_MAX_LEN: usize = 256;
 const PRIVATE_HNSW_ORAM_SESSION_ID_MAX_LEN: usize = 128;
 
@@ -1576,6 +1578,11 @@ fn validate_client_signature_shape(signature: &PrivateHnswClientSignature) -> St
         ));
     }
     validate_client_signature_key_id_shape(&signature.key_id)?;
+    if signature.sig.len() != PRIVATE_HNSW_ORAM_SIGNATURE_B64_LEN {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM signature must encode 64 bytes",
+        ));
+    }
     let signature_bytes = BASE64URL_NOPAD
         .decode(signature.sig.as_bytes())
         .map_err(|_| StorageError::bad_request("private HNSW ORAM signature is not base64url"))?;
@@ -2050,6 +2057,11 @@ fn bucket_ids_for_path_batch(
 }
 
 fn validate_root_hash_string(value: &str, field: &str) -> StorageResult<()> {
+    if value.len() != PRIVATE_HNSW_ORAM_ROOT_HASH_B64_LEN {
+        return Err(StorageError::bad_request(format!(
+            "private HNSW ORAM {field} must encode 32 bytes",
+        )));
+    }
     let bytes = BASE64URL_NOPAD.decode(value.as_bytes()).map_err(|_| {
         StorageError::bad_request(format!("private HNSW ORAM {field} is not base64url"))
     })?;
@@ -2411,6 +2423,57 @@ mod private_hnsw_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("client_id is invalid"));
         assert!(!rendered.contains(malformed));
+    }
+
+    #[test]
+    fn root_hash_shape_rejects_oversized_or_malformed_values_without_reflecting_value() {
+        validate_root_hash_string(&BASE64URL_NOPAD.encode(&[42; 32]), "root_hash").unwrap();
+
+        let oversized = format!("{}{}", BASE64URL_NOPAD.encode(&[42; 32]), "A".repeat(64));
+        let err = validate_root_hash_string(&oversized, "root_hash").unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("root_hash must encode 32 bytes"));
+        assert!(!rendered.contains(&oversized));
+
+        let mut malformed = BASE64URL_NOPAD.encode(&[42; 32]);
+        malformed.replace_range(0..1, "!");
+        let err = validate_root_hash_string(&malformed, "root_hash").unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("root_hash is not base64url"));
+        assert!(!rendered.contains(&malformed));
+    }
+
+    #[test]
+    fn client_signature_shape_rejects_oversized_or_malformed_values_without_reflecting_value() {
+        validate_client_signature_shape(&PrivateHnswClientSignature {
+            alg: "ed25519".to_string(),
+            key_id: "tenant-a/private-hnsw-signing-v1".to_string(),
+            sig: BASE64URL_NOPAD.encode(&[7; 64]),
+        })
+        .unwrap();
+
+        let oversized = format!("{}{}", BASE64URL_NOPAD.encode(&[7; 64]), "A".repeat(64));
+        let err = validate_client_signature_shape(&PrivateHnswClientSignature {
+            alg: "ed25519".to_string(),
+            key_id: "tenant-a/private-hnsw-signing-v1".to_string(),
+            sig: oversized.clone(),
+        })
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("signature must encode 64 bytes"));
+        assert!(!rendered.contains(&oversized));
+
+        let mut malformed = BASE64URL_NOPAD.encode(&[7; 64]);
+        malformed.replace_range(0..1, "!");
+        let err = validate_client_signature_shape(&PrivateHnswClientSignature {
+            alg: "ed25519".to_string(),
+            key_id: "tenant-a/private-hnsw-signing-v1".to_string(),
+            sig: malformed.clone(),
+        })
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("signature is not base64url"));
+        assert!(!rendered.contains(&malformed));
     }
 
     #[test]

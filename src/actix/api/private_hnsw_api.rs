@@ -1671,7 +1671,7 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "signature is not base64url"
+                "signature must encode 64 bytes"
             );
             assert!(
                 !malformed_read_signature_error.contains(signature_body_sentinel),
@@ -2105,7 +2105,7 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "signature is not base64url"
+                "signature must encode 64 bytes"
             );
             assert!(
                 !malformed_commit_signature_error.contains(signature_body_sentinel),

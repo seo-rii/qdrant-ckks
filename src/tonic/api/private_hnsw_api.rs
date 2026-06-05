@@ -2318,7 +2318,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("signature is not base64url"));
+            assert!(err.message().contains("signature must encode 64 bytes"));
             assert!(
                 !err.message().contains(signature_body_sentinel),
                 "{}",
@@ -2801,7 +2801,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("signature is not base64url"));
+            assert!(err.message().contains("signature must encode 64 bytes"));
             assert!(
                 !err.message().contains(signature_body_sentinel),
                 "{}",
