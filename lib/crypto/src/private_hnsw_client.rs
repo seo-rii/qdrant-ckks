@@ -4823,7 +4823,47 @@ mod tests {
             std::slice::from_ref(&bucket),
         )
         .unwrap();
-        verify_private_hnsw_oram_merkle_proof(&proof, 42, &root, 4, &[bucket]).unwrap();
+        verify_private_hnsw_oram_merkle_proof(&proof, 42, &root, 4, &[bucket.clone()]).unwrap();
+
+        let duplicate_proof = PrivateHnswOramMerkleProof {
+            leaves: vec![proof.leaves[0].clone(), proof.leaves[0].clone()],
+            ..proof.clone()
+        };
+        verify_private_hnsw_oram_merkle_proof(
+            &duplicate_proof,
+            42,
+            &root,
+            4,
+            &[bucket.clone(), bucket.clone()],
+        )
+        .unwrap();
+
+        let mut conflicting_duplicate_bucket = bucket.clone();
+        conflicting_duplicate_bucket.ciphertext =
+            BASE64URL_NOPAD.encode(b"conflicting duplicate HNSW bucket");
+        assert_eq!(
+            verify_private_hnsw_oram_merkle_proof(
+                &duplicate_proof,
+                42,
+                &root,
+                4,
+                &[bucket.clone(), conflicting_duplicate_bucket],
+            ),
+            Err(PrivateHnswClientError::InvalidMerkleProof)
+        );
+
+        let mut conflicting_duplicate_proof = duplicate_proof;
+        conflicting_duplicate_proof.leaves[1].leaf_hash = commitment(9);
+        assert_eq!(
+            verify_private_hnsw_oram_merkle_proof(
+                &conflicting_duplicate_proof,
+                42,
+                &root,
+                4,
+                &[bucket.clone(), bucket],
+            ),
+            Err(PrivateHnswClientError::InvalidMerkleProof)
+        );
 
         let oversized_proof_json = " ".repeat(PRIVATE_HNSW_MERKLE_PROOF_JSON_MAX_BYTES + 1);
         assert_eq!(
