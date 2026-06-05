@@ -1645,14 +1645,12 @@ fn generic_vector_write_plan(
                 };
                 if vector_params.distance != private_distance {
                     return Err(StorageError::bad_input(format!(
-                        "collection {collection_name} private HNSW ORAM vector '{vector_name}' distance {:?} does not match runtime distance {:?}",
-                        vector_params.distance, private_distance
+                        "collection {collection_name} private HNSW ORAM vector '{vector_name}' distance does not match runtime policy",
                     )));
                 }
                 if vector_params.size.get() != private_dim {
                     return Err(StorageError::bad_input(format!(
-                        "collection {collection_name} private HNSW ORAM vector '{vector_name}' dimension {} does not match runtime dim {private_dim}",
-                        vector_params.size
+                        "collection {collection_name} private HNSW ORAM vector '{vector_name}' dimension does not match runtime policy",
                     )));
                 }
                 rules.push(VectorWriteRule::PrivateHnswOram {
@@ -6525,14 +6523,12 @@ fn validate_generic_collection_crypto_runtime(
                 };
                 if vector_params.distance != private_distance {
                     return Err(StorageError::bad_input(format!(
-                        "collection {collection_name} private HNSW ORAM vector '{vector_name}' distance {:?} does not match runtime distance {:?}",
-                        vector_params.distance, private_distance
+                        "collection {collection_name} private HNSW ORAM vector '{vector_name}' distance does not match runtime policy",
                     )));
                 }
                 if vector_params.size.get() != private_dim {
                     return Err(StorageError::bad_input(format!(
-                        "collection {collection_name} private HNSW ORAM vector '{vector_name}' dimension {} does not match runtime dim {private_dim}",
-                        vector_params.size
+                        "collection {collection_name} private HNSW ORAM vector '{vector_name}' dimension does not match runtime policy",
                     )));
                 }
             }
@@ -20086,7 +20082,8 @@ mod tests {
                 .expect_err("private HNSW ORAM vector distance must match runtime policy");
         assert!(
             matches!(err, StorageError::BadInput { ref description }
-                if description.contains("distance") && description.contains("does not match runtime distance")),
+                if description.contains("distance") && description.contains("does not match runtime policy")
+                    && !description.contains("Dot") && !description.contains("Cosine")),
             "unexpected error: {err:?}",
         );
 
@@ -20123,7 +20120,8 @@ mod tests {
             .expect_err("private HNSW ORAM vector dimension must match runtime policy");
         assert!(
             matches!(err, StorageError::BadInput { ref description }
-                if description.contains("dimension") && description.contains("does not match runtime dim")),
+                if description.contains("dimension") && description.contains("does not match runtime policy")
+                    && !description.contains('2') && !description.contains('3')),
             "unexpected error: {err:?}",
         );
     }
