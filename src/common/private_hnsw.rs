@@ -913,30 +913,15 @@ pub async fn do_read_private_hnsw_paths(
                 &session.root_hash,
                 "read_paths",
             )?;
-            let mut buckets = Vec::with_capacity(bucket_ids.len());
-            for bucket_id in bucket_ids {
-                buckets.push(
-                    store
-                        .read_bucket(
-                            bucket_id,
-                            session.index_epoch,
-                            session.bucket_count,
-                            session.max_bucket_ciphertext_bytes,
-                        )
-                        .map_err(private_hnsw_read_store_error)?,
-                );
-            }
-            let proof = store
-                .read_merkle_path_batch(
-                    &buckets
-                        .iter()
-                        .map(|bucket| bucket.bucket_id)
-                        .collect::<Vec<_>>(),
+            let (buckets, proof) = store
+                .read_bucket_batch_with_proof(
+                    &bucket_ids,
                     session.index_epoch,
                     &session.root_hash,
                     session.bucket_count,
+                    session.max_bucket_ciphertext_bytes,
                 )
-                .map_err(private_hnsw_read_store_error)?;
+                .map_err(private_hnsw_read_batch_store_error)?;
             ensure_private_hnsw_read_proof_matches_buckets(&proof, &buckets)?;
             let proof_value = serde_json::to_string(&proof).map_err(|_| {
                 StorageError::service_error("failed to serialize private HNSW ORAM Merkle proof")
@@ -1345,6 +1330,21 @@ fn private_hnsw_read_store_error(err: CollectionError) -> StorageError {
             "private HNSW ORAM encrypted bucket store validation failed",
         ),
         other => StorageError::from(other),
+    }
+}
+
+fn private_hnsw_read_batch_store_error(err: CollectionError) -> StorageError {
+    match err {
+        CollectionError::BadRequest { description }
+            if description.contains(
+                "private HNSW ORAM encrypted bucket/proof consistency validation failed",
+            ) =>
+        {
+            StorageError::bad_request(
+                "private HNSW ORAM encrypted bucket/proof consistency validation failed",
+            )
+        }
+        other => private_hnsw_read_store_error(other),
     }
 }
 

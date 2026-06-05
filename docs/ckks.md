@@ -643,6 +643,9 @@ also preflights the store's current epoch/root against the active session before
 bucket or Merkle writeback starts. The `read_paths` path performs the same
 current epoch/root preflight before returning encrypted buckets, so a rolled
 back or mixed current epoch fails closed before bucket ciphertexts are served.
+It now reads buckets through the collection store's batch+proof helper, which
+rechecks current epoch/root and fails closed if any returned bucket commitment
+does not match the corresponding Merkle proof leaf.
 They also reject opening a second session for the same private index while the
 first session is active, exercising the MVP single-writer lock at the route
 layer. After registering a session, session open rechecks the stored

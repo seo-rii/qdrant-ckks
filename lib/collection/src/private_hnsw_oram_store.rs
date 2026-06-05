@@ -489,6 +489,43 @@ impl PrivateHnswOramStore {
         })
     }
 
+    pub fn read_bucket_batch_with_proof(
+        &self,
+        bucket_ids: &[u64],
+        expected_epoch: u64,
+        expected_root_hash: &str,
+        expected_bucket_count: u64,
+        max_ciphertext_bytes: usize,
+    ) -> CollectionResult<(Vec<PrivateHnswOramBucket>, PrivateHnswOramMerkleProof)> {
+        if bucket_ids.is_empty() {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM bucket batch is empty",
+            ));
+        }
+        let expected = PrivateHnswOramEpochState {
+            index_epoch: expected_epoch,
+            root_hash: expected_root_hash.to_string(),
+        };
+        self.ensure_current_epoch_matches(&expected)?;
+        let proof = self.read_merkle_path_batch(
+            bucket_ids,
+            expected_epoch,
+            expected_root_hash,
+            expected_bucket_count,
+        )?;
+        let mut buckets = Vec::with_capacity(bucket_ids.len());
+        for &bucket_id in bucket_ids {
+            buckets.push(self.read_bucket(
+                bucket_id,
+                expected_epoch,
+                expected_bucket_count,
+                max_ciphertext_bytes,
+            )?);
+        }
+        ensure_read_proof_matches_buckets(&proof, &buckets)?;
+        Ok((buckets, proof))
+    }
+
     pub fn prepare_merkle_commit(
         &self,
         old_epoch: u64,
@@ -602,12 +639,44 @@ impl PrivateHnswOramStore {
     fn bucket_path(&self, bucket_id: u64) -> PathBuf {
         self.buckets_dir().join(format!("{bucket_id:08}.bucket"))
     }
+
+    fn ensure_current_epoch_matches(
+        &self,
+        expected: &PrivateHnswOramEpochState,
+    ) -> CollectionResult<()> {
+        let current = self.read_current_epoch()?;
+        if &current != expected {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM RootHashMismatch: current epoch/root does not match old epoch",
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl PrivateHnswPreparedMerkleCommit {
     pub fn write(self) -> CollectionResult<()> {
         self.store.write_merkle_tree(&self.tree)
     }
+}
+
+fn ensure_read_proof_matches_buckets(
+    proof: &PrivateHnswOramMerkleProof,
+    buckets: &[PrivateHnswOramBucket],
+) -> CollectionResult<()> {
+    if proof.leaves.len() != buckets.len() {
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM encrypted bucket/proof consistency validation failed",
+        ));
+    }
+    for (leaf, bucket) in proof.leaves.iter().zip(buckets) {
+        if leaf.bucket_id != bucket.bucket_id || leaf.leaf_hash != bucket.bucket_commitment {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM encrypted bucket/proof consistency validation failed",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_merkle_tree(tree: &PrivateHnswOramMerkleTree) -> CollectionResult<()> {
@@ -2321,6 +2390,88 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("out of range"));
         assert!(!rendered.contains("4"), "{rendered}");
+    }
+
+    #[test]
+    fn read_bucket_batch_with_proof_checks_current_epoch_and_commitments() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let bucket0 = fixture_bucket(0, 42, b"encrypted hnsw bucket 0");
+        let bucket1 = fixture_bucket(1, 42, b"encrypted hnsw bucket 1");
+        let leaf_commitments = vec![
+            bucket0.bucket_commitment.clone(),
+            bucket1.bucket_commitment.clone(),
+        ];
+        let root = PrivateHnswOramStore::merkle_root_for_commitments(&leaf_commitments).unwrap();
+        let current = PrivateHnswOramEpochState {
+            index_epoch: 42,
+            root_hash: root.clone(),
+        };
+
+        store.write_initial_epoch(&current).unwrap();
+        store
+            .write_merkle_tree_from_commitments(42, root.clone(), leaf_commitments)
+            .unwrap();
+        store.write_bucket(&bucket0, 42, 2, 128).unwrap();
+        store.write_bucket(&bucket1, 42, 2, 128).unwrap();
+
+        let (buckets, proof) = store
+            .read_bucket_batch_with_proof(&[0, 1, 0], 42, &root, 2, 128)
+            .unwrap();
+        assert_eq!(
+            buckets,
+            vec![bucket0.clone(), bucket1.clone(), bucket0.clone()]
+        );
+        assert_eq!(proof.leaves.len(), buckets.len());
+        assert_eq!(proof.leaves[0], proof.leaves[2]);
+
+        let mut replacement = fixture_bucket(1, 42, b"private-hnsw-read-bucket-mismatch-sentinel");
+        replacement.bucket_commitment = root_hash(88);
+        assert_ne!(replacement.bucket_commitment, bucket1.bucket_commitment);
+        store.write_bucket(&replacement, 42, 2, 128).unwrap();
+
+        let rendered = store
+            .read_bucket_batch_with_proof(&[1], 42, &root, 2, 128)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("encrypted bucket/proof consistency validation failed"));
+        assert!(!rendered.contains("private-hnsw-read-bucket-mismatch-sentinel"));
+        assert!(!rendered.contains(&replacement.ciphertext));
+        assert!(!rendered.contains(&replacement.bucket_commitment));
+
+        let rendered = store
+            .read_bucket_batch_with_proof(&[], 42, &root, 2, 128)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("bucket batch is empty"));
+    }
+
+    #[test]
+    fn read_bucket_batch_with_proof_preflights_stale_current_epoch() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let old = PrivateHnswOramEpochState {
+            index_epoch: 42,
+            root_hash: root_hash(42),
+        };
+        let stale_current = PrivateHnswOramEpochState {
+            index_epoch: 43,
+            root_hash: root_hash(43),
+        };
+
+        store.write_initial_epoch(&old).unwrap();
+        store.compare_and_swap_epoch(&old, &stale_current).unwrap();
+
+        let rendered = store
+            .read_bucket_batch_with_proof(&[1], old.index_epoch, &old.root_hash, 2, 128)
+            .unwrap_err()
+            .to_string();
+
+        assert!(rendered.contains("RootHashMismatch"));
+        assert!(!rendered.contains("42"), "{rendered}");
+        assert!(!rendered.contains("43"), "{rendered}");
+        assert!(!rendered.contains(&old.root_hash), "{rendered}");
+        assert!(!rendered.contains(&stale_current.root_hash), "{rendered}");
     }
 
     #[test]
