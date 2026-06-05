@@ -953,7 +953,9 @@ Collection snapshots include the `private_result_oram/` directory if it is
 present, but current restore fail-closes when that directory or a symlink at
 that path appears because `payload/private-result-oram@v1` is still reserved.
 Snapshot creation also rejects nested symlinks inside the reserved result ORAM
-source tree without reflecting symlink targets or bucket filenames.
+source tree without reflecting symlink targets or bucket filenames. Restore
+guard inspection failures are also fixed messages and do not reflect collection
+paths, reserved directory names, or OS error strings.
 The CLI/startup snapshot mapping preflight applies the same reserved-directory
 guard before accepting a recovered collection.
 Cluster runtime parity uses the existing crypto capability fingerprint for this

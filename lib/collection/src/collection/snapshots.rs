@@ -608,9 +608,9 @@ fn ensure_private_result_oram_snapshot_restore_not_present(
              which is reserved until the payload ORAM provider runtime is implemented"
         ))),
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(CollectionError::service_error(format!(
-            "failed to inspect private result ORAM snapshot restore guard: {err}"
-        ))),
+        Err(_) => Err(CollectionError::service_error(
+            "private result ORAM snapshot layout validation failed",
+        )),
     }
 }
 
@@ -1338,6 +1338,26 @@ mod tests {
                 .contains(PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
         );
         assert!(!err.to_string().contains("missing-result-oram-target"));
+    }
+
+    #[test]
+    fn private_result_oram_restore_guard_sanitizes_inspection_errors() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-inspect-error")
+            .tempdir()
+            .unwrap();
+        let collection_path = temp_dir.path().join("collection-file");
+        fs::write(&collection_path, b"not-a-directory").unwrap();
+
+        let err = ensure_private_result_oram_snapshot_restore_not_present(&collection_path)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("snapshot layout validation failed"));
+        assert!(!err.contains(collection_path.to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!err.contains("os error"));
+        assert!(!err.contains("Not a directory"));
     }
 
     #[test]
