@@ -857,42 +857,36 @@ fn decode_base64url_32(value: &str, field: &str) -> CollectionResult<[u8; 32]> {
 fn create_private_dir(path: &Path) -> CollectionResult<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() => {
-            return Err(CollectionError::service_error(format!(
-                "private result ORAM path {path:?} must be a non-symlink directory",
-            )));
+            return Err(CollectionError::service_error(
+                "private result ORAM path must be a non-symlink directory",
+            ));
         }
         Ok(_) => {}
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir_all(path).map_err(|err| {
-                CollectionError::service_error(format!(
-                    "failed to create private result ORAM directory {path:?}: {err}",
-                ))
+            fs::create_dir_all(path).map_err(|_| {
+                CollectionError::service_error("failed to create private result ORAM directory")
             })?;
-            let metadata = fs::symlink_metadata(path).map_err(|err| {
-                CollectionError::service_error(format!(
-                    "failed to inspect private result ORAM directory {path:?}: {err}",
-                ))
+            let metadata = fs::symlink_metadata(path).map_err(|_| {
+                CollectionError::service_error("failed to inspect private result ORAM directory")
             })?;
             if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
-                return Err(CollectionError::service_error(format!(
-                    "private result ORAM path {path:?} must be a non-symlink directory",
-                )));
+                return Err(CollectionError::service_error(
+                    "private result ORAM path must be a non-symlink directory",
+                ));
             }
         }
-        Err(err) => {
-            return Err(CollectionError::service_error(format!(
-                "failed to inspect private result ORAM directory {path:?}: {err}",
-            )));
+        Err(_) => {
+            return Err(CollectionError::service_error(
+                "failed to inspect private result ORAM directory",
+            ));
         }
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
 
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|err| {
-            CollectionError::service_error(format!(
-                "failed to harden private result ORAM directory {path:?}: {err}",
-            ))
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|_| {
+            CollectionError::service_error("failed to harden private result ORAM directory")
         })?;
     }
     validate_private_dir(path)
@@ -901,16 +895,14 @@ fn create_private_dir(path: &Path) -> CollectionResult<()> {
 fn validate_private_dir(path: &Path) -> CollectionResult<()> {
     let metadata = fs::symlink_metadata(path).map_err(|err| {
         if err.kind() == std::io::ErrorKind::NotFound {
-            return CollectionError::not_found(format!("private result ORAM directory {path:?}"));
+            return CollectionError::not_found("private result ORAM directory");
         }
-        CollectionError::service_error(format!(
-            "failed to inspect private result ORAM directory {path:?}: {err}",
-        ))
+        CollectionError::service_error("failed to inspect private result ORAM directory")
     })?;
     if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
-        return Err(CollectionError::service_error(format!(
-            "private result ORAM path {path:?} must be a non-symlink directory",
-        )));
+        return Err(CollectionError::service_error(
+            "private result ORAM path must be a non-symlink directory",
+        ));
     }
     #[cfg(unix)]
     {
@@ -918,14 +910,14 @@ fn validate_private_dir(path: &Path) -> CollectionResult<()> {
 
         let effective_uid = nix::unistd::Uid::effective().as_raw();
         if metadata.uid() != effective_uid {
-            return Err(CollectionError::service_error(format!(
-                "private result ORAM directory {path:?} must be owned by the current user",
-            )));
+            return Err(CollectionError::service_error(
+                "private result ORAM directory must be owned by the current user",
+            ));
         }
         if metadata.permissions().mode() & 0o077 != 0 {
-            return Err(CollectionError::service_error(format!(
-                "private result ORAM directory {path:?} must not be group/world accessible",
-            )));
+            return Err(CollectionError::service_error(
+                "private result ORAM directory must not be group/world accessible",
+            ));
         }
     }
     Ok(())
@@ -937,16 +929,10 @@ fn read_json_private_file<T: for<'de> Deserialize<'de>>(
 ) -> CollectionResult<T> {
     let mut file = open_private_file_for_read(path, max_bytes)?;
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).map_err(|err| {
-        CollectionError::service_error(format!(
-            "failed to read private result ORAM file {path:?}: {err}",
-        ))
-    })?;
-    serde_json::from_slice(&bytes).map_err(|err| {
-        CollectionError::bad_request(format!(
-            "private result ORAM file {path:?} contains invalid JSON: {err}",
-        ))
-    })
+    file.read_to_end(&mut bytes)
+        .map_err(|_| CollectionError::service_error("failed to read private result ORAM file"))?;
+    serde_json::from_slice(&bytes)
+        .map_err(|_| CollectionError::bad_request("private result ORAM file contains invalid JSON"))
 }
 
 fn write_json_atomic<T: Serialize>(
@@ -957,35 +943,25 @@ fn write_json_atomic<T: Serialize>(
 ) -> CollectionResult<()> {
     validate_target_under_root(root, target)?;
     validate_private_dir(temp_dir)?;
-    let bytes = serde_json::to_vec_pretty(value).map_err(|err| {
-        CollectionError::service_error(format!(
-            "failed to serialize private result ORAM file {target:?}: {err}",
-        ))
+    let bytes = serde_json::to_vec_pretty(value).map_err(|_| {
+        CollectionError::service_error("failed to serialize private result ORAM file")
     })?;
     let temp_path = unique_temp_path(temp_dir);
     let mut file = open_private_file_for_write(&temp_path)?;
-    file.write_all(&bytes).map_err(|err| {
-        CollectionError::service_error(format!(
-            "failed to write private result ORAM temp file {temp_path:?}: {err}",
-        ))
+    file.write_all(&bytes).map_err(|_| {
+        CollectionError::service_error("failed to write private result ORAM temp file")
     })?;
-    file.flush().map_err(|err| {
-        CollectionError::service_error(format!(
-            "failed to flush private result ORAM temp file {temp_path:?}: {err}",
-        ))
+    file.flush().map_err(|_| {
+        CollectionError::service_error("failed to flush private result ORAM temp file")
     })?;
-    file.sync_all().map_err(|err| {
-        CollectionError::service_error(format!(
-            "failed to sync private result ORAM temp file {temp_path:?}: {err}",
-        ))
+    file.sync_all().map_err(|_| {
+        CollectionError::service_error("failed to sync private result ORAM temp file")
     })?;
     drop(file);
 
-    fs::rename(&temp_path, target).map_err(|err| {
+    fs::rename(&temp_path, target).map_err(|_| {
         let _ = fs::remove_file(&temp_path);
-        CollectionError::service_error(format!(
-            "failed to replace private result ORAM file {target:?}: {err}",
-        ))
+        CollectionError::service_error("failed to replace private result ORAM file")
     })?;
     if let Some(parent) = target.parent() {
         sync_dir(parent)?;
@@ -995,9 +971,9 @@ fn write_json_atomic<T: Serialize>(
 
 fn validate_target_under_root(root: &Path, target: &Path) -> CollectionResult<()> {
     if !target.starts_with(root) {
-        return Err(CollectionError::service_error(format!(
-            "private result ORAM target {target:?} escapes root {root:?}",
-        )));
+        return Err(CollectionError::service_error(
+            "private result ORAM target escapes root",
+        ));
     }
     if let Some(parent) = target.parent() {
         validate_private_dir(parent)?;
@@ -1008,49 +984,42 @@ fn validate_target_under_root(root: &Path, target: &Path) -> CollectionResult<()
 fn open_private_file_for_read(path: &Path, max_bytes: u64) -> CollectionResult<File> {
     let metadata = fs::symlink_metadata(path).map_err(|err| {
         if err.kind() == std::io::ErrorKind::NotFound {
-            return CollectionError::not_found(format!("private result ORAM file {path:?}"));
+            return CollectionError::not_found("private result ORAM file");
         }
-        CollectionError::service_error(format!(
-            "failed to inspect private result ORAM file {path:?}: {err}",
-        ))
+        CollectionError::service_error("failed to inspect private result ORAM file")
     })?;
     if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-        return Err(CollectionError::service_error(format!(
-            "private result ORAM file {path:?} must be a non-symlink regular file",
-        )));
+        return Err(CollectionError::service_error(
+            "private result ORAM file must be a non-symlink regular file",
+        ));
     }
     if metadata.len() > max_bytes {
-        return Err(CollectionError::bad_request(format!(
-            "private result ORAM file {path:?} exceeds maximum size",
-        )));
+        return Err(CollectionError::bad_request(
+            "private result ORAM file exceeds maximum size",
+        ));
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
         if metadata.permissions().mode() & 0o077 != 0 {
-            return Err(CollectionError::service_error(format!(
-                "private result ORAM file {path:?} must not be group/world accessible",
-            )));
+            return Err(CollectionError::service_error(
+                "private result ORAM file must not be group/world accessible",
+            ));
         }
         let file = OpenOptions::new()
             .read(true)
             .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
             .open(path)
-            .map_err(|err| {
-                CollectionError::service_error(format!(
-                    "failed to open private result ORAM file {path:?}: {err}",
-                ))
+            .map_err(|_| {
+                CollectionError::service_error("failed to open private result ORAM file")
             })?;
         return Ok(file);
     }
     #[cfg(not(unix))]
     {
-        File::open(path).map_err(|err| {
-            CollectionError::service_error(format!(
-                "failed to open private result ORAM file {path:?}: {err}",
-            ))
-        })
+        File::open(path)
+            .map_err(|_| CollectionError::service_error("failed to open private result ORAM file"))
     }
 }
 
@@ -1064,10 +1033,8 @@ fn open_private_file_for_write(path: &Path) -> CollectionResult<File> {
         options.mode(0o600);
         options.custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
     }
-    options.open(path).map_err(|err| {
-        CollectionError::service_error(format!(
-            "failed to create private result ORAM temp file {path:?}: {err}",
-        ))
+    options.open(path).map_err(|_| {
+        CollectionError::service_error("failed to create private result ORAM temp file")
     })
 }
 
@@ -1083,16 +1050,11 @@ fn unique_temp_path(temp_dir: &Path) -> PathBuf {
 }
 
 fn sync_dir(path: &Path) -> CollectionResult<()> {
-    let file = File::open(path).map_err(|err| {
-        CollectionError::service_error(format!(
-            "failed to open private result ORAM directory {path:?} for sync: {err}",
-        ))
+    let file = File::open(path).map_err(|_| {
+        CollectionError::service_error("failed to open private result ORAM directory for sync")
     })?;
-    file.sync_all().map_err(|err| {
-        CollectionError::service_error(format!(
-            "failed to sync private result ORAM directory {path:?}: {err}",
-        ))
-    })
+    file.sync_all()
+        .map_err(|_| CollectionError::service_error("failed to sync private result ORAM directory"))
 }
 
 #[cfg(test)]
@@ -1365,7 +1327,10 @@ mod tests {
 
         let err = store.read_bucket(0, 42, 1, 128).unwrap_err();
 
-        assert!(err.to_string().contains("non-symlink regular file"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("non-symlink regular file"));
+        assert!(!rendered.contains("outside.bucket"), "{rendered}");
+        assert!(!rendered.contains("00000000.bucket"), "{rendered}");
     }
 
     #[cfg(unix)]
@@ -1382,7 +1347,10 @@ mod tests {
 
         let err = store.ensure_layout().unwrap_err();
 
-        assert!(err.to_string().contains("non-symlink directory"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("non-symlink directory"));
+        assert!(!rendered.contains("outside-private-result"), "{rendered}");
+        assert!(!rendered.contains("private_result_oram"), "{rendered}");
         let outside_mode = fs::metadata(&outside_dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(outside_mode, 0o755);
     }
@@ -1403,7 +1371,9 @@ mod tests {
 
         let err = store.read_bucket(0, 42, 1, 128).unwrap_err();
 
-        assert!(err.to_string().contains("group/world accessible"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("group/world accessible"));
+        assert!(!rendered.contains("private_result_oram"), "{rendered}");
     }
 
     #[cfg(unix)]
@@ -1423,7 +1393,9 @@ mod tests {
 
         let err = store.read_bucket(0, 42, 1, 128).unwrap_err();
 
-        assert!(err.to_string().contains("group/world accessible"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("group/world accessible"));
+        assert!(!rendered.contains("00000000.bucket"), "{rendered}");
     }
 
     #[test]

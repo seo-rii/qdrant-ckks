@@ -424,6 +424,7 @@
 - REST/gRPC bucket upload/session open current epoch store 오류 응답은 collection-local `private_hnsw_oram` filesystem path를 반사하지 않는다.
 - collection-local private HNSW ORAM store의 bucket read/proof/commit 오류도 bucket id나 bucket epoch 값을 반사하지 않도록 일반화한다.
 - collection-local private HNSW ORAM store의 current epoch, Merkle tree context, bucket shape 오류도 stored/requested epoch, bucket_count, bucket id, unsupported version 값을 반사하지 않도록 일반화한다.
+- collection-local private HNSW ORAM store의 file/directory hardening 오류도 collection-local path, temp filename, symlink target, OS error 문자열을 반사하지 않도록 고정 메시지화한다.
 - REST/gRPC session open client_id는 길이 제한과 safe ASCII resource-id 문자셋을 먼저 검증하고, oversized/malformed client id 오류 응답은 submitted client id sentinel을 반사하지 않는다.
 - SDK helper는 commit plan의 old epoch/root가 현재 manifest와 맞을 때만 refreshed manifest/signature를 만들고, stale old root는 client-side에서 거부한다.
 - SDK upload bundle preflight는 manifest shape, manifest signature shape/owner key id, bucket ciphertext hash, bucket commitment, manifest root hash를 먼저 검증하고, bucket ciphertext hash와 context-bound commitment가 self-consistent하더라도 decoded ciphertext 길이가 manifest-derived fixed bucket ciphertext size와 다르면 client-side에서 거부한다.
@@ -433,6 +434,7 @@
 - private result ORAM skeleton의 upload bundle preflight도 manifest signature shape와 owner key id를 먼저 검증한다. manifest-aware commit planning/signature helper도 empty commit, malformed updated bucket ciphertext hash, updated bucket commitment가 ciphertext hash와 collection/key lineage/bucket epoch context에 묶여 있지 않은 commit을 future 서명/검증 전에 fail closed 한다.
 - private result ORAM store skeleton의 upload bundle, commit, stored Merkle tree root mismatch 오류는 computed Merkle root를 반사하지 않는다. Bucket read/proof/commit 오류도 bucket id나 bucket epoch 값을 반사하지 않도록 일반화한다.
 - private result ORAM store skeleton의 current epoch와 Merkle tree context 오류도 stored/requested epoch, bucket_count, unsupported version 값을 반사하지 않도록 일반화한다.
+- private result ORAM store skeleton의 file/directory hardening 오류도 collection-local path, temp filename, symlink target, OS error 문자열을 반사하지 않도록 고정 메시지화한다.
 - private result ORAM store skeleton의 bucket shape 검증은 encoded ciphertext 길이를 decode 전에 제한한다. writeback commit도 empty update와 non-advancing epoch를 거부하고 current epoch/root와 manifest epoch/root/bucket_count를 먼저 확인하며, updated bucket commitment가 ciphertext hash와 collection/key lineage/bucket epoch context에 묶여 있지 않으면 bucket/Merkle write 전에 fail closed 한다.
 - private result ORAM initial epoch helper도 같은 epoch/root 재업로드만 idempotent하게 허용하고 mismatched manifest epoch/root 재업로드는 기존 `current.json`을 덮지 않는다. 같은 epoch/root의 initial upload bundle 재업로드도 저장된 manifest/signature, Merkle tree, bucket set과 byte-identical일 때만 no-op으로 허용하며, 각각의 mismatch를 별도 fail-closed 테스트로 고정했다.
 - private result ORAM store skeleton은 directory chmod 전에 symlink/type을 검사하고, bucket symlink와 group/world-accessible bucket directory/file을 fail-closed로 거부한다. Snapshot source/restore guard도 private result ORAM root/nested symlink를 fail closed로 거부하면서 symlink target path나 bucket filename을 오류에 반사하지 않는다.
