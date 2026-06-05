@@ -715,8 +715,9 @@ before verifier lookup; invalid key ids are rejected without echoing the
 submitted value. For active sessions, the request key id must match the session
 manifest's `owner_signing_key_id` before the verifier public key is looked up,
 so non-owner key ids do not reach the registry lookup boundary. The `read_paths`
-crypto validator also rejects `requested_paths`/path-count mismatches before
-signature body parsing or canonical message construction.
+and `commit` crypto validators also reject malformed collection/vector/key
+lineage and `requested_paths`/path-count mismatches before signature body
+parsing or canonical message construction.
 Manifest-store layout failures during upload are sanitized without exposing
 collection-local `private_hnsw_oram` filesystem paths.
 Path ORAM manifests must also bind `bucket_count` to the canonical full binary

@@ -475,6 +475,7 @@ pub fn validate_private_result_oram_commit_signature(
     verification: PrivateResultOramSignatureVerification<'_>,
 ) -> Result<(), PrivateResultOramError> {
     validate_signature_fields(input.signature_alg, input.signature_key_id, verification)?;
+    validate_signature_input_context(input.collection_id, input.key_id, input.rk_id)?;
     if input.updated_buckets.is_empty() {
         return Err(PrivateResultOramError::EmptyCommit);
     }
@@ -1026,6 +1027,17 @@ fn validate_signature_fields(
     if key_id != verification.expected_key_id {
         return Err(PrivateResultOramError::SignatureKeyIdMismatch);
     }
+    Ok(())
+}
+
+fn validate_signature_input_context(
+    collection_id: &str,
+    key_id: &str,
+    rk_id: &str,
+) -> Result<(), PrivateResultOramError> {
+    validate_id(collection_id, "collection_id")?;
+    validate_resource_id(key_id)?;
+    validate_resource_id(rk_id)?;
     Ok(())
 }
 
@@ -1990,6 +2002,34 @@ mod tests {
             public_key: key_pair.public_key().as_ref(),
         };
         validate_private_result_oram_commit_signature(input, &signature, verification).unwrap();
+
+        let invalid_context = PrivateResultOramCommitSignatureInput {
+            collection_id: "",
+            ..input
+        };
+        assert_eq!(
+            validate_private_result_oram_commit_signature(
+                invalid_context,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateResultOramError::InvalidManifestField(
+                "collection_id"
+            ))
+        );
+
+        let invalid_key_context = PrivateResultOramCommitSignatureInput {
+            key_id: "bad key id",
+            ..input
+        };
+        assert_eq!(
+            validate_private_result_oram_commit_signature(
+                invalid_key_context,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateResultOramError::InvalidResourceKeyId)
+        );
 
         let empty_input = PrivateResultOramCommitSignatureInput {
             updated_buckets: &[],

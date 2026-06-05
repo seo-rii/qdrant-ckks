@@ -334,6 +334,12 @@ pub fn validate_private_hnsw_oram_commit_signature(
     verification: PrivateHnswSignatureVerification<'_>,
 ) -> Result<(), PrivateHnswOramError> {
     validate_signature_fields(input.signature_alg, input.signature_key_id, verification)?;
+    validate_signature_input_context(
+        input.collection_id,
+        Some(input.vector_name),
+        input.key_id,
+        input.rk_id,
+    )?;
     if input.updated_buckets.is_empty() {
         return Err(PrivateHnswOramError::EmptyCommit);
     }
@@ -355,6 +361,12 @@ pub fn validate_private_hnsw_oram_read_paths_signature(
     verification: PrivateHnswSignatureVerification<'_>,
 ) -> Result<(), PrivateHnswOramError> {
     validate_signature_fields(input.signature_alg, input.signature_key_id, verification)?;
+    validate_signature_input_context(
+        input.collection_id,
+        Some(input.vector_name),
+        input.key_id,
+        input.rk_id,
+    )?;
     decode_base64url_32(input.root_hash, "root_hash")?;
     if input.paths.is_empty()
         || input.requested_paths == 0
@@ -636,6 +648,21 @@ fn validate_signature_fields(
     Ok(())
 }
 
+fn validate_signature_input_context(
+    collection_id: &str,
+    vector_name: Option<&str>,
+    key_id: &str,
+    rk_id: &str,
+) -> Result<(), PrivateHnswOramError> {
+    validate_id(collection_id, "collection_id")?;
+    if let Some(vector_name) = vector_name {
+        validate_id(vector_name, "vector_name")?;
+    }
+    validate_resource_id(key_id)?;
+    validate_resource_id(rk_id)?;
+    Ok(())
+}
+
 fn validate_id(value: &str, field: &'static str) -> Result<(), PrivateHnswOramError> {
     if value.is_empty()
         || value.len() > 256
@@ -906,6 +933,19 @@ mod tests {
         };
         validate_private_hnsw_oram_read_paths_signature(input, &signature, verification).unwrap();
 
+        let invalid_context = PrivateHnswOramReadPathsSignatureInput {
+            vector_name: "",
+            ..input
+        };
+        assert_eq!(
+            validate_private_hnsw_oram_read_paths_signature(
+                invalid_context,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateHnswOramError::InvalidManifestField("vector_name"))
+        );
+
         let malformed_root = PrivateHnswOramReadPathsSignatureInput {
             root_hash: "AAAA",
             ..input
@@ -1145,6 +1185,32 @@ mod tests {
             public_key: key_pair.public_key().as_ref(),
         };
         validate_private_hnsw_oram_commit_signature(input, &signature, verification).unwrap();
+
+        let invalid_context = PrivateHnswOramCommitSignatureInput {
+            collection_id: "",
+            ..input
+        };
+        assert_eq!(
+            validate_private_hnsw_oram_commit_signature(
+                invalid_context,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateHnswOramError::InvalidManifestField("collection_id"))
+        );
+
+        let invalid_key_context = PrivateHnswOramCommitSignatureInput {
+            key_id: "bad key id",
+            ..input
+        };
+        assert_eq!(
+            validate_private_hnsw_oram_commit_signature(
+                invalid_key_context,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateHnswOramError::InvalidResourceKeyId)
+        );
 
         let empty_input = PrivateHnswOramCommitSignatureInput {
             updated_buckets: &[],
