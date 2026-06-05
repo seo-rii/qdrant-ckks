@@ -741,6 +741,8 @@ root hash. Bucket-store layout failures during upload are sanitized without
 exposing collection-local `private_hnsw_oram` filesystem paths. Corrupt
 current-epoch metadata observed during bucket upload or session open is
 sanitized the same way.
+The collection-local private HNSW ORAM store also avoids reflecting bucket ids
+or bucket epochs in bucket read/proof/commit validation errors.
 REST and gRPC `read_paths` error handling is checked for non-reflection:
 epoch/root mismatches and malformed path labels fail without echoing the
 submitted root hash, submitted path label, or any stored bucket ciphertext into

@@ -422,6 +422,7 @@
 - REST/gRPC bucket upload 오류 응답은 malformed bucket ciphertext sentinel을 반사하지 않는다.
 - REST/gRPC bucket upload store layout 오류 응답은 collection-local `private_hnsw_oram` filesystem path를 반사하지 않는다.
 - REST/gRPC bucket upload/session open current epoch store 오류 응답은 collection-local `private_hnsw_oram` filesystem path를 반사하지 않는다.
+- collection-local private HNSW ORAM store의 bucket read/proof/commit 오류도 bucket id나 bucket epoch 값을 반사하지 않도록 일반화한다.
 - REST/gRPC session open client_id는 길이 제한과 safe ASCII resource-id 문자셋을 먼저 검증하고, oversized/malformed client id 오류 응답은 submitted client id sentinel을 반사하지 않는다.
 - SDK helper는 commit plan의 old epoch/root가 현재 manifest와 맞을 때만 refreshed manifest/signature를 만들고, stale old root는 client-side에서 거부한다.
 - SDK upload bundle preflight는 manifest shape, manifest signature shape/owner key id, bucket ciphertext hash, bucket commitment, manifest root hash를 먼저 검증하고, bucket ciphertext hash와 context-bound commitment가 self-consistent하더라도 decoded ciphertext 길이가 manifest-derived fixed bucket ciphertext size와 다르면 client-side에서 거부한다.

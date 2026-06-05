@@ -181,10 +181,9 @@ impl PrivateHnswOramStore {
         let bucket: PrivateHnswOramBucket =
             read_json_private_file(&self.bucket_path(bucket_id), max_bucket_file_bytes)?;
         if bucket.bucket_id != bucket_id {
-            return Err(CollectionError::service_error(format!(
-                "private HNSW ORAM bucket file id mismatch: requested {bucket_id}, found {}",
-                bucket.bucket_id,
-            )));
+            return Err(CollectionError::service_error(
+                "private HNSW ORAM bucket file id mismatch",
+            ));
         }
         validate_bucket_for_read(&bucket, expected_epoch, bucket_count, max_ciphertext_bytes)?;
         Ok(bucket)
@@ -351,9 +350,9 @@ impl PrivateHnswOramStore {
         let mut leaves = Vec::with_capacity(bucket_ids.len());
         for &bucket_id in bucket_ids {
             if bucket_id >= tree.bucket_count {
-                return Err(CollectionError::bad_request(format!(
-                    "private HNSW ORAM Merkle proof bucket {bucket_id} is out of range",
-                )));
+                return Err(CollectionError::bad_request(
+                    "private HNSW ORAM Merkle proof bucket is out of range",
+                ));
             }
             let bucket_index = usize::try_from(bucket_id).map_err(|_| {
                 CollectionError::bad_request(
@@ -395,22 +394,19 @@ impl PrivateHnswOramStore {
         let mut seen_bucket_ids = BTreeSet::new();
         for bucket in updated_buckets {
             if !seen_bucket_ids.insert(bucket.bucket_id) {
-                return Err(CollectionError::bad_request(format!(
-                    "private HNSW ORAM Merkle commit repeats bucket {}",
-                    bucket.bucket_id,
-                )));
+                return Err(CollectionError::bad_request(
+                    "private HNSW ORAM Merkle commit repeats a bucket",
+                ));
             }
             if bucket.index_epoch != new_epoch {
-                return Err(CollectionError::bad_request(format!(
-                    "private HNSW ORAM Merkle commit bucket {} has stale epoch {}",
-                    bucket.bucket_id, bucket.index_epoch,
-                )));
+                return Err(CollectionError::bad_request(
+                    "private HNSW ORAM Merkle commit bucket has stale epoch",
+                ));
             }
             if bucket.bucket_id >= bucket_count {
-                return Err(CollectionError::bad_request(format!(
-                    "private HNSW ORAM Merkle commit bucket {} is out of range",
-                    bucket.bucket_id,
-                )));
+                return Err(CollectionError::bad_request(
+                    "private HNSW ORAM Merkle commit bucket is out of range",
+                ));
             }
             decode_base64url_32(&bucket.bucket_commitment, "bucket_commitment")?;
             let bucket_index = usize::try_from(bucket.bucket_id).map_err(|_| {
@@ -632,10 +628,9 @@ fn validate_bucket(
 ) -> CollectionResult<()> {
     validate_bucket_shape(bucket, bucket_count, max_ciphertext_bytes)?;
     if bucket.index_epoch != expected_epoch {
-        return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM bucket {} has stale epoch {}",
-            bucket.bucket_id, bucket.index_epoch,
-        )));
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM bucket has stale epoch",
+        ));
     }
     Ok(())
 }
@@ -648,10 +643,9 @@ fn validate_bucket_for_read(
 ) -> CollectionResult<()> {
     validate_bucket_shape(bucket, bucket_count, max_ciphertext_bytes)?;
     if bucket.index_epoch > expected_epoch {
-        return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM bucket {} is newer than requested epoch {}",
-            bucket.bucket_id, expected_epoch,
-        )));
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM bucket is newer than requested epoch",
+        ));
     }
     Ok(())
 }
@@ -1403,6 +1397,8 @@ mod tests {
         let err = err.to_string();
 
         assert!(err.contains("bucket file id mismatch"));
+        assert!(!err.contains("requested"));
+        assert!(!err.contains("found"));
         assert!(!err.contains("private-hnsw-bucket-ciphertext-sentinel"));
         assert!(!err.contains(&mismatched_bucket.ciphertext));
     }
@@ -1546,7 +1542,10 @@ mod tests {
         assert_eq!(store.read_bucket(0, 43, 2, 64).unwrap(), unchanged_bucket);
         assert_eq!(store.read_bucket(1, 43, 2, 64).unwrap(), updated_bucket);
         let err = store.read_bucket(1, 42, 2, 64).unwrap_err();
-        assert!(err.to_string().contains("newer than requested epoch"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("newer than requested epoch"));
+        assert!(!rendered.contains("42"), "{rendered}");
+        assert!(!rendered.contains("1"), "{rendered}");
     }
 
     #[test]
@@ -1902,7 +1901,10 @@ mod tests {
         store.write_bucket(&updated_bucket, 43, 2, 64).unwrap();
         assert_eq!(store.read_current_epoch().unwrap(), old_epoch);
         let err = store.read_bucket(0, 42, 2, 64).unwrap_err();
-        assert!(err.to_string().contains("newer than requested epoch"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("newer than requested epoch"));
+        assert!(!rendered.contains("42"), "{rendered}");
+        assert!(!rendered.contains("0"), "{rendered}");
 
         let mut new_commitments = old_commitments;
         new_commitments[0] = updated_bucket.bucket_commitment.clone();
@@ -2035,6 +2037,12 @@ mod tests {
 
         let err = store.read_merkle_path_batch(&[], 42, &root, 4).unwrap_err();
         assert!(err.to_string().contains("bucket batch is empty"));
+        let err = store
+            .read_merkle_path_batch(&[4], 42, &root, 4)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("out of range"));
+        assert!(!rendered.contains("4"), "{rendered}");
     }
 
     #[test]
@@ -2105,6 +2113,8 @@ mod tests {
                 &[updated_bucket.clone(), updated_bucket],
             )
             .unwrap_err();
-        assert!(err.to_string().contains("repeats bucket 2"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("repeats a bucket"));
+        assert!(!rendered.contains("2"), "{rendered}");
     }
 }
