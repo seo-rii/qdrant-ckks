@@ -748,9 +748,10 @@ with drifted `fixed_budget` or `oram` options.
 The request signing key must also match the session manifest's
 `owner_signing_key_id`; merely being present in `signature_public_keys` is not
 enough to authorize ORAM read or commit requests for that private index.
-For `read_paths`, the server verifies the Ed25519 request signature before
-decoding ORAM leaf labels or computing bucket paths, after the fixed-budget and
-session epoch/root checks.
+For `read_paths`, after the fixed-budget and session epoch/root checks, the
+server first bounds each ORAM leaf label to the canonical fixed-length
+base64url form without reflecting malformed labels, then verifies the Ed25519
+request signature before computing bucket paths.
 For `commit`, the server verifies the Ed25519 request signature before parsing
 the proposed `new_root_hash` or preparing Merkle/writeback metadata, after the
 bounded request-size and epoch checks.

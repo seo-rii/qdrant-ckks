@@ -48,6 +48,7 @@ const FIXED_BUDGET_OPTION: &str = "fixed_budget";
 const ZERO_TRUST_PROFILE_STRICT: &str = "strict";
 const SESSION_LEASE_SECS: u64 = 300;
 const MAX_SESSION_COUNT: usize = 1024;
+const PRIVATE_HNSW_ORAM_LEAF_LABEL_B64_LEN: usize = 11;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PrivateHnswManifestRecord {
@@ -875,6 +876,7 @@ pub async fn do_read_private_hnsw_paths(
                     "private HNSW ORAM read_paths request must match fixed path budget",
                 ));
             }
+            validate_private_hnsw_read_path_labels(&paths, session.tree_height)?;
             validate_session_signature_owner_key(session, &client_signature.key_id)?;
             let public_key = request_context.signature_public_key(&client_signature.key_id)?;
             let path_refs = paths.iter().map(String::as_str).collect::<Vec<_>>();
@@ -900,7 +902,6 @@ pub async fn do_read_private_hnsw_paths(
                 },
             )
             .map_err(private_hnsw_error)?;
-            validate_unique_path_labels(&paths)?;
             let bucket_ids =
                 bucket_ids_for_path_batch(&paths, session.tree_height, session.bucket_count)?;
             let store = PrivateHnswOramStore::new(&session.collection_path, vector_name)?;
@@ -1968,6 +1969,23 @@ fn validate_unique_path_labels(paths: &[String]) -> StorageResult<()> {
     Ok(())
 }
 
+fn validate_private_hnsw_read_path_labels(paths: &[String], tree_height: u32) -> StorageResult<()> {
+    validate_unique_path_labels(paths)?;
+    for path in paths {
+        if path.len() != PRIVATE_HNSW_ORAM_LEAF_LABEL_B64_LEN {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM read_paths request contains invalid path label",
+            ));
+        }
+        decode_private_hnsw_oram_leaf_label(path, tree_height).map_err(|_| {
+            StorageError::bad_request(
+                "private HNSW ORAM read_paths request contains invalid path label",
+            )
+        })?;
+    }
+    Ok(())
+}
+
 fn bucket_ids_for_path_batch(
     paths: &[String],
     tree_height: u32,
@@ -2046,6 +2064,24 @@ mod private_hnsw_tests {
         let leaf = BASE64URL_NOPAD.encode(&5u64.to_be_bytes());
         let err = validate_unique_path_labels(&[leaf.clone(), leaf]).unwrap_err();
         assert!(err.to_string().contains("duplicate path label"));
+    }
+
+    #[test]
+    fn read_path_labels_reject_oversized_or_malformed_values_without_reflecting_label() {
+        let oversized = format!(
+            "{}{}",
+            BASE64URL_NOPAD.encode(&5u64.to_be_bytes()),
+            "A".repeat(128)
+        );
+        let err = validate_private_hnsw_read_path_labels(std::slice::from_ref(&oversized), 3)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("invalid path label"));
+        assert!(!rendered.contains(&oversized));
+
+        let malformed = "not-base64!".to_string();
+        let err = validate_private_hnsw_read_path_labels(&[malformed], 3).unwrap_err();
+        assert!(err.to_string().contains("invalid path label"));
     }
 
     #[test]
