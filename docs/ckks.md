@@ -778,8 +778,10 @@ hash into the REST body or gRPC status message. Missing commit Merkle metadata
 is reported without exposing
 collection-local `private_hnsw_oram` filesystem paths. Empty and oversized
 `updated_buckets` commits are rejected by fixed writeback request-size
-validation before bucket writes are attempted, and each updated bucket must also
-carry exactly the manifest-derived fixed ciphertext size.
+validation before bucket writes are attempted; the SDK/server commit signature
+validator also rejects empty commit bucket lists before signature body parsing.
+Each updated bucket must also carry exactly the manifest-derived fixed
+ciphertext size.
 Commit writebacks also validate every updated bucket commitment against the
 bucket ciphertext hash plus collection/vector/key lineage and the proposed
 bucket epoch before Merkle metadata is prepared or bucket files are written.

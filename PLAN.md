@@ -442,7 +442,7 @@
 - REST/gRPC `read_paths`와 `commit` malformed client signature shape 오류 응답은 submitted signature sentinel을 반사하지 않는다.
 - REST/gRPC `read_paths` 성공 응답은 bucket id를 unique set으로 축약하지 않고 요청된 ORAM path별 bucket sequence를 보존해 `requested_paths * (tree_height + 1)` 크기를 유지하며, SDK verifier는 반복 bucket/proof가 byte-identical일 때만 허용한다.
 - REST/gRPC `commit` old epoch/root mismatch 오류 응답은 submitted old root hash sentinel을 반사하지 않는다.
-- REST/gRPC `commit` fixture는 empty 또는 oversized `updated_buckets`를 fixed writeback request-size validation에서 거부한다.
+- REST/gRPC `commit` fixture는 empty 또는 oversized `updated_buckets`를 fixed writeback request-size validation에서 거부하고, crypto commit signature validator도 empty bucket list를 signature body parsing 전에 fail closed 한다.
 - REST/gRPC `commit` 오류 응답은 malformed updated bucket ciphertext sentinel과 malformed `new_root_hash` sentinel을 반사하지 않는다.
 - REST/gRPC `commit` missing Merkle metadata 오류 응답은 collection-local `private_hnsw_oram` filesystem path를 반사하지 않는다.
 - REST/gRPC `read_paths` fixture는 path count, requested path count, dummy padding flag가 fixed path budget과 다르거나 exact duplicate/oversized/malformed path label을 포함하면 bucket read 전에 fail-closed로 거부하고 malformed label 본문을 반사하지 않는다.

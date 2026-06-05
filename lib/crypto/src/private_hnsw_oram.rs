@@ -47,6 +47,8 @@ pub enum PrivateHnswOramError {
     InvalidManifestSignature,
     #[error("private HNSW ORAM commit signature verification failed")]
     InvalidCommitSignature,
+    #[error("private HNSW ORAM commit must update at least one bucket")]
+    EmptyCommit,
     #[error("private HNSW ORAM read_paths signature verification failed")]
     InvalidReadPathsSignature,
     #[error("private HNSW ORAM resource key id is invalid")]
@@ -330,6 +332,9 @@ pub fn validate_private_hnsw_oram_commit_signature(
     verification: PrivateHnswSignatureVerification<'_>,
 ) -> Result<(), PrivateHnswOramError> {
     validate_signature_fields(input.signature_alg, input.signature_key_id, verification)?;
+    if input.updated_buckets.is_empty() {
+        return Err(PrivateHnswOramError::EmptyCommit);
+    }
     let signature_bytes = decode_base64url_64(signature)?;
     let message = private_hnsw_oram_commit_signature_message(input);
     UnparsedPublicKey::new(&ED25519, verification.public_key)
@@ -1042,6 +1047,19 @@ mod tests {
             public_key: key_pair.public_key().as_ref(),
         };
         validate_private_hnsw_oram_commit_signature(input, &signature, verification).unwrap();
+
+        let empty_input = PrivateHnswOramCommitSignatureInput {
+            updated_buckets: &[],
+            ..input
+        };
+        assert_eq!(
+            validate_private_hnsw_oram_commit_signature(
+                empty_input,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateHnswOramError::EmptyCommit)
+        );
 
         let tampered = PrivateHnswOramCommitSignatureInput {
             new_epoch: 44,
