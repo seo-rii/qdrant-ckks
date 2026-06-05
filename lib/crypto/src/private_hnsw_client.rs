@@ -2462,6 +2462,7 @@ pub fn verify_private_hnsw_oram_merkle_proof(
         || proof.kind != PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND
         || proof.index_epoch != expected_epoch
         || proof.bucket_count != expected_bucket_count
+        || buckets.is_empty()
         || proof.leaves.len() != buckets.len()
     {
         return Err(PrivateHnswClientError::InvalidMerkleProof);
@@ -4814,6 +4815,15 @@ mod tests {
             }],
         };
         let proof_json = serde_json::to_string(&proof).unwrap();
+
+        let empty_proof = PrivateHnswOramMerkleProof {
+            leaves: Vec::new(),
+            ..proof.clone()
+        };
+        assert_eq!(
+            verify_private_hnsw_oram_merkle_proof(&empty_proof, 42, &root, 4, &[]),
+            Err(PrivateHnswClientError::InvalidMerkleProof)
+        );
 
         verify_private_hnsw_oram_merkle_proof_json(
             &proof_json,

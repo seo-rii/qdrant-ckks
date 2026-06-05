@@ -772,6 +772,7 @@ pub fn verify_private_result_oram_merkle_proof(
         || proof.kind != PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND
         || proof.index_epoch != expected_epoch
         || proof.bucket_count != expected_bucket_count
+        || buckets.is_empty()
         || proof.leaves.len() != buckets.len()
     {
         return Err(PrivateResultOramError::InvalidMerkleProof);
@@ -1476,6 +1477,15 @@ mod tests {
                 },
             ],
         };
+
+        let empty_proof = PrivateResultOramMerkleProof {
+            leaves: Vec::new(),
+            ..proof.clone()
+        };
+        assert_eq!(
+            verify_private_result_oram_merkle_proof(&empty_proof, 42, &root, 2, &[]),
+            Err(PrivateResultOramError::InvalidMerkleProof)
+        );
 
         verify_private_result_oram_merkle_proof(
             &proof,
