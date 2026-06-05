@@ -55,7 +55,7 @@ pub enum PrivateHnswClientError {
     Encryption(#[from] EncryptionError),
     #[error("private HNSW node block has invalid neighbor shape")]
     InvalidNeighborShape,
-    #[error("private HNSW node block has {actual} neighbors but only {limit} slots")]
+    #[error("private HNSW node block has too many neighbors")]
     TooManyNeighbors { actual: usize, limit: usize },
     #[error("private HNSW node block vector is too large")]
     VectorTooLarge,
@@ -65,9 +65,9 @@ pub enum PrivateHnswClientError {
     EncodedBlockOversized,
     #[error("private HNSW node block encoding is malformed")]
     InvalidBlockEncoding,
-    #[error("private HNSW node block uses unsupported version {0}")]
+    #[error("private HNSW node block uses unsupported version")]
     UnsupportedBlockVersion(u16),
-    #[error("private HNSW node block uses unsupported vector encoding {0}")]
+    #[error("private HNSW node block uses unsupported vector encoding")]
     UnsupportedVectorEncoding(u8),
     #[error("private HNSW node block padding is invalid")]
     InvalidBlockPadding,
@@ -75,9 +75,7 @@ pub enum PrivateHnswClientError {
     InvalidBucketContext(&'static str),
     #[error("private HNSW bucket ciphertext is not base64url")]
     InvalidBucketCiphertextEncoding,
-    #[error(
-        "private HNSW bucket {bucket_id} ciphertext length {actual_bytes} does not match expected fixed length {expected_bytes}"
-    )]
+    #[error("private HNSW bucket ciphertext length does not match expected fixed length")]
     BucketCiphertextSizeMismatch {
         bucket_id: u64,
         expected_bytes: usize,
@@ -89,7 +87,7 @@ pub enum PrivateHnswClientError {
     InvalidBucketCommitment,
     #[error("private HNSW bucket metadata does not match the decrypt context")]
     BucketMetadataMismatch,
-    #[error("private HNSW bucket uses unsupported ciphertext version {0}")]
+    #[error("private HNSW bucket uses unsupported ciphertext version")]
     UnsupportedBucketCiphertextVersion(u8),
     #[error("private HNSW bucket ciphertext authentication failed")]
     BucketOpenFailed,
@@ -121,9 +119,9 @@ pub enum PrivateHnswClientError {
     DuplicateBlock,
     #[error("private HNSW ORAM build config field {0} is invalid")]
     InvalidBuildConfig(&'static str),
-    #[error("private HNSW ORAM initial placement overflowed path for leaf {leaf}")]
+    #[error("private HNSW ORAM initial placement overflowed path")]
     OramInitialPlacementOverflow { leaf: u64 },
-    #[error("private HNSW ORAM client state snapshot uses unsupported version {0}")]
+    #[error("private HNSW ORAM client state snapshot uses unsupported version")]
     UnsupportedClientStateSnapshotVersion(u16),
     #[error("private HNSW ORAM client state snapshot is malformed")]
     InvalidClientStateSnapshot,
@@ -133,7 +131,7 @@ pub enum PrivateHnswClientError {
     InvalidClientStateCiphertextEncoding,
     #[error("private HNSW ORAM client state ciphertext hash is invalid")]
     InvalidClientStateCiphertextHash,
-    #[error("private HNSW ORAM client state uses unsupported ciphertext version {0}")]
+    #[error("private HNSW ORAM client state uses unsupported ciphertext version")]
     UnsupportedClientStateCiphertextVersion(u16),
     #[error("private HNSW ORAM client state decryption authentication failed")]
     ClientStateOpenFailed,
@@ -157,25 +155,21 @@ pub enum PrivateHnswClientError {
     InvalidCommitEpoch,
     #[error("private HNSW ORAM commit must update at least one bucket")]
     EmptyCommit,
-    #[error(
-        "private HNSW ORAM commit bucket {bucket_id} is out of range for {bucket_count} buckets"
-    )]
+    #[error("private HNSW ORAM commit bucket is out of range")]
     BucketOutOfRange { bucket_id: u64, bucket_count: u64 },
-    #[error("private HNSW ORAM upload bucket {bucket_id} appears more than once")]
+    #[error("private HNSW ORAM upload contains duplicate bucket")]
     DuplicateBucket { bucket_id: u64 },
-    #[error("private HNSW ORAM upload is missing bucket {bucket_id}")]
+    #[error("private HNSW ORAM upload is missing a configured bucket")]
     MissingBucket { bucket_id: u64 },
-    #[error("private HNSW ORAM commit bucket {bucket_id} appears more than once")]
+    #[error("private HNSW ORAM commit bucket appears more than once")]
     DuplicateUpdatedBucket { bucket_id: u64 },
-    #[error(
-        "private HNSW ORAM commit bucket {bucket_id} has epoch {actual_epoch}, expected {expected_epoch}"
-    )]
+    #[error("private HNSW ORAM commit bucket has stale epoch")]
     StaleBucketEpoch {
         bucket_id: u64,
         expected_epoch: u64,
         actual_epoch: u64,
     },
-    #[error("private HNSW ORAM bucket uses unsupported version {0}")]
+    #[error("private HNSW ORAM bucket uses unsupported version")]
     UnsupportedBucketVersion(u16),
     #[error("private HNSW ORAM commit signature context field {0} is invalid")]
     InvalidCommitSignatureContext(&'static str),
@@ -3492,6 +3486,53 @@ fn read_array_32(bytes: &[u8], cursor: &mut usize) -> Result<[u8; 32], PrivateHn
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_hnsw_client_error_display_does_not_reflect_structured_values() {
+        let cases = [
+            PrivateHnswClientError::TooManyNeighbors {
+                actual: 77,
+                limit: 55,
+            }
+            .to_string(),
+            PrivateHnswClientError::UnsupportedBlockVersion(99).to_string(),
+            PrivateHnswClientError::UnsupportedVectorEncoding(88).to_string(),
+            PrivateHnswClientError::BucketCiphertextSizeMismatch {
+                bucket_id: 123,
+                expected_bytes: 4096,
+                actual_bytes: 2048,
+            }
+            .to_string(),
+            PrivateHnswClientError::UnsupportedBucketCiphertextVersion(66).to_string(),
+            PrivateHnswClientError::OramInitialPlacementOverflow { leaf: 777 }.to_string(),
+            PrivateHnswClientError::UnsupportedClientStateSnapshotVersion(44).to_string(),
+            PrivateHnswClientError::UnsupportedClientStateCiphertextVersion(33).to_string(),
+            PrivateHnswClientError::BucketOutOfRange {
+                bucket_id: 123,
+                bucket_count: 456,
+            }
+            .to_string(),
+            PrivateHnswClientError::DuplicateBucket { bucket_id: 123 }.to_string(),
+            PrivateHnswClientError::MissingBucket { bucket_id: 123 }.to_string(),
+            PrivateHnswClientError::DuplicateUpdatedBucket { bucket_id: 123 }.to_string(),
+            PrivateHnswClientError::StaleBucketEpoch {
+                bucket_id: 123,
+                expected_epoch: 42,
+                actual_epoch: 43,
+            }
+            .to_string(),
+            PrivateHnswClientError::UnsupportedBucketVersion(22).to_string(),
+        ];
+
+        for rendered in cases {
+            for leaked in [
+                "77", "55", "99", "88", "123", "4096", "2048", "66", "777", "44", "33", "456",
+                "42", "43", "22",
+            ] {
+                assert!(!rendered.contains(leaked), "{rendered}");
+            }
+        }
+    }
 
     fn test_keys() -> PrivateHnswClientKeys {
         let resource_key = SecretKey::from_bytes([7; 32]);

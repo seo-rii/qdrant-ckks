@@ -24,7 +24,7 @@ const PRIVATE_RESULT_ORAM_BUCKET_VERSION: u16 = 1;
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum PrivateResultOramError {
-    #[error("private result ORAM manifest uses unsupported version {0}")]
+    #[error("private result ORAM manifest uses unsupported version")]
     UnsupportedManifestVersion(u16),
     #[error("private result ORAM manifest provider is invalid")]
     InvalidProvider,
@@ -36,7 +36,7 @@ pub enum PrivateResultOramError {
     ManifestContextMismatch(&'static str),
     #[error("private result ORAM manifest signature is missing")]
     MissingManifestSignature,
-    #[error("private result ORAM signature uses unsupported algorithm {0}")]
+    #[error("private result ORAM signature uses unsupported algorithm")]
     UnsupportedSignatureAlgorithm(String),
     #[error("private result ORAM signature key id does not match runtime context")]
     SignatureKeyIdMismatch,
@@ -48,11 +48,9 @@ pub enum PrivateResultOramError {
     InvalidCommitSignature,
     #[error("private result ORAM resource key id is invalid")]
     InvalidResourceKeyId,
-    #[error("private result ORAM bucket uses unsupported version {0}")]
+    #[error("private result ORAM bucket uses unsupported version")]
     UnsupportedBucketVersion(u16),
-    #[error(
-        "private result ORAM bucket {bucket_id} is out of range for bucket_count {bucket_count}"
-    )]
+    #[error("private result ORAM bucket is out of range")]
     BucketOutOfRange { bucket_id: u64, bucket_count: u64 },
     #[error("private result ORAM bucket field {0} is invalid")]
     InvalidBucketField(&'static str),
@@ -68,15 +66,13 @@ pub enum PrivateResultOramError {
     MerkleRootMismatch,
     #[error("private result ORAM manifest epoch/root does not match commit old epoch/root")]
     ManifestCommitMismatch,
-    #[error(
-        "private result ORAM bucket {bucket_id} has stale epoch {actual_epoch}; expected {expected_epoch}"
-    )]
+    #[error("private result ORAM bucket has stale epoch")]
     StaleBucketEpoch {
         bucket_id: u64,
         expected_epoch: u64,
         actual_epoch: u64,
     },
-    #[error("private result ORAM commit repeats bucket {bucket_id}")]
+    #[error("private result ORAM commit repeats bucket")]
     DuplicateUpdatedBucket { bucket_id: u64 },
     #[error("private result ORAM commit must update at least one bucket")]
     EmptyCommit,
@@ -1159,6 +1155,35 @@ mod tests {
 
     use super::*;
     use crate::private_hnsw_oram::OramKind;
+
+    #[test]
+    fn private_result_oram_error_display_does_not_reflect_structured_values() {
+        let cases = [
+            PrivateResultOramError::UnsupportedManifestVersion(99).to_string(),
+            PrivateResultOramError::UnsupportedSignatureAlgorithm("rsa-pss-sentinel".to_string())
+                .to_string(),
+            PrivateResultOramError::UnsupportedBucketVersion(88).to_string(),
+            PrivateResultOramError::BucketOutOfRange {
+                bucket_id: 123,
+                bucket_count: 456,
+            }
+            .to_string(),
+            PrivateResultOramError::StaleBucketEpoch {
+                bucket_id: 123,
+                expected_epoch: 42,
+                actual_epoch: 43,
+            }
+            .to_string(),
+            PrivateResultOramError::DuplicateUpdatedBucket { bucket_id: 123 }.to_string(),
+        ];
+
+        for rendered in cases {
+            assert!(!rendered.contains("rsa-pss-sentinel"), "{rendered}");
+            for leaked in ["99", "88", "123", "456", "42", "43"] {
+                assert!(!rendered.contains(leaked), "{rendered}");
+            }
+        }
+    }
 
     fn fixture_manifest() -> PrivateResultOramManifest {
         PrivateResultOramManifest {
