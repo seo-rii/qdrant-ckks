@@ -668,6 +668,13 @@ fn validate_bucket_shape(
             bucket.bucket_id,
         )));
     }
+    let max_ciphertext_b64_len = max_base64url_nopad_encoded_len(max_ciphertext_bytes)?;
+    if bucket.ciphertext.len() > max_ciphertext_b64_len {
+        return Err(CollectionError::bad_request(format!(
+            "private HNSW ORAM bucket {} ciphertext exceeds maximum size",
+            bucket.bucket_id,
+        )));
+    }
     let ciphertext = BASE64URL_NOPAD
         .decode(bucket.ciphertext.as_bytes())
         .map_err(|_| {
@@ -691,6 +698,24 @@ fn validate_bucket_shape(
     }
     decode_base64url_32(&bucket.bucket_commitment, "bucket_commitment")?;
     Ok(())
+}
+
+fn max_base64url_nopad_encoded_len(byte_len: usize) -> CollectionResult<usize> {
+    let full_chunks = byte_len / 3;
+    let remainder = byte_len % 3;
+    full_chunks
+        .checked_mul(4)
+        .and_then(|len| {
+            len.checked_add(match remainder {
+                0 => 0,
+                1 => 2,
+                2 => 3,
+                _ => unreachable!("remainder modulo 3"),
+            })
+        })
+        .ok_or_else(|| {
+            CollectionError::bad_request("private HNSW ORAM bucket ciphertext size overflows")
+        })
 }
 
 fn validate_epoch_state(epoch: &PrivateHnswOramEpochState) -> CollectionResult<()> {
@@ -1339,6 +1364,18 @@ mod tests {
         assert!(err.to_string().contains("exceeds maximum size"));
         let err = store.write_bucket(&oversized, 42, 16, 64).unwrap_err();
         assert!(err.to_string().contains("exceeds maximum size"));
+
+        let mut encoded_oversized = bucket.clone();
+        encoded_oversized.bucket_id = 5;
+        encoded_oversized.ciphertext = "A".repeat(max_base64url_nopad_encoded_len(64).unwrap() + 1);
+        encoded_oversized.ciphertext_sha256 = root_hash(2);
+        let err = store
+            .validate_bucket_for_write(&encoded_oversized, 42, 16, 64)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("exceeds maximum size"));
+        assert!(!rendered.contains("ciphertext_sha256 mismatch"));
+        assert!(!rendered.contains(&encoded_oversized.ciphertext));
     }
 
     #[test]

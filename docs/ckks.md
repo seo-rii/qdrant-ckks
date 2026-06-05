@@ -719,10 +719,11 @@ ids, malformed bucket ciphertext, and ciphertext hash mismatches before
 encrypted bucket files are written. Bucket commitments must also match the
 server-verifiable commitment over collection/vector/key lineage, bucket id,
 index epoch, and `ciphertext_sha256`. Upload and commit ingress additionally
-check that decoded bucket ciphertext length exactly matches the fixed Path ORAM
-bucket size implied by `oram.bucket_size` and `oram.block_size_bytes`; a shorter
-or longer ciphertext is rejected even when its hash and commitment are
-self-consistent. The malformed ciphertext, fixed-size mismatch, bucket
+bound the base64url ciphertext length before decode and then check that decoded
+bucket ciphertext length exactly matches the fixed Path ORAM bucket size implied
+by `oram.bucket_size` and `oram.block_size_bytes`; a shorter or longer
+ciphertext is rejected even when its hash and commitment are self-consistent.
+The malformed ciphertext, fixed-size mismatch, bucket
 commitment context mismatch, and Merkle root mismatch error paths do not echo the
 submitted ciphertext or computed Merkle root into REST response bodies or gRPC
 status messages, and epoch/root mismatch handling does not echo the submitted
