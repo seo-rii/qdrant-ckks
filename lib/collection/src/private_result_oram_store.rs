@@ -399,6 +399,11 @@ impl PrivateResultOramStore {
         expected_root_hash: &str,
         expected_bucket_count: u64,
     ) -> CollectionResult<PrivateResultOramMerkleProof> {
+        if bucket_ids.is_empty() {
+            return Err(CollectionError::bad_request(
+                "private result ORAM Merkle proof bucket batch is empty",
+            ));
+        }
         let tree = self.read_merkle_tree()?;
         validate_merkle_tree_context(
             &tree,
@@ -2099,6 +2104,9 @@ mod tests {
             &[bucket0.clone(), bucket2, bucket0],
         )
         .unwrap();
+
+        let err = store.read_merkle_path_batch(&[], 42, &root, 3).unwrap_err();
+        assert!(err.to_string().contains("bucket batch is empty"));
 
         let err = store
             .read_merkle_path_batch(&[3], 42, &root, 3)

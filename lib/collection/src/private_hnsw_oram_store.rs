@@ -335,6 +335,11 @@ impl PrivateHnswOramStore {
         expected_root_hash: &str,
         expected_bucket_count: u64,
     ) -> CollectionResult<PrivateHnswOramMerkleProof> {
+        if bucket_ids.is_empty() {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM Merkle proof bucket batch is empty",
+            ));
+        }
         let tree = self.read_merkle_tree()?;
         validate_merkle_tree_context(
             &tree,
@@ -2027,6 +2032,9 @@ mod tests {
             .unwrap();
         assert_eq!(duplicate_proof.leaves.len(), 3);
         assert_eq!(duplicate_proof.leaves[0], duplicate_proof.leaves[2]);
+
+        let err = store.read_merkle_path_batch(&[], 42, &root, 4).unwrap_err();
+        assert!(err.to_string().contains("bucket batch is empty"));
     }
 
     #[test]

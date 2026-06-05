@@ -887,11 +887,12 @@ Directory hardening also checks symlink/type before chmod. It also exposes
 `read_merkle_path_batch` with the canonical qdrant-sec
 `merkle_path_batch/v1` proof DTO so a future result ORAM read API can return
 server-verifiable bucket commitment proofs without opening ciphertexts. The
-SDK-side `verify_private_result_oram_merkle_proof` and JSON helper validate
-proof kind, epoch/root, bucket count, sibling level/position, and bucket
-commitment matches against the same DTO emitted by the collection store. They
-reject empty proof/bucket sets, preserve fixed-size path-batch semantics by
-allowing repeated bucket/proof entries only when the duplicate entries are
+store generator rejects empty bucket batches. The SDK-side
+`verify_private_result_oram_merkle_proof` and JSON helper validate proof kind,
+epoch/root, bucket count, sibling level/position, and bucket commitment matches
+against the same DTO emitted by the collection store. They reject empty
+proof/bucket sets, preserve fixed-size path-batch semantics by allowing
+repeated bucket/proof entries only when the duplicate entries are
 byte-identical, reject oversized proof JSON before parsing, and fail closed on
 conflicting duplicates.
 `write_initial_upload_bundle` validates an SDK-packaged
