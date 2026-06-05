@@ -938,10 +938,8 @@ pub async fn do_read_private_hnsw_paths(
                 )
                 .map_err(private_hnsw_read_store_error)?;
             ensure_private_hnsw_read_proof_matches_buckets(&proof, &buckets)?;
-            let proof_value = serde_json::to_string(&proof).map_err(|err| {
-                StorageError::service_error(format!(
-                    "failed to serialize private HNSW ORAM Merkle proof: {err}",
-                ))
+            let proof_value = serde_json::to_string(&proof).map_err(|_| {
+                StorageError::service_error("failed to serialize private HNSW ORAM Merkle proof")
             })?;
             Ok(PrivateHnswReadPathsResponse {
                 index_epoch: session.index_epoch,
