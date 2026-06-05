@@ -892,7 +892,10 @@ commitments, and the manifest Merkle root.
 verification context to that preflight so future upload APIs do not have to
 stitch shape validation and manifest signature verification together by hand.
 The collection-local result ORAM store uses the shape helper for initial bundle
-ingest, then applies its runtime ciphertext size cap before writing files.
+ingest, then applies its runtime ciphertext size cap before writing files. Its
+signed ingest entrypoint uses the combined upload-bundle/manifest-signature
+helper before creating the private result ORAM layout, so a bad owner Ed25519
+signature leaves `epochs/current.json` absent and does not write bucket files.
 `refresh_private_result_oram_manifest_for_commit` and
 `sign_private_result_oram_manifest_refresh` mirror the private HNSW helper by
 deriving the next signed manifest only when a commit plan's old epoch/root
@@ -902,7 +905,9 @@ payload/result layer. It writes `private_result_oram/manifest.json`,
 `manifest.sig`, encrypted bucket files, Merkle commitment metadata, and
 `epochs/current.json` with the same private directory hardening and epoch CAS
 contract used by private HNSW ORAM. Its upload bundle preflight validates
-manifest signature shape and owner key id before store writes. Upload bundle,
+manifest signature shape and owner key id before store writes, and the signed
+initial upload path verifies the owner Ed25519 signature before layout creation.
+Upload bundle,
 commit, and stored Merkle-tree root mismatch errors do not reflect computed
 Merkle roots; bucket read/proof/commit validation errors also avoid reflecting
 bucket ids or bucket epochs. Current-epoch and Merkle tree context errors are

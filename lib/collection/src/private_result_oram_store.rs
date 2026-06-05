@@ -7,11 +7,12 @@ use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND, PrivateResultOramBucket,
     PrivateResultOramBucketCommitmentContext, PrivateResultOramBucketValidationContext,
-    PrivateResultOramManifest, PrivateResultOramMerkleProof, PrivateResultOramMerkleProofLeaf,
-    PrivateResultOramMerkleSibling, PrivateResultOramMerkleSiblingPosition,
-    PrivateResultOramSignature, PrivateResultOramUploadBundle,
-    private_result_oram_bucket_commitment, validate_private_result_oram_bucket_shape,
-    validate_private_result_oram_upload_bundle,
+    PrivateResultOramManifest, PrivateResultOramManifestValidationContext,
+    PrivateResultOramMerkleProof, PrivateResultOramMerkleProofLeaf, PrivateResultOramMerkleSibling,
+    PrivateResultOramMerkleSiblingPosition, PrivateResultOramSignature,
+    PrivateResultOramUploadBundle, private_result_oram_bucket_commitment,
+    validate_private_result_oram_bucket_shape, validate_private_result_oram_upload_bundle,
+    validate_private_result_oram_upload_bundle_with_signature,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -154,6 +155,16 @@ impl PrivateResultOramStore {
         }
         self.write_initial_epoch_if_absent_or_matching(&epoch)?;
         Ok(epoch)
+    }
+
+    pub fn write_initial_upload_bundle_with_signature(
+        &self,
+        bundle: &PrivateResultOramUploadBundle,
+        max_ciphertext_bytes: usize,
+        validation_context: PrivateResultOramManifestValidationContext<'_>,
+    ) -> CollectionResult<PrivateResultOramEpochState> {
+        validate_upload_bundle_with_signature(bundle, max_ciphertext_bytes, validation_context)?;
+        self.write_initial_upload_bundle(bundle, max_ciphertext_bytes)
     }
 
     fn initial_epoch_status(
@@ -808,6 +819,25 @@ fn validate_upload_bundle(
     Ok(leaf_commitments)
 }
 
+fn validate_upload_bundle_with_signature(
+    bundle: &PrivateResultOramUploadBundle,
+    max_ciphertext_bytes: usize,
+    validation_context: PrivateResultOramManifestValidationContext<'_>,
+) -> CollectionResult<Vec<String>> {
+    let leaf_commitments =
+        validate_private_result_oram_upload_bundle_with_signature(bundle, validation_context)
+            .map_err(private_result_oram_error)?;
+    for bucket in &bundle.buckets {
+        validate_bucket(
+            bucket,
+            bundle.manifest.index_epoch,
+            bundle.manifest.bucket_count,
+            max_ciphertext_bytes,
+        )?;
+    }
+    Ok(leaf_commitments)
+}
+
 fn validate_epoch_state(epoch: &PrivateResultOramEpochState) -> CollectionResult<()> {
     decode_base64url_32(&epoch.root_hash, "root_hash")?;
     Ok(())
@@ -1061,9 +1091,11 @@ fn sync_dir(path: &Path) -> CollectionResult<()> {
 mod tests {
     use qdrant_sec::{
         OramKind, OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_RESULT_ORAM_BINDING,
-        PrivateResultOramBucketCommitmentContext, private_result_oram_bucket_commitment,
-        private_result_oram_merkle_root_for_commitments, verify_private_result_oram_merkle_proof,
+        PrivateResultOramBucketCommitmentContext, PrivateResultOramSignatureVerification,
+        private_result_oram_bucket_commitment, private_result_oram_merkle_root_for_commitments,
+        sign_private_result_oram_manifest, verify_private_result_oram_merkle_proof,
     };
+    use ring::signature::{Ed25519KeyPair, KeyPair};
     use tempfile::TempDir;
 
     use super::*;
@@ -1164,6 +1196,29 @@ mod tests {
             manifest,
             manifest_signature: fixture_signature(),
             buckets,
+        }
+    }
+
+    fn signed_fixture_upload_bundle(key_pair: &Ed25519KeyPair) -> PrivateResultOramUploadBundle {
+        let mut bundle = fixture_upload_bundle();
+        bundle.manifest_signature =
+            sign_private_result_oram_manifest(key_pair, &bundle.manifest).unwrap();
+        bundle
+    }
+
+    fn fixture_validation_context<'a>(
+        public_key: &'a [u8],
+    ) -> PrivateResultOramManifestValidationContext<'a> {
+        PrivateResultOramManifestValidationContext {
+            expected_collection_id: "collection-uuid-1",
+            expected_key_id: "tenant-a/result-private-rk",
+            expected_rk_id: "tenant-a/result-private-rk",
+            min_rk_epoch: 7,
+            max_rk_epoch: 7,
+            signature_verification: PrivateResultOramSignatureVerification {
+                expected_key_id: "tenant-a/private-result-signing-v1",
+                public_key,
+            },
         }
     }
 
@@ -1454,6 +1509,46 @@ mod tests {
             &[bundle.buckets[1].clone()],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn initial_upload_bundle_with_signature_verifies_manifest_before_writes() {
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[17; 32]).unwrap();
+        let bundle = signed_fixture_upload_bundle(&key_pair);
+
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let epoch = store
+            .write_initial_upload_bundle_with_signature(
+                &bundle,
+                128,
+                fixture_validation_context(key_pair.public_key().as_ref()),
+            )
+            .unwrap();
+        assert_eq!(epoch.index_epoch, bundle.manifest.index_epoch);
+        assert_eq!(
+            store.read_manifest().unwrap(),
+            (bundle.manifest.clone(), bundle.manifest_signature.clone()),
+        );
+
+        let mut tampered = bundle.clone();
+        tampered.manifest_signature.sig = BASE64URL_NOPAD.encode(&[8; 64]);
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let rendered = store
+            .write_initial_upload_bundle_with_signature(
+                &tampered,
+                128,
+                fixture_validation_context(key_pair.public_key().as_ref()),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("manifest signature verification failed"));
+        assert!(!rendered.contains(&tampered.manifest_signature.sig));
+        assert!(matches!(
+            store.read_current_epoch(),
+            Err(CollectionError::NotFound { .. })
+        ));
     }
 
     #[test]
