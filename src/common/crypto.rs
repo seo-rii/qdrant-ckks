@@ -244,6 +244,8 @@ const PRIVATE_HNSW_SEARCH_MODE_OPTION: &str = "search_mode";
 const PRIVATE_HNSW_SEARCH_MODE_PRIVATE_HNSW_ORAM: &str = "private_hnsw_oram";
 const PRIVATE_HNSW_RESULT_PRIVACY_OPTION: &str = "result_privacy";
 const PRIVATE_HNSW_RESULT_PRIVACY_IDS_VISIBLE: &str = "ids_visible";
+const PRIVATE_HNSW_RESULT_PRIVACY_PRIVATE_PAYLOAD_ORAM_REQUIRED: &str =
+    "private_payload_oram_required";
 const PRIVATE_HNSW_DISTANCE_OPTION: &str = "distance";
 const PRIVATE_HNSW_DIM_OPTION: &str = "dim";
 const PRIVATE_HNSW_HNSW_OPTION: &str = "hnsw";
@@ -1629,6 +1631,13 @@ fn generic_vector_write_plan(
                     rule.instance
                 ))
             })?;
+            ensure_private_hnsw_private_result_oram_binding(
+                runtime_settings,
+                collection_name,
+                encryption,
+                &rule.id,
+                instance,
+            )?;
             let private_distance = private_hnsw_distance(&rule.instance, instance).map_err(|_| {
                 StorageError::bad_input(format!(
                     "collection {collection_name} private HNSW ORAM instance {} distance option is invalid",
@@ -3688,12 +3697,7 @@ fn validate_private_hnsw_oram_instance(
         PRIVATE_HNSW_SEARCH_MODE_OPTION,
         PRIVATE_HNSW_SEARCH_MODE_PRIVATE_HNSW_ORAM,
     )?;
-    private_hnsw_required_string_value(
-        instance_name,
-        instance,
-        PRIVATE_HNSW_RESULT_PRIVACY_OPTION,
-        PRIVATE_HNSW_RESULT_PRIVACY_IDS_VISIBLE,
-    )?;
+    validate_private_hnsw_result_privacy_option(instance_name, instance)?;
     private_hnsw_distance(instance_name, instance)?;
     let dim =
         private_hnsw_required_u64(instance_name, instance, PRIVATE_HNSW_DIM_OPTION, 1, 65_536)?;
@@ -3856,6 +3860,26 @@ fn private_hnsw_required_string_value(
         });
     }
     Ok(())
+}
+
+fn validate_private_hnsw_result_privacy_option(
+    instance_name: &str,
+    instance: &CryptoInstanceConfig,
+) -> Result<(), CryptoSetupError> {
+    let value =
+        private_hnsw_required_string(instance_name, instance, PRIVATE_HNSW_RESULT_PRIVACY_OPTION)?;
+    if matches!(
+        value,
+        PRIVATE_HNSW_RESULT_PRIVACY_IDS_VISIBLE
+            | PRIVATE_HNSW_RESULT_PRIVACY_PRIVATE_PAYLOAD_ORAM_REQUIRED
+    ) {
+        return Ok(());
+    }
+    Err(CryptoSetupError::InvalidInstanceOption {
+        instance: instance_name.to_string(),
+        option: PRIVATE_HNSW_RESULT_PRIVACY_OPTION.to_string(),
+        reason: "expected ids_visible or private_payload_oram_required".to_string(),
+    })
 }
 
 fn private_hnsw_required_u64(
@@ -6732,6 +6756,13 @@ fn validate_generic_collection_crypto_runtime(
                     rule.instance
                 ))
             })?;
+            ensure_private_hnsw_private_result_oram_binding(
+                runtime_settings,
+                collection_name,
+                encryption,
+                &rule.id,
+                instance,
+            )?;
             let private_distance = private_hnsw_distance(&rule.instance, instance).map_err(|_| {
                 StorageError::bad_input(format!(
                     "collection {collection_name} private HNSW ORAM instance {} distance option is invalid",
@@ -7097,6 +7128,36 @@ fn validate_private_result_oram_collection_runtime(
         }
     }
 
+    Ok(())
+}
+
+fn ensure_private_hnsw_private_result_oram_binding(
+    runtime_settings: &CryptoSettings,
+    collection_name: &str,
+    encryption: &CollectionEncryptionConfig,
+    rule_id: &str,
+    instance: &CryptoInstanceConfig,
+) -> Result<(), StorageError> {
+    let result_privacy = instance
+        .options
+        .get(PRIVATE_HNSW_RESULT_PRIVACY_OPTION)
+        .and_then(Value::as_str);
+    if result_privacy != Some(PRIVATE_HNSW_RESULT_PRIVACY_PRIVATE_PAYLOAD_ORAM_REQUIRED) {
+        return Ok(());
+    }
+
+    let has_private_result_oram_binding = encryption.rules.iter().any(|rule| {
+        rule.binding.as_deref() == Some(PRIVATE_RESULT_ORAM_BINDING)
+            && runtime_settings
+                .instances
+                .get(&rule.instance)
+                .is_some_and(|instance| instance.provider == PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
+    });
+    if !has_private_result_oram_binding {
+        return Err(StorageError::bad_input(format!(
+            "collection {collection_name} private HNSW ORAM rule {rule_id} uses result_privacy=private_payload_oram_required, which requires a {PRIVATE_RESULT_ORAM_BINDING} payload rule backed by {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}",
+        )));
+    }
     Ok(())
 }
 
@@ -9692,8 +9753,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_crypto_settings_rejects_private_hnsw_result_private_mode_until_payload_oram_exists()
-    {
+    fn validate_crypto_settings_accepts_private_hnsw_result_private_mode_schema() {
         let mut settings = CryptoSettings {
             zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
             allow_inline_key_material: false,
@@ -9714,13 +9774,8 @@ mod tests {
             .unwrap()
             .options["result_privacy"] = json!("private_payload_oram_required");
 
-        let err = validate_crypto_settings(&settings)
-            .expect_err("private payload ORAM result privacy is not implemented in the MVP");
-        assert!(
-            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
-                if option == "result_privacy" && reason.contains("ids_visible")),
-            "unexpected error: {err:?}",
-        );
+        validate_crypto_settings(&settings)
+            .expect("private payload ORAM result privacy should be schema-valid at runtime");
     }
 
     #[test]
@@ -20438,6 +20493,130 @@ mod tests {
 
         validate_collection_crypto_runtime_inner(&settings, "docs", &params)
             .expect("private HNSW ORAM vector provider should pass collection runtime validation");
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_rejects_private_hnsw_private_result_without_result_oram_binding()
+     {
+        let mut hnsw_options = private_hnsw_oram_options();
+        hnsw_options["result_privacy"] = json!("private_payload_oram_required");
+        let settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+                allow_inline_key_material: false,
+                instances: HashMap::from([(
+                    "docs_private_hnsw_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: hnsw_options,
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = with_embedding_vector(
+            CollectionParams {
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 7,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "embedding_private_hnsw".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec!["embedding".to_string()],
+                        },
+                        instance: "docs_private_hnsw_v1".to_string(),
+                        binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            },
+            Distance::Cosine,
+        );
+
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params)
+            .expect_err("private result HNSW mode must require result ORAM binding");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("private_payload_oram_required")
+                    && description.contains(PRIVATE_RESULT_ORAM_BINDING)
+                    && description.contains(PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_accepts_private_hnsw_private_result_with_result_oram_binding()
+     {
+        let mut hnsw_options = private_hnsw_oram_options();
+        hnsw_options["result_privacy"] = json!("private_payload_oram_required");
+        let settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+                allow_inline_key_material: false,
+                instances: HashMap::from([
+                    (
+                        "docs_private_hnsw_v1".to_string(),
+                        CryptoInstanceConfig {
+                            provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                            materials: HashMap::new(),
+                            backend_ref: None,
+                            options: hnsw_options,
+                        },
+                    ),
+                    (
+                        "payload_result_oram_v1".to_string(),
+                        CryptoInstanceConfig {
+                            provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+                            materials: HashMap::new(),
+                            backend_ref: None,
+                            options: private_result_oram_options(),
+                        },
+                    ),
+                ]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = with_embedding_vector(
+            CollectionParams {
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 7,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![
+                        EncryptionRuleRef {
+                            id: "embedding_private_hnsw".to_string(),
+                            selector: EncryptionSelector::VectorNames {
+                                names: vec!["embedding".to_string()],
+                            },
+                            instance: "docs_private_hnsw_v1".to_string(),
+                            binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                        },
+                        EncryptionRuleRef {
+                            id: "body_private_result".to_string(),
+                            selector: EncryptionSelector::PayloadPaths {
+                                paths: vec!["body".to_string()],
+                            },
+                            instance: "payload_result_oram_v1".to_string(),
+                            binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
+                        },
+                    ],
+                }),
+                ..CollectionParams::empty()
+            },
+            Distance::Cosine,
+        );
+
+        validate_collection_crypto_runtime_inner(&settings, "docs", &params)
+            .expect("private result HNSW mode should validate when result ORAM binding exists");
     }
 
     #[test]

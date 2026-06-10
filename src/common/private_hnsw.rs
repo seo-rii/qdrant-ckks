@@ -447,7 +447,7 @@ impl ResolvedPrivateHnswContext {
         }
         if manifest.result_privacy != ResultPrivacyMode::IdsVisible {
             return Err(StorageError::bad_request(format!(
-                "private HNSW ORAM result_privacy=private_payload_oram_required requires {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}, which is not implemented in this MVP"
+                "private HNSW ORAM result_privacy=private_payload_oram_required requires HNSW result-token linkage to {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}, which is not implemented in this MVP"
             )));
         }
         if manifest.hnsw != self.expected_hnsw {
@@ -1423,9 +1423,7 @@ fn result_privacy_from_runtime(
 ) -> StorageResult<ResultPrivacyMode> {
     match required_option_string(instance, RESULT_PRIVACY_OPTION)?.as_str() {
         "ids_visible" => Ok(ResultPrivacyMode::IdsVisible),
-        "private_payload_oram_required" => Err(StorageError::bad_request(format!(
-            "private HNSW ORAM result_privacy=private_payload_oram_required requires {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}, which is not implemented in this MVP"
-        ))),
+        "private_payload_oram_required" => Ok(ResultPrivacyMode::PrivatePayloadOramRequired),
         _ => Err(StorageError::bad_request(format!(
             "private HNSW ORAM option {RESULT_PRIVACY_OPTION} has unsupported value",
         ))),

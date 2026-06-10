@@ -2787,7 +2787,7 @@ mod private_hnsw_rest_tests {
             let body = String::from_utf8_lossy(&body_bytes);
             assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
             assert!(
-                body.contains("private HNSW ORAM instance docs_private_hnsw_v1 is invalid"),
+                body.contains("requires a private-result-oram/v1 payload rule"),
                 "{body}"
             );
         });
@@ -2881,7 +2881,7 @@ mod private_hnsw_rest_tests {
             let body = String::from_utf8_lossy(&body_bytes);
             assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
             assert!(
-                body.contains("private HNSW ORAM instance docs_private_hnsw_v1 is invalid"),
+                body.contains("requires a private-result-oram/v1 payload rule"),
                 "{body}"
             );
         });
@@ -2982,7 +2982,7 @@ mod private_hnsw_rest_tests {
             let body = String::from_utf8_lossy(&body_bytes);
             assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
             assert!(
-                body.contains("private HNSW ORAM instance docs_private_hnsw_v1 is invalid"),
+                body.contains("requires a private-result-oram/v1 payload rule"),
                 "{body}"
             );
 
@@ -3158,7 +3158,7 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "private HNSW ORAM instance docs_private_hnsw_v1 is invalid"
+                "requires a private-result-oram/v1 payload rule"
             );
 
             let close_request = actix_test::TestRequest::post()
@@ -3328,7 +3328,7 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "private HNSW ORAM instance docs_private_hnsw_v1 is invalid"
+                "requires a private-result-oram/v1 payload rule"
             );
 
             let close_request = actix_test::TestRequest::post()

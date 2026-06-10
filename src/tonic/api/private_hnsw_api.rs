@@ -3618,7 +3618,7 @@ mod private_hnsw_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(
                 err.message()
-                    .contains("private HNSW ORAM instance docs_private_hnsw_v1 is invalid")
+                    .contains("requires a private-result-oram/v1 payload rule")
             );
         });
     }
@@ -3695,7 +3695,7 @@ mod private_hnsw_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(
                 err.message()
-                    .contains("private HNSW ORAM instance docs_private_hnsw_v1 is invalid")
+                    .contains("requires a private-result-oram/v1 payload rule")
             );
         });
     }
@@ -3779,7 +3779,7 @@ mod private_hnsw_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(
                 err.message()
-                    .contains("private HNSW ORAM instance docs_private_hnsw_v1 is invalid")
+                    .contains("requires a private-result-oram/v1 payload rule")
             );
 
             PrivateHnswOram::upload_private_hnsw_buckets(&service, Request::new(bucket_request()))
@@ -4049,7 +4049,7 @@ mod private_hnsw_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(
                 err.message()
-                    .contains("private HNSW ORAM instance docs_private_hnsw_v1 is invalid")
+                    .contains("requires a private-result-oram/v1 payload rule")
             );
 
             let closed = PrivateHnswOram::close_private_hnsw_session(
@@ -4202,7 +4202,7 @@ mod private_hnsw_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(
                 err.message()
-                    .contains("private HNSW ORAM instance docs_private_hnsw_v1 is invalid")
+                    .contains("requires a private-result-oram/v1 payload rule")
             );
 
             let closed = PrivateHnswOram::close_private_hnsw_session(

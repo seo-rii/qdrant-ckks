@@ -663,11 +663,12 @@ observed during open, the new session is closed and the request fails before any
 ORAM path reads are served. Session open also requires encrypted bucket/Merkle
 metadata for the signed manifest epoch/root, so a manifest-only upload state
 does not open a session. Session open requests with `fixed_budget=false` in
-strict mode, a non-current desired epoch, or the reserved
-`private_payload_oram_required` result privacy mode are rejected before any ORAM
-path reads are served. Client id shape errors are sanitized without echoing the
-submitted client id; session clients must use non-empty safe ASCII resource-id
-characters within the configured length bound.
+strict mode or a non-current desired epoch are rejected before any ORAM path
+reads are served. `private_payload_oram_required` remains rejected at HNSW
+manifest/session policy until result-token linkage is implemented. Client id
+shape errors are sanitized without echoing the submitted client id; session
+clients must use non-empty safe ASCII resource-id characters within the
+configured length bound.
 Expired sessions are purged from the registry before use and release the
 single-writer lock for that private index; using an expired session id for
 `read_paths`, `commit`, or `close` fails closed.
@@ -862,21 +863,20 @@ snapshot manifest and bucket-contract mismatch errors also avoid reflecting
 manifest ids, vector names, dimensions, bucket ids, or bucket ciphertexts.
 
 Current result privacy support is deliberately narrow. `result_privacy:
-ids_visible` is the only accepted runtime mode in the MVP: Qdrant remains blind
-to vectors, query vectors, visited HNSW nodes, distances, and client-side top-k
-during the private session, but a later ordinary retrieve leaks the retrieved
-point ids to Qdrant. The enum and wire schema reserve
-`private_payload_oram_required` for future `payload/private-result-oram@v1`
-with binding `private-result-oram/v1`. Runtime validation accepts the
-server-blind provider instance and collection rule binding, and the dedicated
-REST path can upload/read signed manifests plus encrypted bucket batches, open
-fixed-budget sessions, return Merkle-proven bucket batches, and apply signed
-writeback commits through epoch/root CAS. Result ORAM snapshot restore
-preflight is open for configured `private-result-oram/v1` bindings and validates
-manifest/current epoch, buckets, Merkle metadata, and runtime Ed25519
-signatures. HNSW result-token linkage remains closed. HNSW manifest/session
-policy also rejects that result privacy mode until that linkage exists. Do not
-advertise
+ids_visible` remains the only working private HNSW result mode: Qdrant remains
+blind to vectors, query vectors, visited HNSW nodes, distances, and client-side
+top-k during the private session, but a later ordinary retrieve leaks the
+retrieved point ids to Qdrant. Runtime validation now treats
+`private_payload_oram_required` as schema-valid only when the collection also
+binds a `payload/private-result-oram@v1` rule through `private-result-oram/v1`.
+The dedicated result ORAM REST path can upload/read signed manifests plus
+encrypted bucket batches, open fixed-budget sessions, return Merkle-proven
+bucket batches, and apply signed writeback commits through epoch/root CAS.
+Result ORAM snapshot restore preflight is open for configured
+`private-result-oram/v1` bindings and validates manifest/current epoch, buckets,
+Merkle metadata, and runtime Ed25519 signatures. HNSW result-token linkage
+remains closed. HNSW manifest/session policy also rejects that result privacy
+mode until that linkage exists. Do not advertise
 `private_payload_oram_required` as a working result-private fetch mode for this
 provider version.
 The crypto crate reserves the future payload/result ORAM manifest shape through
