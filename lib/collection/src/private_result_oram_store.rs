@@ -2226,6 +2226,49 @@ mod tests {
             proof.leaves[0].leaf_hash,
             bundle.buckets[1].bucket_commitment
         );
+
+        let temp = TempDir::new().unwrap();
+        let wrong_key_store = fixture_store(&temp);
+        let old = wrong_key_store
+            .write_initial_upload_bundle(&bundle, 128)
+            .unwrap();
+        let mut wrong_key_signature = signature.clone();
+        wrong_key_signature.key_id = "tenant-a/private-result-signing-v2".to_string();
+        let rendered = wrong_key_store
+            .commit_writeback_with_signature(
+                &old,
+                &new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&updated_bucket),
+                128,
+                &wrong_key_signature,
+                PrivateResultOramSignatureVerification {
+                    expected_key_id: "tenant-a/private-result-signing-v1",
+                    public_key: key_pair.public_key().as_ref(),
+                },
+            )
+            .unwrap_err()
+            .to_string();
+
+        assert!(rendered.contains("signature key id does not match runtime context"));
+        assert!(
+            !rendered.contains(&wrong_key_signature.key_id),
+            "{rendered}"
+        );
+        assert_eq!(wrong_key_store.read_current_epoch().unwrap(), old);
+        assert_eq!(
+            wrong_key_store
+                .read_bucket(1, old.index_epoch, bundle.bucket_count(), 128)
+                .unwrap(),
+            bundle.buckets[1],
+        );
+        let proof = wrong_key_store
+            .read_merkle_path_batch(&[1], old.index_epoch, &old.root_hash, bundle.bucket_count())
+            .unwrap();
+        assert_eq!(
+            proof.leaves[0].leaf_hash,
+            bundle.buckets[1].bucket_commitment
+        );
     }
 
     #[test]
