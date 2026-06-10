@@ -836,7 +836,8 @@ collection/vector identity, key lineage, epoch/root, path labels, and padding
 metadata before encrypted buckets are returned.
 Snapshot restore preflight follows the same MVP result-privacy boundary:
 private HNSW ORAM manifests with `private_payload_oram_required` are rejected
-until the payload ORAM provider exists. Restore preflight also checks every
+until `private-result-oram/v1` binding and result-private restore support exist.
+Restore preflight also checks every
 manifest-range bucket for the manifest-derived fixed ciphertext size and verifies
 each bucket commitment against collection/vector/key lineage, bucket epoch, and
 `ciphertext_sha256` before accepting the Merkle root.

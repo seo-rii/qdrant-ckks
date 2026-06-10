@@ -226,9 +226,10 @@ fn validate_private_result_oram_snapshot_restore_not_present(
         collection_path.join(collection::private_result_oram_store::PRIVATE_RESULT_ORAM_DIR);
     match fs::symlink_metadata(&private_result_oram_path) {
         Ok(_) => Err(format!(
-            "private result ORAM snapshot restore requires {}, which is reserved until the \
-             payload ORAM provider runtime is implemented",
+            "private result ORAM snapshot restore requires {} with {} binding and restore support, \
+             which are not implemented yet",
             qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+            qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
         )),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(_) => Err("private result ORAM snapshot layout validation failed".to_string()),

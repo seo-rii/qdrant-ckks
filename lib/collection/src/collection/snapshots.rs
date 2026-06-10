@@ -10,10 +10,10 @@ use data_encoding::BASE64URL_NOPAD;
 use fs_err::File;
 use qdrant_sec::{
     DistanceKind, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_HNSW_ORAM_BINDING,
-    PrivateHnswBucketAeadBaseContext, PrivateHnswOramBucket, PrivateHnswOramManifest,
-    PrivateHnswOramSignature, ResultPrivacyMode, private_hnsw_bucket_commitment,
-    private_hnsw_oram_bucket_ciphertext_bytes, validate_private_hnsw_oram_manifest_shape,
-    validate_private_hnsw_oram_manifest_signature_shape,
+    PRIVATE_RESULT_ORAM_BINDING, PrivateHnswBucketAeadBaseContext, PrivateHnswOramBucket,
+    PrivateHnswOramManifest, PrivateHnswOramSignature, ResultPrivacyMode,
+    private_hnsw_bucket_commitment, private_hnsw_oram_bucket_ciphertext_bytes,
+    validate_private_hnsw_oram_manifest_shape, validate_private_hnsw_oram_manifest_signature_shape,
 };
 use segment::types::SnapshotFormat;
 use segment::utils::fs::move_all;
@@ -605,7 +605,7 @@ fn ensure_private_result_oram_snapshot_restore_not_present(
     match std::fs::symlink_metadata(&private_result_oram_path) {
         Ok(_) => Err(CollectionError::bad_request(format!(
             "private result ORAM snapshot restore requires {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}, \
-             which is reserved until the payload ORAM provider runtime is implemented"
+             but {PRIVATE_RESULT_ORAM_BINDING} binding and restore support are not implemented yet"
         ))),
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
         Err(_) => Err(CollectionError::service_error(
@@ -833,7 +833,8 @@ fn validate_private_hnsw_oram_restore_manifest(
         return Err(CollectionError::bad_request(format!(
             "private HNSW ORAM snapshot restore supports result_privacy=ids_visible only; \
              private_payload_oram_required requires {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}, \
-             which is reserved until the payload ORAM provider exists"
+             but {PRIVATE_RESULT_ORAM_BINDING} binding and result-private restore support are not \
+             implemented yet"
         )));
     }
     if signature.key_id != manifest.owner_signing_key_id {
