@@ -135,6 +135,12 @@ pub enum PrivateResultOramError {
     InvalidBucketPlaintext,
     #[error("private result ORAM bucket plaintext slot count does not match config")]
     BucketPlaintextSlotCountMismatch,
+    #[error("private result ORAM client position map is missing a token")]
+    MissingPosition,
+    #[error("private result ORAM path did not contain the requested block")]
+    MissingBlock,
+    #[error("private result ORAM path buckets do not match the requested leaf path")]
+    PathBucketMismatch,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -197,6 +203,61 @@ pub struct PrivateResultOramClientConfig {
 pub struct PrivateResultOramPlaintextBucket {
     pub bucket_id: u64,
     pub blocks: Vec<Option<PrivateResultOramPayloadBlockPlaintext>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateResultOramAccessResult {
+    pub old_leaf: u64,
+    pub new_leaf: u64,
+    pub block: PrivateResultOramPayloadBlockPlaintext,
+    pub writeback_buckets: Vec<PrivateResultOramPlaintextBucket>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PrivateResultOramClientState {
+    position_map: BTreeMap<[u8; 32], u64>,
+    stash: BTreeMap<[u8; 32], PrivateResultOramPayloadBlockPlaintext>,
+}
+
+impl PrivateResultOramClientState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_position_map(
+        position_map: impl IntoIterator<Item = ([u8; 32], u64)>,
+        tree_height: u32,
+    ) -> Result<Self, PrivateResultOramError> {
+        let mut state = Self::new();
+        for (payload_fetch_token, leaf) in position_map {
+            validate_private_result_oram_leaf(leaf, tree_height)?;
+            state.position_map.insert(payload_fetch_token, leaf);
+        }
+        Ok(state)
+    }
+
+    pub fn insert_position(
+        &mut self,
+        payload_fetch_token: [u8; 32],
+        leaf: u64,
+        tree_height: u32,
+    ) -> Result<(), PrivateResultOramError> {
+        validate_private_result_oram_leaf(leaf, tree_height)?;
+        self.position_map.insert(payload_fetch_token, leaf);
+        Ok(())
+    }
+
+    pub fn position(&self, payload_fetch_token: &[u8; 32]) -> Option<u64> {
+        self.position_map.get(payload_fetch_token).copied()
+    }
+
+    pub fn stash_len(&self) -> usize {
+        self.stash.len()
+    }
+
+    pub fn stash_contains(&self, payload_fetch_token: &[u8; 32]) -> bool {
+        self.stash.contains_key(payload_fetch_token)
+    }
 }
 
 pub struct PrivateResultOramClientKeys {
@@ -672,6 +733,109 @@ pub fn validate_private_result_oram_client_config(
         ));
     }
     Ok(())
+}
+
+pub fn empty_private_result_oram_plaintext_bucket(
+    bucket_id: u64,
+    config: PrivateResultOramClientConfig,
+) -> Result<PrivateResultOramPlaintextBucket, PrivateResultOramError> {
+    validate_private_result_oram_client_config(config)?;
+    Ok(PrivateResultOramPlaintextBucket {
+        bucket_id,
+        blocks: vec![None; config.bucket_size],
+    })
+}
+
+pub fn access_private_result_oram_path(
+    state: &mut PrivateResultOramClientState,
+    config: PrivateResultOramClientConfig,
+    target_payload_fetch_token: [u8; 32],
+    path_buckets: &[PrivateResultOramPlaintextBucket],
+    remap_leaf: u64,
+) -> Result<PrivateResultOramAccessResult, PrivateResultOramError> {
+    validate_private_result_oram_client_config(config)?;
+    let old_leaf = state
+        .position(&target_payload_fetch_token)
+        .ok_or(PrivateResultOramError::MissingPosition)?;
+    validate_private_result_oram_leaf(remap_leaf, config.tree_height)?;
+    let expected_bucket_ids =
+        private_result_oram_bucket_ids_for_leaf(old_leaf, config.tree_height)?;
+    if path_buckets.len() != expected_bucket_ids.len()
+        || path_buckets
+            .iter()
+            .zip(&expected_bucket_ids)
+            .any(|(bucket, expected_id)| bucket.bucket_id != *expected_id)
+    {
+        return Err(PrivateResultOramError::PathBucketMismatch);
+    }
+
+    for bucket in path_buckets {
+        if bucket.blocks.len() != config.bucket_size {
+            return Err(PrivateResultOramError::BucketPlaintextSlotCountMismatch);
+        }
+        for block in bucket.blocks.iter().flatten() {
+            if state.stash.contains_key(&block.payload_fetch_token) {
+                return Err(PrivateResultOramError::DuplicatePayloadFetchToken);
+            }
+            state.stash.insert(block.payload_fetch_token, block.clone());
+        }
+    }
+
+    let block = state
+        .stash
+        .get(&target_payload_fetch_token)
+        .cloned()
+        .ok_or(PrivateResultOramError::MissingBlock)?;
+    state
+        .position_map
+        .insert(target_payload_fetch_token, remap_leaf);
+
+    let mut writeback_by_bucket = BTreeMap::new();
+    for bucket_id in expected_bucket_ids.iter().rev() {
+        let mut blocks = Vec::with_capacity(config.bucket_size);
+        while blocks.len() < config.bucket_size {
+            let candidate_token = state.stash.keys().copied().find(|payload_fetch_token| {
+                let Some(leaf) = state.position_map.get(payload_fetch_token) else {
+                    return false;
+                };
+                private_result_oram_bucket_ids_for_leaf(*leaf, config.tree_height)
+                    .map(|path| path.contains(bucket_id))
+                    .unwrap_or(false)
+            });
+            let Some(candidate_token) = candidate_token else {
+                break;
+            };
+            let block = state
+                .stash
+                .remove(&candidate_token)
+                .ok_or(PrivateResultOramError::MissingBlock)?;
+            blocks.push(Some(block));
+        }
+        blocks.resize(config.bucket_size, None);
+        writeback_by_bucket.insert(
+            *bucket_id,
+            PrivateResultOramPlaintextBucket {
+                bucket_id: *bucket_id,
+                blocks,
+            },
+        );
+    }
+
+    let writeback_buckets = expected_bucket_ids
+        .iter()
+        .map(|bucket_id| {
+            writeback_by_bucket
+                .remove(bucket_id)
+                .ok_or(PrivateResultOramError::PathBucketMismatch)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(PrivateResultOramAccessResult {
+        old_leaf,
+        new_leaf: remap_leaf,
+        block,
+        writeback_buckets,
+    })
 }
 
 pub fn encode_private_result_oram_payload_block(
@@ -2405,6 +2569,158 @@ mod tests {
                 &[bucket0],
             ),
             Err(PrivateResultOramError::MerkleProofMismatch)
+        );
+    }
+
+    #[test]
+    fn path_oram_access_absorbs_path_remaps_and_writes_back() {
+        let config = result_client_config();
+        let block_a = payload_block(10);
+        let block_b = payload_block(11);
+        let mut state = PrivateResultOramClientState::with_position_map(
+            [
+                (block_a.payload_fetch_token, 2),
+                (block_b.payload_fetch_token, 3),
+            ],
+            config.tree_height,
+        )
+        .unwrap();
+        let path = vec![
+            empty_private_result_oram_plaintext_bucket(0, config).unwrap(),
+            empty_private_result_oram_plaintext_bucket(1, config).unwrap(),
+            PrivateResultOramPlaintextBucket {
+                bucket_id: 4,
+                blocks: vec![Some(block_b.clone()), None],
+            },
+            PrivateResultOramPlaintextBucket {
+                bucket_id: 9,
+                blocks: vec![Some(block_a.clone()), None],
+            },
+        ];
+
+        let access = access_private_result_oram_path(
+            &mut state,
+            config,
+            block_a.payload_fetch_token,
+            &path,
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(access.old_leaf, 2);
+        assert_eq!(access.new_leaf, 0);
+        assert_eq!(access.block, block_a);
+        assert_eq!(state.position(&block_a.payload_fetch_token), Some(0));
+        assert_eq!(state.position(&block_b.payload_fetch_token), Some(3));
+        assert_eq!(state.stash_len(), 0);
+        assert_eq!(
+            access
+                .writeback_buckets
+                .iter()
+                .map(|bucket| bucket.bucket_id)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 4, 9]
+        );
+        assert!(access.writeback_buckets[0].blocks[0].is_none());
+        assert_eq!(
+            access.writeback_buckets[1].blocks[0]
+                .as_ref()
+                .map(|block| block.payload_fetch_token),
+            Some([10; 32])
+        );
+        assert_eq!(
+            access.writeback_buckets[2].blocks[0]
+                .as_ref()
+                .map(|block| block.payload_fetch_token),
+            Some([11; 32])
+        );
+        assert!(access.writeback_buckets[3].blocks[0].is_none());
+    }
+
+    #[test]
+    fn path_oram_access_rejects_wrong_path_and_missing_target() {
+        let config = result_client_config();
+        let block_a = payload_block(10);
+        let mut state = PrivateResultOramClientState::with_position_map(
+            [(block_a.payload_fetch_token, 2)],
+            config.tree_height,
+        )
+        .unwrap();
+        let wrong_path = vec![
+            empty_private_result_oram_plaintext_bucket(0, config).unwrap(),
+            empty_private_result_oram_plaintext_bucket(1, config).unwrap(),
+            empty_private_result_oram_plaintext_bucket(4, config).unwrap(),
+            empty_private_result_oram_plaintext_bucket(10, config).unwrap(),
+        ];
+        assert_eq!(
+            access_private_result_oram_path(
+                &mut state,
+                config,
+                block_a.payload_fetch_token,
+                &wrong_path,
+                0,
+            ),
+            Err(PrivateResultOramError::PathBucketMismatch)
+        );
+
+        let path = vec![
+            empty_private_result_oram_plaintext_bucket(0, config).unwrap(),
+            empty_private_result_oram_plaintext_bucket(1, config).unwrap(),
+            empty_private_result_oram_plaintext_bucket(4, config).unwrap(),
+            empty_private_result_oram_plaintext_bucket(9, config).unwrap(),
+        ];
+        assert_eq!(
+            access_private_result_oram_path(
+                &mut state,
+                config,
+                block_a.payload_fetch_token,
+                &path,
+                0,
+            ),
+            Err(PrivateResultOramError::MissingBlock)
+        );
+    }
+
+    #[test]
+    fn path_oram_writeback_buckets_can_be_encoded_sealed_and_reopened() {
+        let config = result_client_config();
+        let keys = result_test_keys();
+        let block = payload_block(10);
+        let mut state = PrivateResultOramClientState::with_position_map(
+            [(block.payload_fetch_token, 2)],
+            config.tree_height,
+        )
+        .unwrap();
+        let path = vec![
+            empty_private_result_oram_plaintext_bucket(0, config).unwrap(),
+            empty_private_result_oram_plaintext_bucket(1, config).unwrap(),
+            empty_private_result_oram_plaintext_bucket(4, config).unwrap(),
+            PrivateResultOramPlaintextBucket {
+                bucket_id: 9,
+                blocks: vec![Some(block), None],
+            },
+        ];
+
+        let access =
+            access_private_result_oram_path(&mut state, config, [10; 32], &path, 0).unwrap();
+        let root_writeback = &access.writeback_buckets[0];
+        let sealed = seal_private_result_oram_plaintext_bucket(
+            &keys,
+            result_bucket_base_context(),
+            42,
+            root_writeback,
+            config,
+        )
+        .unwrap();
+        assert_eq!(
+            open_private_result_oram_plaintext_bucket(
+                &keys,
+                result_bucket_base_context(),
+                &sealed,
+                config,
+            )
+            .unwrap(),
+            *root_writeback
         );
     }
 

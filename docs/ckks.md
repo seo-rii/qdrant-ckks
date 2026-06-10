@@ -891,7 +891,10 @@ are encoded inside the client-encrypted bucket body and are never server
 validated as plaintext. Client AEAD helpers can seal/open those plaintext
 buckets into `PrivateResultOramBucket` ciphertexts with collection/key/epoch
 AAD, context-bound bucket commitments, ciphertext hash checks, and
-Merkle-proof-before-open verification for read batches. Server-side HNSW
+Merkle-proof-before-open verification for read batches. The SDK-side result ORAM
+state/access helper can now use the client-held token position map and stash to
+access a payload fetch token on a Path ORAM path, remap it to a new leaf, and
+produce plaintext writeback buckets for the commit path. Server-side HNSW
 manifest/session policy still rejects that result privacy mode until the full
 result fetch-token workflow is wired through. Do not advertise
 `private_payload_oram_required` as a working result-private fetch mode for this
