@@ -27,6 +27,7 @@ use super::auth::Auth;
 use super::crypto::validate_recovered_collection_crypto_config;
 use super::http_client::HttpClient;
 use super::private_hnsw::begin_private_hnsw_collection_snapshot;
+use super::private_result_oram::begin_private_result_oram_collection_snapshot;
 use crate::settings::Settings;
 
 pub fn validate_snapshot_url_api_key_policy(
@@ -117,19 +118,26 @@ pub async fn do_create_full_snapshot(
     let pass = new_unchecked_verification_pass();
     let toc = dispatcher.toc(&auth, &pass).clone();
 
-    let mut snapshot_guards = Vec::new();
+    let mut private_hnsw_snapshot_guards = Vec::new();
+    let mut private_result_snapshot_guards = Vec::new();
     for collection_pass in toc.multipass_into_collections(&collections_pass).await {
         let collection = toc.get_collection(&collection_pass).await?;
         let config = collection.config_snapshot().await;
         if let Some(snapshot_guard) =
             begin_private_hnsw_collection_snapshot(collection.name(), &config)?
         {
-            snapshot_guards.push(snapshot_guard);
+            private_hnsw_snapshot_guards.push(snapshot_guard);
+        }
+        if let Some(snapshot_guard) =
+            begin_private_result_oram_collection_snapshot(collection.name(), &config)?
+        {
+            private_result_snapshot_guards.push(snapshot_guard);
         }
     }
 
     let snapshot = snapshots::do_create_full_snapshot(dispatcher, auth).await;
-    drop(snapshot_guards);
+    drop(private_result_snapshot_guards);
+    drop(private_hnsw_snapshot_guards);
     snapshot
 }
 

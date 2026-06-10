@@ -46,6 +46,7 @@ use uuid::Uuid;
 
 use super::auth::Auth;
 use super::private_hnsw::begin_private_hnsw_collection_snapshot;
+use super::private_result_oram::begin_private_result_oram_collection_snapshot;
 pub async fn do_collection_exists(
     toc: &TableOfContent,
     auth: &Auth,
@@ -227,10 +228,14 @@ pub async fn do_create_snapshot(
 
     let collection = toc.get_collection(&collection_pass).await?;
     let config = collection.config_snapshot().await;
-    let snapshot_guard = begin_private_hnsw_collection_snapshot(collection.name(), &config)?;
+    let private_hnsw_snapshot_guard =
+        begin_private_hnsw_collection_snapshot(collection.name(), &config)?;
+    let private_result_snapshot_guard =
+        begin_private_result_oram_collection_snapshot(collection.name(), &config)?;
 
     let result = tokio::spawn(async move {
-        let _snapshot_guard = snapshot_guard;
+        let _private_hnsw_snapshot_guard = private_hnsw_snapshot_guard;
+        let _private_result_snapshot_guard = private_result_snapshot_guard;
         toc.create_snapshot(&collection_pass).await
     })
     .await??;

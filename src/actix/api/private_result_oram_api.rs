@@ -10,8 +10,10 @@ use super::CollectionPath;
 use crate::actix::auth::ActixAuth;
 use crate::actix::helpers::process_response;
 use crate::common::private_result_oram::{
-    do_get_private_result_oram_manifest, do_read_private_result_oram_buckets,
-    do_upload_private_result_oram_buckets, do_upload_private_result_oram_manifest,
+    do_close_private_result_oram_session, do_commit_private_result_oram_buckets,
+    do_get_private_result_oram_manifest, do_open_private_result_oram_session,
+    do_read_private_result_oram_buckets, do_upload_private_result_oram_buckets,
+    do_upload_private_result_oram_manifest,
 };
 use crate::settings::Settings;
 
@@ -36,7 +38,26 @@ pub struct UploadPrivateResultOramBucketsRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+pub struct OpenPrivateResultOramSessionRequest {
+    pub client_id: String,
+    pub desired_epoch: u64,
+    pub fixed_budget: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct PrivateResultOramSessionResponse {
+    pub session_id: String,
+    pub collection_id: String,
+    pub index_epoch: u64,
+    pub root_hash: String,
+    pub manifest: qdrant_sec::PrivateResultOramManifest,
+    pub lease_expires_unix: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
 pub struct ReadPrivateResultOramBucketsRequest {
+    pub session_id: String,
     pub index_epoch: u64,
     pub root_hash: String,
     pub bucket_ids: Vec<u64>,
@@ -56,6 +77,17 @@ pub struct PrivateResultOramReadBucketsResponse {
 pub struct PrivateResultOramReadProof {
     pub kind: String,
     pub value: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+pub struct CommitPrivateResultOramBucketsRequest {
+    pub session_id: String,
+    pub old_epoch: u64,
+    pub new_epoch: u64,
+    pub old_root_hash: String,
+    pub new_root_hash: String,
+    pub updated_buckets: Vec<qdrant_sec::PrivateResultOramBucket>,
+    pub commit_signature: qdrant_sec::PrivateResultOramSignature,
 }
 
 #[post("/collections/{collection_name}/private-result-oram/manifest")]
@@ -124,6 +156,30 @@ async fn upload_buckets(
     process_response(result, timing, None)
 }
 
+#[post("/collections/{collection_name}/private-result-oram/session")]
+async fn open_session(
+    dispatcher: web::Data<Dispatcher>,
+    settings: web::Data<Settings>,
+    path: Path<PrivateResultOramPath>,
+    request: Json<OpenPrivateResultOramSessionRequest>,
+    ActixAuth(auth): ActixAuth,
+) -> HttpResponse {
+    let path = path.into_inner();
+    let request = request.into_inner();
+    let timing = Instant::now();
+    let result = do_open_private_result_oram_session(
+        dispatcher.toc(&auth, &new_unchecked_verification_pass()),
+        &auth,
+        settings.get_ref(),
+        &path.collection.collection_name,
+        request.client_id,
+        request.desired_epoch,
+        request.fixed_budget,
+    )
+    .await;
+    process_response(result, timing, None)
+}
+
 #[post("/collections/{collection_name}/private-result-oram/oram/read_buckets")]
 async fn read_buckets(
     dispatcher: web::Data<Dispatcher>,
@@ -140,6 +196,7 @@ async fn read_buckets(
         &auth,
         settings.get_ref(),
         &path.collection.collection_name,
+        &request.session_id,
         request.index_epoch,
         request.root_hash,
         request.bucket_ids,
@@ -148,11 +205,71 @@ async fn read_buckets(
     process_response(result, timing, None)
 }
 
+#[post("/collections/{collection_name}/private-result-oram/oram/commit")]
+async fn commit_buckets(
+    dispatcher: web::Data<Dispatcher>,
+    settings: web::Data<Settings>,
+    path: Path<PrivateResultOramPath>,
+    request: Json<CommitPrivateResultOramBucketsRequest>,
+    ActixAuth(auth): ActixAuth,
+) -> HttpResponse {
+    let path = path.into_inner();
+    let request = request.into_inner();
+    let timing = Instant::now();
+    let result = do_commit_private_result_oram_buckets(
+        dispatcher.toc(&auth, &new_unchecked_verification_pass()),
+        &auth,
+        settings.get_ref(),
+        &path.collection.collection_name,
+        &request.session_id,
+        request.old_epoch,
+        request.new_epoch,
+        request.old_root_hash,
+        request.new_root_hash,
+        request.updated_buckets,
+        request.commit_signature,
+    )
+    .await;
+    process_response(result, timing, None)
+}
+
+#[post("/collections/{collection_name}/private-result-oram/session/{session_id}/close")]
+async fn close_session(
+    dispatcher: web::Data<Dispatcher>,
+    settings: web::Data<Settings>,
+    path: Path<PrivateResultOramClosePath>,
+    ActixAuth(auth): ActixAuth,
+) -> HttpResponse {
+    let path = path.into_inner();
+    let timing = Instant::now();
+    let result = do_close_private_result_oram_session(
+        dispatcher.toc(&auth, &new_unchecked_verification_pass()),
+        &auth,
+        settings.get_ref(),
+        &path.private_result_oram.collection.collection_name,
+        &path.session_id,
+    )
+    .await;
+    process_response(result, timing, None)
+}
+
+#[derive(Deserialize, Validate)]
+struct PrivateResultOramClosePath {
+    #[validate(nested)]
+    #[serde(flatten)]
+    private_result_oram: PrivateResultOramPath,
+    #[validate(length(min = 1, max = 256))]
+    session_id: String,
+}
+
 pub fn config_private_result_oram_api(cfg: &mut web::ServiceConfig) {
     cfg.service(upload_manifest)
         .service(get_manifest)
         .service(upload_buckets)
-        .service(read_buckets);
+        .service(open_session)
+        .service(read_buckets)
+        .service(commit_buckets)
+        .service(close_session);
 }
 
 #[cfg(test)]
@@ -171,8 +288,10 @@ mod private_result_oram_rest_tests {
     use qdrant_sec::{
         OramKind, OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_RESULT_ORAM_BINDING,
         PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND, PrivateResultOramBucket,
-        PrivateResultOramBucketCommitmentContext, PrivateResultOramManifest,
-        private_result_oram_bucket_commitment, private_result_oram_merkle_root_for_commitments,
+        PrivateResultOramBucketCommitmentContext, PrivateResultOramClientCommitBucketRef,
+        PrivateResultOramCommitPlan, PrivateResultOramCommitSignatureContext,
+        PrivateResultOramManifest, private_result_oram_bucket_commitment,
+        private_result_oram_merkle_root_for_commitments, sign_private_result_oram_commit,
         sign_private_result_oram_manifest,
     };
     use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -196,6 +315,8 @@ mod private_result_oram_rest_tests {
     const RK_EPOCH: u64 = 7;
     const SIGNING_KEY_ID: &str = "tenant-a/private-result-signing-v1";
     const BASE_EPOCH: u64 = 42;
+    const NEXT_EPOCH: u64 = 43;
+    const SESSION_ID: &str = "session-1";
 
     struct PrivateResultRouteFixture {
         manifest: PrivateResultOramManifest,
@@ -290,14 +411,69 @@ mod private_result_oram_rest_tests {
             };
             settings
         }
+
+        fn commit_bucket(
+            &self,
+        ) -> (
+            PrivateResultOramBucket,
+            qdrant_sec::PrivateResultOramSignature,
+            String,
+        ) {
+            let updated_bucket = fixture_bucket_for_epoch(0, &self.manifest, NEXT_EPOCH, &[42; 16]);
+            let mut commitments = self
+                .buckets
+                .iter()
+                .map(|bucket| bucket.bucket_commitment.clone())
+                .collect::<Vec<_>>();
+            commitments[0] = updated_bucket.bucket_commitment.clone();
+            let new_root_hash =
+                private_result_oram_merkle_root_for_commitments(&commitments).unwrap();
+            let plan = PrivateResultOramCommitPlan {
+                old_epoch: BASE_EPOCH,
+                new_epoch: NEXT_EPOCH,
+                old_root_hash: self.manifest.root_hash.clone(),
+                new_root_hash: new_root_hash.clone(),
+                leaf_commitments: commitments,
+                updated_buckets: vec![PrivateResultOramClientCommitBucketRef {
+                    bucket_id: updated_bucket.bucket_id,
+                    ciphertext_sha256: updated_bucket.ciphertext_sha256.clone(),
+                }],
+            };
+            let commit_signature = sign_private_result_oram_commit(
+                &self.signing_key,
+                PrivateResultOramCommitSignatureContext {
+                    collection_id: &self.manifest.collection_id,
+                    key_id: &self.manifest.key_id,
+                    rk_id: &self.manifest.rk_id,
+                    rk_epoch: self.manifest.rk_epoch,
+                    signing_key_id: SIGNING_KEY_ID,
+                },
+                &plan,
+            )
+            .unwrap();
+            (updated_bucket, commit_signature, new_root_hash)
+        }
     }
 
     fn fixture_bucket(
         bucket_id: u64,
         manifest: &PrivateResultOramManifest,
     ) -> PrivateResultOramBucket {
-        let ciphertext_bytes = [bucket_id as u8; 16];
-        let ciphertext = BASE64URL_NOPAD.encode(&ciphertext_bytes);
+        fixture_bucket_for_epoch(
+            bucket_id,
+            manifest,
+            manifest.index_epoch,
+            &[bucket_id as u8; 16],
+        )
+    }
+
+    fn fixture_bucket_for_epoch(
+        bucket_id: u64,
+        manifest: &PrivateResultOramManifest,
+        index_epoch: u64,
+        ciphertext_bytes: &[u8],
+    ) -> PrivateResultOramBucket {
+        let ciphertext = BASE64URL_NOPAD.encode(ciphertext_bytes);
         let ciphertext_sha256 = BASE64URL_NOPAD.encode(&Sha256::digest(ciphertext_bytes));
         let bucket_commitment = private_result_oram_bucket_commitment(
             PrivateResultOramBucketCommitmentContext {
@@ -306,7 +482,7 @@ mod private_result_oram_rest_tests {
                 rk_id: &manifest.rk_id,
                 rk_epoch: manifest.rk_epoch,
                 bucket_id,
-                index_epoch: manifest.index_epoch,
+                index_epoch,
             },
             &ciphertext_sha256,
         )
@@ -314,7 +490,7 @@ mod private_result_oram_rest_tests {
         PrivateResultOramBucket {
             version: 1,
             bucket_id,
-            index_epoch: manifest.index_epoch,
+            index_epoch,
             ciphertext,
             ciphertext_sha256,
             bucket_commitment,
@@ -395,12 +571,32 @@ mod private_result_oram_rest_tests {
         };
         assert_eq!(json_roundtrip(&buckets_request), buckets_request);
 
+        let session_request = OpenPrivateResultOramSessionRequest {
+            client_id: "tenant-a/sdk-instance-1".to_string(),
+            desired_epoch: BASE_EPOCH,
+            fixed_budget: true,
+        };
+        assert_eq!(json_roundtrip(&session_request), session_request);
+
         let read_request = ReadPrivateResultOramBucketsRequest {
+            session_id: SESSION_ID.to_string(),
             index_epoch: fixture.manifest.index_epoch,
             root_hash: fixture.manifest.root_hash.clone(),
             bucket_ids: vec![0, 1],
         };
         assert_eq!(json_roundtrip(&read_request), read_request);
+
+        let (updated_bucket, commit_signature, new_root_hash) = fixture.commit_bucket();
+        let commit_request = CommitPrivateResultOramBucketsRequest {
+            session_id: SESSION_ID.to_string(),
+            old_epoch: BASE_EPOCH,
+            new_epoch: NEXT_EPOCH,
+            old_root_hash: fixture.manifest.root_hash.clone(),
+            new_root_hash,
+            updated_buckets: vec![updated_bucket],
+            commit_signature,
+        };
+        assert_eq!(json_roundtrip(&commit_request), commit_request);
     }
 
     #[test]
@@ -531,9 +727,33 @@ mod private_result_oram_rest_tests {
             );
             assert_eq!(buckets_result["index_epoch"], fixture.manifest.index_epoch);
 
+            let session_result = post_json_ok!(
+                "/collections/docs/private-result-oram/session",
+                OpenPrivateResultOramSessionRequest {
+                    client_id: "tenant-a/sdk-instance-1".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                }
+            );
+            let session_id = session_result["session_id"].as_str().unwrap().to_string();
+            assert_eq!(session_result["collection_id"], COLLECTION_ID);
+            assert_eq!(session_result["index_epoch"], BASE_EPOCH);
+
+            post_json_error_contains!(
+                "/collections/docs/private-result-oram/session",
+                OpenPrivateResultOramSessionRequest {
+                    client_id: "tenant-a/sdk-instance-2".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                },
+                StatusCode::BAD_REQUEST,
+                "active session"
+            );
+
             let read_result = post_json_ok!(
                 "/collections/docs/private-result-oram/oram/read_buckets",
                 ReadPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
                     index_epoch: fixture.manifest.index_epoch,
                     root_hash: fixture.manifest.root_hash.clone(),
                     bucket_ids: vec![0, 1],
@@ -549,6 +769,7 @@ mod private_result_oram_rest_tests {
             let duplicate_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/read_buckets",
                 ReadPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
                     index_epoch: fixture.manifest.index_epoch,
                     root_hash: fixture.manifest.root_hash.clone(),
                     bucket_ids: vec![0, 0],
@@ -557,6 +778,42 @@ mod private_result_oram_rest_tests {
                 "duplicate"
             );
             assert!(!duplicate_error.contains(&fixture.buckets[0].ciphertext));
+
+            let (updated_bucket, commit_signature, new_root_hash) = fixture.commit_bucket();
+            let commit_result = post_json_ok!(
+                "/collections/docs/private-result-oram/oram/commit",
+                CommitPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash: new_root_hash.clone(),
+                    updated_buckets: vec![updated_bucket.clone()],
+                    commit_signature: commit_signature.clone(),
+                }
+            );
+            assert_eq!(commit_result["index_epoch"], NEXT_EPOCH);
+            assert_eq!(commit_result["root_hash"], new_root_hash);
+
+            let stale_commit_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/commit",
+                CommitPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash,
+                    updated_buckets: vec![updated_bucket],
+                    commit_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "old epoch/root"
+            );
+            assert!(!stale_commit_error.contains(&fixture.buckets[0].ciphertext));
+
+            let close_uri =
+                format!("/collections/docs/private-result-oram/session/{session_id}/close");
+            let _ = post_json_ok!(close_uri.as_str(), serde_json::json!({}));
         });
     }
 }

@@ -510,7 +510,8 @@ accepts only `key_id`, `material_fingerprint_id`, `profile`,
 accepts only `key_id`, `expected_rk_id`, `min_rk_epoch`, `max_rk_epoch`,
 `oram`, `integrity`, and `signature_public_keys` while its collection binding
 validation is open for `private-result-oram/v1`; manifest/bucket upload/read
-REST APIs are open, while session/commit APIs remain closed. Unknown options
+REST APIs are open, and bucket reads/commits are session-bound with
+single-writer epoch/root CAS. Unknown options
 fail startup/runtime validation instead of being silently ignored.
 Collection-facing private HNSW
 ORAM runtime validation errors use fixed descriptions and do not append the
@@ -838,8 +839,8 @@ collection/vector identity, key lineage, epoch/root, path labels, and padding
 metadata before encrypted buckets are returned.
 Snapshot restore preflight follows the same MVP result-privacy boundary:
 private HNSW ORAM manifests with `private_payload_oram_required` are rejected
-until HNSW result-token linkage and result ORAM session/read/commit support
-exist. Restore preflight also checks every
+until HNSW result-token linkage to the result ORAM provider exists. Restore
+preflight also checks every
 manifest-range bucket for the manifest-derived fixed ciphertext size and verifies
 each bucket commitment against collection/vector/key lineage, bucket epoch, and
 `ciphertext_sha256` before accepting the Merkle root.
@@ -868,12 +869,14 @@ point ids to Qdrant. The enum and wire schema reserve
 `private_payload_oram_required` for future `payload/private-result-oram@v1`
 with binding `private-result-oram/v1`. Runtime validation accepts the
 server-blind provider instance and collection rule binding, and the dedicated
-REST path can upload/read signed manifests plus encrypted bucket batches. Result
-ORAM snapshot restore preflight is open for configured `private-result-oram/v1`
-bindings and validates manifest/current epoch, buckets, Merkle metadata, and
-runtime Ed25519 signatures. Result ORAM session/commit APIs and HNSW
-result-token linkage remain closed. HNSW manifest/session policy also rejects
-that result privacy mode until those pieces exist. Do not advertise
+REST path can upload/read signed manifests plus encrypted bucket batches, open
+fixed-budget sessions, return Merkle-proven bucket batches, and apply signed
+writeback commits through epoch/root CAS. Result ORAM snapshot restore
+preflight is open for configured `private-result-oram/v1` bindings and validates
+manifest/current epoch, buckets, Merkle metadata, and runtime Ed25519
+signatures. HNSW result-token linkage remains closed. HNSW manifest/session
+policy also rejects that result privacy mode until that linkage exists. Do not
+advertise
 `private_payload_oram_required` as a working result-private fetch mode for this
 provider version.
 The crypto crate reserves the future payload/result ORAM manifest shape through
@@ -951,7 +954,7 @@ collection/key lineage and the proposed bucket epoch before preparing Merkle
 metadata.
 Directory hardening also checks symlink/type before chmod. It also exposes
 `read_merkle_path_batch` with the canonical qdrant-sec
-`merkle_path_batch/v1` proof DTO so a future result ORAM read API can return
+`merkle_path_batch/v1` proof DTO; the REST `read_buckets` API returns these
 server-verifiable bucket commitment proofs without opening ciphertexts. The
 store generator rejects empty bucket batches. `read_bucket_batch_with_proof`
 preflights the current epoch/root before reading encrypted buckets, returns the

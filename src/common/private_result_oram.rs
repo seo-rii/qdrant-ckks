@@ -1,4 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use collection::config::{
     CollectionConfigInternal, CollectionEncryptionConfig, EncryptionRuleRef, EncryptionSelector,
@@ -9,9 +11,10 @@ use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_RESULT_ORAM_BINDING,
     PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND, PrivateResultOramManifest,
-    PrivateResultOramManifestValidationContext, PrivateResultOramSignature,
-    PrivateResultOramSignatureVerification, PrivateResultOramUploadBundle,
-    validate_private_result_oram_manifest, validate_private_result_oram_manifest_signature_shape,
+    PrivateResultOramManifestValidationContext, PrivateResultOramMerkleProof,
+    PrivateResultOramSignature, PrivateResultOramSignatureVerification,
+    PrivateResultOramUploadBundle, validate_private_result_oram_manifest,
+    validate_private_result_oram_manifest_signature_shape,
     validate_private_result_oram_upload_bundle,
 };
 use serde::Serialize;
@@ -29,13 +32,28 @@ const MIN_RK_EPOCH_OPTION: &str = "min_rk_epoch";
 const MAX_RK_EPOCH_OPTION: &str = "max_rk_epoch";
 const ORAM_OPTION: &str = "oram";
 const SIGNATURE_PUBLIC_KEYS_OPTION: &str = "signature_public_keys";
+const ZERO_TRUST_PROFILE_STRICT: &str = "strict";
+const SESSION_LEASE_SECS: u64 = 300;
+const MAX_SESSION_COUNT: usize = 1024;
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
 const ED25519_PUBLIC_KEY_BYTES: usize = 32;
+const PRIVATE_RESULT_ORAM_CLIENT_ID_MAX_LEN: usize = 256;
+const PRIVATE_RESULT_ORAM_SESSION_ID_MAX_LEN: usize = 128;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PrivateResultOramManifestRecord {
     pub manifest: PrivateResultOramManifest,
     pub signature: PrivateResultOramSignature,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PrivateResultOramSessionResponse {
+    pub session_id: String,
+    pub collection_id: String,
+    pub index_epoch: u64,
+    pub root_hash: String,
+    pub manifest: PrivateResultOramManifest,
+    pub lease_expires_unix: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -50,6 +68,213 @@ pub struct PrivateResultOramReadBucketsResponse {
 pub struct PrivateResultOramReadProof {
     pub kind: String,
     pub value: String,
+}
+
+#[derive(Clone, Debug)]
+struct PrivateResultOramSession {
+    session_id: String,
+    _client_id: String,
+    collection_id: String,
+    collection_path: std::path::PathBuf,
+    index_epoch: u64,
+    root_hash: String,
+    lease_expires_unix: u64,
+    bucket_count: u64,
+    tree_height: u32,
+    path_batch_size: u32,
+    max_bucket_ciphertext_bytes: usize,
+    manifest: PrivateResultOramManifest,
+}
+
+#[derive(Default)]
+struct PrivateResultOramSessionRegistry {
+    sessions: HashMap<String, PrivateResultOramSession>,
+    active_writer_by_collection: HashMap<String, String>,
+    active_snapshot_by_collection: HashMap<String, usize>,
+    active_upload_by_collection: HashMap<String, usize>,
+}
+
+impl PrivateResultOramSessionRegistry {
+    fn open(
+        &mut self,
+        mut session: PrivateResultOramSession,
+        now_unix: u64,
+    ) -> StorageResult<PrivateResultOramSessionResponse> {
+        self.expire(now_unix);
+        if self.sessions.len() >= MAX_SESSION_COUNT {
+            return Err(StorageError::bad_request(
+                "private result ORAM session registry is full",
+            ));
+        }
+        if self
+            .active_snapshot_by_collection
+            .contains_key(&session.collection_id)
+        {
+            return Err(StorageError::bad_request(
+                "private result ORAM session open requires no active collection snapshot",
+            ));
+        }
+        if self
+            .active_upload_by_collection
+            .contains_key(&session.collection_id)
+        {
+            return Err(StorageError::bad_request(
+                "private result ORAM session open requires no active upload for this collection",
+            ));
+        }
+        if self
+            .active_writer_by_collection
+            .contains_key(&session.collection_id)
+        {
+            return Err(StorageError::bad_request(
+                "private result ORAM ConcurrentWriter: an active session already holds this collection",
+            ));
+        }
+        while self.sessions.contains_key(&session.session_id) {
+            session.session_id = new_session_id();
+        }
+
+        let response = session.response();
+        self.active_writer_by_collection
+            .insert(session.collection_id.clone(), session.session_id.clone());
+        self.sessions.insert(session.session_id.clone(), session);
+        Ok(response)
+    }
+
+    fn close(&mut self, collection_id: &str, session_id: &str, now_unix: u64) -> bool {
+        self.expire(now_unix);
+        let removed = self.sessions.remove(session_id);
+        if let Some(session) = removed {
+            if session.collection_id == collection_id {
+                if self
+                    .active_writer_by_collection
+                    .get(collection_id)
+                    .is_some_and(|active| active == session_id)
+                {
+                    self.active_writer_by_collection.remove(collection_id);
+                }
+                return true;
+            }
+            self.sessions.insert(session_id.to_string(), session);
+        }
+        false
+    }
+
+    fn has_active_collection(&mut self, collection_id: &str, now_unix: u64) -> bool {
+        self.expire(now_unix);
+        self.sessions
+            .values()
+            .any(|session| session.collection_id == collection_id)
+    }
+
+    fn has_active_upload_collection(&self, collection_id: &str) -> bool {
+        self.active_upload_by_collection.contains_key(collection_id)
+    }
+
+    fn begin_collection_snapshot(
+        &mut self,
+        collection_id: &str,
+        now_unix: u64,
+    ) -> StorageResult<()> {
+        ensure_no_active_private_result_oram_collection_session_in_registry(
+            self,
+            collection_id,
+            now_unix,
+        )?;
+        *self
+            .active_snapshot_by_collection
+            .entry(collection_id.to_string())
+            .or_insert(0) += 1;
+        Ok(())
+    }
+
+    fn release_collection_snapshot(&mut self, collection_id: &str) {
+        let Some(count) = self.active_snapshot_by_collection.get_mut(collection_id) else {
+            return;
+        };
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            self.active_snapshot_by_collection.remove(collection_id);
+        }
+    }
+
+    fn begin_upload(&mut self, collection_id: &str, now_unix: u64) -> StorageResult<()> {
+        ensure_private_result_oram_write_window_in_registry(self, collection_id, now_unix)?;
+        *self
+            .active_upload_by_collection
+            .entry(collection_id.to_string())
+            .or_insert(0) += 1;
+        Ok(())
+    }
+
+    fn release_upload(&mut self, collection_id: &str) {
+        let Some(count) = self.active_upload_by_collection.get_mut(collection_id) else {
+            return;
+        };
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            self.active_upload_by_collection.remove(collection_id);
+        }
+    }
+
+    fn with_session_mut<T>(
+        &mut self,
+        collection_id: &str,
+        session_id: &str,
+        now_unix: u64,
+        action: impl FnOnce(&mut PrivateResultOramSession) -> StorageResult<T>,
+    ) -> StorageResult<T> {
+        self.expire(now_unix);
+        let session = self.sessions.get_mut(session_id).ok_or_else(|| {
+            StorageError::bad_request("private result ORAM session is missing or expired")
+        })?;
+        if session.collection_id != collection_id {
+            return Err(StorageError::bad_request(
+                "private result ORAM session does not match collection",
+            ));
+        }
+        if session.lease_expires_unix <= now_unix {
+            return Err(StorageError::bad_request(
+                "private result ORAM session lease expired",
+            ));
+        }
+        action(session)
+    }
+
+    fn expire(&mut self, now_unix: u64) {
+        let expired = self
+            .sessions
+            .iter()
+            .filter_map(|(session_id, session)| {
+                (session.lease_expires_unix <= now_unix).then_some(session_id.clone())
+            })
+            .collect::<Vec<_>>();
+        for session_id in expired {
+            if let Some(session) = self.sessions.remove(&session_id) {
+                if self
+                    .active_writer_by_collection
+                    .get(&session.collection_id)
+                    .is_some_and(|active| active == &session_id)
+                {
+                    self.active_writer_by_collection
+                        .remove(&session.collection_id);
+                }
+            }
+        }
+    }
+}
+
+impl PrivateResultOramSession {
+    fn response(&self) -> PrivateResultOramSessionResponse {
+        PrivateResultOramSessionResponse {
+            session_id: self.session_id.clone(),
+            collection_id: self.collection_id.clone(),
+            index_epoch: self.index_epoch,
+            root_hash: self.root_hash.clone(),
+            manifest: self.manifest.clone(),
+            lease_expires_unix: self.lease_expires_unix,
+        }
+    }
 }
 
 struct ResolvedPrivateResultOramContext {
@@ -94,6 +319,35 @@ impl ResolvedPrivateResultOramContext {
     }
 }
 
+fn session_registry() -> &'static Mutex<PrivateResultOramSessionRegistry> {
+    static REGISTRY: OnceLock<Mutex<PrivateResultOramSessionRegistry>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(PrivateResultOramSessionRegistry::default()))
+}
+
+pub(crate) struct PrivateResultOramCollectionSnapshotGuard {
+    collection_id: String,
+}
+
+struct PrivateResultOramUploadGuard {
+    collection_id: String,
+}
+
+impl Drop for PrivateResultOramCollectionSnapshotGuard {
+    fn drop(&mut self) {
+        if let Ok(mut registry) = session_registry().lock() {
+            registry.release_collection_snapshot(&self.collection_id);
+        }
+    }
+}
+
+impl Drop for PrivateResultOramUploadGuard {
+    fn drop(&mut self) {
+        if let Ok(mut registry) = session_registry().lock() {
+            registry.release_upload(&self.collection_id);
+        }
+    }
+}
+
 pub async fn do_upload_private_result_oram_manifest(
     toc: &TableOfContent,
     auth: &Auth,
@@ -120,6 +374,8 @@ pub async fn do_upload_private_result_oram_manifest(
     )
     .map_err(private_result_oram_error)?;
     resolved.validate_manifest_runtime_policy(&manifest)?;
+    let _upload_guard =
+        begin_private_result_oram_upload_write_window(&resolved.collection_crypto_id)?;
 
     let epoch_state = PrivateResultOramEpochState {
         index_epoch: epoch.epoch,
@@ -181,6 +437,116 @@ pub async fn do_get_private_result_oram_manifest(
     })
 }
 
+pub async fn do_open_private_result_oram_session(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    client_id: String,
+    desired_epoch: u64,
+    fixed_budget: bool,
+) -> StorageResult<PrivateResultOramSessionResponse> {
+    validate_private_result_oram_client_id_shape(&client_id)?;
+    validate_private_result_oram_session_cluster_epoch_mode(toc.is_distributed())?;
+    if is_strict(settings) && !fixed_budget {
+        return Err(StorageError::bad_request(
+            "private result ORAM strict mode requires fixed_budget=true",
+        ));
+    }
+    if !fixed_budget {
+        return Err(StorageError::bad_request(
+            "private result ORAM sessions require fixed_budget=true",
+        ));
+    }
+
+    let pass = auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new(),
+        "private_result_oram_session_open",
+    )?;
+    let collection: std::sync::Arc<collection::collection::Collection> =
+        toc.get_collection(&pass).await?;
+    let config: CollectionConfigInternal = collection.config_snapshot().await;
+    let collection_crypto_id = config.stable_crypto_id(collection.name())?;
+    validate_collection_crypto_runtime_with_crypto_id(
+        settings,
+        collection.name(),
+        &collection_crypto_id,
+        &config.params,
+    )?;
+    let encryption = config.params.effective_encryption().ok_or_else(|| {
+        StorageError::bad_request(format!(
+            "collection {collection_name} does not configure private result ORAM encryption",
+        ))
+    })?;
+    let rule = private_result_oram_rule(&encryption)?;
+    let instance = private_result_oram_instance(settings, rule)?;
+    let store = PrivateResultOramStore::new(collection.path());
+    let (manifest, signature) = read_uploaded_manifest(&store)?;
+    let public_key = signature_public_key(instance, &signature.key_id)?;
+    let resolved = ResolvedPrivateResultOramContext {
+        collection_path: collection.path().to_path_buf(),
+        ..manifest_context_from_runtime(&collection_crypto_id, instance, public_key)?
+    };
+    let manifest_epoch = validate_private_result_oram_manifest(
+        &manifest,
+        Some(&signature),
+        resolved.manifest_context(&signature.key_id),
+    )
+    .map_err(private_result_oram_error)?;
+    resolved.validate_manifest_runtime_policy(&manifest)?;
+    let current_epoch = store
+        .read_current_epoch()
+        .map_err(private_result_oram_epoch_store_error)?;
+    if current_epoch.index_epoch != manifest_epoch.epoch
+        || current_epoch.root_hash != manifest.root_hash
+    {
+        return Err(StorageError::bad_request(
+            "private result ORAM manifest epoch/root does not match current epoch",
+        ));
+    }
+    if desired_epoch != current_epoch.index_epoch {
+        return Err(StorageError::bad_request(
+            "private result ORAM requested epoch is not current epoch",
+        ));
+    }
+    let expected_open_epoch = current_epoch.clone();
+    let expected_open_manifest = manifest.clone();
+    let expected_open_signature = signature.clone();
+
+    let now_unix = current_unix_secs()?;
+    let session = PrivateResultOramSession {
+        session_id: new_session_id(),
+        _client_id: client_id,
+        collection_id: collection_crypto_id.clone(),
+        collection_path: collection.path().to_path_buf(),
+        index_epoch: current_epoch.index_epoch,
+        root_hash: current_epoch.root_hash.clone(),
+        lease_expires_unix: now_unix.saturating_add(SESSION_LEASE_SECS),
+        bucket_count: manifest.bucket_count,
+        tree_height: manifest.oram.tree_height,
+        path_batch_size: manifest.oram.path_batch_size,
+        max_bucket_ciphertext_bytes: max_bucket_ciphertext_bytes(&manifest.oram)?,
+        manifest,
+    };
+    let response = session_registry()
+        .lock()
+        .map_err(|_| StorageError::service_error("private result ORAM session registry poisoned"))?
+        .open(session, now_unix)?;
+    if let Err(err) = ensure_private_result_oram_session_open_storage_matches(
+        &store,
+        &expected_open_epoch,
+        &expected_open_manifest,
+        &expected_open_signature,
+    ) {
+        if let Ok(mut registry) = session_registry().lock() {
+            registry.close(&collection_crypto_id, &response.session_id, now_unix);
+        }
+        return Err(err);
+    }
+    Ok(response)
+}
+
 pub async fn do_upload_private_result_oram_buckets(
     toc: &TableOfContent,
     auth: &Auth,
@@ -224,6 +590,8 @@ pub async fn do_upload_private_result_oram_buckets(
     )
     .map_err(private_result_oram_error)?;
     resolved.validate_manifest_runtime_policy(&manifest)?;
+    let _upload_guard =
+        begin_private_result_oram_upload_write_window(&resolved.collection_crypto_id)?;
     let current_epoch = store
         .read_current_epoch()
         .map_err(private_result_oram_epoch_store_error)?;
@@ -275,67 +643,199 @@ pub async fn do_read_private_result_oram_buckets(
     auth: &Auth,
     settings: &Settings,
     collection_name: &str,
+    session_id: &str,
     index_epoch: u64,
     root_hash: String,
     bucket_ids: Vec<u64>,
 ) -> StorageResult<PrivateResultOramReadBucketsResponse> {
+    validate_private_result_oram_session_id_shape(session_id)?;
     validate_base64url_32_string(&root_hash, "root_hash")?;
-    let pass = auth.check_collection_access(
-        collection_name,
-        AccessRequirements::new(),
-        "private_result_oram_buckets_read",
-    )?;
-    let collection: std::sync::Arc<collection::collection::Collection> =
-        toc.get_collection(&pass).await?;
-    let config: CollectionConfigInternal = collection.config_snapshot().await;
-    let collection_crypto_id = config.stable_crypto_id(collection.name())?;
-    validate_collection_crypto_runtime_with_crypto_id(
+    let request_context = collection_context_for_request(
+        toc,
+        auth,
         settings,
-        collection.name(),
-        &collection_crypto_id,
-        &config.params,
-    )?;
-    let encryption = config.params.effective_encryption().ok_or_else(|| {
-        StorageError::bad_request(format!(
-            "collection {collection_name} does not configure private result ORAM encryption",
-        ))
-    })?;
-    let rule = private_result_oram_rule(&encryption)?;
-    let instance = private_result_oram_instance(settings, rule)?;
-    let store = PrivateResultOramStore::new(collection.path());
-    let (manifest, signature) = read_uploaded_manifest(&store)?;
-    let public_key = signature_public_key(instance, &signature.key_id)?;
-    let resolved = manifest_context_from_runtime(&collection_crypto_id, instance, public_key)?;
-    validate_private_result_oram_manifest(
-        &manifest,
-        Some(&signature),
-        resolved.manifest_context(&signature.key_id),
+        collection_name,
+        None,
+        "private_result_oram_buckets_read",
     )
-    .map_err(private_result_oram_error)?;
-    resolved.validate_manifest_runtime_policy(&manifest)?;
-    validate_bucket_read_request(&manifest, &bucket_ids)?;
-    let max_ciphertext_bytes = max_bucket_ciphertext_bytes(&manifest.oram)?;
-    let (buckets, proof) = store
-        .read_bucket_batch_with_proof(
-            &bucket_ids,
-            index_epoch,
-            &root_hash,
-            manifest.bucket_count,
-            max_ciphertext_bytes,
-        )
-        .map_err(private_result_oram_read_store_error)?;
-    let proof_value = serde_json::to_string(&proof).map_err(|_| {
-        StorageError::service_error("failed to serialize private result ORAM Merkle proof")
+    .await?;
+    let now_unix = current_unix_secs()?;
+    let mut registry = session_registry().lock().map_err(|_| {
+        StorageError::service_error("private result ORAM session registry poisoned")
     })?;
-    Ok(PrivateResultOramReadBucketsResponse {
-        index_epoch,
-        root_hash,
-        buckets,
-        proof: PrivateResultOramReadProof {
-            kind: PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND.to_string(),
-            value: proof_value,
+    registry.with_session_mut(
+        &request_context.collection_crypto_id,
+        session_id,
+        now_unix,
+        |session| {
+            request_context.validate_manifest_runtime_policy(&session.manifest)?;
+            if session.index_epoch != index_epoch || session.root_hash != root_hash {
+                return Err(StorageError::bad_request(
+                    "private result ORAM session epoch/root mismatch",
+                ));
+            }
+            validate_bucket_read_request(&session.manifest, &bucket_ids)?;
+            let store = PrivateResultOramStore::new(&session.collection_path);
+            ensure_private_result_oram_active_session_current_epoch(
+                &store,
+                session.index_epoch,
+                &session.root_hash,
+                "read_buckets",
+            )?;
+            let (buckets, proof) = store
+                .read_bucket_batch_with_proof(
+                    &bucket_ids,
+                    session.index_epoch,
+                    &session.root_hash,
+                    session.bucket_count,
+                    session.max_bucket_ciphertext_bytes,
+                )
+                .map_err(private_result_oram_read_store_error)?;
+            ensure_private_result_oram_read_proof_matches_buckets(&proof, &buckets)?;
+            let proof_value = serde_json::to_string(&proof).map_err(|_| {
+                StorageError::service_error("failed to serialize private result ORAM Merkle proof")
+            })?;
+            Ok(PrivateResultOramReadBucketsResponse {
+                index_epoch: session.index_epoch,
+                root_hash: session.root_hash.clone(),
+                buckets,
+                proof: PrivateResultOramReadProof {
+                    kind: PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND.to_string(),
+                    value: proof_value,
+                },
+            })
         },
-    })
+    )
+}
+
+pub async fn do_commit_private_result_oram_buckets(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    session_id: &str,
+    old_epoch: u64,
+    new_epoch: u64,
+    old_root_hash: String,
+    new_root_hash: String,
+    updated_buckets: Vec<qdrant_sec::PrivateResultOramBucket>,
+    commit_signature: PrivateResultOramSignature,
+) -> StorageResult<PrivateResultOramEpochState> {
+    validate_private_result_oram_manifest_signature_shape(&commit_signature)
+        .map_err(private_result_oram_error)?;
+    validate_private_result_oram_session_id_shape(session_id)?;
+    validate_base64url_32_string(&old_root_hash, "old_root_hash")?;
+    validate_base64url_32_string(&new_root_hash, "new_root_hash")?;
+    let request_context = collection_context_for_request(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        Some(&commit_signature.key_id),
+        "private_result_oram_commit",
+    )
+    .await?;
+    let now_unix = current_unix_secs()?;
+    let mut registry = session_registry().lock().map_err(|_| {
+        StorageError::service_error("private result ORAM session registry poisoned")
+    })?;
+    registry.with_session_mut(
+        &request_context.collection_crypto_id,
+        session_id,
+        now_unix,
+        |session| {
+            request_context.validate_manifest_runtime_policy(&session.manifest)?;
+            if session.index_epoch != old_epoch || session.root_hash != old_root_hash {
+                return Err(StorageError::bad_request(
+                    "private result ORAM commit old epoch/root does not match active session",
+                ));
+            }
+            if new_epoch <= old_epoch {
+                return Err(StorageError::bad_request(
+                    "private result ORAM commit new_epoch must be greater than old_epoch",
+                ));
+            }
+            let max_updated_buckets = max_updated_bucket_count(session)?;
+            if updated_buckets.is_empty() || updated_buckets.len() > max_updated_buckets {
+                return Err(StorageError::bad_request(format!(
+                    "private result ORAM commit updated_buckets must contain 1..={max_updated_buckets} buckets",
+                )));
+            }
+            let mut seen_bucket_ids = HashSet::new();
+            for bucket in &updated_buckets {
+                if !seen_bucket_ids.insert(bucket.bucket_id) {
+                    return Err(StorageError::bad_request(
+                        "private result ORAM commit updated_buckets contains duplicate bucket id",
+                    ));
+                }
+                validate_base64url_32_string(&bucket.ciphertext_sha256, "ciphertext_sha256")?;
+            }
+            validate_session_signature_owner_key(session, &commit_signature.key_id)?;
+            let store = PrivateResultOramStore::new(&session.collection_path);
+            ensure_private_result_oram_active_session_current_epoch(
+                &store,
+                old_epoch,
+                &old_root_hash,
+                "commit",
+            )?;
+            let old = PrivateResultOramEpochState {
+                index_epoch: old_epoch,
+                root_hash: old_root_hash,
+            };
+            let new = PrivateResultOramEpochState {
+                index_epoch: new_epoch,
+                root_hash: new_root_hash,
+            };
+            let committed = store
+                .commit_writeback_with_signature(
+                    &old,
+                    &new,
+                    session.bucket_count,
+                    &updated_buckets,
+                    session.max_bucket_ciphertext_bytes,
+                    &commit_signature,
+                    PrivateResultOramSignatureVerification {
+                        expected_key_id: &commit_signature.key_id,
+                        public_key: &request_context.public_key,
+                    },
+                )
+                .map_err(private_result_oram_commit_writeback_store_error)?;
+            session.index_epoch = committed.index_epoch;
+            session.root_hash = committed.root_hash.clone();
+            session.lease_expires_unix = now_unix.saturating_add(SESSION_LEASE_SECS);
+            Ok(committed)
+        },
+    )
+}
+
+pub async fn do_close_private_result_oram_session(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    session_id: &str,
+) -> StorageResult<bool> {
+    validate_private_result_oram_session_id_shape(session_id)?;
+    let request_context = collection_context_for_request(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        None,
+        "private_result_oram_session_close",
+    )
+    .await?;
+    let now_unix = current_unix_secs()?;
+    let closed = session_registry()
+        .lock()
+        .map_err(|_| StorageError::service_error("private result ORAM session registry poisoned"))?
+        .close(&request_context.collection_crypto_id, session_id, now_unix);
+    if !closed {
+        return Err(StorageError::bad_request(
+            "private result ORAM session is missing or already closed",
+        ));
+    }
+    Ok(true)
 }
 
 pub fn validate_recovered_private_result_oram_snapshot_signatures(
@@ -375,6 +875,43 @@ pub fn validate_recovered_private_result_oram_snapshot_signatures(
     }
 
     Ok(())
+}
+
+async fn collection_context_for_request(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    signature_key_id: Option<&str>,
+    method: &str,
+) -> StorageResult<ResolvedPrivateResultOramContext> {
+    let pass = auth.check_collection_access(collection_name, AccessRequirements::new(), method)?;
+    let collection: std::sync::Arc<collection::collection::Collection> =
+        toc.get_collection(&pass).await?;
+    let config: CollectionConfigInternal = collection.config_snapshot().await;
+    let collection_crypto_id = config.stable_crypto_id(collection.name())?;
+    validate_collection_crypto_runtime_with_crypto_id(
+        settings,
+        collection.name(),
+        &collection_crypto_id,
+        &config.params,
+    )?;
+    let encryption = config.params.effective_encryption().ok_or_else(|| {
+        StorageError::bad_request(format!(
+            "collection {collection_name} does not configure private result ORAM encryption",
+        ))
+    })?;
+    let rule = private_result_oram_rule(&encryption)?;
+    let instance = private_result_oram_instance(settings, rule)?;
+    let public_key = if let Some(signature_key_id) = signature_key_id {
+        signature_public_key(instance, signature_key_id)?
+    } else {
+        Vec::new()
+    };
+    Ok(ResolvedPrivateResultOramContext {
+        collection_path: collection.path().to_path_buf(),
+        ..manifest_context_from_runtime(&collection_crypto_id, instance, public_key)?
+    })
 }
 
 async fn resolve_private_result_oram_context(
@@ -475,6 +1012,243 @@ fn read_uploaded_manifest(
     store
         .read_manifest()
         .map_err(private_result_oram_manifest_read_store_error)
+}
+
+fn ensure_private_result_oram_session_open_storage_matches(
+    store: &PrivateResultOramStore,
+    expected_epoch: &PrivateResultOramEpochState,
+    expected_manifest: &PrivateResultOramManifest,
+    expected_signature: &PrivateResultOramSignature,
+) -> StorageResult<()> {
+    let current_epoch = store
+        .read_current_epoch()
+        .map_err(private_result_oram_epoch_store_error)?;
+    let (stored_manifest, stored_signature) = read_uploaded_manifest(store)?;
+    if current_epoch != *expected_epoch
+        || stored_manifest != *expected_manifest
+        || stored_signature != *expected_signature
+    {
+        return Err(StorageError::bad_request(
+            "private result ORAM session open observed concurrent manifest or epoch update",
+        ));
+    }
+    store
+        .read_merkle_path_batch(
+            &[0],
+            expected_epoch.index_epoch,
+            &expected_epoch.root_hash,
+            expected_manifest.bucket_count,
+        )
+        .map_err(private_result_oram_read_store_error)?;
+    Ok(())
+}
+
+pub(crate) fn begin_private_result_oram_collection_snapshot(
+    collection_name: &str,
+    config: &CollectionConfigInternal,
+) -> StorageResult<Option<PrivateResultOramCollectionSnapshotGuard>> {
+    if !collection_uses_private_result_oram(config) {
+        return Ok(None);
+    }
+
+    let collection_crypto_id = config.stable_crypto_id(collection_name)?;
+    let now_unix = current_unix_secs()?;
+    let mut registry = session_registry().lock().map_err(|_| {
+        StorageError::service_error("private result ORAM session registry poisoned")
+    })?;
+    registry.begin_collection_snapshot(&collection_crypto_id, now_unix)?;
+    Ok(Some(PrivateResultOramCollectionSnapshotGuard {
+        collection_id: collection_crypto_id,
+    }))
+}
+
+fn begin_private_result_oram_upload_write_window(
+    collection_id: &str,
+) -> StorageResult<PrivateResultOramUploadGuard> {
+    let now_unix = current_unix_secs()?;
+    let mut registry = session_registry().lock().map_err(|_| {
+        StorageError::service_error("private result ORAM session registry poisoned")
+    })?;
+    registry.begin_upload(collection_id, now_unix)?;
+    Ok(PrivateResultOramUploadGuard {
+        collection_id: collection_id.to_string(),
+    })
+}
+
+fn ensure_private_result_oram_write_window_in_registry(
+    registry: &mut PrivateResultOramSessionRegistry,
+    collection_id: &str,
+    now_unix: u64,
+) -> StorageResult<()> {
+    if registry
+        .active_snapshot_by_collection
+        .contains_key(collection_id)
+    {
+        return Err(StorageError::bad_request(
+            "private result ORAM upload requires no active collection snapshot",
+        ));
+    }
+    if registry.has_active_collection(collection_id, now_unix) {
+        return Err(StorageError::bad_request(
+            "private result ORAM upload requires no active session for this collection",
+        ));
+    }
+    if registry
+        .active_upload_by_collection
+        .contains_key(collection_id)
+    {
+        return Err(StorageError::bad_request(
+            "private result ORAM upload requires no active upload for this collection",
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_no_active_private_result_oram_collection_session_in_registry(
+    registry: &mut PrivateResultOramSessionRegistry,
+    collection_id: &str,
+    now_unix: u64,
+) -> StorageResult<()> {
+    if registry.has_active_collection(collection_id, now_unix) {
+        return Err(StorageError::bad_request(
+            "private result ORAM collection snapshot requires no active private ORAM session",
+        ));
+    }
+    if registry.has_active_upload_collection(collection_id) {
+        return Err(StorageError::bad_request(
+            "private result ORAM collection snapshot requires no active private ORAM upload",
+        ));
+    }
+    Ok(())
+}
+
+fn collection_uses_private_result_oram(config: &CollectionConfigInternal) -> bool {
+    config
+        .params
+        .effective_encryption()
+        .is_some_and(|encryption| {
+            encryption
+                .rules
+                .iter()
+                .any(|rule| rule.binding.as_deref() == Some(PRIVATE_RESULT_ORAM_BINDING))
+        })
+}
+
+fn ensure_private_result_oram_active_session_current_epoch(
+    store: &PrivateResultOramStore,
+    expected_epoch: u64,
+    expected_root_hash: &str,
+    operation: &str,
+) -> StorageResult<()> {
+    let current = store
+        .read_current_epoch()
+        .map_err(private_result_oram_epoch_store_error)?;
+    if current.index_epoch != expected_epoch || current.root_hash != expected_root_hash {
+        return Err(StorageError::bad_request(format!(
+            "private result ORAM {operation} current epoch/root does not match active session"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_session_signature_owner_key(
+    session: &PrivateResultOramSession,
+    signature_key_id: &str,
+) -> StorageResult<()> {
+    if signature_key_id != session.manifest.owner_signing_key_id {
+        return Err(StorageError::bad_request(
+            "private result ORAM request signature key_id does not match manifest owner_signing_key_id",
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_private_result_oram_read_proof_matches_buckets(
+    proof: &PrivateResultOramMerkleProof,
+    buckets: &[qdrant_sec::PrivateResultOramBucket],
+) -> StorageResult<()> {
+    if proof.leaves.len() != buckets.len() {
+        return Err(StorageError::bad_request(
+            "private result ORAM encrypted bucket/proof consistency validation failed",
+        ));
+    }
+    for (leaf, bucket) in proof.leaves.iter().zip(buckets) {
+        if leaf.bucket_id != bucket.bucket_id || leaf.leaf_hash != bucket.bucket_commitment {
+            return Err(StorageError::bad_request(
+                "private result ORAM encrypted bucket/proof consistency validation failed",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn max_updated_bucket_count(session: &PrivateResultOramSession) -> StorageResult<usize> {
+    let levels = usize::try_from(session.tree_height)
+        .ok()
+        .and_then(|height| height.checked_add(1))
+        .ok_or_else(|| StorageError::bad_request("private result ORAM tree height overflows"))?;
+    let paths = usize::try_from(session.path_batch_size)
+        .map_err(|_| StorageError::bad_request("private result ORAM path batch size overflows"))?;
+    levels
+        .checked_mul(paths)
+        .ok_or_else(|| StorageError::bad_request("private result ORAM writeback size overflows"))
+}
+
+fn current_unix_secs() -> StorageResult<u64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|err| {
+            StorageError::service_error(format!("system clock before UNIX epoch: {err}"))
+        })
+}
+
+fn new_session_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+fn is_strict(settings: &Settings) -> bool {
+    settings.crypto.zero_trust_profile.as_deref() == Some(ZERO_TRUST_PROFILE_STRICT)
+}
+
+fn validate_private_result_oram_session_cluster_epoch_mode(distributed: bool) -> StorageResult<()> {
+    if distributed {
+        return Err(StorageError::bad_request(
+            "private result ORAM distributed sessions require consensus-backed epoch/root CAS; \
+             this MVP supports private ORAM sessions only in single-node mode",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_private_result_oram_client_id_shape(client_id: &str) -> StorageResult<()> {
+    if client_id.is_empty() || client_id.len() > PRIVATE_RESULT_ORAM_CLIENT_ID_MAX_LEN {
+        return Err(StorageError::bad_request(
+            "private result ORAM client_id must be non-empty and at most 256 bytes",
+        ));
+    }
+    if !client_id.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'/' | b'@' | b'-')
+    }) {
+        return Err(StorageError::bad_request(
+            "private result ORAM client_id is invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_private_result_oram_session_id_shape(session_id: &str) -> StorageResult<()> {
+    if session_id.is_empty()
+        || session_id.len() > PRIVATE_RESULT_ORAM_SESSION_ID_MAX_LEN
+        || !session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(StorageError::bad_request(
+            "private result ORAM session_id is invalid",
+        ));
+    }
+    Ok(())
 }
 
 fn signature_public_key(
@@ -671,6 +1445,38 @@ fn private_result_oram_read_store_error(err: CollectionError) -> StorageError {
         ),
         CollectionError::ServiceError { .. } => StorageError::service_error(
             "private result ORAM encrypted bucket store validation failed",
+        ),
+        other => StorageError::from(other),
+    }
+}
+
+fn private_result_oram_commit_writeback_store_error(err: CollectionError) -> StorageError {
+    match err {
+        CollectionError::NotFound { .. } => StorageError::not_found(
+            "private result ORAM encrypted bucket store metadata is unavailable",
+        ),
+        CollectionError::BadRequest { description }
+            if description.contains("commit signature verification failed") =>
+        {
+            StorageError::bad_request("private result ORAM commit signature verification failed")
+        }
+        CollectionError::BadRequest { description }
+            if description.contains("bucket commitment context mismatch") =>
+        {
+            StorageError::bad_request(
+                "private result ORAM commit bucket commitment context mismatch",
+            )
+        }
+        CollectionError::BadRequest { description }
+            if description.contains("bucket ciphertext") =>
+        {
+            StorageError::bad_request("private result ORAM bucket ciphertext validation failed")
+        }
+        CollectionError::BadRequest { .. } => StorageError::bad_request(
+            "private result ORAM encrypted bucket store metadata validation failed",
+        ),
+        CollectionError::ServiceError { .. } => StorageError::service_error(
+            "private result ORAM encrypted bucket store metadata validation failed",
         ),
         other => StorageError::from(other),
     }
