@@ -29,7 +29,9 @@ const PRIVATE_RESULT_ORAM_BUCKET_AEAD_VERSION: u8 = 1;
 const PRIVATE_RESULT_ORAM_BUCKET_AEAD_NONCE_LEN: usize = 12;
 const PRIVATE_RESULT_ORAM_BUCKET_AEAD_TAG_LEN: usize = 16;
 const PRIVATE_RESULT_ORAM_BUCKET_CIPHERTEXT_OPEN_MAX_BYTES: usize = 64 * 1024 * 1024;
+const PRIVATE_RESULT_ORAM_CLIENT_STATE_SNAPSHOT_VERSION: u16 = 1;
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
+const BASE64URL_NOPAD_8_BYTE_LEN: usize = 11;
 const BASE64URL_NOPAD_64_BYTE_LEN: usize = 86;
 const PRIVATE_RESULT_ORAM_MERKLE_PROOF_JSON_MAX_BYTES: usize = 4 * 1024 * 1024;
 const PRIVATE_RESULT_ORAM_MANIFEST_VERSION: u16 = 1;
@@ -141,6 +143,10 @@ pub enum PrivateResultOramError {
     MissingBlock,
     #[error("private result ORAM path buckets do not match the requested leaf path")]
     PathBucketMismatch,
+    #[error("private result ORAM client state snapshot uses unsupported version")]
+    UnsupportedClientStateSnapshotVersion(u16),
+    #[error("private result ORAM client state snapshot is malformed")]
+    InvalidClientStateSnapshot,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -182,7 +188,8 @@ pub struct PrivateResultOramSignature {
     pub sig: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PrivateResultOramPayloadBlockPlaintext {
     pub version: u16,
     pub payload_fetch_token: [u8; 32],
@@ -211,6 +218,22 @@ pub struct PrivateResultOramAccessResult {
     pub new_leaf: u64,
     pub block: PrivateResultOramPayloadBlockPlaintext,
     pub writeback_buckets: Vec<PrivateResultOramPlaintextBucket>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateResultOramClientStateSnapshot {
+    pub version: u16,
+    pub tree_height: u32,
+    pub positions: Vec<PrivateResultOramPositionMapSnapshotEntry>,
+    pub stash: Vec<PrivateResultOramPayloadBlockPlaintext>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateResultOramPositionMapSnapshotEntry {
+    pub payload_fetch_token: String,
+    pub leaf_label: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -249,6 +272,75 @@ impl PrivateResultOramClientState {
 
     pub fn position(&self, payload_fetch_token: &[u8; 32]) -> Option<u64> {
         self.position_map.get(payload_fetch_token).copied()
+    }
+
+    pub fn to_snapshot(
+        &self,
+        tree_height: u32,
+    ) -> Result<PrivateResultOramClientStateSnapshot, PrivateResultOramError> {
+        private_result_oram_leaf_count(tree_height)?;
+        let positions = self
+            .position_map
+            .iter()
+            .map(|(payload_fetch_token, leaf)| {
+                Ok(PrivateResultOramPositionMapSnapshotEntry {
+                    payload_fetch_token: BASE64URL_NOPAD.encode(payload_fetch_token),
+                    leaf_label: encode_private_result_oram_leaf_label(*leaf, tree_height)?,
+                })
+            })
+            .collect::<Result<Vec<_>, PrivateResultOramError>>()?;
+        for payload_fetch_token in self.stash.keys() {
+            if !self.position_map.contains_key(payload_fetch_token) {
+                return Err(PrivateResultOramError::InvalidClientStateSnapshot);
+            }
+        }
+
+        Ok(PrivateResultOramClientStateSnapshot {
+            version: PRIVATE_RESULT_ORAM_CLIENT_STATE_SNAPSHOT_VERSION,
+            tree_height,
+            positions,
+            stash: self.stash.values().cloned().collect(),
+        })
+    }
+
+    pub fn from_snapshot(
+        snapshot: &PrivateResultOramClientStateSnapshot,
+    ) -> Result<Self, PrivateResultOramError> {
+        if snapshot.version != PRIVATE_RESULT_ORAM_CLIENT_STATE_SNAPSHOT_VERSION {
+            return Err(
+                PrivateResultOramError::UnsupportedClientStateSnapshotVersion(snapshot.version),
+            );
+        }
+        private_result_oram_leaf_count(snapshot.tree_height)?;
+
+        let mut position_map = BTreeMap::new();
+        for entry in &snapshot.positions {
+            let payload_fetch_token =
+                decode_client_state_snapshot_payload_fetch_token(&entry.payload_fetch_token)?;
+            let leaf =
+                decode_private_result_oram_leaf_label(&entry.leaf_label, snapshot.tree_height)?;
+            if position_map.insert(payload_fetch_token, leaf).is_some() {
+                return Err(PrivateResultOramError::InvalidClientStateSnapshot);
+            }
+        }
+
+        let mut stash = BTreeMap::new();
+        for block in &snapshot.stash {
+            if !position_map.contains_key(&block.payload_fetch_token) {
+                return Err(PrivateResultOramError::InvalidClientStateSnapshot);
+            }
+            if stash
+                .insert(block.payload_fetch_token, block.clone())
+                .is_some()
+            {
+                return Err(PrivateResultOramError::InvalidClientStateSnapshot);
+            }
+        }
+
+        Ok(Self {
+            position_map,
+            stash,
+        })
     }
 
     pub fn stash_len(&self) -> usize {
@@ -632,6 +724,24 @@ pub fn private_result_oram_bucket_ids_for_leaf(
     Ok(bucket_ids)
 }
 
+pub fn encode_private_result_oram_leaf_label(
+    leaf: u64,
+    tree_height: u32,
+) -> Result<String, PrivateResultOramError> {
+    validate_private_result_oram_leaf(leaf, tree_height)?;
+    Ok(BASE64URL_NOPAD.encode(&leaf.to_be_bytes()))
+}
+
+pub fn decode_private_result_oram_leaf_label(
+    label: &str,
+    tree_height: u32,
+) -> Result<u64, PrivateResultOramError> {
+    let bytes = decode_private_result_oram_leaf_label_shape(label)?;
+    let leaf = u64::from_be_bytes(bytes);
+    validate_private_result_oram_leaf(leaf, tree_height)?;
+    Ok(leaf)
+}
+
 fn validate_private_result_oram_leaf(
     leaf: u64,
     tree_height: u32,
@@ -640,6 +750,34 @@ fn validate_private_result_oram_leaf(
         return Err(PrivateResultOramError::InvalidFetchPlanField("leaf"));
     }
     Ok(())
+}
+
+fn decode_private_result_oram_leaf_label_shape(
+    label: &str,
+) -> Result<[u8; 8], PrivateResultOramError> {
+    if label.len() != BASE64URL_NOPAD_8_BYTE_LEN {
+        return Err(PrivateResultOramError::InvalidClientStateSnapshot);
+    }
+    let bytes = BASE64URL_NOPAD
+        .decode(label.as_bytes())
+        .map_err(|_| PrivateResultOramError::InvalidClientStateSnapshot)?;
+    bytes
+        .try_into()
+        .map_err(|_| PrivateResultOramError::InvalidClientStateSnapshot)
+}
+
+fn decode_client_state_snapshot_payload_fetch_token(
+    value: &str,
+) -> Result<[u8; 32], PrivateResultOramError> {
+    if value.len() != BASE64URL_NOPAD_32_BYTE_LEN {
+        return Err(PrivateResultOramError::InvalidClientStateSnapshot);
+    }
+    let bytes = BASE64URL_NOPAD
+        .decode(value.as_bytes())
+        .map_err(|_| PrivateResultOramError::InvalidClientStateSnapshot)?;
+    bytes
+        .try_into()
+        .map_err(|_| PrivateResultOramError::InvalidClientStateSnapshot)
 }
 
 pub fn plan_private_result_oram_read_bucket_batches_for_fetch_tokens(
@@ -2104,6 +2242,7 @@ mod tests {
             PrivateResultOramError::UnsupportedBucketVersion(88).to_string(),
             PrivateResultOramError::UnsupportedBucketCiphertextVersion(77).to_string(),
             PrivateResultOramError::UnsupportedPayloadBlockVersion(99).to_string(),
+            PrivateResultOramError::UnsupportedClientStateSnapshotVersion(55).to_string(),
             PrivateResultOramError::BucketOutOfRange {
                 bucket_id: 123,
                 bucket_count: 456,
@@ -2120,7 +2259,7 @@ mod tests {
 
         for rendered in cases {
             assert!(!rendered.contains("rsa-pss-sentinel"), "{rendered}");
-            for leaked in ["99", "88", "77", "123", "456", "42", "43"] {
+            for leaked in ["99", "88", "77", "55", "123", "456", "42", "43"] {
                 assert!(!rendered.contains(leaked), "{rendered}");
             }
         }
@@ -2721,6 +2860,61 @@ mod tests {
             )
             .unwrap(),
             *root_writeback
+        );
+    }
+
+    #[test]
+    fn client_state_snapshot_roundtrips_position_map_and_stash() {
+        let config = result_client_config();
+        let entry = payload_block(10);
+        let stash = payload_block(11);
+        let mut state = PrivateResultOramClientState::with_position_map(
+            [
+                (entry.payload_fetch_token, 0),
+                (stash.payload_fetch_token, 1),
+            ],
+            config.tree_height,
+        )
+        .unwrap();
+        state.stash.insert(stash.payload_fetch_token, stash.clone());
+
+        let snapshot = state.to_snapshot(config.tree_height).unwrap();
+        assert_eq!(snapshot.version, 1);
+        assert_eq!(snapshot.tree_height, config.tree_height);
+        assert_eq!(snapshot.positions.len(), 2);
+        assert_eq!(snapshot.stash, vec![stash.clone()]);
+        let leaf_label = encode_private_result_oram_leaf_label(1, config.tree_height).unwrap();
+        assert_eq!(
+            decode_private_result_oram_leaf_label(&leaf_label, config.tree_height).unwrap(),
+            1
+        );
+
+        let encoded = serde_json::to_string(&snapshot).unwrap();
+        let decoded: PrivateResultOramClientStateSnapshot = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(
+            PrivateResultOramClientState::from_snapshot(&decoded).unwrap(),
+            state
+        );
+
+        let mut bad_version = decoded.clone();
+        bad_version.version = 2;
+        assert_eq!(
+            PrivateResultOramClientState::from_snapshot(&bad_version),
+            Err(PrivateResultOramError::UnsupportedClientStateSnapshotVersion(2))
+        );
+
+        let mut bad_token = decoded.clone();
+        bad_token.positions[0].payload_fetch_token = "not-base64".to_string();
+        assert_eq!(
+            PrivateResultOramClientState::from_snapshot(&bad_token),
+            Err(PrivateResultOramError::InvalidClientStateSnapshot)
+        );
+
+        let mut bad_stash = decoded;
+        bad_stash.stash[0].payload_fetch_token = [99; 32];
+        assert_eq!(
+            PrivateResultOramClientState::from_snapshot(&bad_stash),
+            Err(PrivateResultOramError::InvalidClientStateSnapshot)
         );
     }
 
