@@ -884,7 +884,11 @@ logical volume. The private result ORAM client contract can now map that fixed
 token batch through the client-held token-position map into session
 `read_buckets` bucket-id batches and rejects missing token positions, duplicate
 fetch tokens, duplicate token-position entries, and out-of-range leaves before a
-server request is built. Server-side HNSW manifest/session policy still rejects
+server request is built. The crypto crate also has a client-only private result
+ORAM payload block/plaintext bucket codec for fixed-size bucket contents:
+payload bytes, payload fetch token, point token, generation, and deletion state
+are encoded inside the client-encrypted bucket body and are never server
+validated as plaintext. Server-side HNSW manifest/session policy still rejects
 that result privacy mode until the full result fetch-token workflow is wired
 through. Do not advertise
 `private_payload_oram_required` as a working result-private fetch mode for this
