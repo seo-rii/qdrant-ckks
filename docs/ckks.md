@@ -896,10 +896,11 @@ state/access helper can now use the client-held token position map and stash to
 access a payload fetch token on a Path ORAM path, remap it to a new leaf, and
 produce plaintext writeback buckets for the commit path. A canonical plaintext
 client-state snapshot shape now round-trips the result ORAM token position map
-and stash for client-side backup validation; sealing that snapshot under a
-client backup key remains a follow-on step. Server-side HNSW manifest/session
-policy still rejects that result privacy mode until the full result fetch-token
-workflow is wired through. Do not advertise
+and stash for client-side backup validation, and an encrypted snapshot helper
+seals that backup under a client-derived state key with collection/key/epoch/root
+AAD plus ciphertext hash checks. Server-side HNSW manifest/session policy still
+rejects that result privacy mode until the full result fetch-token workflow is
+wired through. Do not advertise
 `private_payload_oram_required` as a working result-private fetch mode for this
 provider version.
 The crypto crate reserves the future payload/result ORAM manifest shape through
