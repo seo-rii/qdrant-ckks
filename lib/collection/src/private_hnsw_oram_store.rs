@@ -2281,6 +2281,95 @@ mod tests {
     }
 
     #[test]
+    fn writeback_commit_preflights_manifest_epoch_root_before_writes() {
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[31; 32]).unwrap();
+        let (bundle, updated_bucket, new, _) = fixture_signed_commit_update(&key_pair);
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let old = store.write_initial_upload_bundle(&bundle, 4096).unwrap();
+
+        let mut tampered_manifest = bundle.manifest.clone();
+        tampered_manifest.root_hash = root_hash(99);
+        assert_ne!(tampered_manifest.root_hash, old.root_hash);
+        store
+            .write_manifest(&tampered_manifest, &bundle.manifest_signature)
+            .unwrap();
+
+        let rendered = store
+            .commit_writeback(
+                &old,
+                &new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&updated_bucket),
+                4096,
+            )
+            .unwrap_err()
+            .to_string();
+
+        assert!(rendered.contains("manifest epoch/root"));
+        assert!(
+            !rendered.contains(&tampered_manifest.root_hash),
+            "{rendered}"
+        );
+        assert_eq!(store.read_current_epoch().unwrap(), old);
+        assert_eq!(
+            store
+                .read_bucket(0, old.index_epoch, bundle.bucket_count(), 4096)
+                .unwrap(),
+            bundle.buckets[0]
+        );
+        let proof = store
+            .read_merkle_path_batch(&[0], old.index_epoch, &old.root_hash, bundle.bucket_count())
+            .unwrap();
+        assert_eq!(
+            proof.leaves[0].leaf_hash,
+            bundle.buckets[0].bucket_commitment
+        );
+    }
+
+    #[test]
+    fn writeback_commit_preflights_manifest_bucket_count_before_writes() {
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[37; 32]).unwrap();
+        let (bundle, updated_bucket, new, _) = fixture_signed_commit_update(&key_pair);
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let old = store.write_initial_upload_bundle(&bundle, 4096).unwrap();
+
+        let mut tampered_manifest = bundle.manifest.clone();
+        tampered_manifest.bucket_count += 1;
+        store
+            .write_manifest(&tampered_manifest, &bundle.manifest_signature)
+            .unwrap();
+
+        let rendered = store
+            .commit_writeback(
+                &old,
+                &new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&updated_bucket),
+                4096,
+            )
+            .unwrap_err()
+            .to_string();
+
+        assert!(rendered.contains("manifest bucket_count"));
+        assert_eq!(store.read_current_epoch().unwrap(), old);
+        assert_eq!(
+            store
+                .read_bucket(0, old.index_epoch, bundle.bucket_count(), 4096)
+                .unwrap(),
+            bundle.buckets[0]
+        );
+        let proof = store
+            .read_merkle_path_batch(&[0], old.index_epoch, &old.root_hash, bundle.bucket_count())
+            .unwrap();
+        assert_eq!(
+            proof.leaves[0].leaf_hash,
+            bundle.buckets[0].bucket_commitment
+        );
+    }
+
+    #[test]
     fn sdk_upload_search_fixture_roundtrips_store_read_paths_and_commit() {
         let temp = TempDir::new().unwrap();
         let store = fixture_store(&temp);
