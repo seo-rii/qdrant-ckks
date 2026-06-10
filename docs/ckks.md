@@ -874,9 +874,12 @@ encrypted bucket batches, open fixed-budget sessions, return Merkle-proven
 bucket batches, and apply signed writeback commits through epoch/root CAS.
 Result ORAM snapshot restore preflight is open for configured
 `private-result-oram/v1` bindings and validates manifest/current epoch, buckets,
-Merkle metadata, and runtime Ed25519 signatures. HNSW result-token linkage
-remains closed. HNSW manifest/session policy also rejects that result privacy
-mode until that linkage exists. Do not advertise
+Merkle metadata, and runtime Ed25519 signatures. The SDK search result now
+propagates each node block's `payload_fetch_token`, and a client-side helper
+fails closed when `private_payload_oram_required` hits do not all carry payload
+fetch tokens. Server-side HNSW manifest/session policy still rejects that result
+privacy mode until the full result fetch-token workflow is wired through. Do not
+advertise
 `private_payload_oram_required` as a working result-private fetch mode for this
 provider version.
 The crypto crate reserves the future payload/result ORAM manifest shape through

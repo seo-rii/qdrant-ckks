@@ -145,6 +145,8 @@ pub enum PrivateHnswClientError {
     VectorDimensionMismatch,
     #[error("private HNSW search distance is not finite")]
     NonFiniteDistance,
+    #[error("private HNSW private result mode requires every hit to carry a payload fetch token")]
+    MissingPayloadFetchToken,
     #[error("private HNSW ORAM Merkle tree must contain at least one leaf")]
     EmptyMerkleTree,
     #[error("private HNSW ORAM Merkle root is invalid")]
@@ -433,6 +435,7 @@ pub struct PrivateHnswSearchParams {
 pub struct PrivateHnswSearchHit {
     pub node_id: [u8; 32],
     pub point_token: [u8; 32],
+    pub payload_fetch_token: Option<[u8; 32]>,
     pub distance: f32,
 }
 
@@ -466,6 +469,26 @@ impl PrivateHnswSearchResult {
                 .len(),
             fixed_steps: params.fixed_steps,
             exhausted_fixed_budget: self.completed_steps == params.fixed_steps,
+        }
+    }
+}
+
+pub fn validate_private_hnsw_search_result_privacy(
+    result_privacy: ResultPrivacyMode,
+    result: &PrivateHnswSearchResult,
+) -> Result<(), PrivateHnswClientError> {
+    match result_privacy {
+        ResultPrivacyMode::IdsVisible => Ok(()),
+        ResultPrivacyMode::PrivatePayloadOramRequired => {
+            if result
+                .hits
+                .iter()
+                .all(|hit| hit.payload_fetch_token.is_some())
+            {
+                Ok(())
+            } else {
+                Err(PrivateHnswClientError::MissingPayloadFetchToken)
+            }
         }
     }
 }
@@ -2186,6 +2209,7 @@ where
         hits.push(PrivateHnswSearchHit {
             node_id: block.node_id,
             point_token: block.point_token,
+            payload_fetch_token: block.payload_fetch_token,
             distance,
         });
         sort_hits(&mut hits);
@@ -5012,7 +5036,8 @@ mod tests {
             ..oram_config()
         };
         let entry = node_block_with_vector(1, &[10.0, 0.0], vec![[2; 32], [3; 32]]);
-        let near = node_block_with_vector(2, &[1.0, 0.0], vec![]);
+        let mut near = node_block_with_vector(2, &[1.0, 0.0], vec![]);
+        near.payload_fetch_token = Some([55; 32]);
         let far = node_block_with_vector(3, &[0.0, 1.0], vec![]);
         let build = build_private_hnsw_oram_plaintext_index_from_blocks(
             config,
@@ -5076,6 +5101,36 @@ mod tests {
 
         assert_eq!(result.hits.len(), 1);
         assert_eq!(result.hits[0].node_id, near.node_id);
+        assert_eq!(result.hits[0].payload_fetch_token, Some([55; 32]));
+        validate_private_hnsw_search_result_privacy(
+            ResultPrivacyMode::PrivatePayloadOramRequired,
+            &result,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn private_result_search_privacy_requires_payload_fetch_tokens() {
+        let result = PrivateHnswSearchResult {
+            hits: vec![PrivateHnswSearchHit {
+                node_id: [1; 32],
+                point_token: [2; 32],
+                payload_fetch_token: None,
+                distance: 0.0,
+            }],
+            accessed_leaf_labels: vec![],
+            completed_steps: 1,
+        };
+
+        validate_private_hnsw_search_result_privacy(ResultPrivacyMode::IdsVisible, &result)
+            .unwrap();
+        assert_eq!(
+            validate_private_hnsw_search_result_privacy(
+                ResultPrivacyMode::PrivatePayloadOramRequired,
+                &result,
+            ),
+            Err(PrivateHnswClientError::MissingPayloadFetchToken)
+        );
     }
 
     #[test]
