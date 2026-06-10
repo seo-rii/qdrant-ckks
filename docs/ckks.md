@@ -640,9 +640,12 @@ commit with a non-increasing new epoch is rejected, a validly-shaped but wrong
 Ed25519 signature is rejected, and replaying a previous old epoch/root after a
 successful commit is rejected against the active session state. The commit path
 also preflights the store's current epoch/root against the active session before
-bucket or Merkle writeback starts. The `read_paths` path performs the same
-current epoch/root preflight before returning encrypted buckets, so a rolled
-back or mixed current epoch fails closed before bucket ciphertexts are served.
+bucket or Merkle writeback starts, and the store writeback helper also requires
+the stored signed manifest's epoch/root and bucket_count to match the commit old
+context before accepting updated buckets. The `read_paths` path performs the
+same current epoch/root preflight before returning encrypted buckets, so a
+rolled back or mixed current epoch fails closed before bucket ciphertexts are
+served.
 It now reads buckets through the collection store's batch+proof helper, which
 rechecks current epoch/root and fails closed if any returned bucket commitment
 does not match the corresponding Merkle proof leaf.
