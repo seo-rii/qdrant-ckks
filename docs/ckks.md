@@ -877,9 +877,11 @@ Result ORAM snapshot restore preflight is open for configured
 Merkle metadata, and runtime Ed25519 signatures. The SDK search result now
 propagates each node block's `payload_fetch_token`, and a client-side helper
 fails closed when `private_payload_oram_required` hits do not all carry payload
-fetch tokens. Server-side HNSW manifest/session policy still rejects that result
-privacy mode until the full result fetch-token workflow is wired through. Do not
-advertise
+fetch tokens. A follow-on SDK helper turns those hit tokens into an exactly
+`fixed_result_k` private result ORAM fetch-token batch, padding with a caller
+provided dummy token so the eventual result fetch has fixed volume. Server-side
+HNSW manifest/session policy still rejects that result privacy mode until the
+full result fetch-token workflow is wired through. Do not advertise
 `private_payload_oram_required` as a working result-private fetch mode for this
 provider version.
 The crypto crate reserves the future payload/result ORAM manifest shape through
