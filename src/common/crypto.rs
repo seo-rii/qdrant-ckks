@@ -227,6 +227,15 @@ const VECTOR_PRIVATE_HNSW_ORAM_ALLOWED_OPTIONS: &[&str] = &[
     PRIVATE_HNSW_INTEGRITY_OPTION,
     SIGNATURE_PUBLIC_KEYS_OPTION,
 ];
+const PAYLOAD_PRIVATE_RESULT_ORAM_ALLOWED_OPTIONS: &[&str] = &[
+    "key_id",
+    EXPECTED_RK_ID_OPTION,
+    MIN_RK_EPOCH_OPTION,
+    MAX_RK_EPOCH_OPTION,
+    PRIVATE_RESULT_ORAM_OPTION,
+    PRIVATE_RESULT_INTEGRITY_OPTION,
+    SIGNATURE_PUBLIC_KEYS_OPTION,
+];
 const CLIENT_CKKS_VECTOR_SEARCH_MODE_OPTION: &str = "search_mode";
 const CLIENT_CKKS_VECTOR_SEARCH_MODE_OPAQUE_STORAGE_ONLY: &str = "opaque_storage_only";
 const PRIVATE_HNSW_SEARCH_EXECUTION_OPTION: &str = "search_execution";
@@ -241,6 +250,8 @@ const PRIVATE_HNSW_HNSW_OPTION: &str = "hnsw";
 const PRIVATE_HNSW_ORAM_OPTION: &str = "oram";
 const PRIVATE_HNSW_FIXED_BUDGET_OPTION: &str = "fixed_budget";
 const PRIVATE_HNSW_INTEGRITY_OPTION: &str = "integrity";
+const PRIVATE_RESULT_ORAM_OPTION: &str = "oram";
+const PRIVATE_RESULT_INTEGRITY_OPTION: &str = "integrity";
 const VECTOR_OPENFHE_CKKS_ALLOWED_MATERIAL_ROLES: &[&str] = &[PAYLOAD_SYM_KEY_ROLE];
 const OPENFHE_BACKEND_KIND_PROCESS: &str = "process";
 const OPENFHE_BACKEND_KIND_PROCESS_POOL: &str = "process_pool";
@@ -2543,6 +2554,7 @@ fn material_key_attestation_commitment(
 fn sanitized_crypto_instance_options(instance: &CryptoInstanceConfig) -> serde_json::Value {
     let mut options = instance.options.clone();
     if (instance.provider == PAYLOAD_CLIENT_AEAD_PROVIDER
+        || instance.provider == PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER
         || instance.provider == VECTOR_OPENFHE_CKKS_PROVIDER
         || instance.provider == VECTOR_CLIENT_CKKS_PROVIDER
         || instance.provider == VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
@@ -2804,19 +2816,11 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                 reason: format!("invalid provider {}", instance.provider),
             });
         }
-        if instance.provider == PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER {
-            return Err(CryptoSetupError::InvalidInstanceOption {
-                instance: instance_name.clone(),
-                option: "provider".to_string(),
-                reason: format!(
-                    "{PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER} is reserved for future result-private payload fetch and is not implemented in this MVP"
-                ),
-            });
-        }
         if !matches!(
             instance.provider.as_str(),
             PAYLOAD_AES_GCM_PROVIDER
                 | PAYLOAD_CLIENT_AEAD_PROVIDER
+                | PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER
                 | VECTOR_OPENFHE_CKKS_PROVIDER
                 | VECTOR_CLIENT_CKKS_PROVIDER
                 | VECTOR_PRIVATE_HNSW_ORAM_PROVIDER
@@ -2845,6 +2849,9 @@ fn validate_crypto_settings(settings: &CryptoSettings) -> Result<(), CryptoSetup
                 instance,
                 settings.zero_trust_profile.as_deref() == Some(ZERO_TRUST_PROFILE_STRICT),
             )?;
+        }
+        if instance.provider == PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER {
+            validate_private_result_oram_instance(instance_name, instance)?;
         }
         if instance.provider == PAYLOAD_CLIENT_AEAD_PROVIDER
             && (!instance.materials.is_empty() || instance.backend_ref.is_some())
@@ -3738,6 +3745,66 @@ fn validate_private_hnsw_oram_instance(
     Ok(())
 }
 
+fn validate_private_result_oram_instance(
+    instance_name: &str,
+    instance: &CryptoInstanceConfig,
+) -> Result<(), CryptoSetupError> {
+    if !instance.materials.is_empty() || instance.backend_ref.is_some() {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: "provider".to_string(),
+            reason: "payload/private-result-oram@v1 must not configure server materials or backend"
+                .to_string(),
+        });
+    }
+    if let Some(option) = unsupported_instance_option(
+        &instance.options,
+        PAYLOAD_PRIVATE_RESULT_ORAM_ALLOWED_OPTIONS,
+    ) {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option,
+            reason: "unsupported option for payload/private-result-oram@v1".to_string(),
+        });
+    }
+
+    let key_id = private_hnsw_required_identifier(instance_name, instance, "key_id")?;
+    let expected_rk_id =
+        private_hnsw_required_identifier(instance_name, instance, EXPECTED_RK_ID_OPTION)?;
+    if key_id != expected_rk_id {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: EXPECTED_RK_ID_OPTION.to_string(),
+            reason: "expected_rk_id must match key_id when both are configured".to_string(),
+        });
+    }
+
+    let min_rk_epoch =
+        private_hnsw_required_u64(instance_name, instance, MIN_RK_EPOCH_OPTION, 0, u64::MAX)?;
+    let max_rk_epoch =
+        private_hnsw_required_u64(instance_name, instance, MAX_RK_EPOCH_OPTION, 0, u64::MAX)?;
+    if min_rk_epoch != max_rk_epoch {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: MAX_RK_EPOCH_OPTION.to_string(),
+            reason: "private result ORAM provider must pin one active rk_epoch".to_string(),
+        });
+    }
+
+    validate_private_result_oram_options(instance_name, instance)?;
+    validate_private_result_integrity_options(instance_name, instance)?;
+
+    client_payload_signature_verifier(instance, instance_name).map_err(|err| {
+        CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: SIGNATURE_PUBLIC_KEYS_OPTION.to_string(),
+            reason: err.to_string(),
+        }
+    })?;
+
+    Ok(())
+}
+
 fn private_hnsw_required_identifier<'a>(
     instance_name: &str,
     instance: &'a CryptoInstanceConfig,
@@ -3946,6 +4013,25 @@ fn private_hnsw_reject_unknown_object_fields(
     Ok(())
 }
 
+fn private_result_reject_unknown_object_fields(
+    instance_name: &str,
+    object: &serde_json::Map<String, Value>,
+    object_name: &str,
+    allowed: &[&str],
+) -> Result<(), CryptoSetupError> {
+    if let Some(field) = object
+        .keys()
+        .find(|field| !allowed.contains(&field.as_str()))
+    {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: format!("{object_name}.{field}"),
+            reason: "unsupported private result ORAM option".to_string(),
+        });
+    }
+    Ok(())
+}
+
 fn private_hnsw_distance(
     instance_name: &str,
     instance: &CryptoInstanceConfig,
@@ -3961,6 +4047,111 @@ fn private_hnsw_distance(
             reason: "expected one of cosine, dot, euclid, manhattan".to_string(),
         }),
     }
+}
+
+fn validate_private_result_oram_options(
+    instance_name: &str,
+    instance: &CryptoInstanceConfig,
+) -> Result<(), CryptoSetupError> {
+    let oram = private_hnsw_object(instance_name, instance, PRIVATE_RESULT_ORAM_OPTION)?;
+    private_result_reject_unknown_object_fields(
+        instance_name,
+        oram,
+        PRIVATE_RESULT_ORAM_OPTION,
+        &[
+            "kind",
+            "bucket_size",
+            "block_size_bytes",
+            "tree_height",
+            "path_batch_size",
+        ],
+    )?;
+    let kind = private_hnsw_object_string(instance_name, oram, PRIVATE_RESULT_ORAM_OPTION, "kind")?;
+    if kind != "path_oram" {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: "oram.kind".to_string(),
+            reason: "expected path_oram".to_string(),
+        });
+    }
+    let bucket_size = private_hnsw_object_u64(
+        instance_name,
+        oram,
+        PRIVATE_RESULT_ORAM_OPTION,
+        "bucket_size",
+        2,
+        16,
+    )?;
+    if !matches!(bucket_size, 2 | 4 | 8 | 16) {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: "oram.bucket_size".to_string(),
+            reason: "expected one of 2, 4, 8, 16".to_string(),
+        });
+    }
+    let block_size = private_hnsw_object_u64(
+        instance_name,
+        oram,
+        PRIVATE_RESULT_ORAM_OPTION,
+        "block_size_bytes",
+        1024,
+        65536,
+    )?;
+    if !matches!(
+        block_size,
+        1024 | 2048 | 4096 | 8192 | 16384 | 32768 | 65536
+    ) {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: "oram.block_size_bytes".to_string(),
+            reason: "expected one of 1024, 2048, 4096, 8192, 16384, 32768, 65536".to_string(),
+        });
+    }
+    let tree_height = private_hnsw_object_u64(
+        instance_name,
+        oram,
+        PRIVATE_RESULT_ORAM_OPTION,
+        "tree_height",
+        1,
+        62,
+    )?;
+    let path_batch_size = private_hnsw_object_u64(
+        instance_name,
+        oram,
+        PRIVATE_RESULT_ORAM_OPTION,
+        "path_batch_size",
+        1,
+        1024,
+    )?;
+    let leaf_count = 1u64
+        .checked_shl(u32::try_from(tree_height).map_err(|_| {
+            CryptoSetupError::InvalidInstanceOption {
+                instance: instance_name.to_string(),
+                option: "oram.tree_height".to_string(),
+                reason: "tree_height is too large".to_string(),
+            }
+        })?)
+        .ok_or_else(|| CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: "oram.tree_height".to_string(),
+            reason: "tree_height is too large".to_string(),
+        })?;
+    if path_batch_size > leaf_count {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: "oram.path_batch_size".to_string(),
+            reason: "must be less than or equal to the ORAM leaf count".to_string(),
+        });
+    }
+    block_size
+        .checked_mul(bucket_size)
+        .and_then(|size| size.checked_add(4096))
+        .ok_or_else(|| CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: "oram.block_size_bytes".to_string(),
+            reason: "private result ORAM ciphertext cap calculation overflowed".to_string(),
+        })?;
+    Ok(())
 }
 
 fn validate_private_hnsw_hnsw_options(
@@ -4216,6 +4407,42 @@ fn validate_private_hnsw_integrity_options(
     Ok(())
 }
 
+fn validate_private_result_integrity_options(
+    instance_name: &str,
+    instance: &CryptoInstanceConfig,
+) -> Result<(), CryptoSetupError> {
+    let integrity = private_hnsw_object(instance_name, instance, PRIVATE_RESULT_INTEGRITY_OPTION)?;
+    private_result_reject_unknown_object_fields(
+        instance_name,
+        integrity,
+        PRIVATE_RESULT_INTEGRITY_OPTION,
+        &[
+            "manifest_signature_required",
+            "commit_signature_required",
+            "merkle_root_required",
+        ],
+    )?;
+    for field in [
+        "manifest_signature_required",
+        "commit_signature_required",
+        "merkle_root_required",
+    ] {
+        if !private_hnsw_object_bool(
+            instance_name,
+            integrity,
+            PRIVATE_RESULT_INTEGRITY_OPTION,
+            field,
+        )? {
+            return Err(CryptoSetupError::InvalidInstanceOption {
+                instance: instance_name.to_string(),
+                option: format!("{PRIVATE_RESULT_INTEGRITY_OPTION}.{field}"),
+                reason: "private result ORAM integrity checks must be required".to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn validate_zero_trust_profile(settings: &CryptoSettings) -> Result<(), CryptoSetupError> {
     let Some(profile) = settings.zero_trust_profile.as_deref() else {
         return Ok(());
@@ -4254,6 +4481,7 @@ fn validate_zero_trust_profile(settings: &CryptoSettings) -> Result<(), CryptoSe
     for (instance_name, instance) in &settings.instances {
         match instance.provider.as_str() {
             PAYLOAD_CLIENT_AEAD_PROVIDER
+            | PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER
             | METADATA_BLIND_INDEX_PROVIDER
             | VECTOR_CLIENT_CKKS_PROVIDER
             | VECTOR_PRIVATE_HNSW_ORAM_PROVIDER => {}
@@ -8927,6 +9155,30 @@ mod tests {
         })
     }
 
+    fn private_result_oram_options() -> serde_json::Value {
+        json!({
+            "key_id": "tenant-a:result-private-rk",
+            "expected_rk_id": "tenant-a:result-private-rk",
+            "min_rk_epoch": 7,
+            "max_rk_epoch": 7,
+            "oram": {
+                "kind": "path_oram",
+                "bucket_size": 4,
+                "block_size_bytes": 8192,
+                "tree_height": 24,
+                "path_batch_size": 8
+            },
+            "integrity": {
+                "manifest_signature_required": true,
+                "commit_signature_required": true,
+                "merkle_root_required": true
+            },
+            "signature_public_keys": {
+                "tenant-a/private-result-signing-v1": BASE64URL_NOPAD.encode(&[13_u8; 32])
+            }
+        })
+    }
+
     fn oversized_client_signature_registry() -> serde_json::Value {
         let mut keys = serde_json::Map::new();
         for key_index in 0..=MAX_CLIENT_SIGNATURE_PUBLIC_KEYS {
@@ -9582,7 +9834,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_crypto_settings_rejects_reserved_private_result_oram_provider() {
+    fn validate_crypto_settings_accepts_private_result_oram_provider_skeleton() {
         let settings = CryptoSettings {
             zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
             allow_inline_key_material: false,
@@ -9592,19 +9844,145 @@ mod tests {
                     provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
                     materials: HashMap::new(),
                     backend_ref: None,
-                    options: json!({}),
+                    options: private_result_oram_options(),
+                },
+            )]),
+            ..CryptoSettings::default()
+        };
+
+        validate_crypto_settings(&settings)
+            .expect("private result ORAM runtime provider validation should be open in E2");
+    }
+
+    #[test]
+    fn validate_crypto_settings_rejects_private_result_oram_server_materials_and_backend() {
+        let mut settings = CryptoSettings {
+            zero_trust_profile: None,
+            allow_inline_key_material: false,
+            instances: HashMap::from([(
+                "payload_result_oram_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+                    materials: HashMap::from([("sym_key".to_string(), "ignored".to_string())]),
+                    backend_ref: None,
+                    options: private_result_oram_options(),
                 },
             )]),
             ..CryptoSettings::default()
         };
 
         let err = validate_crypto_settings(&settings)
-            .expect_err("private result payload ORAM provider is only reserved");
+            .expect_err("private result ORAM must not configure server materials");
         assert!(
             matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
-                if option == "provider"
-                    && reason.contains(PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
-                    && reason.contains("reserved")),
+                if option == "provider" && reason.contains("must not configure server materials")),
+            "unexpected error: {err:?}",
+        );
+
+        let instance = settings
+            .instances
+            .get_mut("payload_result_oram_v1")
+            .unwrap();
+        instance.materials.clear();
+        instance.backend_ref = Some("openfhe".to_string());
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private result ORAM must not configure a backend");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "provider" && reason.contains("must not configure server materials")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
+    fn validate_crypto_settings_rejects_private_result_oram_policy_drift() {
+        let mut settings = CryptoSettings {
+            zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+            allow_inline_key_material: false,
+            instances: HashMap::from([(
+                "payload_result_oram_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+                    materials: HashMap::new(),
+                    backend_ref: None,
+                    options: private_result_oram_options(),
+                },
+            )]),
+            ..CryptoSettings::default()
+        };
+
+        settings
+            .instances
+            .get_mut("payload_result_oram_v1")
+            .unwrap()
+            .options["expected_rk_id"] = json!("tenant-a:other-result-rk");
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private result ORAM must pin expected_rk_id to key_id");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "expected_rk_id" && reason.contains("must match key_id")),
+            "unexpected error: {err:?}",
+        );
+
+        let options = &mut settings
+            .instances
+            .get_mut("payload_result_oram_v1")
+            .unwrap()
+            .options;
+        options["expected_rk_id"] = json!("tenant-a:result-private-rk");
+        options["max_rk_epoch"] = json!(8);
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private result ORAM must pin one active rk_epoch");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "max_rk_epoch" && reason.contains("pin one active rk_epoch")),
+            "unexpected error: {err:?}",
+        );
+
+        let options = &mut settings
+            .instances
+            .get_mut("payload_result_oram_v1")
+            .unwrap()
+            .options;
+        options["max_rk_epoch"] = json!(7);
+        options["oram"]["path_batch_size"] = json!(3);
+        options["oram"]["tree_height"] = json!(1);
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private result ORAM path_batch_size cannot exceed leaf count");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "oram.path_batch_size" && reason.contains("ORAM leaf count")),
+            "unexpected error: {err:?}",
+        );
+
+        let options = &mut settings
+            .instances
+            .get_mut("payload_result_oram_v1")
+            .unwrap()
+            .options;
+        options["oram"]["path_batch_size"] = json!(1);
+        options["oram"]["block_size_bytes"] = json!(1234);
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private result ORAM must use block size allowlist");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "oram.block_size_bytes" && reason.contains("expected one of")),
+            "unexpected error: {err:?}",
+        );
+
+        let options = &mut settings
+            .instances
+            .get_mut("payload_result_oram_v1")
+            .unwrap()
+            .options;
+        options["oram"]["block_size_bytes"] = json!(8192);
+        options[SIGNATURE_PUBLIC_KEYS_OPTION] = json!({});
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private result ORAM must require signature_public_keys");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == SIGNATURE_PUBLIC_KEYS_OPTION
+                    && reason.contains("signature_public_keys")),
             "unexpected error: {err:?}",
         );
     }

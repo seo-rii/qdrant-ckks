@@ -506,8 +506,11 @@ accepts only `key_id`, `material_fingerprint_id`, `profile`,
 `vector/private-hnsw-oram@v1` accepts only `key_id`, `expected_rk_id`,
 `min_rk_epoch`, `max_rk_epoch`, `search_execution`, `search_mode`,
 `result_privacy`, `distance`, `dim`, `hnsw`, `oram`, `fixed_budget`,
-`integrity`, and `signature_public_keys`. Unknown options fail startup/runtime
-validation instead of being silently ignored. Collection-facing private HNSW
+`integrity`, and `signature_public_keys`; `payload/private-result-oram@v1`
+accepts only `key_id`, `expected_rk_id`, `min_rk_epoch`, `max_rk_epoch`,
+`oram`, `integrity`, and `signature_public_keys` while its collection binding
+and APIs remain closed. Unknown options fail startup/runtime validation instead
+of being silently ignored. Collection-facing private HNSW
 ORAM runtime validation errors use fixed descriptions and do not append the
 inner setup error detail, so unsupported option names, option values, and reason
 strings are not reflected through collection API failures.
@@ -860,10 +863,11 @@ to vectors, query vectors, visited HNSW nodes, distances, and client-side top-k
 during the private session, but a later ordinary retrieve leaks the retrieved
 point ids to Qdrant. The enum and wire schema reserve
 `private_payload_oram_required` for future `payload/private-result-oram@v1`
-with binding `private-result-oram/v1`, but runtime validation and
-collection rule validation reject that binding; manifest/session policy also
-rejects that mode and the reserved payload provider ID until the payload ORAM
-layer exists. Do not advertise
+with binding `private-result-oram/v1`. Runtime validation accepts a closed
+provider-instance skeleton for `payload/private-result-oram@v1`, but collection
+rule validation still rejects `private-result-oram/v1`; manifest/session policy
+also rejects that result privacy mode until the payload ORAM API and HNSW result
+token linkage exist. Do not advertise
 `private_payload_oram_required` as a working result-private fetch mode for this
 provider version.
 The crypto crate reserves the future payload/result ORAM manifest shape through
@@ -977,9 +981,10 @@ failure categories such as `ciphertext` or `commit signature` without echoing
 ciphertext bodies, bucket ids, or root hashes.
 Collection snapshots include the `private_result_oram/` directory if it is
 present, but current restore fail-closes when that directory or a symlink at
-that path appears because `payload/private-result-oram@v1` is still reserved.
-Snapshot creation also rejects nested symlinks inside the reserved result ORAM
-source tree without reflecting symlink targets or bucket filenames. Restore
+that path appears because `private-result-oram/v1` binding and restore runtime
+policy are still closed. Snapshot creation also rejects nested symlinks inside
+the reserved result ORAM source tree without reflecting symlink targets or
+bucket filenames. Restore
 guard inspection failures are also fixed messages and do not reflect collection
 paths, reserved directory names, or OS error strings.
 The CLI/startup snapshot mapping preflight applies the same reserved-directory
