@@ -1589,7 +1589,7 @@ mod ckks_tests {
     }
 
     #[test]
-    fn encryption_config_rejects_reserved_private_result_oram_binding() {
+    fn encryption_config_accepts_private_result_oram_payload_binding() {
         let params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
@@ -1609,12 +1609,48 @@ mod ckks_tests {
             ..CollectionParams::empty()
         };
 
+        params
+            .validate()
+            .expect("private result ORAM payload binding should be schema-valid in E3");
+    }
+
+    #[test]
+    fn encryption_config_rejects_duplicate_private_result_oram_payload_binding() {
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![
+                    EncryptionRuleRef {
+                        id: "body_private_result".to_string(),
+                        selector: EncryptionSelector::PayloadPaths {
+                            paths: vec!["body".to_string()],
+                        },
+                        instance: "docs_private_result_oram_v1".to_string(),
+                        binding: Some("private-result-oram/v1".to_string()),
+                    },
+                    EncryptionRuleRef {
+                        id: "summary_private_result".to_string(),
+                        selector: EncryptionSelector::PayloadPaths {
+                            paths: vec!["summary".to_string()],
+                        },
+                        instance: "docs_private_result_oram_v1".to_string(),
+                        binding: Some("private-result-oram/v1".to_string()),
+                    },
+                ],
+            }),
+            ..CollectionParams::empty()
+        };
+
         let err = params
             .validate()
-            .expect_err("private result ORAM binding is reserved until runtime support exists");
+            .expect_err("private result ORAM has one collection-scoped payload binding in v1");
         assert!(
             err.to_string()
-                .contains("reserved_private_result_oram_binding")
+                .contains("duplicate_private_result_oram_binding")
         );
     }
 
@@ -2439,12 +2475,8 @@ fn validate_encryption_rules(
     let mut payload_paths = Vec::<&str>::new();
     let mut vector_names = HashSet::new();
     let mut metadata_keys = Vec::<&str>::new();
+    let mut has_private_result_oram_rule = false;
     for rule in rules {
-        if rule.binding.as_deref() == Some(PRIVATE_RESULT_ORAM_BINDING) {
-            return Err(validator::ValidationError::new(
-                "reserved_private_result_oram_binding",
-            ));
-        }
         if !ids.insert(rule.id.as_str()) {
             return Err(validator::ValidationError::new(
                 "duplicate_encryption_rule_id",
@@ -2453,10 +2485,19 @@ fn validate_encryption_rules(
         match &rule.selector {
             EncryptionSelector::PayloadPaths { paths } => {
                 if rule.binding.as_deref().is_some_and(|binding| {
-                    binding != PAYLOAD_FIELD_BINDING && binding != CLIENT_PAYLOAD_ENVELOPE_BINDING
+                    binding != PAYLOAD_FIELD_BINDING
+                        && binding != CLIENT_PAYLOAD_ENVELOPE_BINDING
+                        && binding != PRIVATE_RESULT_ORAM_BINDING
                 }) {
                     return Err(validator::ValidationError::new(
                         "unsupported_payload_encryption_binding",
+                    ));
+                }
+                if rule.binding.as_deref() == Some(PRIVATE_RESULT_ORAM_BINDING)
+                    && std::mem::replace(&mut has_private_result_oram_rule, true)
+                {
+                    return Err(validator::ValidationError::new(
+                        "duplicate_private_result_oram_binding",
                     ));
                 }
                 for path in paths {

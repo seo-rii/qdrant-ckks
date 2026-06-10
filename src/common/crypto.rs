@@ -26,8 +26,8 @@ use qdrant_sec::{
     METADATA_BLIND_INDEX_PROVIDER, METADATA_EXACT_MATCH_TOKEN_BINDING, METADATA_VALUE_BINDING,
     MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER,
     PAYLOAD_FIELD_BINDING, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_HNSW_ORAM_BINDING,
-    PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
-    RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, ServerPayloadVerifiedEnvelopeKey,
+    PRIVATE_RESULT_ORAM_BINDING, PayloadEncryptionError, PayloadEncryptionPolicy,
+    PayloadTextEncryptor, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, ServerPayloadVerifiedEnvelopeKey,
     VECTOR_CLIENT_CKKS_PROVIDER, VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER,
     VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, WrappedKeyBlob, client_ckks_vector_sidecar_envelope_key,
     client_payload_nonce_replay_key, client_payload_signature_key_id,
@@ -6009,6 +6009,11 @@ fn generic_payload_write_plan(
     let mut rules = Vec::new();
 
     for rule in &encryption.rules {
+        if matches!(rule.selector, EncryptionSelector::PayloadPaths { .. })
+            && rule.binding.as_deref() == Some(PRIVATE_RESULT_ORAM_BINDING)
+        {
+            continue;
+        }
         let (paths, expected_binding, expected_provider, rule_kind) = match &rule.selector {
             EncryptionSelector::PayloadPaths { paths } => (
                 paths.as_slice(),
@@ -6523,11 +6528,14 @@ fn validate_generic_collection_crypto_runtime(
     params: &CollectionParams,
     encryption: &CollectionEncryptionConfig,
 ) -> Result<(), StorageError> {
+    validate_private_result_oram_collection_runtime(runtime_settings, collection_name, encryption)?;
+
     let payload_rules: Vec<_> = encryption
         .rules
         .iter()
         .filter(|rule| {
             matches!(rule.selector, EncryptionSelector::PayloadPaths { .. })
+                && rule.binding.as_deref() != Some(PRIVATE_RESULT_ORAM_BINDING)
                 || matches!(rule.selector, EncryptionSelector::MetadataKeys { .. })
                     && rule.binding.as_deref() == Some(METADATA_VALUE_BINDING)
         })
@@ -7039,6 +7047,53 @@ fn validate_generic_collection_crypto_runtime(
         }
         for vector_name in names {
             let _distance = ckks_vector_distance(params, collection_name, vector_name)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_private_result_oram_collection_runtime(
+    runtime_settings: &CryptoSettings,
+    collection_name: &str,
+    encryption: &CollectionEncryptionConfig,
+) -> Result<(), StorageError> {
+    for rule in &encryption.rules {
+        let EncryptionSelector::PayloadPaths { .. } = &rule.selector else {
+            continue;
+        };
+
+        let Some(instance) = runtime_settings.instances.get(&rule.instance) else {
+            if rule.binding.as_deref() == Some(PRIVATE_RESULT_ORAM_BINDING) {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} references unknown private result ORAM crypto instance {}",
+                    rule.instance,
+                )));
+            }
+            continue;
+        };
+
+        if rule.binding.as_deref() == Some(PRIVATE_RESULT_ORAM_BINDING) {
+            if instance.provider != PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} rule {} uses binding {PRIVATE_RESULT_ORAM_BINDING}, which requires provider {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}; found {}",
+                    rule.id, instance.provider,
+                )));
+            }
+            validate_private_result_oram_instance(&rule.instance, instance).map_err(|_| {
+                StorageError::bad_input(format!(
+                    "collection {collection_name} private result ORAM instance {} is invalid",
+                    rule.instance,
+                ))
+            })?;
+            continue;
+        }
+
+        if instance.provider == PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} rule {} uses provider {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}, which must use binding {PRIVATE_RESULT_ORAM_BINDING}",
+                rule.id,
+            )));
         }
     }
 
@@ -9852,6 +9907,127 @@ mod tests {
 
         validate_crypto_settings(&settings)
             .expect("private result ORAM runtime provider validation should be open in E2");
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_accepts_private_result_oram_payload_binding() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+                allow_inline_key_material: false,
+                instances: HashMap::from([(
+                    "payload_result_oram_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: private_result_oram_options(),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_private_result".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "payload_result_oram_v1".to_string(),
+                    binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        validate_collection_crypto_runtime_with_crypto_id(&settings, "docs", "docs", &params)
+            .expect("private result ORAM payload binding should validate at collection runtime");
+        assert!(
+            payload_write_plan_for_collection_for_test(&settings, "docs", &params)
+                .expect("private result ORAM binding should not break ordinary payload planning")
+                .is_none(),
+            "private result ORAM rules must not enter the ordinary payload write plan",
+        );
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_rejects_private_result_oram_binding_drift() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+                allow_inline_key_material: false,
+                instances: HashMap::from([
+                    (
+                        "payload_result_oram_v1".to_string(),
+                        CryptoInstanceConfig {
+                            provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+                            materials: HashMap::new(),
+                            backend_ref: None,
+                            options: private_result_oram_options(),
+                        },
+                    ),
+                    (
+                        "payload_client_v1".to_string(),
+                        CryptoInstanceConfig {
+                            provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
+                            materials: HashMap::new(),
+                            backend_ref: None,
+                            options: json!({}),
+                        },
+                    ),
+                ]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let mut params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_private_result".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "payload_result_oram_v1".to_string(),
+                    binding: Some(PAYLOAD_FIELD_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err =
+            validate_collection_crypto_runtime_with_crypto_id(&settings, "docs", "docs", &params)
+                .expect_err("private result ORAM provider must require its own binding");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains(PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
+                    && description.contains(PRIVATE_RESULT_ORAM_BINDING)),
+            "unexpected error: {err:?}",
+        );
+
+        params.encryption.as_mut().unwrap().rules[0].instance = "payload_client_v1".to_string();
+        params.encryption.as_mut().unwrap().rules[0].binding =
+            Some(PRIVATE_RESULT_ORAM_BINDING.to_string());
+        let err =
+            validate_collection_crypto_runtime_with_crypto_id(&settings, "docs", "docs", &params)
+                .expect_err("private result ORAM binding must require its provider");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains(PRIVATE_RESULT_ORAM_BINDING)
+                    && description.contains(PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)),
+            "unexpected error: {err:?}",
+        );
     }
 
     #[test]

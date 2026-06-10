@@ -509,8 +509,9 @@ accepts only `key_id`, `material_fingerprint_id`, `profile`,
 `integrity`, and `signature_public_keys`; `payload/private-result-oram@v1`
 accepts only `key_id`, `expected_rk_id`, `min_rk_epoch`, `max_rk_epoch`,
 `oram`, `integrity`, and `signature_public_keys` while its collection binding
-and APIs remain closed. Unknown options fail startup/runtime validation instead
-of being silently ignored. Collection-facing private HNSW
+validation is open for `private-result-oram/v1`; upload/session APIs remain
+closed. Unknown options fail startup/runtime validation instead of being
+silently ignored. Collection-facing private HNSW
 ORAM runtime validation errors use fixed descriptions and do not append the
 inner setup error detail, so unsupported option names, option values, and reason
 strings are not reflected through collection API failures.
@@ -864,11 +865,11 @@ to vectors, query vectors, visited HNSW nodes, distances, and client-side top-k
 during the private session, but a later ordinary retrieve leaks the retrieved
 point ids to Qdrant. The enum and wire schema reserve
 `private_payload_oram_required` for future `payload/private-result-oram@v1`
-with binding `private-result-oram/v1`. Runtime validation accepts a closed
-provider-instance skeleton for `payload/private-result-oram@v1`, but collection
-rule validation still rejects `private-result-oram/v1`; manifest/session policy
-also rejects that result privacy mode until the payload ORAM API and HNSW result
-token linkage exist. Do not advertise
+with binding `private-result-oram/v1`. Runtime validation accepts the
+server-blind provider instance and collection rule binding, but upload/session
+APIs, snapshot restore, and HNSW result-token linkage remain closed. HNSW
+manifest/session policy also rejects that result privacy mode until those pieces
+exist. Do not advertise
 `private_payload_oram_required` as a working result-private fetch mode for this
 provider version.
 The crypto crate reserves the future payload/result ORAM manifest shape through
