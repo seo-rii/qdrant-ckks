@@ -888,9 +888,12 @@ server request is built. The crypto crate also has a client-only private result
 ORAM payload block/plaintext bucket codec for fixed-size bucket contents:
 payload bytes, payload fetch token, point token, generation, and deletion state
 are encoded inside the client-encrypted bucket body and are never server
-validated as plaintext. Server-side HNSW manifest/session policy still rejects
-that result privacy mode until the full result fetch-token workflow is wired
-through. Do not advertise
+validated as plaintext. Client AEAD helpers can seal/open those plaintext
+buckets into `PrivateResultOramBucket` ciphertexts with collection/key/epoch
+AAD, context-bound bucket commitments, ciphertext hash checks, and
+Merkle-proof-before-open verification for read batches. Server-side HNSW
+manifest/session policy still rejects that result privacy mode until the full
+result fetch-token workflow is wired through. Do not advertise
 `private_payload_oram_required` as a working result-private fetch mode for this
 provider version.
 The crypto crate reserves the future payload/result ORAM manifest shape through

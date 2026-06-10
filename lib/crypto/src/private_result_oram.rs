@@ -1,12 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::{self, Debug, Formatter};
 
 use data_encoding::BASE64URL_NOPAD;
+use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
+use ring::rand::{SecureRandom, SystemRandom};
 use ring::signature::{ED25519, Ed25519KeyPair, UnparsedPublicKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::aead::validate_resource_key_id;
+use crate::aead::{EncryptionError, SecretKey, validate_resource_key_id};
 use crate::control_plane::{PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_RESULT_ORAM_BINDING};
 use crate::private_hnsw_oram::OramParams;
 
@@ -16,8 +19,16 @@ pub const PRIVATE_RESULT_ORAM_COMMIT_SIGNATURE_DOMAIN: &str =
     "qdrant-sec/private-result-oram-commit-signature/v1";
 pub const PRIVATE_RESULT_ORAM_BUCKET_COMMITMENT_DOMAIN: &str =
     "qdrant-sec/private-result-oram-bucket-commitment/v1";
+pub const PRIVATE_RESULT_ORAM_BUCKET_AEAD_DOMAIN: &[u8] =
+    b"qdrant-sec/private-result-oram-bucket-aead/v1";
 
 const PRIVATE_RESULT_ORAM_SIGNATURE_ALGORITHM: &str = "ed25519";
+const PRIVATE_RESULT_ORAM_BUCKET_AEAD_CONTEXT_DOMAIN: &str =
+    "qdrant-sec/private-result-oram-bucket-aead-context/v1";
+const PRIVATE_RESULT_ORAM_BUCKET_AEAD_VERSION: u8 = 1;
+const PRIVATE_RESULT_ORAM_BUCKET_AEAD_NONCE_LEN: usize = 12;
+const PRIVATE_RESULT_ORAM_BUCKET_AEAD_TAG_LEN: usize = 16;
+const PRIVATE_RESULT_ORAM_BUCKET_CIPHERTEXT_OPEN_MAX_BYTES: usize = 64 * 1024 * 1024;
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
 const BASE64URL_NOPAD_64_BYTE_LEN: usize = 86;
 const PRIVATE_RESULT_ORAM_MERKLE_PROOF_JSON_MAX_BYTES: usize = 4 * 1024 * 1024;
@@ -30,6 +41,8 @@ const PRIVATE_RESULT_ORAM_BUCKET_PLAINTEXT_VERSION: u16 = 1;
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum PrivateResultOramError {
+    #[error("private result ORAM client encryption failed: {0}")]
+    Encryption(#[from] EncryptionError),
     #[error("private result ORAM manifest uses unsupported version")]
     UnsupportedManifestVersion(u16),
     #[error("private result ORAM manifest provider is invalid")]
@@ -64,6 +77,18 @@ pub enum PrivateResultOramError {
     BucketOversized,
     #[error("private result ORAM bucket ciphertext_sha256 mismatch")]
     InvalidBucketHash,
+    #[error("private result ORAM bucket ciphertext is malformed")]
+    InvalidBucketCiphertextEncoding,
+    #[error("private result ORAM bucket ciphertext hash mismatch")]
+    InvalidBucketCiphertextHash,
+    #[error("private result ORAM bucket ciphertext uses unsupported version")]
+    UnsupportedBucketCiphertextVersion(u8),
+    #[error("private result ORAM bucket decryption authentication failed")]
+    BucketOpenFailed,
+    #[error("private result ORAM bucket metadata does not match context")]
+    BucketMetadataMismatch,
+    #[error("private result ORAM bucket context field {0} is invalid")]
+    InvalidBucketContext(&'static str),
     #[error("private result ORAM bucket commitment context mismatch")]
     InvalidBucketCommitment,
     #[error("private result ORAM Merkle tree is empty")]
@@ -172,6 +197,65 @@ pub struct PrivateResultOramClientConfig {
 pub struct PrivateResultOramPlaintextBucket {
     pub bucket_id: u64,
     pub blocks: Vec<Option<PrivateResultOramPayloadBlockPlaintext>>,
+}
+
+pub struct PrivateResultOramClientKeys {
+    bucket_aead: SecretKey,
+}
+
+impl PrivateResultOramClientKeys {
+    pub fn derive_from_resource_key(resource_key: &SecretKey) -> Result<Self, EncryptionError> {
+        Ok(Self {
+            bucket_aead: resource_key.derive_subkey(PRIVATE_RESULT_ORAM_BUCKET_AEAD_DOMAIN)?,
+        })
+    }
+
+    pub fn bucket_aead_key(&self) -> &SecretKey {
+        &self.bucket_aead
+    }
+}
+
+impl Debug for PrivateResultOramClientKeys {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramClientKeys")
+            .field("bucket_aead", &"[redacted; 32 bytes]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateResultOramBucketAeadContext<'a> {
+    pub collection_id: &'a str,
+    pub key_id: &'a str,
+    pub rk_id: &'a str,
+    pub rk_epoch: u64,
+    pub bucket_id: u64,
+    pub index_epoch: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateResultOramBucketAeadBaseContext<'a> {
+    pub collection_id: &'a str,
+    pub key_id: &'a str,
+    pub rk_id: &'a str,
+    pub rk_epoch: u64,
+}
+
+impl<'a> PrivateResultOramBucketAeadBaseContext<'a> {
+    pub fn for_bucket(
+        self,
+        bucket_id: u64,
+        index_epoch: u64,
+    ) -> PrivateResultOramBucketAeadContext<'a> {
+        PrivateResultOramBucketAeadContext {
+            collection_id: self.collection_id,
+            key_id: self.key_id,
+            rk_id: self.rk_id,
+            rk_epoch: self.rk_epoch,
+            bucket_id,
+            index_epoch,
+        }
+    }
 }
 
 pub const PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND: &str = "merkle_path_batch/v1";
@@ -762,6 +846,178 @@ pub fn decode_private_result_oram_bucket_plaintext(
     Ok(PrivateResultOramPlaintextBucket { bucket_id, blocks })
 }
 
+pub fn seal_private_result_oram_bucket(
+    keys: &PrivateResultOramClientKeys,
+    context: PrivateResultOramBucketAeadContext<'_>,
+    plaintext: &[u8],
+) -> Result<PrivateResultOramBucket, PrivateResultOramError> {
+    validate_private_result_bucket_context(context)?;
+
+    let rng = SystemRandom::new();
+    let mut nonce_bytes = [0u8; PRIVATE_RESULT_ORAM_BUCKET_AEAD_NONCE_LEN];
+    rng.fill(&mut nonce_bytes)
+        .map_err(|_| EncryptionError::RandomFailure)?;
+
+    let unbound_key = UnboundKey::new(&AES_256_GCM, keys.bucket_aead_key().as_bytes())
+        .map_err(|_| EncryptionError::SealFailed)?;
+    let key = LessSafeKey::new(unbound_key);
+    let nonce = Nonce::assume_unique_for_key(nonce_bytes);
+    let aad = private_result_oram_bucket_aead(context)?;
+    let mut in_out = plaintext.to_vec();
+    let tag = key
+        .seal_in_place_separate_tag(nonce, Aad::from(aad.as_slice()), &mut in_out)
+        .map_err(|_| EncryptionError::SealFailed)?;
+    in_out.extend_from_slice(tag.as_ref());
+
+    let mut raw_ciphertext =
+        Vec::with_capacity(1 + PRIVATE_RESULT_ORAM_BUCKET_AEAD_NONCE_LEN + in_out.len());
+    raw_ciphertext.push(PRIVATE_RESULT_ORAM_BUCKET_AEAD_VERSION);
+    raw_ciphertext.extend_from_slice(&nonce_bytes);
+    raw_ciphertext.extend_from_slice(&in_out);
+
+    let ciphertext_sha256 = base64url_sha256(&raw_ciphertext);
+    let bucket_commitment = private_result_oram_bucket_commitment(
+        PrivateResultOramBucketCommitmentContext {
+            collection_id: context.collection_id,
+            key_id: context.key_id,
+            rk_id: context.rk_id,
+            rk_epoch: context.rk_epoch,
+            bucket_id: context.bucket_id,
+            index_epoch: context.index_epoch,
+        },
+        &ciphertext_sha256,
+    )?;
+
+    Ok(PrivateResultOramBucket {
+        version: PRIVATE_RESULT_ORAM_BUCKET_VERSION,
+        bucket_id: context.bucket_id,
+        index_epoch: context.index_epoch,
+        ciphertext: BASE64URL_NOPAD.encode(&raw_ciphertext),
+        ciphertext_sha256,
+        bucket_commitment,
+    })
+}
+
+pub fn open_private_result_oram_bucket(
+    keys: &PrivateResultOramClientKeys,
+    context: PrivateResultOramBucketAeadContext<'_>,
+    bucket: &PrivateResultOramBucket,
+) -> Result<Vec<u8>, PrivateResultOramError> {
+    validate_private_result_bucket_context(context)?;
+    if bucket.version != PRIVATE_RESULT_ORAM_BUCKET_VERSION
+        || bucket.bucket_id != context.bucket_id
+        || bucket.index_epoch != context.index_epoch
+    {
+        return Err(PrivateResultOramError::BucketMetadataMismatch);
+    }
+
+    let Some(decoded_len) = base64url_nopad_decoded_len(bucket.ciphertext.len()) else {
+        return Err(PrivateResultOramError::InvalidBucketCiphertextEncoding);
+    };
+    if decoded_len > PRIVATE_RESULT_ORAM_BUCKET_CIPHERTEXT_OPEN_MAX_BYTES {
+        return Err(PrivateResultOramError::InvalidBucketCiphertextEncoding);
+    }
+    let raw_ciphertext = BASE64URL_NOPAD
+        .decode(bucket.ciphertext.as_bytes())
+        .map_err(|_| PrivateResultOramError::InvalidBucketCiphertextEncoding)?;
+    if raw_ciphertext.len()
+        < 1 + PRIVATE_RESULT_ORAM_BUCKET_AEAD_NONCE_LEN + PRIVATE_RESULT_ORAM_BUCKET_AEAD_TAG_LEN
+    {
+        return Err(PrivateResultOramError::InvalidBucketCiphertextEncoding);
+    }
+    let ciphertext_sha256 = base64url_sha256(&raw_ciphertext);
+    if ciphertext_sha256 != bucket.ciphertext_sha256 {
+        return Err(PrivateResultOramError::InvalidBucketCiphertextHash);
+    }
+    let expected_commitment = private_result_oram_bucket_commitment(
+        PrivateResultOramBucketCommitmentContext {
+            collection_id: context.collection_id,
+            key_id: context.key_id,
+            rk_id: context.rk_id,
+            rk_epoch: context.rk_epoch,
+            bucket_id: context.bucket_id,
+            index_epoch: context.index_epoch,
+        },
+        &bucket.ciphertext_sha256,
+    )?;
+    if expected_commitment != bucket.bucket_commitment {
+        return Err(PrivateResultOramError::InvalidBucketCommitment);
+    }
+    if raw_ciphertext[0] != PRIVATE_RESULT_ORAM_BUCKET_AEAD_VERSION {
+        return Err(PrivateResultOramError::UnsupportedBucketCiphertextVersion(
+            raw_ciphertext[0],
+        ));
+    }
+
+    let nonce_bytes: [u8; PRIVATE_RESULT_ORAM_BUCKET_AEAD_NONCE_LEN] = raw_ciphertext
+        [1..1 + PRIVATE_RESULT_ORAM_BUCKET_AEAD_NONCE_LEN]
+        .try_into()
+        .map_err(|_| PrivateResultOramError::InvalidBucketCiphertextEncoding)?;
+    let nonce = Nonce::assume_unique_for_key(nonce_bytes);
+    let mut ciphertext = raw_ciphertext[1 + PRIVATE_RESULT_ORAM_BUCKET_AEAD_NONCE_LEN..].to_vec();
+
+    let unbound_key = UnboundKey::new(&AES_256_GCM, keys.bucket_aead_key().as_bytes())
+        .map_err(|_| EncryptionError::OpenFailed)?;
+    let key = LessSafeKey::new(unbound_key);
+    let aad = private_result_oram_bucket_aead(context)?;
+    let plaintext = key
+        .open_in_place(nonce, Aad::from(aad.as_slice()), &mut ciphertext)
+        .map_err(|_| PrivateResultOramError::BucketOpenFailed)?;
+    Ok(plaintext.to_vec())
+}
+
+pub fn seal_private_result_oram_plaintext_bucket(
+    keys: &PrivateResultOramClientKeys,
+    base_context: PrivateResultOramBucketAeadBaseContext<'_>,
+    index_epoch: u64,
+    bucket: &PrivateResultOramPlaintextBucket,
+    config: PrivateResultOramClientConfig,
+) -> Result<PrivateResultOramBucket, PrivateResultOramError> {
+    let plaintext = encode_private_result_oram_bucket_plaintext(bucket, config)?;
+    seal_private_result_oram_bucket(
+        keys,
+        base_context.for_bucket(bucket.bucket_id, index_epoch),
+        &plaintext,
+    )
+}
+
+pub fn open_private_result_oram_plaintext_bucket(
+    keys: &PrivateResultOramClientKeys,
+    base_context: PrivateResultOramBucketAeadBaseContext<'_>,
+    bucket: &PrivateResultOramBucket,
+    config: PrivateResultOramClientConfig,
+) -> Result<PrivateResultOramPlaintextBucket, PrivateResultOramError> {
+    let plaintext = open_private_result_oram_bucket(
+        keys,
+        base_context.for_bucket(bucket.bucket_id, bucket.index_epoch),
+        bucket,
+    )?;
+    decode_private_result_oram_bucket_plaintext(bucket.bucket_id, &plaintext, config)
+}
+
+pub fn open_private_result_oram_verified_bucket_batch(
+    keys: &PrivateResultOramClientKeys,
+    base_context: PrivateResultOramBucketAeadBaseContext<'_>,
+    config: PrivateResultOramClientConfig,
+    expected_epoch: u64,
+    expected_root_hash: &str,
+    expected_bucket_count: u64,
+    proof_value: &str,
+    buckets: &[PrivateResultOramBucket],
+) -> Result<Vec<PrivateResultOramPlaintextBucket>, PrivateResultOramError> {
+    verify_private_result_oram_merkle_proof_json(
+        proof_value,
+        expected_epoch,
+        expected_root_hash,
+        expected_bucket_count,
+        buckets,
+    )?;
+    buckets
+        .iter()
+        .map(|bucket| open_private_result_oram_plaintext_bucket(keys, base_context, bucket, config))
+        .collect()
+}
+
 pub fn validate_private_result_oram_bucket_shape(
     bucket: &PrivateResultOramBucket,
     context: PrivateResultOramBucketValidationContext,
@@ -1124,6 +1380,36 @@ pub fn private_result_oram_bucket_commitment(
     push_u64(&mut message, context.index_epoch);
     message.extend_from_slice(&ciphertext_sha256);
     Ok(BASE64URL_NOPAD.encode(Sha256::digest(&message).as_ref()))
+}
+
+fn private_result_oram_bucket_aead(
+    context: PrivateResultOramBucketAeadContext<'_>,
+) -> Result<Vec<u8>, PrivateResultOramError> {
+    validate_private_result_bucket_context(context)?;
+    let mut aad = Vec::new();
+    push_domain(
+        &mut aad,
+        PRIVATE_RESULT_ORAM_BUCKET_AEAD_CONTEXT_DOMAIN.as_bytes(),
+    );
+    push_str(&mut aad, context.collection_id);
+    push_str(&mut aad, context.key_id);
+    push_str(&mut aad, context.rk_id);
+    push_u64(&mut aad, context.rk_epoch);
+    push_u64(&mut aad, context.bucket_id);
+    push_u64(&mut aad, context.index_epoch);
+    Ok(aad)
+}
+
+fn validate_private_result_bucket_context(
+    context: PrivateResultOramBucketAeadContext<'_>,
+) -> Result<(), PrivateResultOramError> {
+    validate_id(context.collection_id, "collection_id")
+        .map_err(|_| PrivateResultOramError::InvalidBucketContext("collection_id"))?;
+    validate_resource_key_id(context.key_id)
+        .map_err(|_| PrivateResultOramError::InvalidBucketContext("key_id"))?;
+    validate_resource_key_id(context.rk_id)
+        .map_err(|_| PrivateResultOramError::InvalidBucketContext("rk_id"))?;
+    Ok(())
 }
 
 pub fn private_result_oram_merkle_root_for_commitments(
@@ -1524,6 +1810,21 @@ fn private_result_oram_merkle_parent_hash(left: &[u8; 32], right: &[u8; 32]) -> 
     hasher.finalize().into()
 }
 
+fn base64url_sha256(bytes: &[u8]) -> String {
+    BASE64URL_NOPAD.encode(Sha256::digest(bytes).as_ref())
+}
+
+fn base64url_nopad_decoded_len(encoded_len: usize) -> Option<usize> {
+    let full_quads = encoded_len / 4;
+    let base_len = full_quads.checked_mul(3)?;
+    match encoded_len % 4 {
+        0 => Some(base_len),
+        2 => base_len.checked_add(1),
+        3 => base_len.checked_add(2),
+        _ => None,
+    }
+}
+
 fn push_domain(message: &mut Vec<u8>, domain: &[u8]) {
     message.extend_from_slice(&(domain.len() as u32).to_be_bytes());
     message.extend_from_slice(domain);
@@ -1637,6 +1938,7 @@ mod tests {
             PrivateResultOramError::UnsupportedSignatureAlgorithm("rsa-pss-sentinel".to_string())
                 .to_string(),
             PrivateResultOramError::UnsupportedBucketVersion(88).to_string(),
+            PrivateResultOramError::UnsupportedBucketCiphertextVersion(77).to_string(),
             PrivateResultOramError::UnsupportedPayloadBlockVersion(99).to_string(),
             PrivateResultOramError::BucketOutOfRange {
                 bucket_id: 123,
@@ -1654,7 +1956,7 @@ mod tests {
 
         for rendered in cases {
             assert!(!rendered.contains("rsa-pss-sentinel"), "{rendered}");
-            for leaked in ["99", "88", "123", "456", "42", "43"] {
+            for leaked in ["99", "88", "77", "123", "456", "42", "43"] {
                 assert!(!rendered.contains(leaked), "{rendered}");
             }
         }
@@ -1809,6 +2111,46 @@ mod tests {
         }
     }
 
+    fn result_test_keys() -> PrivateResultOramClientKeys {
+        PrivateResultOramClientKeys::derive_from_resource_key(&SecretKey::from_bytes([7; 32]))
+            .unwrap()
+    }
+
+    fn result_bucket_context(bucket_id: u64) -> PrivateResultOramBucketAeadContext<'static> {
+        PrivateResultOramBucketAeadContext {
+            collection_id: "collection-uuid-1",
+            key_id: "tenant-a/payload-private-rk",
+            rk_id: "tenant-a/payload-private-rk",
+            rk_epoch: 7,
+            bucket_id,
+            index_epoch: 42,
+        }
+    }
+
+    fn result_bucket_base_context() -> PrivateResultOramBucketAeadBaseContext<'static> {
+        PrivateResultOramBucketAeadBaseContext {
+            collection_id: "collection-uuid-1",
+            key_id: "tenant-a/payload-private-rk",
+            rk_id: "tenant-a/payload-private-rk",
+            rk_epoch: 7,
+        }
+    }
+
+    #[test]
+    fn result_oram_client_key_derivation_is_domain_separated() {
+        let resource_key = SecretKey::from_bytes([7; 32]);
+        let keys = PrivateResultOramClientKeys::derive_from_resource_key(&resource_key).unwrap();
+        assert_ne!(keys.bucket_aead_key().as_bytes(), resource_key.as_bytes());
+        assert_eq!(
+            keys.bucket_aead_key().as_bytes(),
+            resource_key
+                .derive_subkey(PRIVATE_RESULT_ORAM_BUCKET_AEAD_DOMAIN)
+                .unwrap()
+                .as_bytes()
+        );
+        assert!(format!("{keys:?}").contains("[redacted; 32 bytes]"));
+    }
+
     #[test]
     fn payload_block_codec_pads_to_fixed_size_and_roundtrips() {
         let block = payload_block(7);
@@ -1867,6 +2209,202 @@ mod tests {
         assert_eq!(
             decode_private_result_oram_bucket_plaintext(3, &tampered, config),
             Err(PrivateResultOramError::InvalidBucketPlaintext)
+        );
+    }
+
+    #[test]
+    fn bucket_seal_open_roundtrips_and_populates_integrity_fields() {
+        let keys = result_test_keys();
+        let context = result_bucket_context(3);
+        let plaintext = vec![11; 256];
+        let bucket = seal_private_result_oram_bucket(&keys, context, &plaintext).unwrap();
+
+        assert_eq!(bucket.version, 1);
+        assert_eq!(bucket.bucket_id, 3);
+        assert_eq!(bucket.index_epoch, 42);
+        decode_base64url_32(&bucket.ciphertext_sha256, "ciphertext_sha256").unwrap();
+        decode_bucket_commitment(&bucket.bucket_commitment).unwrap();
+        assert_eq!(
+            private_result_oram_bucket_commitment(
+                PrivateResultOramBucketCommitmentContext {
+                    collection_id: context.collection_id,
+                    key_id: context.key_id,
+                    rk_id: context.rk_id,
+                    rk_epoch: context.rk_epoch,
+                    bucket_id: context.bucket_id,
+                    index_epoch: context.index_epoch,
+                },
+                &bucket.ciphertext_sha256,
+            )
+            .unwrap(),
+            bucket.bucket_commitment
+        );
+        assert_eq!(
+            open_private_result_oram_bucket(&keys, context, &bucket).unwrap(),
+            plaintext
+        );
+    }
+
+    #[test]
+    fn bucket_open_rejects_wrong_context_hash_and_ciphertext_tamper() {
+        let keys = result_test_keys();
+        let context = result_bucket_context(3);
+        let bucket = seal_private_result_oram_bucket(&keys, context, &[9; 64]).unwrap();
+
+        let mut wrong_context = context;
+        wrong_context.bucket_id = 4;
+        assert_eq!(
+            open_private_result_oram_bucket(&keys, wrong_context, &bucket),
+            Err(PrivateResultOramError::BucketMetadataMismatch)
+        );
+
+        let mut wrong_hash = bucket.clone();
+        wrong_hash.ciphertext_sha256 = BASE64URL_NOPAD.encode(&[8; 32]);
+        assert_eq!(
+            open_private_result_oram_bucket(&keys, context, &wrong_hash),
+            Err(PrivateResultOramError::InvalidBucketCiphertextHash)
+        );
+
+        let mut malformed_ciphertext = bucket.clone();
+        malformed_ciphertext.ciphertext = "A".to_string();
+        assert_eq!(
+            open_private_result_oram_bucket(&keys, context, &malformed_ciphertext),
+            Err(PrivateResultOramError::InvalidBucketCiphertextEncoding)
+        );
+
+        let mut wrong_ciphertext = bucket;
+        let mut raw = BASE64URL_NOPAD
+            .decode(wrong_ciphertext.ciphertext.as_bytes())
+            .unwrap();
+        let last = raw.len() - 1;
+        raw[last] ^= 1;
+        wrong_ciphertext.ciphertext = BASE64URL_NOPAD.encode(&raw);
+        wrong_ciphertext.ciphertext_sha256 = base64url_sha256(&raw);
+        wrong_ciphertext.bucket_commitment = private_result_oram_bucket_commitment(
+            PrivateResultOramBucketCommitmentContext {
+                collection_id: context.collection_id,
+                key_id: context.key_id,
+                rk_id: context.rk_id,
+                rk_epoch: context.rk_epoch,
+                bucket_id: context.bucket_id,
+                index_epoch: context.index_epoch,
+            },
+            &wrong_ciphertext.ciphertext_sha256,
+        )
+        .unwrap();
+        assert_eq!(
+            open_private_result_oram_bucket(&keys, context, &wrong_ciphertext),
+            Err(PrivateResultOramError::BucketOpenFailed)
+        );
+    }
+
+    #[test]
+    fn plaintext_bucket_seal_open_roundtrips() {
+        let keys = result_test_keys();
+        let config = result_client_config();
+        let plaintext_bucket = PrivateResultOramPlaintextBucket {
+            bucket_id: 0,
+            blocks: vec![Some(payload_block(8)), None],
+        };
+        let sealed = seal_private_result_oram_plaintext_bucket(
+            &keys,
+            result_bucket_base_context(),
+            42,
+            &plaintext_bucket,
+            config,
+        )
+        .unwrap();
+
+        assert_eq!(
+            open_private_result_oram_plaintext_bucket(
+                &keys,
+                result_bucket_base_context(),
+                &sealed,
+                config,
+            )
+            .unwrap(),
+            plaintext_bucket
+        );
+    }
+
+    #[test]
+    fn verified_bucket_batch_opens_only_after_merkle_proof_check() {
+        let keys = result_test_keys();
+        let config = result_client_config();
+        let bucket0 = seal_private_result_oram_plaintext_bucket(
+            &keys,
+            result_bucket_base_context(),
+            42,
+            &PrivateResultOramPlaintextBucket {
+                bucket_id: 0,
+                blocks: vec![Some(payload_block(8)), None],
+            },
+            config,
+        )
+        .unwrap();
+        let bucket1 = seal_private_result_oram_plaintext_bucket(
+            &keys,
+            result_bucket_base_context(),
+            42,
+            &PrivateResultOramPlaintextBucket {
+                bucket_id: 1,
+                blocks: vec![Some(payload_block(9)), None],
+            },
+            config,
+        )
+        .unwrap();
+        let root = private_result_oram_merkle_root_for_commitments(&[
+            bucket0.bucket_commitment.clone(),
+            bucket1.bucket_commitment.clone(),
+        ])
+        .unwrap();
+        let proof = PrivateResultOramMerkleProof {
+            kind: PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND.to_string(),
+            index_epoch: 42,
+            root_hash: root.clone(),
+            bucket_count: 2,
+            leaves: vec![PrivateResultOramMerkleProofLeaf {
+                bucket_id: 0,
+                leaf_hash: bucket0.bucket_commitment.clone(),
+                siblings: vec![PrivateResultOramMerkleSibling {
+                    level: 0,
+                    position: PrivateResultOramMerkleSiblingPosition::Right,
+                    hash: bucket1.bucket_commitment.clone(),
+                }],
+            }],
+        };
+        let proof_value = serde_json::to_string(&proof).unwrap();
+
+        let opened = open_private_result_oram_verified_bucket_batch(
+            &keys,
+            result_bucket_base_context(),
+            config,
+            42,
+            &root,
+            2,
+            &proof_value,
+            std::slice::from_ref(&bucket0),
+        )
+        .unwrap();
+        assert_eq!(opened.len(), 1);
+        assert_eq!(opened[0].blocks[0], Some(payload_block(8)));
+
+        let tampered_proof = PrivateResultOramMerkleProof {
+            root_hash: BASE64URL_NOPAD.encode(&[99; 32]),
+            ..proof
+        };
+        assert_eq!(
+            open_private_result_oram_verified_bucket_batch(
+                &keys,
+                result_bucket_base_context(),
+                config,
+                42,
+                &root,
+                2,
+                &serde_json::to_string(&tampered_proof).unwrap(),
+                &[bucket0],
+            ),
+            Err(PrivateResultOramError::MerkleProofMismatch)
         );
     }
 
