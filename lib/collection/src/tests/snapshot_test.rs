@@ -238,7 +238,7 @@ async fn _test_snapshot_collection(node_type: NodeType) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_snapshot_private_result_oram_is_included_but_restore_fails_closed() {
+async fn test_snapshot_private_result_oram_is_included_but_unconfigured_restore_fails_closed() {
     init_logger();
 
     let config = CollectionConfigInternal {
@@ -342,7 +342,9 @@ async fn test_snapshot_private_result_oram_is_included_but_restore_fails_closed(
     let snapshot_data = SnapshotData::new_packed_persistent(snapshot_path);
     let err = Collection::restore_snapshot(snapshot_data, recover_dir.path(), 0, true).unwrap_err();
     let err = err.to_string();
-    assert!(err.contains("payload/private-result-oram@v1"));
+    assert!(
+        err.contains("private result ORAM snapshot store is present without a matching collection encryption rule")
+    );
     assert!(!err.contains(collection_dir.path().to_string_lossy().as_ref()));
     assert!(!err.contains(recover_dir.path().to_string_lossy().as_ref()));
     assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));

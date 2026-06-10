@@ -838,8 +838,8 @@ collection/vector identity, key lineage, epoch/root, path labels, and padding
 metadata before encrypted buckets are returned.
 Snapshot restore preflight follows the same MVP result-privacy boundary:
 private HNSW ORAM manifests with `private_payload_oram_required` are rejected
-until `private-result-oram/v1` binding and result-private restore support exist.
-Restore preflight also checks every
+until HNSW result-token linkage and result ORAM session/read/commit support
+exist. Restore preflight also checks every
 manifest-range bucket for the manifest-derived fixed ciphertext size and verifies
 each bucket commitment against collection/vector/key lineage, bucket epoch, and
 `ciphertext_sha256` before accepting the Merkle root.
@@ -869,9 +869,11 @@ point ids to Qdrant. The enum and wire schema reserve
 with binding `private-result-oram/v1`. Runtime validation accepts the
 server-blind provider instance and collection rule binding, and the dedicated
 REST path can upload/read signed manifests plus encrypted bucket batches. Result
-ORAM session/commit APIs, snapshot restore, and HNSW result-token linkage remain
-closed. HNSW manifest/session policy also rejects that result privacy mode until
-those pieces exist. Do not advertise
+ORAM snapshot restore preflight is open for configured `private-result-oram/v1`
+bindings and validates manifest/current epoch, buckets, Merkle metadata, and
+runtime Ed25519 signatures. Result ORAM session/commit APIs and HNSW
+result-token linkage remain closed. HNSW manifest/session policy also rejects
+that result privacy mode until those pieces exist. Do not advertise
 `private_payload_oram_required` as a working result-private fetch mode for this
 provider version.
 The crypto crate reserves the future payload/result ORAM manifest shape through

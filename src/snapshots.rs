@@ -18,6 +18,7 @@ use crate::common::crypto::validate_recovered_collection_crypto_config;
 #[cfg(test)]
 use crate::common::crypto::validate_recovered_collection_crypto_runtime;
 use crate::common::private_hnsw::validate_recovered_private_hnsw_oram_snapshot_signatures;
+use crate::common::private_result_oram::validate_recovered_private_result_oram_snapshot_signatures;
 use crate::settings::Settings;
 
 /// Recover snapshots from the given arguments
@@ -202,10 +203,28 @@ fn validate_restored_collection_crypto_runtime(
              snapshot {collection_name}: {err}",
         )
     })?;
-    validate_private_result_oram_snapshot_restore_not_present(collection_path).map_err(|err| {
+    Collection::validate_private_result_oram_snapshot_restore_layout(
+        collection_name,
+        &config,
+        collection_path,
+    )
+    .map_err(|err| {
+        let detail = sanitize_private_result_oram_snapshot_layout_error(collection_path, err);
         format!(
             "Failed to validate private result ORAM snapshot layout for recovered snapshot \
-             {collection_name}: {err}",
+             {collection_name}: {detail}",
+        )
+    })?;
+    validate_recovered_private_result_oram_snapshot_signatures(
+        settings,
+        collection_name,
+        &config,
+        collection_path,
+    )
+    .map_err(|err| {
+        format!(
+            "Failed to validate private result ORAM snapshot manifest signatures for recovered \
+             snapshot {collection_name}: {err}",
         )
     })?;
     Ok(())
@@ -219,21 +238,12 @@ fn sanitize_private_hnsw_snapshot_layout_error(
     "private HNSW ORAM snapshot layout validation failed".to_string()
 }
 
-fn validate_private_result_oram_snapshot_restore_not_present(
-    collection_path: &Path,
-) -> Result<(), String> {
-    let private_result_oram_path =
-        collection_path.join(collection::private_result_oram_store::PRIVATE_RESULT_ORAM_DIR);
-    match fs::symlink_metadata(&private_result_oram_path) {
-        Ok(_) => Err(format!(
-            "private result ORAM snapshot restore requires {} with {} binding and restore support, \
-             which are not implemented yet",
-            qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
-            qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
-        )),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(_) => Err("private result ORAM snapshot layout validation failed".to_string()),
-    }
+fn sanitize_private_result_oram_snapshot_layout_error(
+    _collection_path: &Path,
+    err: collection::operations::types::CollectionError,
+) -> String {
+    let _ = err;
+    "private result ORAM snapshot layout validation failed".to_string()
 }
 
 #[cfg(test)]
@@ -264,14 +274,22 @@ mod tests {
     use collection::private_hnsw_oram_store::{
         PRIVATE_HNSW_ORAM_DIR, PrivateHnswOramEpochState, PrivateHnswOramStore,
     };
-    use collection::private_result_oram_store::PRIVATE_RESULT_ORAM_DIR;
+    use collection::private_result_oram_store::{
+        PRIVATE_RESULT_ORAM_DIR, PrivateResultOramEpochState, PrivateResultOramStore,
+    };
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_sec::{
-        LocalMasterKeyProvider, MasterKeyProvider, PRIVATE_HNSW_ORAM_BINDING,
-        RESOURCE_KEY_WRAP_ALGORITHM, SecretKey,
+        LocalMasterKeyProvider, MasterKeyProvider, OramKind, OramParams,
+        PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_HNSW_ORAM_BINDING,
+        PRIVATE_RESULT_ORAM_BINDING, PrivateResultOramBucket,
+        PrivateResultOramBucketCommitmentContext, PrivateResultOramManifest,
+        RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, private_result_oram_bucket_commitment,
+        private_result_oram_merkle_root_for_commitments, sign_private_result_oram_manifest,
     };
+    use ring::signature::{Ed25519KeyPair, KeyPair};
     use segment::types::{Distance, HnswConfig};
     use serde_json::json;
+    use sha2::{Digest, Sha256};
     use tempfile::TempDir;
     use uuid::Uuid;
 
@@ -280,6 +298,9 @@ mod tests {
         COLLECTION_ID, KEY_ID, PrivateHnswRouteWireFixture, RK_EPOCH, SIGNING_KEY_ID, VECTOR_NAME,
     };
     use crate::settings::{CryptoInstanceConfig, CryptoMaterialConfig, CryptoSettings};
+
+    const RESULT_KEY_ID: &str = "tenant-a/result-private-rk";
+    const RESULT_SIGNING_KEY_ID: &str = "tenant-a/private-result-signing-v1";
 
     fn recovered_private_hnsw_config() -> CollectionConfigInternal {
         CollectionConfigInternal {
@@ -326,6 +347,175 @@ mod tests {
         }
     }
 
+    fn recovered_private_result_config() -> CollectionConfigInternal {
+        CollectionConfigInternal {
+            params: CollectionParams {
+                vectors: VectorsConfig::Multi(BTreeMap::from([(
+                    VECTOR_NAME.to_string(),
+                    VectorParamsBuilder::new(2, Distance::Euclid).build(),
+                )])),
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some(RESULT_KEY_ID.to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: RK_EPOCH,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "body_private_result".to_string(),
+                        selector: EncryptionSelector::PayloadPaths {
+                            paths: vec!["body".to_string()],
+                        },
+                        instance: "payload_result_oram_v1".to_string(),
+                        binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            },
+            hnsw_config: HnswConfig::default(),
+            optimizer_config: OptimizersConfig {
+                deleted_threshold: 0.1,
+                vacuum_min_vector_number: 1000,
+                default_segment_number: 0,
+                max_segment_size: None,
+                #[expect(deprecated)]
+                memmap_threshold: None,
+                indexing_threshold: Some(100_000),
+                flush_interval_sec: 60,
+                max_optimization_threads: Some(0),
+                prevent_unoptimized: None,
+            },
+            wal_config: WalConfig::default(),
+            quantization_config: None,
+            strict_mode_config: None,
+            uuid: Some(Uuid::parse_str(COLLECTION_ID).unwrap()),
+            metadata: None,
+        }
+    }
+
+    struct PrivateResultSnapshotFixture {
+        manifest: PrivateResultOramManifest,
+        signature: qdrant_sec::PrivateResultOramSignature,
+        buckets: Vec<PrivateResultOramBucket>,
+        signing_key: Ed25519KeyPair,
+    }
+
+    impl PrivateResultSnapshotFixture {
+        fn build() -> Self {
+            let signing_key = Ed25519KeyPair::from_seed_unchecked(&[9; 32]).unwrap();
+            let oram = OramParams {
+                kind: OramKind::PathOram,
+                bucket_size: 2,
+                block_size_bytes: 1024,
+                tree_height: 1,
+                path_batch_size: 2,
+            };
+            let bucket_count = (1_u64 << (oram.tree_height + 1)) - 1;
+            let mut manifest = PrivateResultOramManifest {
+                version: 1,
+                provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+                binding: PRIVATE_RESULT_ORAM_BINDING.to_string(),
+                collection_id: COLLECTION_ID.to_string(),
+                key_id: RESULT_KEY_ID.to_string(),
+                rk_id: RESULT_KEY_ID.to_string(),
+                rk_epoch: RK_EPOCH,
+                oram: oram.clone(),
+                index_epoch: 42,
+                root_hash: BASE64URL_NOPAD.encode(&[0; 32]),
+                bucket_count,
+                logical_result_count: 2,
+                dummy_result_count: 1,
+                owner_signing_key_id: RESULT_SIGNING_KEY_ID.to_string(),
+                created_at_unix: 1,
+            };
+            let buckets = (0..bucket_count)
+                .map(|bucket_id| private_result_snapshot_bucket(bucket_id, &manifest))
+                .collect::<Vec<_>>();
+            let commitments = buckets
+                .iter()
+                .map(|bucket| bucket.bucket_commitment.clone())
+                .collect::<Vec<_>>();
+            manifest.root_hash =
+                private_result_oram_merkle_root_for_commitments(&commitments).unwrap();
+            let buckets = (0..bucket_count)
+                .map(|bucket_id| private_result_snapshot_bucket(bucket_id, &manifest))
+                .collect::<Vec<_>>();
+            let signature = sign_private_result_oram_manifest(&signing_key, &manifest).unwrap();
+            Self {
+                manifest,
+                signature,
+                buckets,
+                signing_key,
+            }
+        }
+
+        fn settings(&self) -> Settings {
+            let mut settings = Settings::new(None).unwrap();
+            settings.crypto = CryptoSettings {
+                zero_trust_profile: Some(crate::settings::ZERO_TRUST_PROFILE_STRICT.to_string()),
+                instances: HashMap::from([(
+                    "payload_result_oram_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": RESULT_KEY_ID,
+                            "expected_rk_id": RESULT_KEY_ID,
+                            "min_rk_epoch": RK_EPOCH,
+                            "max_rk_epoch": RK_EPOCH,
+                            "oram": {
+                                "kind": "path_oram",
+                                "bucket_size": self.manifest.oram.bucket_size,
+                                "block_size_bytes": self.manifest.oram.block_size_bytes,
+                                "tree_height": self.manifest.oram.tree_height,
+                                "path_batch_size": self.manifest.oram.path_batch_size
+                            },
+                            "integrity": {
+                                "manifest_signature_required": true,
+                                "commit_signature_required": true,
+                                "merkle_root_required": true
+                            },
+                            "signature_public_keys": {
+                                RESULT_SIGNING_KEY_ID: BASE64URL_NOPAD.encode(self.signing_key.public_key().as_ref())
+                            }
+                        }),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            };
+            settings
+        }
+    }
+
+    fn private_result_snapshot_bucket(
+        bucket_id: u64,
+        manifest: &PrivateResultOramManifest,
+    ) -> PrivateResultOramBucket {
+        let ciphertext_bytes = [bucket_id as u8; 16];
+        let ciphertext = BASE64URL_NOPAD.encode(&ciphertext_bytes);
+        let ciphertext_sha256 = BASE64URL_NOPAD.encode(&Sha256::digest(ciphertext_bytes));
+        let bucket_commitment = private_result_oram_bucket_commitment(
+            PrivateResultOramBucketCommitmentContext {
+                collection_id: &manifest.collection_id,
+                key_id: &manifest.key_id,
+                rk_id: &manifest.rk_id,
+                rk_epoch: manifest.rk_epoch,
+                bucket_id,
+                index_epoch: manifest.index_epoch,
+            },
+            &ciphertext_sha256,
+        )
+        .unwrap();
+        PrivateResultOramBucket {
+            version: 1,
+            bucket_id,
+            index_epoch: manifest.index_epoch,
+            ciphertext,
+            ciphertext_sha256,
+            bucket_commitment,
+        }
+    }
+
     fn write_recovered_private_hnsw_snapshot_fixture(
         collection_dir: &Path,
         fixture: &PrivateHnswRouteWireFixture,
@@ -366,6 +556,57 @@ mod tests {
                     fixture.encrypted_build.index_epoch,
                     fixture.encrypted_build.bucket_count,
                     crate::common::private_hnsw_wire_fixture::MAX_CIPHERTEXT_BYTES,
+                )
+                .unwrap();
+        }
+    }
+
+    fn write_recovered_private_result_snapshot_fixture(
+        collection_dir: &Path,
+        fixture: &PrivateResultSnapshotFixture,
+        tamper_signature: bool,
+    ) {
+        let config = recovered_private_result_config();
+        fs::write(
+            collection_dir.join(COLLECTION_CONFIG_FILE),
+            config.to_bytes().unwrap(),
+        )
+        .unwrap();
+
+        let store = PrivateResultOramStore::new(collection_dir);
+        let mut signature = fixture.signature.clone();
+        if tamper_signature {
+            signature.sig = BASE64URL_NOPAD.encode(&[5; 64]);
+        }
+        store.write_manifest(&fixture.manifest, &signature).unwrap();
+        store
+            .write_initial_epoch(&PrivateResultOramEpochState {
+                index_epoch: fixture.manifest.index_epoch,
+                root_hash: fixture.manifest.root_hash.clone(),
+            })
+            .unwrap();
+        let commitments = fixture
+            .buckets
+            .iter()
+            .map(|bucket| bucket.bucket_commitment.clone())
+            .collect::<Vec<_>>();
+        store
+            .write_merkle_tree_from_commitments(
+                fixture.manifest.index_epoch,
+                fixture.manifest.root_hash.clone(),
+                commitments,
+            )
+            .unwrap();
+        let block_size = usize::try_from(fixture.manifest.oram.block_size_bytes).unwrap();
+        let bucket_size = usize::try_from(fixture.manifest.oram.bucket_size).unwrap();
+        let max_ciphertext_bytes = block_size * bucket_size + 4096;
+        for bucket in &fixture.buckets {
+            store
+                .write_bucket(
+                    bucket,
+                    fixture.manifest.index_epoch,
+                    fixture.manifest.bucket_count,
+                    max_ciphertext_bytes,
                 )
                 .unwrap();
         }
@@ -510,7 +751,43 @@ mod tests {
     }
 
     #[test]
-    fn cli_snapshot_crypto_preflight_rejects_reserved_private_result_oram_directory() {
+    fn cli_snapshot_crypto_preflight_accepts_private_result_oram_snapshot() {
+        let fixture = PrivateResultSnapshotFixture::build();
+        let settings = fixture.settings();
+        let collection_dir = TempDir::new().unwrap();
+        write_recovered_private_result_snapshot_fixture(collection_dir.path(), &fixture, false);
+
+        validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
+            .expect("valid private result ORAM snapshot should pass CLI preflight");
+    }
+
+    #[test]
+    fn cli_snapshot_crypto_preflight_rejects_private_result_oram_manifest_signature_tamper() {
+        let fixture = PrivateResultSnapshotFixture::build();
+        let settings = fixture.settings();
+        let collection_dir = TempDir::new().unwrap();
+        write_recovered_private_result_snapshot_fixture(collection_dir.path(), &fixture, true);
+
+        let err =
+            validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
+                .expect_err("tampered private result manifest signature must fail CLI preflight");
+
+        assert!(
+            err.contains("manifest signature verification failed"),
+            "{err}"
+        );
+        assert!(
+            !err.contains(collection_dir.path().to_string_lossy().as_ref()),
+            "{err}"
+        );
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR), "{err}");
+        assert!(!err.contains(&fixture.manifest.root_hash), "{err}");
+        assert!(!err.contains(&fixture.buckets[0].ciphertext), "{err}");
+        assert!(!err.contains(RESULT_SIGNING_KEY_ID), "{err}");
+    }
+
+    #[test]
+    fn cli_snapshot_crypto_preflight_rejects_unconfigured_private_result_oram_directory() {
         let settings = Settings::new(None).unwrap();
         let collection_dir = TempDir::new().unwrap();
         let mut config = recovered_private_hnsw_config();
@@ -524,16 +801,16 @@ mod tests {
 
         let err =
             validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
-                .expect_err("reserved private result ORAM directory must fail CLI preflight");
+                .expect_err("unconfigured private result ORAM directory must fail CLI preflight");
 
-        assert!(err.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
+        assert!(err.contains("private result ORAM snapshot layout validation failed"));
         assert!(!err.contains(collection_dir.path().to_string_lossy().as_ref()));
         assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
     }
 
     #[cfg(unix)]
     #[test]
-    fn cli_snapshot_crypto_preflight_rejects_reserved_private_result_oram_symlink() {
+    fn cli_snapshot_crypto_preflight_rejects_unconfigured_private_result_oram_symlink() {
         let settings = Settings::new(None).unwrap();
         let collection_dir = TempDir::new().unwrap();
         let mut config = recovered_private_hnsw_config();
@@ -551,9 +828,9 @@ mod tests {
 
         let err =
             validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
-                .expect_err("reserved private result ORAM symlink must fail CLI preflight");
+                .expect_err("unconfigured private result ORAM symlink must fail CLI preflight");
 
-        assert!(err.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
+        assert!(err.contains("private result ORAM snapshot layout validation failed"));
         assert!(!err.contains(collection_dir.path().to_string_lossy().as_ref()));
         assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
     }

@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use collection::config::{CollectionConfigInternal, CollectionEncryptionConfig, EncryptionRuleRef};
+use collection::config::{
+    CollectionConfigInternal, CollectionEncryptionConfig, EncryptionRuleRef, EncryptionSelector,
+};
 use collection::operations::types::CollectionError;
 use collection::private_result_oram_store::{PrivateResultOramEpochState, PrivateResultOramStore};
 use data_encoding::BASE64URL_NOPAD;
@@ -334,6 +336,45 @@ pub async fn do_read_private_result_oram_buckets(
             value: proof_value,
         },
     })
+}
+
+pub fn validate_recovered_private_result_oram_snapshot_signatures(
+    settings: &Settings,
+    collection_name: &str,
+    config: &CollectionConfigInternal,
+    collection_path: &std::path::Path,
+) -> StorageResult<()> {
+    let collection_crypto_id = config.stable_crypto_id(collection_name)?;
+    let Some(encryption) = config.params.effective_encryption() else {
+        return Ok(());
+    };
+
+    for rule in encryption
+        .rules
+        .iter()
+        .filter(|rule| rule.binding.as_deref() == Some(PRIVATE_RESULT_ORAM_BINDING))
+    {
+        if !matches!(rule.selector, EncryptionSelector::PayloadPaths { .. }) {
+            return Err(StorageError::bad_request(format!(
+                "private result ORAM snapshot rule {} must use payload_paths selector",
+                rule.id,
+            )));
+        }
+        let instance = private_result_oram_instance(settings, rule)?;
+        let store = PrivateResultOramStore::new(collection_path);
+        let (manifest, signature) = read_uploaded_manifest(&store)?;
+        let public_key = signature_public_key(instance, &signature.key_id)?;
+        let resolved = manifest_context_from_runtime(&collection_crypto_id, instance, public_key)?;
+        validate_private_result_oram_manifest(
+            &manifest,
+            Some(&signature),
+            resolved.manifest_context(&signature.key_id),
+        )
+        .map_err(private_result_oram_error)?;
+        resolved.validate_manifest_runtime_policy(&manifest)?;
+    }
+
+    Ok(())
 }
 
 async fn resolve_private_result_oram_context(

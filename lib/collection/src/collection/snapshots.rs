@@ -11,9 +11,13 @@ use fs_err::File;
 use qdrant_sec::{
     DistanceKind, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_HNSW_ORAM_BINDING,
     PRIVATE_RESULT_ORAM_BINDING, PrivateHnswBucketAeadBaseContext, PrivateHnswOramBucket,
-    PrivateHnswOramManifest, PrivateHnswOramSignature, ResultPrivacyMode,
-    private_hnsw_bucket_commitment, private_hnsw_oram_bucket_ciphertext_bytes,
+    PrivateHnswOramManifest, PrivateHnswOramSignature, PrivateResultOramBucket,
+    PrivateResultOramBucketCommitmentContext, PrivateResultOramManifest,
+    PrivateResultOramSignature, ResultPrivacyMode, private_hnsw_bucket_commitment,
+    private_hnsw_oram_bucket_ciphertext_bytes, private_result_oram_bucket_commitment,
     validate_private_hnsw_oram_manifest_shape, validate_private_hnsw_oram_manifest_signature_shape,
+    validate_private_result_oram_manifest_shape,
+    validate_private_result_oram_manifest_signature_shape,
 };
 use segment::types::SnapshotFormat;
 use segment::utils::fs::move_all;
@@ -33,7 +37,7 @@ use crate::config::{
 use crate::operations::snapshot_ops::SnapshotDescription;
 use crate::operations::types::{CollectionError, CollectionResult, NodeType};
 use crate::private_hnsw_oram_store::{PRIVATE_HNSW_ORAM_DIR, PrivateHnswOramStore};
-use crate::private_result_oram_store::PRIVATE_RESULT_ORAM_DIR;
+use crate::private_result_oram_store::{PRIVATE_RESULT_ORAM_DIR, PrivateResultOramStore};
 use crate::shards::local_shard::LocalShard;
 use crate::shards::remote_shard::RemoteShard;
 use crate::shards::replica_set::ShardReplicaSet;
@@ -244,11 +248,16 @@ impl Collection {
 
         let config = CollectionConfigInternal::load(target_dir)?;
         config.validate_and_warn();
-        ensure_private_result_oram_snapshot_restore_not_present(target_dir)?;
         let restore_collection_name = target_dir
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("restored_collection");
+        Self::validate_private_result_oram_snapshot_restore_layout(
+            restore_collection_name,
+            &config,
+            target_dir,
+        )
+        .map_err(|err| sanitize_private_result_oram_snapshot_layout_error(target_dir, err))?;
         Self::validate_private_hnsw_oram_snapshot_restore_layout(
             restore_collection_name,
             &config,
@@ -336,6 +345,22 @@ impl Collection {
         }
 
         Ok(())
+    }
+
+    pub fn validate_private_result_oram_snapshot_restore_layout(
+        collection_name: &str,
+        config: &CollectionConfigInternal,
+        collection_dir: &Path,
+    ) -> CollectionResult<()> {
+        let configured = private_result_oram_configured(&config.params)?;
+        validate_private_result_oram_snapshot_store_matches_config(collection_dir, configured)?;
+
+        if !configured {
+            return Ok(());
+        }
+
+        let stable_crypto_id = config.stable_crypto_id(collection_name)?;
+        validate_private_result_oram_snapshot(collection_dir, &stable_crypto_id, &config.params)
     }
 
     /// # Cancel safety
@@ -598,20 +623,38 @@ fn ensure_snapshot_crypto_migration_state_allows_snapshot(
     Ok(())
 }
 
-fn ensure_private_result_oram_snapshot_restore_not_present(
+fn validate_private_result_oram_snapshot_store_matches_config(
     collection_dir: &Path,
+    configured: bool,
 ) -> CollectionResult<()> {
     let private_result_oram_path = collection_dir.join(PRIVATE_RESULT_ORAM_DIR);
-    match std::fs::symlink_metadata(&private_result_oram_path) {
-        Ok(_) => Err(CollectionError::bad_request(format!(
-            "private result ORAM snapshot restore requires {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}, \
-             but {PRIVATE_RESULT_ORAM_BINDING} binding and restore support are not implemented yet"
-        ))),
-        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
-        Err(_) => Err(CollectionError::service_error(
-            "private result ORAM snapshot layout validation failed",
-        )),
+    let metadata = match std::fs::symlink_metadata(&private_result_oram_path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == ErrorKind::NotFound && !configured => return Ok(()),
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            return Err(CollectionError::bad_request(
+                "private result ORAM snapshot store is missing for configured binding",
+            ));
+        }
+        Err(_) => {
+            return Err(CollectionError::bad_request(
+                "private result ORAM snapshot store root cannot be inspected",
+            ));
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        return Err(CollectionError::bad_request(
+            "private result ORAM snapshot store root must be a non-symlink directory",
+        ));
     }
+
+    if !configured {
+        return Err(CollectionError::bad_request(
+            "private result ORAM snapshot store is present without a matching collection encryption rule",
+        ));
+    }
+
+    Ok(())
 }
 
 fn validate_private_hnsw_oram_shard_snapshot_operation(
@@ -705,6 +748,86 @@ fn validate_private_hnsw_oram_vector_snapshot(
     )?;
 
     Ok(())
+}
+
+fn validate_private_result_oram_snapshot(
+    collection_dir: &Path,
+    stable_crypto_id: &str,
+    params: &CollectionParams,
+) -> CollectionResult<()> {
+    let store = PrivateResultOramStore::new(collection_dir);
+    let (manifest, signature) = store.read_manifest()?;
+    validate_private_result_oram_restore_manifest(&manifest, &signature, stable_crypto_id, params)?;
+
+    let current_epoch = store.read_current_epoch()?;
+    if current_epoch.index_epoch != manifest.index_epoch
+        || current_epoch.root_hash != manifest.root_hash
+    {
+        return Err(CollectionError::bad_request(
+            "private result ORAM snapshot current epoch/root does not match manifest",
+        ));
+    }
+
+    let max_ciphertext_bytes = private_result_restore_max_bucket_ciphertext_bytes(&manifest)?;
+    let mut bucket_commitments = Vec::new();
+    for bucket_id in 0..manifest.bucket_count {
+        let bucket = store.read_bucket(
+            bucket_id,
+            manifest.index_epoch,
+            manifest.bucket_count,
+            max_ciphertext_bytes,
+        )?;
+        validate_private_result_restore_bucket_contract(&manifest, &bucket)?;
+        bucket_commitments.push(bucket.bucket_commitment);
+    }
+    let bucket_root = PrivateResultOramStore::merkle_root_for_commitments(&bucket_commitments)?;
+    if bucket_root != manifest.root_hash {
+        return Err(CollectionError::bad_request(
+            "private result ORAM snapshot bucket commitments do not match manifest root_hash",
+        ));
+    }
+    let last_bucket_id = manifest.bucket_count.saturating_sub(1);
+    let bucket_ids = if last_bucket_id == 0 {
+        vec![0]
+    } else {
+        vec![0, last_bucket_id]
+    };
+    store.read_merkle_path_batch(
+        &bucket_ids,
+        manifest.index_epoch,
+        &manifest.root_hash,
+        manifest.bucket_count,
+    )?;
+
+    Ok(())
+}
+
+fn private_result_oram_configured(params: &CollectionParams) -> CollectionResult<bool> {
+    let Some(encryption) = params.effective_encryption() else {
+        return Ok(false);
+    };
+
+    let mut configured = false;
+    for rule in encryption
+        .rules
+        .iter()
+        .filter(|rule| rule.binding.as_deref() == Some(PRIVATE_RESULT_ORAM_BINDING))
+    {
+        if !matches!(rule.selector, EncryptionSelector::PayloadPaths { .. }) {
+            return Err(CollectionError::bad_request(format!(
+                "private result ORAM snapshot rule {} must use payload_paths selector",
+                rule.id,
+            )));
+        }
+        if configured {
+            return Err(CollectionError::bad_request(
+                "private result ORAM snapshot supports one configured binding in v1",
+            ));
+        }
+        configured = true;
+    }
+
+    Ok(configured)
 }
 
 fn private_hnsw_oram_configured_vectors(
@@ -818,6 +941,21 @@ fn sanitize_private_hnsw_snapshot_layout_error(
     err
 }
 
+fn sanitize_private_result_oram_snapshot_layout_error(
+    collection_dir: &Path,
+    err: CollectionError,
+) -> CollectionError {
+    let rendered = err.to_string();
+    if rendered.contains(collection_dir.to_string_lossy().as_ref())
+        || rendered.contains(PRIVATE_RESULT_ORAM_DIR)
+    {
+        return CollectionError::bad_request(
+            "private result ORAM snapshot layout validation failed",
+        );
+    }
+    err
+}
+
 fn validate_private_hnsw_oram_restore_manifest(
     manifest: &PrivateHnswOramManifest,
     signature: &PrivateHnswOramSignature,
@@ -860,6 +998,36 @@ fn validate_private_hnsw_oram_restore_manifest(
     if manifest.distance != expected_distance {
         return Err(CollectionError::bad_request(
             "private HNSW ORAM snapshot manifest distance mismatch",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_private_result_oram_restore_manifest(
+    manifest: &PrivateResultOramManifest,
+    signature: &PrivateResultOramSignature,
+    stable_crypto_id: &str,
+    params: &CollectionParams,
+) -> CollectionResult<()> {
+    validate_private_result_oram_manifest_shape(manifest).map_err(private_result_restore_error)?;
+    validate_private_result_oram_manifest_signature_shape(signature)
+        .map_err(private_result_restore_error)?;
+    if signature.key_id != manifest.owner_signing_key_id {
+        return Err(CollectionError::bad_request(
+            "private result ORAM snapshot manifest signature key_id does not match owner_signing_key_id",
+        ));
+    }
+    if manifest.collection_id != stable_crypto_id {
+        return Err(CollectionError::bad_request(
+            "private result ORAM snapshot manifest collection_id mismatch",
+        ));
+    }
+    if let Some(encryption) = params.effective_encryption()
+        && let Some(collection_key_id) = encryption.key_id.as_deref()
+        && manifest.key_id != collection_key_id
+    {
+        return Err(CollectionError::bad_request(
+            "private result ORAM snapshot manifest key_id mismatch",
         ));
     }
     Ok(())
@@ -914,7 +1082,61 @@ fn validate_private_hnsw_restore_bucket_contract(
     Ok(())
 }
 
+fn private_result_restore_max_bucket_ciphertext_bytes(
+    manifest: &PrivateResultOramManifest,
+) -> CollectionResult<usize> {
+    let block_size = usize::try_from(manifest.oram.block_size_bytes).map_err(|_| {
+        CollectionError::bad_request("private result ORAM snapshot block_size_bytes is invalid")
+    })?;
+    let bucket_size = usize::try_from(manifest.oram.bucket_size).map_err(|_| {
+        CollectionError::bad_request("private result ORAM snapshot bucket_size is invalid")
+    })?;
+    block_size
+        .checked_mul(bucket_size)
+        .and_then(|size| size.checked_add(4096))
+        .ok_or_else(|| {
+            CollectionError::bad_request("private result ORAM snapshot bucket size is invalid")
+        })
+}
+
+fn validate_private_result_restore_bucket_contract(
+    manifest: &PrivateResultOramManifest,
+    bucket: &PrivateResultOramBucket,
+) -> CollectionResult<()> {
+    if bucket.index_epoch != manifest.index_epoch {
+        return Err(CollectionError::bad_request(
+            "private result ORAM snapshot bucket epoch does not match manifest",
+        ));
+    }
+    let expected_commitment = private_result_oram_bucket_commitment(
+        PrivateResultOramBucketCommitmentContext {
+            collection_id: &manifest.collection_id,
+            key_id: &manifest.key_id,
+            rk_id: &manifest.rk_id,
+            rk_epoch: manifest.rk_epoch,
+            bucket_id: bucket.bucket_id,
+            index_epoch: manifest.index_epoch,
+        },
+        &bucket.ciphertext_sha256,
+    )
+    .map_err(|_| {
+        CollectionError::bad_request(
+            "private result ORAM snapshot bucket commitment context mismatch",
+        )
+    })?;
+    if expected_commitment != bucket.bucket_commitment {
+        return Err(CollectionError::bad_request(
+            "private result ORAM snapshot bucket commitment context mismatch",
+        ));
+    }
+    Ok(())
+}
+
 fn private_hnsw_restore_error(err: qdrant_sec::PrivateHnswOramError) -> CollectionError {
+    CollectionError::bad_request(err.to_string())
+}
+
+fn private_result_restore_error(err: qdrant_sec::PrivateResultOramError) -> CollectionError {
     CollectionError::bad_request(err.to_string())
 }
 
@@ -984,6 +1206,36 @@ mod tests {
                         },
                         instance: "docs_text_private_hnsw".to_string(),
                         binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            },
+            hnsw_config: HnswConfig::default(),
+            optimizer_config: OptimizersConfig::fixture(),
+            wal_config: WalConfig::default(),
+            quantization_config: None,
+            strict_mode_config: None,
+            uuid: Some(uuid),
+            metadata: None,
+        }
+    }
+
+    fn private_result_config(uuid: Uuid) -> CollectionConfigInternal {
+        CollectionConfigInternal {
+            params: CollectionParams {
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a/result-private-rk".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 7,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "docs_body_private_result".to_string(),
+                        selector: EncryptionSelector::PayloadPaths {
+                            paths: vec!["body".to_string()],
+                        },
+                        instance: "docs_private_result_oram".to_string(),
+                        binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
                     }],
                 }),
                 ..CollectionParams::empty()
@@ -1115,6 +1367,120 @@ mod tests {
                     manifest.index_epoch,
                     manifest.bucket_count,
                     private_hnsw_restore_expected_bucket_ciphertext_bytes(manifest).unwrap(),
+                )
+                .unwrap();
+        }
+        store
+            .write_merkle_tree_from_commitments(
+                manifest.index_epoch,
+                manifest.root_hash.clone(),
+                commitments,
+            )
+            .unwrap();
+    }
+
+    fn private_result_manifest(collection_id: String) -> PrivateResultOramManifest {
+        let bucket_count = 3;
+        let mut manifest = PrivateResultOramManifest {
+            version: 1,
+            provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+            binding: PRIVATE_RESULT_ORAM_BINDING.to_string(),
+            collection_id,
+            key_id: "tenant-a/result-private-rk".to_string(),
+            rk_id: "tenant-a/result-private-rk".to_string(),
+            rk_epoch: 7,
+            oram: OramParams {
+                kind: OramKind::PathOram,
+                bucket_size: 4,
+                block_size_bytes: 1024,
+                tree_height: 1,
+                path_batch_size: 2,
+            },
+            index_epoch: 42,
+            root_hash: String::new(),
+            bucket_count,
+            logical_result_count: 2,
+            dummy_result_count: 1,
+            owner_signing_key_id: "tenant-a/private-result-signing-v1".to_string(),
+            created_at_unix: 1,
+        };
+        refresh_private_result_snapshot_manifest_root(&mut manifest);
+        manifest
+    }
+
+    fn refresh_private_result_snapshot_manifest_root(manifest: &mut PrivateResultOramManifest) {
+        let commitments = private_result_snapshot_leaf_commitments(manifest);
+        manifest.root_hash =
+            PrivateResultOramStore::merkle_root_for_commitments(&commitments).unwrap();
+    }
+
+    fn private_result_snapshot_leaf_commitments(
+        manifest: &PrivateResultOramManifest,
+    ) -> Vec<String> {
+        (0..manifest.bucket_count)
+            .map(|bucket_id| private_result_snapshot_bucket(manifest, bucket_id).bucket_commitment)
+            .collect()
+    }
+
+    fn private_result_snapshot_bucket(
+        manifest: &PrivateResultOramManifest,
+        bucket_id: u64,
+    ) -> PrivateResultOramBucket {
+        let ciphertext_bytes = vec![19 + bucket_id as u8; 16];
+        let ciphertext = BASE64URL_NOPAD.encode(&ciphertext_bytes);
+        let ciphertext_sha256 = BASE64URL_NOPAD.encode(Sha256::digest(&ciphertext_bytes).as_ref());
+        let bucket_commitment = private_result_oram_bucket_commitment(
+            PrivateResultOramBucketCommitmentContext {
+                collection_id: &manifest.collection_id,
+                key_id: &manifest.key_id,
+                rk_id: &manifest.rk_id,
+                rk_epoch: manifest.rk_epoch,
+                bucket_id,
+                index_epoch: manifest.index_epoch,
+            },
+            &ciphertext_sha256,
+        )
+        .unwrap();
+
+        PrivateResultOramBucket {
+            version: 1,
+            bucket_id,
+            index_epoch: manifest.index_epoch,
+            ciphertext,
+            ciphertext_sha256,
+            bucket_commitment,
+        }
+    }
+
+    fn write_private_result_snapshot_fixture(
+        collection_dir: &Path,
+        manifest: &PrivateResultOramManifest,
+    ) {
+        let store = PrivateResultOramStore::new(collection_dir);
+        let signature = PrivateResultOramSignature {
+            alg: "ed25519".to_string(),
+            key_id: manifest.owner_signing_key_id.clone(),
+            sig: BASE64URL_NOPAD.encode(&[9; 64]),
+        };
+        store.write_manifest(manifest, &signature).unwrap();
+        store
+            .write_initial_epoch(
+                &crate::private_result_oram_store::PrivateResultOramEpochState {
+                    index_epoch: manifest.index_epoch,
+                    root_hash: manifest.root_hash.clone(),
+                },
+            )
+            .unwrap();
+
+        let commitments = private_result_snapshot_leaf_commitments(manifest);
+        for bucket_id in 0..manifest.bucket_count {
+            let bucket = private_result_snapshot_bucket(manifest, bucket_id);
+            store
+                .write_bucket(
+                    &bucket,
+                    manifest.index_epoch,
+                    manifest.bucket_count,
+                    private_result_restore_max_bucket_ciphertext_bytes(manifest).unwrap(),
                 )
                 .unwrap();
         }
@@ -1300,30 +1666,44 @@ mod tests {
     }
 
     #[test]
-    fn private_result_oram_restore_guard_rejects_reserved_directory() {
+    fn private_result_oram_restore_preflight_rejects_store_without_binding() {
         let temp_dir = tempfile::Builder::new()
-            .prefix("private-result-restore-reserved")
+            .prefix("private-result-restore-orphan-store")
             .tempdir()
             .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let mut config = private_result_config(uuid);
+        config.params.encryption.as_mut().unwrap().rules.clear();
 
-        ensure_private_result_oram_snapshot_restore_not_present(temp_dir.path()).unwrap();
+        Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap();
 
         fs::create_dir(temp_dir.path().join(PRIVATE_RESULT_ORAM_DIR)).unwrap();
-        let err =
-            ensure_private_result_oram_snapshot_restore_not_present(temp_dir.path()).unwrap_err();
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
         let err = err.to_string();
-        assert!(err.contains(PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
+        assert!(err.contains("without a matching collection encryption rule"));
         assert!(!err.contains(temp_dir.path().to_string_lossy().as_ref()));
         assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
     }
 
     #[cfg(unix)]
     #[test]
-    fn private_result_oram_restore_guard_rejects_reserved_symlink() {
+    fn private_result_oram_restore_preflight_rejects_root_symlink() {
         let temp_dir = tempfile::Builder::new()
             .prefix("private-result-restore-symlink")
             .tempdir()
             .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
 
         std::os::unix::fs::symlink(
             temp_dir.path().join("missing-result-oram-target"),
@@ -1331,34 +1711,81 @@ mod tests {
         )
         .unwrap();
 
-        let err =
-            ensure_private_result_oram_snapshot_restore_not_present(temp_dir.path()).unwrap_err();
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
 
-        assert!(
-            err.to_string()
-                .contains(PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
-        );
+        assert!(err.to_string().contains("non-symlink directory"));
         assert!(!err.to_string().contains("missing-result-oram-target"));
     }
 
     #[test]
-    fn private_result_oram_restore_guard_sanitizes_inspection_errors() {
+    fn private_result_oram_restore_preflight_sanitizes_inspection_errors() {
         let temp_dir = tempfile::Builder::new()
             .prefix("private-result-restore-inspect-error")
             .tempdir()
             .unwrap();
         let collection_path = temp_dir.path().join("collection-file");
         fs::write(&collection_path, b"not-a-directory").unwrap();
+        let uuid = Uuid::from_u128(7);
+        let mut config = private_result_config(uuid);
+        config.params.encryption.as_mut().unwrap().rules.clear();
 
-        let err = ensure_private_result_oram_snapshot_restore_not_present(&collection_path)
-            .unwrap_err()
-            .to_string();
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            &collection_path,
+        )
+        .unwrap_err()
+        .to_string();
 
-        assert!(err.contains("snapshot layout validation failed"));
+        assert!(err.contains("snapshot store root cannot be inspected"));
         assert!(!err.contains(collection_path.to_string_lossy().as_ref()));
         assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
         assert!(!err.contains("os error"));
         assert!(!err.contains("Not a directory"));
+    }
+
+    #[test]
+    fn private_result_oram_restore_preflight_rejects_missing_store_for_configured_rule() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-missing-store")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("missing for configured binding"));
+        assert!(!err.to_string().contains(PRIVATE_RESULT_ORAM_DIR));
+    }
+
+    #[test]
+    fn private_result_oram_restore_preflight_accepts_manifest_epoch_and_buckets() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-ok")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let manifest = private_result_manifest(uuid.to_string());
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+
+        Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap();
     }
 
     #[test]
