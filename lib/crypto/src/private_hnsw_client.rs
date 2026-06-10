@@ -504,7 +504,7 @@ pub fn plan_private_hnsw_private_result_fetch_tokens(
     result_privacy: ResultPrivacyMode,
     result: &PrivateHnswSearchResult,
     fixed_result_k: usize,
-    dummy_payload_fetch_token: [u8; 32],
+    dummy_payload_fetch_tokens: &[[u8; 32]],
 ) -> Result<Option<PrivateHnswPrivateResultFetchPlan>, PrivateHnswClientError> {
     match result_privacy {
         ResultPrivacyMode::IdsVisible => Ok(None),
@@ -512,6 +512,12 @@ pub fn plan_private_hnsw_private_result_fetch_tokens(
             if fixed_result_k == 0 || result.hits.len() > fixed_result_k {
                 return Err(PrivateHnswClientError::InvalidSearchConfig(
                     "fixed_result_k",
+                ));
+            }
+            let padding_count = fixed_result_k - result.hits.len();
+            if dummy_payload_fetch_tokens.len() < padding_count {
+                return Err(PrivateHnswClientError::InvalidSearchConfig(
+                    "dummy_payload_fetch_tokens",
                 ));
             }
             validate_private_hnsw_search_result_privacy(result_privacy, result)?;
@@ -523,7 +529,13 @@ pub fn plan_private_hnsw_private_result_fetch_tokens(
                         .ok_or(PrivateHnswClientError::MissingPayloadFetchToken)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            payload_fetch_tokens.resize(fixed_result_k, dummy_payload_fetch_token);
+            payload_fetch_tokens.extend_from_slice(&dummy_payload_fetch_tokens[..padding_count]);
+            let mut seen = BTreeSet::new();
+            if !payload_fetch_tokens.iter().all(|token| seen.insert(*token)) {
+                return Err(PrivateHnswClientError::InvalidSearchConfig(
+                    "payload_fetch_tokens",
+                ));
+            }
             Ok(Some(PrivateHnswPrivateResultFetchPlan {
                 payload_fetch_tokens,
                 real_result_count: result.hits.len(),
@@ -5199,7 +5211,7 @@ mod tests {
                 ResultPrivacyMode::IdsVisible,
                 &result,
                 4,
-                [99; 32],
+                &[],
             )
             .unwrap(),
             None
@@ -5209,7 +5221,7 @@ mod tests {
             ResultPrivacyMode::PrivatePayloadOramRequired,
             &result,
             4,
-            [99; 32],
+            &[[99; 32], [100; 32]],
         )
         .unwrap()
         .unwrap();
@@ -5218,12 +5230,12 @@ mod tests {
         assert_eq!(plan.fixed_result_k, 4);
         assert_eq!(
             plan.payload_fetch_tokens,
-            vec![[11; 32], [12; 32], [99; 32], [99; 32]]
+            vec![[11; 32], [12; 32], [99; 32], [100; 32]]
         );
     }
 
     #[test]
-    fn private_result_fetch_plan_rejects_missing_or_oversized_token_batch() {
+    fn private_result_fetch_plan_rejects_missing_oversized_or_duplicate_token_batch() {
         let missing_token = PrivateHnswSearchResult {
             hits: vec![PrivateHnswSearchHit {
                 node_id: [1; 32],
@@ -5239,7 +5251,7 @@ mod tests {
                 ResultPrivacyMode::PrivatePayloadOramRequired,
                 &missing_token,
                 1,
-                [99; 32],
+                &[],
             ),
             Err(PrivateHnswClientError::MissingPayloadFetchToken)
         );
@@ -5259,10 +5271,32 @@ mod tests {
                 ResultPrivacyMode::PrivatePayloadOramRequired,
                 &one_hit,
                 0,
-                [99; 32],
+                &[],
             ),
             Err(PrivateHnswClientError::InvalidSearchConfig(
                 "fixed_result_k"
+            ))
+        );
+        assert_eq!(
+            plan_private_hnsw_private_result_fetch_tokens(
+                ResultPrivacyMode::PrivatePayloadOramRequired,
+                &one_hit,
+                3,
+                &[[99; 32]],
+            ),
+            Err(PrivateHnswClientError::InvalidSearchConfig(
+                "dummy_payload_fetch_tokens"
+            ))
+        );
+        assert_eq!(
+            plan_private_hnsw_private_result_fetch_tokens(
+                ResultPrivacyMode::PrivatePayloadOramRequired,
+                &one_hit,
+                3,
+                &[[99; 32], [99; 32]],
+            ),
+            Err(PrivateHnswClientError::InvalidSearchConfig(
+                "payload_fetch_tokens"
             ))
         );
 
@@ -5289,7 +5323,7 @@ mod tests {
                 ResultPrivacyMode::PrivatePayloadOramRequired,
                 &too_many_hits,
                 1,
-                [99; 32],
+                &[],
             ),
             Err(PrivateHnswClientError::InvalidSearchConfig(
                 "fixed_result_k"

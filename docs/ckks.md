@@ -878,10 +878,15 @@ Merkle metadata, and runtime Ed25519 signatures. The SDK search result now
 propagates each node block's `payload_fetch_token`, and a client-side helper
 fails closed when `private_payload_oram_required` hits do not all carry payload
 fetch tokens. A follow-on SDK helper turns those hit tokens into an exactly
-`fixed_result_k` private result ORAM fetch-token batch, padding with a caller
-provided dummy token so the eventual result fetch has fixed volume. Server-side
-HNSW manifest/session policy still rejects that result privacy mode until the
-full result fetch-token workflow is wired through. Do not advertise
+`fixed_result_k` private result ORAM fetch-token batch, padding from a caller
+provided distinct dummy-token pool so the eventual result fetch has fixed
+logical volume. The private result ORAM client contract can now map that fixed
+token batch through the client-held token-position map into session
+`read_buckets` bucket-id batches and rejects missing token positions, duplicate
+fetch tokens, duplicate token-position entries, and out-of-range leaves before a
+server request is built. Server-side HNSW manifest/session policy still rejects
+that result privacy mode until the full result fetch-token workflow is wired
+through. Do not advertise
 `private_payload_oram_required` as a working result-private fetch mode for this
 provider version.
 The crypto crate reserves the future payload/result ORAM manifest shape through
