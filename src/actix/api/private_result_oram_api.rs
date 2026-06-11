@@ -306,7 +306,9 @@ mod private_result_oram_rest_tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::common::private_hnsw_wire_fixture::{route_e2e_guard, test_dispatcher};
+    use crate::common::private_hnsw_wire_fixture::{
+        route_e2e_guard, test_dispatcher, test_distributed_dispatcher,
+    };
     use crate::settings::{CryptoInstanceConfig, CryptoSettings};
 
     const COLLECTION_NAME: &str = "docs";
@@ -814,6 +816,76 @@ mod private_result_oram_rest_tests {
             let close_uri =
                 format!("/collections/docs/private-result-oram/session/{session_id}/close");
             let _ = post_json_ok!(close_uri.as_str(), serde_json::json!({}));
+        });
+    }
+
+    #[test]
+    fn open_session_rest_route_rejects_distributed_epoch_mode() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateResultRouteFixture::build();
+        let settings = fixture.settings();
+        let (_temp, dispatcher) = test_distributed_dispatcher();
+        actix_web::rt::System::new().block_on(async {
+            create_private_result_collection(&dispatcher).await;
+            let app = actix_test::init_service(
+                App::new()
+                    .app_data(web::Data::new(dispatcher.clone()))
+                    .app_data(web::Data::new(settings.clone()))
+                    .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
+                    .configure(config_private_result_oram_api),
+            )
+            .await;
+
+            let manifest_response = actix_test::call_service(
+                &app,
+                actix_test::TestRequest::post()
+                    .uri("/collections/docs/private-result-oram/manifest")
+                    .set_json(&UploadPrivateResultOramManifestRequest {
+                        manifest: fixture.manifest.clone(),
+                        signature: fixture.signature.clone(),
+                    })
+                    .to_request(),
+            )
+            .await;
+            let manifest_status = manifest_response.status();
+            let manifest_body_bytes = actix_test::read_body(manifest_response).await;
+            let manifest_body = String::from_utf8_lossy(&manifest_body_bytes);
+            assert_eq!(manifest_status, StatusCode::OK, "{manifest_body}");
+
+            let bucket_response = actix_test::call_service(
+                &app,
+                actix_test::TestRequest::post()
+                    .uri("/collections/docs/private-result-oram/buckets")
+                    .set_json(&UploadPrivateResultOramBucketsRequest {
+                        index_epoch: fixture.manifest.index_epoch,
+                        root_hash: fixture.manifest.root_hash.clone(),
+                        buckets: fixture.buckets.clone(),
+                    })
+                    .to_request(),
+            )
+            .await;
+            let bucket_status = bucket_response.status();
+            let bucket_body_bytes = actix_test::read_body(bucket_response).await;
+            let bucket_body = String::from_utf8_lossy(&bucket_body_bytes);
+            assert_eq!(bucket_status, StatusCode::OK, "{bucket_body}");
+
+            let session_response = actix_test::call_service(
+                &app,
+                actix_test::TestRequest::post()
+                    .uri("/collections/docs/private-result-oram/session")
+                    .set_json(&OpenPrivateResultOramSessionRequest {
+                        client_id: "tenant-a/distributed-result-sdk-instance".to_string(),
+                        desired_epoch: BASE_EPOCH,
+                        fixed_budget: true,
+                    })
+                    .to_request(),
+            )
+            .await;
+            let status = session_response.status();
+            let body_bytes = actix_test::read_body(session_response).await;
+            let body = String::from_utf8_lossy(&body_bytes);
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert!(body.contains("consensus-backed epoch/root CAS"), "{body}");
         });
     }
 }
