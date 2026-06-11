@@ -522,8 +522,8 @@ mod private_hnsw_grpc_tests {
     use crate::common::private_hnsw_wire_fixture::{
         BASE_EPOCH, COLLECTION_ID, COLLECTION_NAME, MAX_CIPHERTEXT_BYTES, NEXT_EPOCH,
         PrivateHnswRouteWireFixture, SESSION_ID, SIGNING_KEY_ID, VECTOR_NAME,
-        create_private_hnsw_collection, route_e2e_guard, test_dispatcher,
-        test_distributed_dispatcher,
+        create_private_hnsw_collection, create_private_hnsw_collection_with_private_result_oram,
+        route_e2e_guard, test_dispatcher, test_distributed_dispatcher,
     };
 
     fn sample_manifest() -> PrivateHnswOramManifest {
@@ -3620,6 +3620,89 @@ mod private_hnsw_grpc_tests {
                 err.message()
                     .contains("requires a private-result-oram/v1 payload rule")
             );
+        });
+    }
+
+    #[test]
+    fn manifest_upload_grpc_route_accepts_result_private_with_result_oram_binding() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded()
+            .with_result_privacy(ResultPrivacyMode::PrivatePayloadOramRequired);
+        let settings = fixture.route_settings_with_private_result_oram();
+        let (_temp, dispatcher) = test_dispatcher();
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection_with_private_result_oram(&dispatcher).await;
+            let service =
+                PrivateHnswOramService::new(Arc::new(dispatcher.clone()), settings.clone());
+
+            PrivateHnswOram::upload_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                    signature: Some(signature_to_proto(fixture.manifest_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap();
+
+            PrivateHnswOram::upload_private_hnsw_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateHnswBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: fixture
+                        .encrypted_build
+                        .buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            )
+            .await
+            .unwrap();
+
+            let session = PrivateHnswOram::open_private_hnsw_session(
+                &service,
+                Request::new(grpc::OpenPrivateHnswSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    client_id: "tenant-a/grpc-sdk-instance-private-result".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: result_privacy_to_proto(
+                        ResultPrivacyMode::PrivatePayloadOramRequired,
+                    ),
+                }),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            assert_eq!(session.index_epoch, BASE_EPOCH);
+            assert_eq!(session.collection_id, COLLECTION_ID);
+            assert_eq!(
+                manifest_from_proto(session.manifest.unwrap())
+                    .unwrap()
+                    .result_privacy,
+                ResultPrivacyMode::PrivatePayloadOramRequired
+            );
+
+            let closed = PrivateHnswOram::close_private_hnsw_session(
+                &service,
+                Request::new(grpc::ClosePrivateHnswSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id,
+                }),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            assert!(closed.closed);
         });
     }
 
