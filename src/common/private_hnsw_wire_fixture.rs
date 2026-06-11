@@ -45,6 +45,8 @@ pub(crate) const COLLECTION_NAME: &str = "docs";
 pub(crate) const COLLECTION_ID: &str = "12345678-90ab-cdef-1234-567890abcdef";
 pub(crate) const VECTOR_NAME: &str = "text";
 pub(crate) const KEY_ID: &str = "tenant-a/vector-private-rk";
+pub(crate) const RESULT_KEY_ID: &str = "tenant-a:result-private-rk";
+pub(crate) const RESULT_SIGNING_KEY_ID: &str = "tenant-a/private-result-signing-v1";
 pub(crate) const RK_EPOCH: u64 = 7;
 pub(crate) const SIGNING_KEY_ID: &str = "tenant-a/private-hnsw-signing-v1";
 pub(crate) const SESSION_ID: &str = "session-1";
@@ -196,6 +198,12 @@ impl PrivateHnswRouteWireFixture {
         }
     }
 
+    pub(crate) fn with_result_privacy(mut self, result_privacy: ResultPrivacyMode) -> Self {
+        self.manifest.result_privacy = result_privacy;
+        self.manifest_signature = self.sign_manifest(&self.manifest);
+        self
+    }
+
     pub(crate) fn read_batch_for_leaf(
         &self,
         leaf: u64,
@@ -335,6 +343,46 @@ impl PrivateHnswRouteWireFixture {
             )]),
             ..CryptoSettings::default()
         };
+        settings
+    }
+
+    pub(crate) fn route_settings_with_private_result_oram(&self) -> Settings {
+        let mut settings = self.route_settings();
+        settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["result_privacy"] = json!("private_payload_oram_required");
+        settings.crypto.instances.insert(
+            "docs_private_result_oram_v1".to_string(),
+            CryptoInstanceConfig {
+                provider: qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+                materials: HashMap::new(),
+                backend_ref: None,
+                options: json!({
+                    "key_id": RESULT_KEY_ID,
+                    "expected_rk_id": RESULT_KEY_ID,
+                    "min_rk_epoch": RK_EPOCH,
+                    "max_rk_epoch": RK_EPOCH,
+                    "oram": {
+                        "kind": "path_oram",
+                        "bucket_size": 4,
+                        "block_size_bytes": 8192,
+                        "tree_height": 24,
+                        "path_batch_size": 8
+                    },
+                    "integrity": {
+                        "manifest_signature_required": true,
+                        "commit_signature_required": true,
+                        "merkle_root_required": true
+                    },
+                    "signature_public_keys": {
+                        RESULT_SIGNING_KEY_ID: BASE64URL_NOPAD.encode(&[13_u8; 32])
+                    }
+                }),
+            },
+        );
         settings
     }
 
@@ -495,6 +543,38 @@ pub(crate) fn route_e2e_guard() -> MutexGuard<'static, ()> {
 }
 
 pub(crate) async fn create_private_hnsw_collection(dispatcher: &Dispatcher) {
+    create_private_hnsw_collection_with_result_oram_rule(dispatcher, false).await
+}
+
+pub(crate) async fn create_private_hnsw_collection_with_private_result_oram(
+    dispatcher: &Dispatcher,
+) {
+    create_private_hnsw_collection_with_result_oram_rule(dispatcher, true).await
+}
+
+async fn create_private_hnsw_collection_with_result_oram_rule(
+    dispatcher: &Dispatcher,
+    include_private_result_oram: bool,
+) {
+    let mut rules = vec![EncryptionRuleRef {
+        id: "text_private_hnsw".to_string(),
+        selector: EncryptionSelector::VectorNames {
+            names: vec![VECTOR_NAME.to_string()],
+        },
+        instance: "docs_private_hnsw_v1".to_string(),
+        binding: Some(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING.to_string()),
+    }];
+    if include_private_result_oram {
+        rules.push(EncryptionRuleRef {
+            id: "payload_private_result_oram".to_string(),
+            selector: EncryptionSelector::PayloadPaths {
+                paths: vec!["body".to_string()],
+            },
+            instance: "docs_private_result_oram_v1".to_string(),
+            binding: Some(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING.to_string()),
+        });
+    }
+
     dispatcher
         .submit_collection_meta_op(
             CollectionMetaOperations::CreateCollection(
@@ -524,14 +604,7 @@ pub(crate) async fn create_private_hnsw_collection(dispatcher: &Dispatcher) {
                             crypto_schema_version: 1,
                             encryption_epoch: RK_EPOCH,
                             migration_state: CryptoMigrationState::Active,
-                            rules: vec![EncryptionRuleRef {
-                                id: "text_private_hnsw".to_string(),
-                                selector: EncryptionSelector::VectorNames {
-                                    names: vec![VECTOR_NAME.to_string()],
-                                },
-                                instance: "docs_private_hnsw_v1".to_string(),
-                                binding: Some(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING.to_string()),
-                            }],
+                            rules,
                         }),
                         strict_mode_config: None,
                         uuid: Some(Uuid::parse_str(COLLECTION_ID).unwrap()),

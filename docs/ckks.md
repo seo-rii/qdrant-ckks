@@ -664,8 +664,9 @@ ORAM path reads are served. Session open also requires encrypted bucket/Merkle
 metadata for the signed manifest epoch/root, so a manifest-only upload state
 does not open a session. Session open requests with `fixed_budget=false` in
 strict mode or a non-current desired epoch are rejected before any ORAM path
-reads are served. `private_payload_oram_required` remains rejected at HNSW
-manifest/session policy until result-token linkage is implemented. Client id
+reads are served. `private_payload_oram_required` is accepted at HNSW
+manifest/session policy only when the collection also has a
+`private-result-oram/v1` payload binding; otherwise it fails closed. Client id
 shape errors are sanitized without echoing the submitted client id; session
 clients must use non-empty safe ASCII resource-id characters within the
 configured length bound.
@@ -838,10 +839,10 @@ budget, before bucket reads are served. Valid `read_paths` calls must carry an
 Ed25519 client signature over
 collection/vector identity, key lineage, epoch/root, path labels, and padding
 metadata before encrypted buckets are returned.
-Snapshot restore preflight follows the same MVP result-privacy boundary:
-private HNSW ORAM manifests with `private_payload_oram_required` are rejected
-until HNSW result-token linkage to the result ORAM provider exists. Restore
-preflight also checks every
+Snapshot restore preflight follows the same result-privacy boundary: private
+HNSW ORAM manifests with `private_payload_oram_required` require a configured
+private result ORAM payload binding and corresponding result ORAM snapshot store.
+Restore preflight also checks every
 manifest-range bucket for the manifest-derived fixed ciphertext size and verifies
 each bucket commitment against collection/vector/key lineage, bucket epoch, and
 `ciphertext_sha256` before accepting the Merkle root.
@@ -904,11 +905,13 @@ before exposing payload bytes to the caller. A canonical plaintext client-state
 snapshot shape now round-trips the result ORAM token position map and stash for
 client-side backup validation, and an encrypted snapshot helper seals that backup
 under a client-derived state key with collection/key/epoch/root AAD plus
-ciphertext hash checks. Server-side HNSW manifest/session policy still rejects
-that result privacy mode until the full result fetch-token workflow is wired
-through. Do not advertise
-`private_payload_oram_required` as a working result-private fetch mode for this
-provider version.
+ciphertext hash checks. Server-side HNSW manifest upload, bucket upload, session
+open, and snapshot restore preflight now accept
+`private_payload_oram_required` only when the same collection also has a
+`private-result-oram/v1` payload rule backed by
+`payload/private-result-oram@v1`; without that binding they continue to fail
+closed. Normal Qdrant search APIs remain client-led-session-only for private
+HNSW vectors.
 The crypto crate reserves the future payload/result ORAM manifest shape through
 `PrivateResultOramManifest`, `PrivateResultOramBucket`, and
 `private_result_oram_manifest_signature_message`. It can validate manifest

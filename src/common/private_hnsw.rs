@@ -15,13 +15,14 @@ use collection::private_hnsw_oram_store::{
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     DistanceKind, FixedBudgetParams, OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
-    PRIVATE_HNSW_ORAM_BINDING, PrivateHnswBucketAeadContext, PrivateHnswManifestValidationContext,
-    PrivateHnswOramBucket, PrivateHnswOramManifest, PrivateHnswOramReadPathsSignatureInput,
-    PrivateHnswOramSignature, PrivateHnswParams, PrivateHnswSignatureVerification,
-    ResultPrivacyMode, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, decode_private_hnsw_oram_leaf_label,
-    private_hnsw_bucket_commitment, private_hnsw_oram_bucket_ciphertext_bytes,
-    private_hnsw_oram_bucket_count, private_hnsw_oram_bucket_ids_for_leaf,
-    validate_private_hnsw_oram_manifest, validate_private_hnsw_oram_manifest_signature_shape,
+    PRIVATE_HNSW_ORAM_BINDING, PRIVATE_RESULT_ORAM_BINDING, PrivateHnswBucketAeadContext,
+    PrivateHnswManifestValidationContext, PrivateHnswOramBucket, PrivateHnswOramManifest,
+    PrivateHnswOramReadPathsSignatureInput, PrivateHnswOramSignature, PrivateHnswParams,
+    PrivateHnswSignatureVerification, ResultPrivacyMode, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+    decode_private_hnsw_oram_leaf_label, private_hnsw_bucket_commitment,
+    private_hnsw_oram_bucket_ciphertext_bytes, private_hnsw_oram_bucket_count,
+    private_hnsw_oram_bucket_ids_for_leaf, validate_private_hnsw_oram_manifest,
+    validate_private_hnsw_oram_manifest_signature_shape,
     validate_private_hnsw_oram_read_paths_signature,
 };
 use segment::types::Distance;
@@ -335,6 +336,7 @@ struct ResolvedPrivateHnswContext {
     expected_dim: u32,
     expected_distance: DistanceKind,
     expected_result_privacy: ResultPrivacyMode,
+    private_result_oram_binding_configured: bool,
     expected_hnsw: PrivateHnswParams,
     expected_oram: OramParams,
     expected_fixed_budget: FixedBudgetParams,
@@ -445,9 +447,11 @@ impl ResolvedPrivateHnswContext {
                 "private HNSW ORAM manifest result_privacy does not match runtime instance",
             ));
         }
-        if manifest.result_privacy != ResultPrivacyMode::IdsVisible {
+        if manifest.result_privacy == ResultPrivacyMode::PrivatePayloadOramRequired
+            && !self.private_result_oram_binding_configured
+        {
             return Err(StorageError::bad_request(format!(
-                "private HNSW ORAM result_privacy=private_payload_oram_required requires HNSW result-token linkage to {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}, which is not implemented in this MVP"
+                "private HNSW ORAM result_privacy=private_payload_oram_required requires a {PRIVATE_RESULT_ORAM_BINDING} payload rule backed by {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}"
             )));
         }
         if manifest.hnsw != self.expected_hnsw {
@@ -579,6 +583,7 @@ pub async fn do_get_private_hnsw_manifest(
         &collection_crypto_id,
         vector_name,
         instance,
+        has_private_result_oram_binding(settings, &encryption),
     )?;
     let public_key = signature_public_key(instance, &signature.key_id)?;
     let resolved = ResolvedPrivateHnswContext {
@@ -639,6 +644,7 @@ pub async fn do_upload_private_hnsw_buckets(
         &collection_crypto_id,
         vector_name,
         instance,
+        has_private_result_oram_binding(settings, &encryption),
     )?;
     let public_key = signature_public_key(instance, &signature.key_id)?;
     let resolved = ResolvedPrivateHnswContext {
@@ -744,6 +750,7 @@ pub async fn do_open_private_hnsw_session(
         &collection_crypto_id,
         vector_name,
         instance,
+        has_private_result_oram_binding(settings, &encryption),
     )?;
     let public_key = signature_public_key(instance, &signature.key_id)?;
     let resolved = ResolvedPrivateHnswContext {
@@ -1112,6 +1119,7 @@ pub fn validate_recovered_private_hnsw_oram_snapshot_signatures(
                 &collection_crypto_id,
                 vector_name,
                 instance,
+                has_private_result_oram_binding(settings, &encryption),
             )?;
             let public_key = signature_public_key(instance, &signature.key_id)?;
             let resolved = ResolvedPrivateHnswContext {
@@ -1164,6 +1172,7 @@ async fn resolve_private_hnsw_context(
         &collection_crypto_id,
         vector_name,
         instance,
+        has_private_result_oram_binding(settings, &encryption),
     )?;
     Ok(ResolvedPrivateHnswContext {
         collection_path: collection.path().to_path_buf(),
@@ -1213,6 +1222,20 @@ fn private_hnsw_instance<'a>(
         )));
     }
     Ok(instance)
+}
+
+fn has_private_result_oram_binding(
+    settings: &Settings,
+    encryption: &CollectionEncryptionConfig,
+) -> bool {
+    encryption.rules.iter().any(|rule| {
+        rule.binding.as_deref() == Some(PRIVATE_RESULT_ORAM_BINDING)
+            && settings
+                .crypto
+                .instances
+                .get(&rule.instance)
+                .is_some_and(|instance| instance.provider == PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
+    })
 }
 
 fn read_uploaded_manifest(
@@ -1378,6 +1401,7 @@ fn manifest_context_from_runtime(
     collection_crypto_id: &str,
     vector_name: &str,
     instance: &CryptoInstanceConfig,
+    private_result_oram_binding_configured: bool,
 ) -> StorageResult<ResolvedPrivateHnswContext> {
     let vector_params = params.vectors.get_params(vector_name).ok_or_else(|| {
         CollectionError::bad_input(format!(
@@ -1410,6 +1434,7 @@ fn manifest_context_from_runtime(
         expected_dim,
         expected_distance,
         expected_result_privacy,
+        private_result_oram_binding_configured,
         expected_hnsw,
         expected_oram,
         expected_fixed_budget,
@@ -1513,6 +1538,7 @@ async fn collection_context_for_request(
         &collection_crypto_id,
         vector_name,
         instance,
+        has_private_result_oram_binding(settings, &encryption),
     )?;
     let public_key = if let Some(signature_key_id) = signature_key_id {
         signature_public_key(instance, signature_key_id)?

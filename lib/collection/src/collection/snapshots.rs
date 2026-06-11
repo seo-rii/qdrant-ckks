@@ -693,6 +693,7 @@ fn validate_private_hnsw_oram_vector_snapshot(
 
     let store = PrivateHnswOramStore::new(collection_dir, vector_name)?;
     let (manifest, signature) = store.read_manifest()?;
+    let private_result_oram_configured = private_result_oram_configured(params)?;
     validate_private_hnsw_oram_restore_manifest(
         &manifest,
         &signature,
@@ -700,6 +701,7 @@ fn validate_private_hnsw_oram_vector_snapshot(
         vector_name,
         expected_dim,
         expected_distance,
+        private_result_oram_configured,
     )?;
 
     let current_epoch = store.read_current_epoch()?;
@@ -963,16 +965,18 @@ fn validate_private_hnsw_oram_restore_manifest(
     vector_name: &str,
     expected_dim: u32,
     expected_distance: DistanceKind,
+    private_result_oram_configured: bool,
 ) -> CollectionResult<()> {
     validate_private_hnsw_oram_manifest_shape(manifest).map_err(private_hnsw_restore_error)?;
     validate_private_hnsw_oram_manifest_signature_shape(signature)
         .map_err(private_hnsw_restore_error)?;
-    if manifest.result_privacy != ResultPrivacyMode::IdsVisible {
+    if manifest.result_privacy == ResultPrivacyMode::PrivatePayloadOramRequired
+        && !private_result_oram_configured
+    {
         return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM snapshot restore supports result_privacy=ids_visible only; \
-             private_payload_oram_required requires {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}, \
-             but {PRIVATE_RESULT_ORAM_BINDING} binding and result-private restore support are not \
-             implemented yet"
+            "private HNSW ORAM snapshot restore result_privacy=private_payload_oram_required \
+             requires a {PRIVATE_RESULT_ORAM_BINDING} payload rule backed by \
+             {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}"
         )));
     }
     if signature.key_id != manifest.owner_signing_key_id {
@@ -1248,6 +1252,27 @@ mod tests {
             uuid: Some(uuid),
             metadata: None,
         }
+    }
+
+    fn private_hnsw_with_result_config(uuid: Uuid) -> CollectionConfigInternal {
+        let mut config = private_hnsw_config(uuid);
+        let result_config = private_result_config(uuid);
+        let result_rule = result_config
+            .params
+            .encryption
+            .unwrap()
+            .rules
+            .into_iter()
+            .next()
+            .unwrap();
+        config
+            .params
+            .encryption
+            .as_mut()
+            .unwrap()
+            .rules
+            .push(result_rule);
+        config
     }
 
     fn private_hnsw_manifest(collection_id: String) -> PrivateHnswOramManifest {
@@ -2002,7 +2027,41 @@ mod tests {
             temp_dir.path(),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("result_privacy=ids_visible"));
+        assert!(
+            err.to_string()
+                .contains("requires a private-result-oram/v1 payload rule")
+        );
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_accepts_result_private_with_result_oram_binding() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-result-private-allowed")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_with_result_config(uuid);
+        let mut hnsw_manifest = private_hnsw_manifest(uuid.to_string());
+        hnsw_manifest.result_privacy = ResultPrivacyMode::PrivatePayloadOramRequired;
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &hnsw_manifest);
+        let mut result_manifest = private_result_manifest(uuid.to_string());
+        result_manifest.key_id = "tenant-a/vector-private-rk".to_string();
+        result_manifest.rk_id = "tenant-a/vector-private-rk".to_string();
+        refresh_private_result_snapshot_manifest_root(&mut result_manifest);
+        write_private_result_snapshot_fixture(temp_dir.path(), &result_manifest);
+
+        Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap();
+        Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap();
     }
 
     #[cfg(unix)]
