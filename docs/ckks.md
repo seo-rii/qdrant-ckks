@@ -894,13 +894,16 @@ AAD, context-bound bucket commitments, ciphertext hash checks, and
 Merkle-proof-before-open verification for read batches. The SDK-side result ORAM
 state/access helper can now use the client-held token position map and stash to
 access a payload fetch token on a Path ORAM path, remap it to a new leaf, and
-produce plaintext writeback buckets for the commit path. A canonical plaintext
-client-state snapshot shape now round-trips the result ORAM token position map
-and stash for client-side backup validation, and an encrypted snapshot helper
-seals that backup under a client-derived state key with collection/key/epoch/root
-AAD plus ciphertext hash checks. Server-side HNSW manifest/session policy still
-rejects that result privacy mode until the full result fetch-token workflow is
-wired through. Do not advertise
+produce plaintext writeback buckets for the commit path. A higher-level verified
+token-fetch helper now consumes planned encrypted bucket batches, overlays local
+writebacks between batched Path ORAM accesses, returns payload blocks, and
+reseals unique writeback buckets for the result ORAM commit planner. A canonical
+plaintext client-state snapshot shape now round-trips the result ORAM token
+position map and stash for client-side backup validation, and an encrypted
+snapshot helper seals that backup under a client-derived state key with
+collection/key/epoch/root AAD plus ciphertext hash checks. Server-side HNSW
+manifest/session policy still rejects that result privacy mode until the full
+result fetch-token workflow is wired through. Do not advertise
 `private_payload_oram_required` as a working result-private fetch mode for this
 provider version.
 The crypto crate reserves the future payload/result ORAM manifest shape through

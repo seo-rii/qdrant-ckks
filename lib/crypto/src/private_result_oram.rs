@@ -723,6 +723,29 @@ pub struct PrivateResultOramReadBucketPlan {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateResultOramEncryptedBucketBatch {
+    pub index_epoch: u64,
+    pub root_hash: String,
+    pub bucket_count: u64,
+    pub proof_value: String,
+    pub buckets: Vec<PrivateResultOramBucket>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateResultOramTokenFetchAccess {
+    pub payload_fetch_token: [u8; 32],
+    pub old_leaf: u64,
+    pub new_leaf: u64,
+    pub block: PrivateResultOramPayloadBlockPlaintext,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateResultOramTokenFetchResult {
+    pub accesses: Vec<PrivateResultOramTokenFetchAccess>,
+    pub updated_buckets: Vec<PrivateResultOramBucket>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrivateResultOramCommitPlan {
     pub old_epoch: u64,
     pub new_epoch: u64,
@@ -1078,7 +1101,7 @@ pub fn access_private_result_oram_path(
         .position_map
         .insert(target_payload_fetch_token, remap_leaf);
 
-    let mut writeback_by_bucket = BTreeMap::new();
+    let mut writeback_by_bucket: BTreeMap<u64, PrivateResultOramPlaintextBucket> = BTreeMap::new();
     for bucket_id in expected_bucket_ids.iter().rev() {
         let mut blocks = Vec::with_capacity(config.bucket_size);
         while blocks.len() < config.bucket_size {
@@ -1468,6 +1491,181 @@ pub fn open_private_result_oram_verified_bucket_batch(
         .iter()
         .map(|bucket| open_private_result_oram_plaintext_bucket(keys, base_context, bucket, config))
         .collect()
+}
+
+pub fn fetch_private_result_oram_tokens_encrypted_verified<NextLeaf>(
+    keys: &PrivateResultOramClientKeys,
+    base_context: PrivateResultOramBucketAeadBaseContext<'_>,
+    expected_epoch: u64,
+    expected_root_hash: &str,
+    expected_bucket_count: u64,
+    writeback_epoch: u64,
+    state: &mut PrivateResultOramClientState,
+    config: PrivateResultOramClientConfig,
+    payload_fetch_tokens: &[[u8; 32]],
+    read_plan: &PrivateResultOramReadBucketPlan,
+    encrypted_batches: &[PrivateResultOramEncryptedBucketBatch],
+    mut next_remap_leaf: NextLeaf,
+) -> Result<PrivateResultOramTokenFetchResult, PrivateResultOramError>
+where
+    NextLeaf: FnMut() -> Result<u64, PrivateResultOramError>,
+{
+    validate_private_result_oram_client_config(config)?;
+    if payload_fetch_tokens.is_empty() {
+        return Err(PrivateResultOramError::InvalidFetchPlanField(
+            "payload_fetch_tokens",
+        ));
+    }
+    if read_plan.token_count != payload_fetch_tokens.len() {
+        return Err(PrivateResultOramError::InvalidFetchPlanField("read_plan"));
+    }
+    if read_plan.path_batch_size == 0 {
+        return Err(PrivateResultOramError::InvalidFetchPlanField(
+            "path_batch_size",
+        ));
+    }
+    if expected_bucket_count != private_result_oram_bucket_count(config.tree_height)? {
+        return Err(PrivateResultOramError::InvalidFetchPlanField(
+            "bucket_count",
+        ));
+    }
+
+    let expected_batch_count = payload_fetch_tokens
+        .chunks(read_plan.path_batch_size)
+        .count();
+    if read_plan.batches.len() != expected_batch_count {
+        return Err(PrivateResultOramError::InvalidFetchPlanField("batches"));
+    }
+    if encrypted_batches.len() != expected_batch_count {
+        return Err(PrivateResultOramError::InvalidFetchPlanField(
+            "encrypted_batches",
+        ));
+    }
+
+    let mut seen_tokens = BTreeSet::new();
+    for token in payload_fetch_tokens {
+        if !seen_tokens.insert(*token) {
+            return Err(PrivateResultOramError::DuplicatePayloadFetchToken);
+        }
+    }
+
+    let mut accesses = Vec::with_capacity(payload_fetch_tokens.len());
+    let mut writeback_by_bucket: BTreeMap<u64, PrivateResultOramPlaintextBucket> = BTreeMap::new();
+    for (batch_index, token_chunk) in payload_fetch_tokens
+        .chunks(read_plan.path_batch_size)
+        .enumerate()
+    {
+        let batch_plan = read_plan
+            .batches
+            .get(batch_index)
+            .ok_or(PrivateResultOramError::InvalidFetchPlanField("batches"))?;
+        let encrypted_batch = encrypted_batches.get(batch_index).ok_or(
+            PrivateResultOramError::InvalidFetchPlanField("encrypted_batches"),
+        )?;
+        if batch_plan.token_count != token_chunk.len() {
+            return Err(PrivateResultOramError::InvalidFetchPlanField("token_count"));
+        }
+        if batch_plan.bucket_ids.is_empty()
+            || !batch_plan
+                .bucket_ids
+                .windows(2)
+                .all(|window| window[0] < window[1])
+            || batch_plan
+                .bucket_ids
+                .iter()
+                .any(|bucket_id| *bucket_id >= expected_bucket_count)
+        {
+            return Err(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"));
+        }
+        if encrypted_batch.index_epoch != expected_epoch
+            || encrypted_batch.root_hash != expected_root_hash
+            || encrypted_batch.bucket_count != expected_bucket_count
+        {
+            return Err(PrivateResultOramError::MerkleProofMismatch);
+        }
+        let mut actual_bucket_ids = encrypted_batch
+            .buckets
+            .iter()
+            .map(|bucket| bucket.bucket_id)
+            .collect::<Vec<_>>();
+        actual_bucket_ids.sort_unstable();
+        if actual_bucket_ids != batch_plan.bucket_ids {
+            return Err(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"));
+        }
+
+        let mut plaintext_by_bucket = open_private_result_oram_verified_bucket_batch(
+            keys,
+            base_context,
+            config,
+            expected_epoch,
+            expected_root_hash,
+            expected_bucket_count,
+            &encrypted_batch.proof_value,
+            &encrypted_batch.buckets,
+        )?
+        .into_iter()
+        .map(|bucket| (bucket.bucket_id, bucket))
+        .collect::<BTreeMap<_, _>>();
+
+        for (bucket_id, bucket) in &writeback_by_bucket {
+            if plaintext_by_bucket.contains_key(bucket_id) {
+                plaintext_by_bucket.insert(*bucket_id, bucket.clone());
+            }
+        }
+
+        for payload_fetch_token in token_chunk {
+            let old_leaf = state
+                .position(payload_fetch_token)
+                .ok_or(PrivateResultOramError::MissingPosition)?;
+            let path_bucket_ids =
+                private_result_oram_bucket_ids_for_leaf(old_leaf, config.tree_height)?;
+            let path_buckets = path_bucket_ids
+                .iter()
+                .map(|bucket_id| {
+                    plaintext_by_bucket
+                        .get(bucket_id)
+                        .cloned()
+                        .ok_or(PrivateResultOramError::PathBucketMismatch)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let access = access_private_result_oram_path(
+                state,
+                config,
+                *payload_fetch_token,
+                &path_buckets,
+                next_remap_leaf()?,
+            )?;
+            for bucket in &access.writeback_buckets {
+                plaintext_by_bucket.insert(bucket.bucket_id, bucket.clone());
+                writeback_by_bucket.insert(bucket.bucket_id, bucket.clone());
+            }
+            accesses.push(PrivateResultOramTokenFetchAccess {
+                payload_fetch_token: *payload_fetch_token,
+                old_leaf: access.old_leaf,
+                new_leaf: access.new_leaf,
+                block: access.block,
+            });
+        }
+    }
+
+    let updated_buckets = writeback_by_bucket
+        .into_values()
+        .map(|bucket| {
+            seal_private_result_oram_plaintext_bucket(
+                keys,
+                base_context,
+                writeback_epoch,
+                &bucket,
+                config,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(PrivateResultOramTokenFetchResult {
+        accesses,
+        updated_buckets,
+    })
 }
 
 pub fn validate_private_result_oram_bucket_shape(
@@ -2634,6 +2832,65 @@ mod tests {
         }
     }
 
+    fn result_proof_sibling(
+        level: u32,
+        position: PrivateResultOramMerkleSiblingPosition,
+        hash: String,
+    ) -> PrivateResultOramMerkleSibling {
+        PrivateResultOramMerkleSibling {
+            level,
+            position,
+            hash,
+        }
+    }
+
+    fn result_proof_for_bucket_ids(
+        bucket_ids: &[u64],
+        index_epoch: u64,
+        root_hash: String,
+        commitments: &[String],
+    ) -> PrivateResultOramMerkleProof {
+        let levels = private_result_oram_merkle_levels(commitments).unwrap();
+        let leaves = bucket_ids
+            .iter()
+            .map(|bucket_id| {
+                let mut index = *bucket_id as usize;
+                let siblings = levels
+                    .iter()
+                    .enumerate()
+                    .take(levels.len().saturating_sub(1))
+                    .map(|(level, level_hashes)| {
+                        let sibling_index = if index % 2 == 0 { index + 1 } else { index - 1 };
+                        let position = if index % 2 == 0 {
+                            PrivateResultOramMerkleSiblingPosition::Right
+                        } else {
+                            PrivateResultOramMerkleSiblingPosition::Left
+                        };
+                        index /= 2;
+                        result_proof_sibling(
+                            level as u32,
+                            position,
+                            BASE64URL_NOPAD.encode(&level_hashes[sibling_index]),
+                        )
+                    })
+                    .collect();
+                PrivateResultOramMerkleProofLeaf {
+                    bucket_id: *bucket_id,
+                    leaf_hash: commitments[*bucket_id as usize].clone(),
+                    siblings,
+                }
+            })
+            .collect();
+
+        PrivateResultOramMerkleProof {
+            kind: PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND.to_string(),
+            index_epoch,
+            root_hash,
+            bucket_count: commitments.len() as u64,
+            leaves,
+        }
+    }
+
     #[test]
     fn result_oram_client_key_derivation_is_domain_separated() {
         let resource_key = SecretKey::from_bytes([7; 32]);
@@ -3066,6 +3323,278 @@ mod tests {
             )
             .unwrap(),
             *root_writeback
+        );
+    }
+
+    #[test]
+    fn encrypted_verified_token_fetch_opens_remaps_and_reseals_unique_writebacks() {
+        let keys = result_test_keys();
+        let base_context = result_bucket_base_context();
+        let config = result_client_config();
+        let bucket_count = private_result_oram_bucket_count(config.tree_height).unwrap();
+        let bucket_count_usize = usize::try_from(bucket_count).unwrap();
+        let block_a = payload_block(10);
+        let block_b = payload_block(11);
+
+        let mut plaintext_store = BTreeMap::new();
+        for bucket_id in 0..bucket_count {
+            plaintext_store.insert(
+                bucket_id,
+                empty_private_result_oram_plaintext_bucket(bucket_id, config).unwrap(),
+            );
+        }
+        for (leaf, block) in [(2, block_a.clone()), (3, block_b.clone())] {
+            let leaf_bucket_id = *private_result_oram_bucket_ids_for_leaf(leaf, config.tree_height)
+                .unwrap()
+                .last()
+                .unwrap();
+            let bucket = plaintext_store.get_mut(&leaf_bucket_id).unwrap();
+            let slot = bucket
+                .blocks
+                .iter_mut()
+                .find(|slot| slot.is_none())
+                .unwrap();
+            *slot = Some(block);
+        }
+
+        let encrypted_store = plaintext_store
+            .values()
+            .map(|bucket| {
+                let encrypted = seal_private_result_oram_plaintext_bucket(
+                    &keys,
+                    base_context,
+                    42,
+                    bucket,
+                    config,
+                )
+                .unwrap();
+                (bucket.bucket_id, encrypted)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let commitments = (0..bucket_count)
+            .map(|bucket_id| {
+                encrypted_store
+                    .get(&bucket_id)
+                    .unwrap()
+                    .bucket_commitment
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(commitments.len(), bucket_count_usize);
+        let root_hash = private_result_oram_merkle_root_for_commitments(&commitments).unwrap();
+        let manifest = PrivateResultOramManifest {
+            oram: OramParams {
+                kind: OramKind::PathOram,
+                bucket_size: config.bucket_size as u32,
+                block_size_bytes: config.block_size_bytes as u32,
+                tree_height: config.tree_height,
+                path_batch_size: 2,
+            },
+            bucket_count,
+            root_hash: root_hash.clone(),
+            logical_result_count: 2,
+            dummy_result_count: 0,
+            ..fixture_manifest()
+        };
+
+        let payload_fetch_tokens = [block_a.payload_fetch_token, block_b.payload_fetch_token];
+        let token_positions = [
+            PrivateResultOramFetchTokenPosition {
+                payload_fetch_token: block_a.payload_fetch_token,
+                leaf: 2,
+            },
+            PrivateResultOramFetchTokenPosition {
+                payload_fetch_token: block_b.payload_fetch_token,
+                leaf: 3,
+            },
+        ];
+        let read_plan = plan_private_result_oram_read_bucket_batches_for_fetch_tokens(
+            &manifest,
+            &payload_fetch_tokens,
+            &token_positions,
+        )
+        .unwrap();
+        assert_eq!(read_plan.batches.len(), 1);
+        assert_eq!(read_plan.batches[0].bucket_ids, vec![0, 1, 4, 9, 10]);
+
+        let bucket_ids = &read_plan.batches[0].bucket_ids;
+        let proof = result_proof_for_bucket_ids(bucket_ids, 42, root_hash.clone(), &commitments);
+        let encrypted_batch = PrivateResultOramEncryptedBucketBatch {
+            index_epoch: 42,
+            root_hash: root_hash.clone(),
+            bucket_count,
+            proof_value: serde_json::to_string(&proof).unwrap(),
+            buckets: bucket_ids
+                .iter()
+                .map(|bucket_id| encrypted_store.get(bucket_id).unwrap().clone())
+                .collect(),
+        };
+        let mut state = PrivateResultOramClientState::with_position_map(
+            [
+                (block_a.payload_fetch_token, 2),
+                (block_b.payload_fetch_token, 3),
+            ],
+            config.tree_height,
+        )
+        .unwrap();
+        let mut remaps = [0, 1].into_iter();
+
+        let result = fetch_private_result_oram_tokens_encrypted_verified(
+            &keys,
+            base_context,
+            42,
+            &root_hash,
+            bucket_count,
+            43,
+            &mut state,
+            config,
+            &payload_fetch_tokens,
+            &read_plan,
+            &[encrypted_batch],
+            || {
+                remaps
+                    .next()
+                    .ok_or(PrivateResultOramError::InvalidFetchPlanField("leaf"))
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.accesses.len(), 2);
+        assert_eq!(result.accesses[0].block, block_a);
+        assert_eq!(result.accesses[1].block, block_b);
+        assert_eq!(result.accesses[0].old_leaf, 2);
+        assert_eq!(result.accesses[0].new_leaf, 0);
+        assert_eq!(result.accesses[1].old_leaf, 3);
+        assert_eq!(result.accesses[1].new_leaf, 1);
+        assert_eq!(state.position(&block_a.payload_fetch_token), Some(0));
+        assert_eq!(state.position(&block_b.payload_fetch_token), Some(1));
+        assert!(
+            result
+                .updated_buckets
+                .iter()
+                .all(|bucket| bucket.index_epoch == 43)
+        );
+        assert_eq!(
+            result
+                .updated_buckets
+                .iter()
+                .map(|bucket| bucket.bucket_id)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 4, 9, 10]
+        );
+
+        let updated_bucket_one = result
+            .updated_buckets
+            .iter()
+            .find(|bucket| bucket.bucket_id == 1)
+            .unwrap();
+        let opened_bucket_one = open_private_result_oram_plaintext_bucket(
+            &keys,
+            base_context,
+            updated_bucket_one,
+            config,
+        )
+        .unwrap();
+        let mut bucket_one_tokens = opened_bucket_one
+            .blocks
+            .iter()
+            .flatten()
+            .map(|block| block.payload_fetch_token)
+            .collect::<Vec<_>>();
+        bucket_one_tokens.sort_unstable();
+        assert_eq!(
+            bucket_one_tokens,
+            vec![block_a.payload_fetch_token, block_b.payload_fetch_token]
+        );
+
+        let commit_plan = plan_private_result_oram_commit_for_manifest(
+            &manifest,
+            43,
+            &commitments,
+            &result.updated_buckets,
+        )
+        .unwrap();
+        assert_eq!(commit_plan.updated_buckets.len(), 5);
+        assert_ne!(commit_plan.new_root_hash, root_hash);
+    }
+
+    #[test]
+    fn encrypted_verified_token_fetch_rejects_bad_metadata_and_duplicate_tokens() {
+        let keys = result_test_keys();
+        let base_context = result_bucket_base_context();
+        let config = result_client_config();
+        let bucket_count = private_result_oram_bucket_count(config.tree_height).unwrap();
+        let block = payload_block(10);
+        let root_hash = BASE64URL_NOPAD.encode(&[42; 32]);
+        let mut state = PrivateResultOramClientState::with_position_map(
+            [(block.payload_fetch_token, 2)],
+            config.tree_height,
+        )
+        .unwrap();
+        let read_plan = PrivateResultOramReadBucketPlan {
+            batches: vec![PrivateResultOramReadBucketBatchPlan {
+                bucket_ids: vec![0, 1, 4, 9],
+                token_count: 1,
+            }],
+            token_count: 1,
+            path_batch_size: 1,
+        };
+        let bad_metadata_batch = PrivateResultOramEncryptedBucketBatch {
+            index_epoch: 42,
+            root_hash: BASE64URL_NOPAD.encode(&[99; 32]),
+            bucket_count,
+            proof_value: "{}".to_string(),
+            buckets: Vec::new(),
+        };
+        assert_eq!(
+            fetch_private_result_oram_tokens_encrypted_verified(
+                &keys,
+                base_context,
+                42,
+                &root_hash,
+                bucket_count,
+                43,
+                &mut state,
+                config,
+                &[block.payload_fetch_token],
+                &read_plan,
+                &[bad_metadata_batch],
+                || Ok(0),
+            ),
+            Err(PrivateResultOramError::MerkleProofMismatch)
+        );
+
+        let duplicate_plan = PrivateResultOramReadBucketPlan {
+            batches: vec![PrivateResultOramReadBucketBatchPlan {
+                bucket_ids: vec![0, 1, 4, 9],
+                token_count: 2,
+            }],
+            token_count: 2,
+            path_batch_size: 2,
+        };
+        let duplicate_batch = PrivateResultOramEncryptedBucketBatch {
+            index_epoch: 42,
+            root_hash: root_hash.clone(),
+            bucket_count,
+            proof_value: "{}".to_string(),
+            buckets: Vec::new(),
+        };
+        assert_eq!(
+            fetch_private_result_oram_tokens_encrypted_verified(
+                &keys,
+                base_context,
+                42,
+                &root_hash,
+                bucket_count,
+                43,
+                &mut state,
+                config,
+                &[block.payload_fetch_token, block.payload_fetch_token],
+                &duplicate_plan,
+                &[duplicate_batch],
+                || Ok(0),
+            ),
+            Err(PrivateResultOramError::DuplicatePayloadFetchToken)
         );
     }
 
