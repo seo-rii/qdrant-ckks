@@ -20,6 +20,9 @@ use crate::private_hnsw_oram::{
     private_hnsw_oram_read_paths_signature_message, validate_private_hnsw_oram_manifest,
     validate_private_hnsw_oram_manifest_shape, validate_private_hnsw_oram_manifest_signature_shape,
 };
+use crate::private_result_oram::{
+    PrivateResultOramPayloadBlockPlaintext, PrivateResultOramTokenFetchResult,
+};
 
 pub const PRIVATE_HNSW_NODE_AEAD_DOMAIN: &[u8] = b"qdrant-sec/private-hnsw-node-aead/v1";
 pub const PRIVATE_HNSW_BUCKET_AEAD_DOMAIN: &[u8] = b"qdrant-sec/private-hnsw-bucket-aead/v1";
@@ -453,6 +456,24 @@ pub struct PrivateHnswPrivateResultFetchPlan {
     pub fixed_result_k: usize,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrivateHnswPrivateResultPayload {
+    pub node_id: [u8; 32],
+    pub point_token: [u8; 32],
+    pub payload_fetch_token: [u8; 32],
+    pub distance: f32,
+    pub payload: Vec<u8>,
+    pub payload_generation: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrivateHnswPrivateResultPayloadFetch {
+    pub results: Vec<PrivateHnswPrivateResultPayload>,
+    pub real_result_count: usize,
+    pub fixed_result_k: usize,
+    pub fetched_token_count: usize,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateHnswSearchAccessMetrics {
@@ -543,6 +564,97 @@ pub fn plan_private_hnsw_private_result_fetch_tokens(
             }))
         }
     }
+}
+
+pub fn finalize_private_hnsw_private_result_fetch(
+    result: &PrivateHnswSearchResult,
+    fetch_plan: &PrivateHnswPrivateResultFetchPlan,
+    token_fetch_result: &PrivateResultOramTokenFetchResult,
+) -> Result<PrivateHnswPrivateResultPayloadFetch, PrivateHnswClientError> {
+    validate_private_hnsw_search_result_privacy(
+        ResultPrivacyMode::PrivatePayloadOramRequired,
+        result,
+    )?;
+    if fetch_plan.real_result_count != result.hits.len()
+        || fetch_plan.fixed_result_k != fetch_plan.payload_fetch_tokens.len()
+        || token_fetch_result.accesses.len() != fetch_plan.payload_fetch_tokens.len()
+    {
+        return Err(PrivateHnswClientError::InvalidSearchConfig(
+            "result_fetch_plan",
+        ));
+    }
+
+    let mut seen_tokens = BTreeSet::new();
+    if !fetch_plan
+        .payload_fetch_tokens
+        .iter()
+        .all(|token| seen_tokens.insert(*token))
+    {
+        return Err(PrivateHnswClientError::InvalidSearchConfig(
+            "payload_fetch_tokens",
+        ));
+    }
+
+    for (access, expected_token) in token_fetch_result
+        .accesses
+        .iter()
+        .zip(&fetch_plan.payload_fetch_tokens)
+    {
+        if access.payload_fetch_token != *expected_token
+            || access.block.payload_fetch_token != *expected_token
+        {
+            return Err(PrivateHnswClientError::InvalidSearchConfig(
+                "payload_fetch_tokens",
+            ));
+        }
+    }
+
+    let mut results = Vec::with_capacity(fetch_plan.real_result_count);
+    for (hit, access) in result
+        .hits
+        .iter()
+        .zip(token_fetch_result.accesses.iter())
+        .take(fetch_plan.real_result_count)
+    {
+        let payload_fetch_token = hit
+            .payload_fetch_token
+            .ok_or(PrivateHnswClientError::MissingPayloadFetchToken)?;
+        validate_private_hnsw_result_payload_block(hit, payload_fetch_token, &access.block)?;
+        results.push(PrivateHnswPrivateResultPayload {
+            node_id: hit.node_id,
+            point_token: hit.point_token,
+            payload_fetch_token,
+            distance: hit.distance,
+            payload: access.block.payload.clone(),
+            payload_generation: access.block.generation,
+        });
+    }
+
+    Ok(PrivateHnswPrivateResultPayloadFetch {
+        results,
+        real_result_count: fetch_plan.real_result_count,
+        fixed_result_k: fetch_plan.fixed_result_k,
+        fetched_token_count: token_fetch_result.accesses.len(),
+    })
+}
+
+fn validate_private_hnsw_result_payload_block(
+    hit: &PrivateHnswSearchHit,
+    payload_fetch_token: [u8; 32],
+    block: &PrivateResultOramPayloadBlockPlaintext,
+) -> Result<(), PrivateHnswClientError> {
+    if block.deleted {
+        return Err(PrivateHnswClientError::InvalidSearchConfig("payload_block"));
+    }
+    if block.payload_fetch_token != payload_fetch_token {
+        return Err(PrivateHnswClientError::InvalidSearchConfig(
+            "payload_fetch_tokens",
+        ));
+    }
+    if block.point_token != hit.point_token {
+        return Err(PrivateHnswClientError::InvalidSearchConfig("point_token"));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3583,6 +3695,7 @@ fn read_array_32(bytes: &[u8], cursor: &mut usize) -> Result<[u8; 32], PrivateHn
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::private_result_oram::PrivateResultOramTokenFetchAccess;
 
     #[test]
     fn private_hnsw_client_error_display_does_not_reflect_structured_values() {
@@ -3842,6 +3955,26 @@ mod tests {
             deleted: false,
             generation: 1,
             payload_fetch_token: None,
+        }
+    }
+
+    fn result_token_access(
+        payload_fetch_token: [u8; 32],
+        point_token: [u8; 32],
+        payload: Vec<u8>,
+    ) -> PrivateResultOramTokenFetchAccess {
+        PrivateResultOramTokenFetchAccess {
+            payload_fetch_token,
+            old_leaf: 0,
+            new_leaf: 1,
+            block: PrivateResultOramPayloadBlockPlaintext {
+                version: 1,
+                payload_fetch_token,
+                point_token,
+                payload,
+                deleted: false,
+                generation: 7,
+            },
         }
     }
 
@@ -5327,6 +5460,112 @@ mod tests {
             ),
             Err(PrivateHnswClientError::InvalidSearchConfig(
                 "fixed_result_k"
+            ))
+        );
+    }
+
+    #[test]
+    fn private_result_fetch_finalizer_maps_real_payloads_and_ignores_dummies() {
+        let result = PrivateHnswSearchResult {
+            hits: vec![
+                PrivateHnswSearchHit {
+                    node_id: [1; 32],
+                    point_token: [21; 32],
+                    payload_fetch_token: Some([11; 32]),
+                    distance: 0.25,
+                },
+                PrivateHnswSearchHit {
+                    node_id: [2; 32],
+                    point_token: [22; 32],
+                    payload_fetch_token: Some([12; 32]),
+                    distance: 0.5,
+                },
+            ],
+            accessed_leaf_labels: vec![],
+            completed_steps: 2,
+        };
+        let plan = plan_private_hnsw_private_result_fetch_tokens(
+            ResultPrivacyMode::PrivatePayloadOramRequired,
+            &result,
+            4,
+            &[[99; 32], [100; 32]],
+        )
+        .unwrap()
+        .unwrap();
+        let token_fetch = PrivateResultOramTokenFetchResult {
+            accesses: vec![
+                result_token_access([11; 32], [21; 32], vec![1, 2, 3]),
+                result_token_access([12; 32], [22; 32], vec![4, 5, 6]),
+                result_token_access([99; 32], [199; 32], vec![9]),
+                result_token_access([100; 32], [200; 32], vec![10]),
+            ],
+            updated_buckets: Vec::new(),
+        };
+
+        let payloads =
+            finalize_private_hnsw_private_result_fetch(&result, &plan, &token_fetch).unwrap();
+        assert_eq!(payloads.real_result_count, 2);
+        assert_eq!(payloads.fixed_result_k, 4);
+        assert_eq!(payloads.fetched_token_count, 4);
+        assert_eq!(payloads.results.len(), 2);
+        assert_eq!(payloads.results[0].node_id, [1; 32]);
+        assert_eq!(payloads.results[0].point_token, [21; 32]);
+        assert_eq!(payloads.results[0].payload_fetch_token, [11; 32]);
+        assert_eq!(payloads.results[0].distance, 0.25);
+        assert_eq!(payloads.results[0].payload, vec![1, 2, 3]);
+        assert_eq!(payloads.results[1].node_id, [2; 32]);
+        assert_eq!(payloads.results[1].payload, vec![4, 5, 6]);
+    }
+
+    #[test]
+    fn private_result_fetch_finalizer_rejects_mismatched_or_deleted_payloads() {
+        let result = PrivateHnswSearchResult {
+            hits: vec![PrivateHnswSearchHit {
+                node_id: [1; 32],
+                point_token: [21; 32],
+                payload_fetch_token: Some([11; 32]),
+                distance: 0.25,
+            }],
+            accessed_leaf_labels: vec![],
+            completed_steps: 1,
+        };
+        let plan = plan_private_hnsw_private_result_fetch_tokens(
+            ResultPrivacyMode::PrivatePayloadOramRequired,
+            &result,
+            1,
+            &[],
+        )
+        .unwrap()
+        .unwrap();
+
+        let wrong_point_token = PrivateResultOramTokenFetchResult {
+            accesses: vec![result_token_access([11; 32], [99; 32], vec![1])],
+            updated_buckets: Vec::new(),
+        };
+        assert_eq!(
+            finalize_private_hnsw_private_result_fetch(&result, &plan, &wrong_point_token),
+            Err(PrivateHnswClientError::InvalidSearchConfig("point_token"))
+        );
+
+        let mut deleted_access = result_token_access([11; 32], [21; 32], vec![1]);
+        deleted_access.block.deleted = true;
+        let deleted_payload = PrivateResultOramTokenFetchResult {
+            accesses: vec![deleted_access],
+            updated_buckets: Vec::new(),
+        };
+        assert_eq!(
+            finalize_private_hnsw_private_result_fetch(&result, &plan, &deleted_payload),
+            Err(PrivateHnswClientError::InvalidSearchConfig("payload_block"))
+        );
+
+        let wrong_token = PrivateResultOramTokenFetchResult {
+            accesses: vec![result_token_access([12; 32], [21; 32], vec![1])],
+            updated_buckets: Vec::new(),
+        };
+        assert_eq!(
+            finalize_private_hnsw_private_result_fetch(&result, &plan, &wrong_token),
+            Err(PrivateHnswClientError::InvalidSearchConfig(
+                "payload_fetch_tokens"
             ))
         );
     }
