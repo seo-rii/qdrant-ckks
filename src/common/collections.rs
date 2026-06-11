@@ -28,7 +28,7 @@ use collection::shards::resharding::ReshardKey;
 use collection::shards::shard::{PeerId, ShardId, ShardsPlacement};
 use collection::shards::transfer::{ShardTransfer, ShardTransferKey, ShardTransferRestart};
 use itertools::Itertools;
-use qdrant_sec::PRIVATE_HNSW_ORAM_BINDING;
+use qdrant_sec::{PRIVATE_HNSW_ORAM_BINDING, PRIVATE_RESULT_ORAM_BINDING};
 use rand::prelude::SliceRandom;
 use rand::seq::IteratorRandom;
 use storage::content_manager::collection_meta_ops::ShardTransferOperations::{Abort, Start};
@@ -325,7 +325,7 @@ pub async fn do_update_collection_cluster(
         &get_all_peer_ids(),
         &peer_metadata_by_id,
     )?;
-    reject_private_hnsw_cluster_transfer_until_supported(
+    reject_private_oram_cluster_transfer_until_supported(
         &collection_name,
         &collection_state.config,
         &operation,
@@ -1109,23 +1109,23 @@ fn validate_encrypted_cluster_data_movement_parity(
     Ok(())
 }
 
-fn reject_private_hnsw_cluster_transfer_until_supported(
+fn reject_private_oram_cluster_transfer_until_supported(
     collection_name: &str,
     config: &CollectionConfigInternal,
     operation: &ClusterOperations,
 ) -> Result<(), StorageError> {
     if !cluster_operation_starts_shard_transfer(operation)
-        || !collection_uses_private_hnsw_oram(config)
+        || !collection_uses_private_oram_bucket_store(config)
     {
         return Ok(());
     }
 
     Err(StorageError::BadRequest {
         description: format!(
-            "cannot start shard transfer for private HNSW ORAM collection {collection_name}: \
+            "cannot start shard transfer for private ORAM collection {collection_name}: \
              encrypted ORAM bucket transfer and consensus-backed epoch/root ownership are not \
              implemented for shard transfer; use collection snapshot/restore preflight or keep \
-             the private HNSW ORAM collection on the current shard owner",
+             the private ORAM collection on the current shard owner",
         ),
     })
 }
@@ -1140,15 +1140,17 @@ fn cluster_operation_starts_shard_transfer(operation: &ClusterOperations) -> boo
     )
 }
 
-fn collection_uses_private_hnsw_oram(config: &CollectionConfigInternal) -> bool {
+fn collection_uses_private_oram_bucket_store(config: &CollectionConfigInternal) -> bool {
     config
         .params
         .effective_encryption()
         .is_some_and(|encryption| {
-            encryption
-                .rules
-                .iter()
-                .any(|rule| rule.binding.as_deref() == Some(PRIVATE_HNSW_ORAM_BINDING))
+            encryption.rules.iter().any(|rule| {
+                matches!(
+                    rule.binding.as_deref(),
+                    Some(PRIVATE_HNSW_ORAM_BINDING) | Some(PRIVATE_RESULT_ORAM_BINDING)
+                )
+            })
         })
 }
 
@@ -1411,15 +1413,73 @@ mod tests {
         }
     }
 
+    fn private_result_oram_collection_config() -> CollectionConfigInternal {
+        CollectionConfigInternal {
+            params: collection::config::CollectionParams {
+                encryption: Some(collection::config::CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a/result-private-rk".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 7,
+                    migration_state: collection::config::CryptoMigrationState::Active,
+                    rules: vec![collection::config::EncryptionRuleRef {
+                        id: "body_private_result_oram".to_string(),
+                        selector: collection::config::EncryptionSelector::PayloadPaths {
+                            paths: vec!["body".to_string()],
+                        },
+                        instance: "docs_private_result_oram".to_string(),
+                        binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
+                    }],
+                }),
+                ..collection::config::CollectionParams::empty()
+            },
+            hnsw_config: Default::default(),
+            optimizer_config: collection::optimizers_builder::OptimizersConfig {
+                deleted_threshold: 0.1,
+                vacuum_min_vector_number: 1000,
+                default_segment_number: 0,
+                max_segment_size: None,
+                #[expect(deprecated)]
+                memmap_threshold: None,
+                indexing_threshold: Some(100_000),
+                flush_interval_sec: 60,
+                max_optimization_threads: Some(0),
+                prevent_unoptimized: None,
+            },
+            wal_config: collection::config::WalConfig::default(),
+            quantization_config: None,
+            strict_mode_config: None,
+            uuid: Some(Uuid::from_u128(12)),
+            metadata: None,
+        }
+    }
+
     #[test]
     fn private_hnsw_transfer_guard_blocks_until_bucket_transfer_is_supported() {
         let config = private_hnsw_collection_config();
         for operation in private_hnsw_transfer_start_operations() {
             let err =
-                reject_private_hnsw_cluster_transfer_until_supported("docs", &config, &operation)
+                reject_private_oram_cluster_transfer_until_supported("docs", &config, &operation)
                     .expect_err(
                         "private HNSW ORAM transfer must fail closed until bucket transfer exists",
                     );
+            assert!(
+                err.to_string().contains("encrypted ORAM bucket transfer"),
+                "unexpected error for {operation:?}: {err}",
+            );
+        }
+    }
+
+    #[test]
+    fn private_result_oram_transfer_guard_blocks_until_bucket_transfer_is_supported() {
+        let config = private_result_oram_collection_config();
+        for operation in private_hnsw_transfer_start_operations() {
+            let err = reject_private_oram_cluster_transfer_until_supported(
+                "docs", &config, &operation,
+            )
+            .expect_err(
+                "private result ORAM transfer must fail closed until bucket transfer exists",
+            );
             assert!(
                 err.to_string().contains("encrypted ORAM bucket transfer"),
                 "unexpected error for {operation:?}: {err}",

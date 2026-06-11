@@ -614,11 +614,11 @@ sources; snapshot tests seal a plaintext sentinel into a client bucket and
 assert that the raw snapshot archive and restored bucket file do not contain the
 sentinel bytes.
 Collection and full snapshot creation also fail closed while any active private
-HNSW ORAM session exists for the collection, because a session may be remapping
-paths and writing back buckets. While a private HNSW ORAM collection/full
-snapshot guard is active, new session opens and manifest/bucket uploads fail
-closed for the same reason. The error is sanitized and does not include
-collection-local `private_hnsw_oram` filesystem paths or bucket roots.
+HNSW ORAM or private result ORAM session exists for the collection, because a
+session may be remapping paths and writing back buckets. While a private ORAM
+collection/full snapshot guard is active, new session opens and manifest/bucket
+uploads fail closed for the same reason. The error is sanitized and does not
+include collection-local private ORAM filesystem paths or bucket roots.
 Snapshot creation also fails closed while a private HNSW ORAM manifest or bucket
 upload write-window guard is active for the collection, because upload writes
 canonical manifest, bucket, Merkle, and epoch files.
@@ -1039,20 +1039,21 @@ shape or signing verifier fails runtime capability parity before it can be
 treated as an equivalent private-HNSW-capable node. The mismatch diagnostic
 names the peer and fail-closed condition but does not echo the local or peer
 fingerprint strings.
-Shard transfer start operations are also blocked while a private HNSW ORAM
-collection is configured. The MVP stores the private index as collection-level
-encrypted ORAM buckets, and shard transfer does not yet copy bucket files or
-move epoch/root ownership through consensus, so transfer start operations fail
-closed instead of producing a partial private index on the receiver.
+Shard transfer start operations are also blocked while a collection is configured
+with private HNSW ORAM or private result ORAM bucket stores. The MVP stores
+those private indexes as collection-level encrypted ORAM buckets, and shard
+transfer does not yet copy bucket files or move epoch/root ownership through
+consensus, so transfer start operations fail closed instead of producing a
+partial private index on the receiver.
 Manual shard snapshot creation, streaming, partial snapshot manifests, and shard
 snapshot recovery fail closed for the same reason: shard snapshots do not yet
 carry the collection-local private ORAM bucket store with epoch/root parity. Use
-collection snapshot/restore preflight for private HNSW ORAM collections until
+collection snapshot/restore preflight for private ORAM collections until
 shard-level bucket parity is implemented.
-Automatic dead-replica shard transfer recovery also skips private HNSW ORAM
-collections for the same reason; parity alone is insufficient until bucket
+Automatic dead-replica shard transfer recovery also skips private ORAM bucket
+store collections for the same reason; parity alone is insufficient until bucket
 movement and epoch/root ownership are consensus-backed. As a final guard,
-existing consensus transfer records for private HNSW ORAM collections are
+existing consensus transfer records for private ORAM collections are
 rejected before the local transfer task starts moving shard data or the transfer
 progresses replica state. `Abort` remains allowed so unsupported transfer records
 can be cleaned up without moving encrypted ORAM buckets.

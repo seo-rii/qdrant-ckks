@@ -937,14 +937,14 @@ impl Collection {
         on_convert_to_listener: ChangePeerState,
         on_convert_from_listener: ChangePeerState,
     ) -> CollectionResult<()> {
-        let (encrypted_collection, private_hnsw_oram_collection) = {
+        let (encrypted_collection, private_oram_bucket_store_collection) = {
             let config = self.collection_config.read().await;
             let encryption = config.params.effective_encryption();
             (
                 encryption.is_some(),
                 encryption
                     .as_ref()
-                    .is_some_and(collection_encryption_uses_private_hnsw_oram),
+                    .is_some_and(collection_encryption_uses_private_oram_bucket_store),
             )
         };
 
@@ -1043,10 +1043,10 @@ impl Collection {
             if !is_dead {
                 continue;
             }
-            if let Err(err) = validate_private_hnsw_automatic_transfer_recovery_until_supported(
+            if let Err(err) = validate_private_oram_automatic_transfer_recovery_until_supported(
                 self.name(),
                 shard_id,
-                private_hnsw_oram_collection,
+                private_oram_bucket_store_collection,
             ) {
                 log::warn!("{err}");
                 continue;
@@ -1478,24 +1478,29 @@ fn validate_encrypted_automatic_transfer_crypto_runtime_parity(
     Ok(())
 }
 
-fn collection_encryption_uses_private_hnsw_oram(encryption: &CollectionEncryptionConfig) -> bool {
-    encryption
-        .rules
-        .iter()
-        .any(|rule| rule.binding.as_deref() == Some(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING))
+fn collection_encryption_uses_private_oram_bucket_store(
+    encryption: &CollectionEncryptionConfig,
+) -> bool {
+    encryption.rules.iter().any(|rule| {
+        matches!(
+            rule.binding.as_deref(),
+            Some(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING)
+                | Some(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING)
+        )
+    })
 }
 
-fn validate_private_hnsw_automatic_transfer_recovery_until_supported(
+fn validate_private_oram_automatic_transfer_recovery_until_supported(
     collection_name: &str,
     shard_id: ShardId,
-    private_hnsw_oram_collection: bool,
+    private_oram_bucket_store_collection: bool,
 ) -> CollectionResult<()> {
-    if !private_hnsw_oram_collection {
+    if !private_oram_bucket_store_collection {
         return Ok(());
     }
 
     Err(CollectionError::bad_input(format!(
-        "automatic shard transfer recovery for private HNSW ORAM collection {collection_name} \
+        "automatic shard transfer recovery for private ORAM collection {collection_name} \
          shard {shard_id} is disabled until encrypted ORAM bucket transfer and \
          consensus-backed epoch/root ownership are implemented",
     )))
@@ -1689,22 +1694,31 @@ mod tests {
             }],
         };
 
-        assert!(collection_encryption_uses_private_hnsw_oram(&encryption));
+        assert!(collection_encryption_uses_private_oram_bucket_store(
+            &encryption
+        ));
+
+        encryption.rules[0].binding = Some(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING.to_string());
+        assert!(collection_encryption_uses_private_oram_bucket_store(
+            &encryption
+        ));
 
         encryption.rules[0].binding = None;
-        assert!(!collection_encryption_uses_private_hnsw_oram(&encryption));
+        assert!(!collection_encryption_uses_private_oram_bucket_store(
+            &encryption
+        ));
     }
 
     #[test]
     fn private_hnsw_automatic_transfer_recovery_fails_closed_until_bucket_transfer_supported() {
-        validate_private_hnsw_automatic_transfer_recovery_until_supported("docs", 3, false)
+        validate_private_oram_automatic_transfer_recovery_until_supported("docs", 3, false)
             .unwrap();
 
         let err =
-            validate_private_hnsw_automatic_transfer_recovery_until_supported("docs", 3, true)
+            validate_private_oram_automatic_transfer_recovery_until_supported("docs", 3, true)
                 .unwrap_err();
         let rendered = format!("{err:?}");
-        assert!(rendered.contains("private HNSW ORAM collection docs"));
+        assert!(rendered.contains("private ORAM collection docs"));
         assert!(rendered.contains("encrypted ORAM bucket transfer"));
         assert!(!rendered.contains("private_hnsw_oram"));
     }

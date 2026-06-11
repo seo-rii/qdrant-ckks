@@ -411,7 +411,7 @@ impl Collection {
         shard_id: ShardId,
         temp_dir: &Path,
     ) -> CollectionResult<SnapshotDescription> {
-        self.validate_private_hnsw_oram_shard_snapshot_allowed("shard snapshot creation")
+        self.validate_private_oram_shard_snapshot_allowed("shard snapshot creation")
             .await?;
 
         let snapshot_creator = self
@@ -433,7 +433,7 @@ impl Collection {
         manifest: Option<SnapshotManifest>,
         temp_dir: &Path,
     ) -> CollectionResult<SnapshotStream> {
-        self.validate_private_hnsw_oram_shard_snapshot_allowed("shard snapshot streaming")
+        self.validate_private_oram_shard_snapshot_allowed("shard snapshot streaming")
             .await?;
 
         let shard = OwnedRwLockReadGuard::try_map(
@@ -466,7 +466,7 @@ impl Collection {
         let collection_path = self.path.clone();
         let collection_name = self.name().to_string();
         let collection_params = self.collection_config.read().await.params.clone();
-        validate_private_hnsw_oram_shard_snapshot_operation(
+        validate_private_oram_shard_snapshot_operation(
             &collection_name,
             &collection_params,
             "shard snapshot recovery",
@@ -526,7 +526,7 @@ impl Collection {
         &self,
         shard_id: ShardId,
     ) -> CollectionResult<SnapshotManifest> {
-        self.validate_private_hnsw_oram_shard_snapshot_allowed("partial shard snapshot manifest")
+        self.validate_private_oram_shard_snapshot_allowed("partial shard snapshot manifest")
             .await?;
 
         self.shards_holder
@@ -538,12 +538,12 @@ impl Collection {
             .await
     }
 
-    pub async fn validate_private_hnsw_oram_shard_snapshot_allowed(
+    pub async fn validate_private_oram_shard_snapshot_allowed(
         &self,
         operation_name: &str,
     ) -> CollectionResult<()> {
         let params = self.collection_config.read().await.params.clone();
-        validate_private_hnsw_oram_shard_snapshot_operation(self.name(), &params, operation_name)
+        validate_private_oram_shard_snapshot_operation(self.name(), &params, operation_name)
     }
 }
 
@@ -657,17 +657,19 @@ fn validate_private_result_oram_snapshot_store_matches_config(
     Ok(())
 }
 
-fn validate_private_hnsw_oram_shard_snapshot_operation(
+fn validate_private_oram_shard_snapshot_operation(
     collection_name: &str,
     params: &CollectionParams,
     operation_name: &str,
 ) -> CollectionResult<()> {
-    if private_hnsw_oram_configured_vectors(params)?.is_empty() {
+    if private_hnsw_oram_configured_vectors(params)?.is_empty()
+        && !private_result_oram_configured(params)?
+    {
         return Ok(());
     }
 
     Err(CollectionError::bad_request(format!(
-        "{operation_name} for private HNSW ORAM collection {collection_name} is disabled until \
+        "{operation_name} for private ORAM collection {collection_name} is disabled until \
          shard snapshots include collection-local encrypted ORAM buckets with epoch/root parity; \
          use collection snapshot/restore preflight",
     )))
@@ -1580,42 +1582,48 @@ mod tests {
     #[test]
     fn private_hnsw_oram_shard_snapshot_operations_fail_closed_until_bucket_parity_supported() {
         let empty_params = CollectionParams::empty();
-        validate_private_hnsw_oram_shard_snapshot_operation(
+        validate_private_oram_shard_snapshot_operation(
             "docs",
             &empty_params,
             "shard snapshot creation",
         )
         .unwrap();
 
-        let config = private_hnsw_config(Uuid::from_u128(7));
+        let configs = [
+            private_hnsw_config(Uuid::from_u128(7)),
+            private_result_config(Uuid::from_u128(8)),
+        ];
         for operation_name in [
             "shard snapshot creation",
             "shard snapshot streaming",
             "shard snapshot recovery",
             "partial shard snapshot manifest",
         ] {
-            let err = validate_private_hnsw_oram_shard_snapshot_operation(
-                "docs",
-                &config.params,
-                operation_name,
-            )
-            .expect_err("private HNSW ORAM shard snapshots must fail closed");
-            let rendered = err.to_string();
-            assert!(
-                rendered.contains(&format!(
-                    "{operation_name} for private HNSW ORAM collection docs"
-                )),
-                "unexpected error: {rendered}",
-            );
-            assert!(
-                rendered.contains("collection-local encrypted ORAM buckets"),
-                "unexpected error: {rendered}",
-            );
-            assert!(
-                rendered.contains("collection snapshot/restore preflight"),
-                "unexpected error: {rendered}",
-            );
-            assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+            for config in &configs {
+                let err = validate_private_oram_shard_snapshot_operation(
+                    "docs",
+                    &config.params,
+                    operation_name,
+                )
+                .expect_err("private ORAM shard snapshots must fail closed");
+                let rendered = err.to_string();
+                assert!(
+                    rendered.contains(&format!(
+                        "{operation_name} for private ORAM collection docs"
+                    )),
+                    "unexpected error: {rendered}",
+                );
+                assert!(
+                    rendered.contains("collection-local encrypted ORAM buckets"),
+                    "unexpected error: {rendered}",
+                );
+                assert!(
+                    rendered.contains("collection snapshot/restore preflight"),
+                    "unexpected error: {rendered}",
+                );
+                assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+                assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
+            }
         }
     }
 
@@ -2497,7 +2505,7 @@ mod tests {
         .unwrap_err()
         .to_string();
 
-        assert!(err.contains("private HNSW ORAM snapshot layout validation failed"));
+        assert!(err.contains("private HNSW ORAM file not found"), "{err}");
         assert!(!err.contains(target_dir.path().to_string_lossy().as_ref()));
         assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
         assert!(!err.contains("00000000.bucket"));

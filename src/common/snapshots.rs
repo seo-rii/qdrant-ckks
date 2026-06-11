@@ -187,7 +187,7 @@ pub async fn stream_shard_snapshot(
 
     let collection = toc.get_collection(&collection_pass).await?;
     collection
-        .validate_private_hnsw_oram_shard_snapshot_allowed("shard snapshot streaming")
+        .validate_private_oram_shard_snapshot_allowed("shard snapshot streaming")
         .await?;
 
     let _telemetry_scope_guard = toc
@@ -301,7 +301,7 @@ pub async fn recover_shard_snapshot(
             let collection = toc.get_collection(&collection_pass).await?;
             collection.assert_shard_exists(shard_id).await?;
             collection
-                .validate_private_hnsw_oram_shard_snapshot_allowed("shard snapshot recovery")
+                .validate_private_oram_shard_snapshot_allowed("shard snapshot recovery")
                 .await?;
 
             // Default temporary path to storage dir, to allow faster recovery within the same volume

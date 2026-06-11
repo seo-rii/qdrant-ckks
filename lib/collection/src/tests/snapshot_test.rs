@@ -502,7 +502,7 @@ async fn test_snapshot_private_hnsw_missing_bucket_fails_before_archive() {
         .unwrap_err()
         .to_string();
 
-    assert!(err.contains("private HNSW ORAM snapshot layout validation failed"));
+    assert!(err.contains("private HNSW ORAM file not found"), "{err}");
     assert!(!err.contains(collection_dir.path().to_string_lossy().as_ref()));
     assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
     assert!(!err.contains("00000000.bucket"));
