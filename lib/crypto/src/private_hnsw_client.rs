@@ -5433,6 +5433,36 @@ mod tests {
             ))
         );
 
+        let duplicate_real_tokens = PrivateHnswSearchResult {
+            hits: vec![
+                PrivateHnswSearchHit {
+                    node_id: [1; 32],
+                    point_token: [2; 32],
+                    payload_fetch_token: Some([11; 32]),
+                    distance: 0.0,
+                },
+                PrivateHnswSearchHit {
+                    node_id: [3; 32],
+                    point_token: [4; 32],
+                    payload_fetch_token: Some([11; 32]),
+                    distance: 1.0,
+                },
+            ],
+            accessed_leaf_labels: vec![],
+            completed_steps: 2,
+        };
+        assert_eq!(
+            plan_private_hnsw_private_result_fetch_tokens(
+                ResultPrivacyMode::PrivatePayloadOramRequired,
+                &duplicate_real_tokens,
+                2,
+                &[],
+            ),
+            Err(PrivateHnswClientError::InvalidSearchConfig(
+                "payload_fetch_tokens"
+            ))
+        );
+
         let too_many_hits = PrivateHnswSearchResult {
             hits: vec![
                 PrivateHnswSearchHit {
