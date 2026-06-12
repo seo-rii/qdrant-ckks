@@ -740,6 +740,10 @@ so non-owner key ids do not reach the registry lookup boundary. The `read_paths`
 and `commit` crypto validators also reject malformed collection/vector/key
 lineage, `requested_paths`/path-count mismatches, and non-advancing commit
 epochs before signature body parsing or canonical message construction.
+After bounded session epoch/root and fixed-budget preflight, the REST/gRPC
+`read_paths` and `commit` handlers verify the client signature before returning
+detailed path-label or duplicate-bucket errors, so unauthenticated malformed
+traversal/writeback bodies stay on the generic signature-failure path.
 Manifest-store layout failures during upload are sanitized without exposing
 collection-local `private_hnsw_oram` filesystem paths.
 Path ORAM manifests must also bind `bucket_count` to the canonical full binary

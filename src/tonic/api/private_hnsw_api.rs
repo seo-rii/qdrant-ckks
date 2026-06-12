@@ -2126,7 +2126,11 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("invalid path label"));
+            assert!(
+                err.message()
+                    .contains("read_paths signature verification failed")
+            );
+            assert!(!err.message().contains("invalid path label"));
             assert!(!err.message().contains(path_label_sentinel));
             assert!(
                 !err.message()
@@ -3087,10 +3091,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(
-                err.message()
-                    .contains("ciphertext_sha256 must encode 32 bytes")
-            );
+            assert!(err.message().contains("ciphertext_sha256 is invalid"));
             assert!(
                 !err.message().contains(commit_hash_sentinel),
                 "{}",
@@ -3134,6 +3135,7 @@ mod private_hnsw_grpc_tests {
                     old_root_hash: duplicate_commit_plan.old_root_hash,
                     new_root_hash: duplicate_commit_plan.new_root_hash,
                     updated_buckets: duplicate_commit_buckets
+                        .clone()
                         .into_iter()
                         .map(bucket_to_proto)
                         .collect(),
@@ -3144,6 +3146,32 @@ mod private_hnsw_grpc_tests {
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("duplicate bucket id"));
+
+            let err = PrivateHnswOram::commit_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramCommitRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: duplicate_commit_buckets
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                    commit_signature: Some(signature_to_proto(fixture.client_signature())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("commit signature verification failed")
+            );
+            assert!(!err.message().contains("duplicate bucket id"));
 
             let mut oversized_writeback_buckets = search_run.updated_buckets.clone();
             while oversized_writeback_buckets.len() <= 3 {

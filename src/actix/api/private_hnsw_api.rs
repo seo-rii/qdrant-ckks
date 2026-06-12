@@ -1232,6 +1232,8 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "requested epoch"
             );
+            let stale_epoch_error: Value = serde_json::from_str(&stale_epoch_error).unwrap();
+            let stale_epoch_error = stale_epoch_error["status"]["error"].as_str().unwrap();
             assert!(
                 !stale_epoch_error.contains(&NEXT_EPOCH.to_string()),
                 "{stale_epoch_error}"
@@ -1532,8 +1534,9 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "invalid path label"
+                "read_paths signature verification failed"
             );
+            assert!(!read_error.contains("invalid path label"), "{read_error}");
             assert!(!read_error.contains(path_label_sentinel), "{read_error}");
             assert!(
                 !read_error.contains(&fixture.encrypted_build.buckets[0].ciphertext),
@@ -2328,7 +2331,7 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "ciphertext_sha256 must encode 32 bytes"
+                "ciphertext_sha256 is invalid"
             );
             assert!(
                 !commit_hash_error.contains(commit_hash_sentinel),
@@ -2366,7 +2369,7 @@ mod private_hnsw_rest_tests {
                     new_epoch: NEXT_EPOCH,
                     old_root_hash: duplicate_commit_plan.old_root_hash,
                     new_root_hash: duplicate_commit_plan.new_root_hash,
-                    updated_buckets: duplicate_commit_buckets,
+                    updated_buckets: duplicate_commit_buckets.clone(),
                     commit_signature: PrivateHnswClientSignature {
                         alg: duplicate_commit_signature.alg,
                         key_id: duplicate_commit_signature.key_id,
@@ -2376,6 +2379,25 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "duplicate bucket id"
             );
+            let invalid_signature_duplicate_bucket_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/commit",
+                OramCommitRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: duplicate_commit_buckets,
+                    commit_signature: PrivateHnswClientSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: SIGNING_KEY_ID.to_string(),
+                        sig: fixture.client_signature().sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "commit signature verification failed"
+            );
+            assert!(!invalid_signature_duplicate_bucket_error.contains("duplicate bucket id"));
             let mut oversized_writeback_buckets = search_run.updated_buckets.clone();
             while oversized_writeback_buckets.len() <= 3 {
                 oversized_writeback_buckets.push(search_run.updated_buckets[0].clone());

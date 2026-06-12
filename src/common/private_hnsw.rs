@@ -16,13 +16,14 @@ use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     DistanceKind, FixedBudgetParams, OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
     PRIVATE_HNSW_ORAM_BINDING, PRIVATE_RESULT_ORAM_BINDING, PrivateHnswBucketAeadContext,
-    PrivateHnswManifestValidationContext, PrivateHnswOramBucket, PrivateHnswOramManifest,
+    PrivateHnswManifestValidationContext, PrivateHnswOramBucket, PrivateHnswOramCommitBucketRef,
+    PrivateHnswOramCommitSignatureInput, PrivateHnswOramManifest,
     PrivateHnswOramReadPathsSignatureInput, PrivateHnswOramSignature, PrivateHnswParams,
     PrivateHnswSignatureVerification, ResultPrivacyMode, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
     decode_private_hnsw_oram_leaf_label, private_hnsw_bucket_commitment,
     private_hnsw_oram_bucket_ciphertext_bytes, private_hnsw_oram_bucket_count,
-    private_hnsw_oram_bucket_ids_for_leaf, validate_private_hnsw_oram_manifest,
-    validate_private_hnsw_oram_manifest_signature_shape,
+    private_hnsw_oram_bucket_ids_for_leaf, validate_private_hnsw_oram_commit_signature,
+    validate_private_hnsw_oram_manifest, validate_private_hnsw_oram_manifest_signature_shape,
     validate_private_hnsw_oram_read_paths_signature,
 };
 use segment::types::Distance;
@@ -890,7 +891,6 @@ pub async fn do_read_private_hnsw_paths(
                     "private HNSW ORAM read_paths request must match fixed path budget",
                 ));
             }
-            validate_private_hnsw_read_path_labels(&paths, session.tree_height)?;
             validate_session_signature_owner_key(session, &client_signature.key_id)?;
             let public_key = request_context.signature_public_key(&client_signature.key_id)?;
             let path_refs = paths.iter().map(String::as_str).collect::<Vec<_>>();
@@ -916,6 +916,7 @@ pub async fn do_read_private_hnsw_paths(
                 },
             )
             .map_err(private_hnsw_error)?;
+            validate_private_hnsw_read_path_labels(&paths, session.tree_height)?;
             let bucket_ids =
                 bucket_ids_for_path_batch(&paths, session.tree_height, session.bucket_count)?;
             let store = PrivateHnswOramStore::new(&session.collection_path, vector_name)?;
@@ -1001,6 +1002,37 @@ pub async fn do_commit_private_hnsw_paths(
                 "private HNSW ORAM commit updated_buckets must contain 1..={max_updated_buckets} buckets",
             )));
         }
+        let updated_bucket_refs = updated_buckets
+            .iter()
+            .map(|bucket| PrivateHnswOramCommitBucketRef {
+                bucket_id: bucket.bucket_id,
+                ciphertext_sha256: bucket.ciphertext_sha256.as_str(),
+            })
+            .collect::<Vec<_>>();
+        validate_session_signature_owner_key(session, &commit_signature.key_id)?;
+        let public_key = request_context.signature_public_key(&commit_signature.key_id)?;
+        validate_private_hnsw_oram_commit_signature(
+            PrivateHnswOramCommitSignatureInput {
+                collection_id: &session.collection_id,
+                vector_name,
+                key_id: &session.manifest.key_id,
+                rk_id: &session.manifest.rk_id,
+                rk_epoch: session.manifest.rk_epoch,
+                old_epoch,
+                new_epoch,
+                old_root_hash: &old_root_hash,
+                new_root_hash: &new_root_hash,
+                updated_buckets: &updated_bucket_refs,
+                signature_alg: &commit_signature.alg,
+                signature_key_id: &commit_signature.key_id,
+            },
+            &commit_signature.sig,
+            PrivateHnswSignatureVerification {
+                expected_key_id: &commit_signature.key_id,
+                public_key: &public_key,
+            },
+        )
+        .map_err(private_hnsw_error)?;
         let mut seen_bucket_ids = HashSet::new();
         for bucket in &updated_buckets {
             if !seen_bucket_ids.insert(bucket.bucket_id) {
@@ -1010,8 +1042,6 @@ pub async fn do_commit_private_hnsw_paths(
             }
             validate_root_hash_string(&bucket.ciphertext_sha256, "ciphertext_sha256")?;
         }
-        validate_session_signature_owner_key(session, &commit_signature.key_id)?;
-        let public_key = request_context.signature_public_key(&commit_signature.key_id)?;
 
         let store = PrivateHnswOramStore::new(&session.collection_path, vector_name)?;
         ensure_private_hnsw_active_session_current_epoch(
