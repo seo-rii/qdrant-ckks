@@ -10,7 +10,7 @@ use segment::data_types::facets::{FacetParams, FacetResponse, FacetValue};
 use segment::json_path::JsonPath;
 
 use super::Collection;
-use crate::config::EncryptionSelector;
+use crate::config::{CollectionEncryptionConfig, EncryptionSelector};
 use crate::operations::consistency_params::ReadConsistency;
 use crate::operations::shard_selector_internal::ShardSelectorInternal;
 use crate::operations::types::{CollectionError, CollectionResult};
@@ -37,69 +37,7 @@ impl Collection {
             .params
             .effective_encryption()
         {
-            if encryption
-                .rules
-                .iter()
-                .any(|rule| matches!(rule.selector, EncryptionSelector::VectorNames { .. }))
-            {
-                let sidecar_path = format!("\"{ENCRYPTED_VECTOR_SIDECAR_FIELD}\"")
-                    .parse::<JsonPath>()
-                    .map_err(|err| {
-                        CollectionError::bad_input(format!(
-                            "encrypted vector sidecar field path '{ENCRYPTED_VECTOR_SIDECAR_FIELD}' is invalid: {err:?}",
-                        ))
-                    })?;
-                if request.key.compatible(&sidecar_path) {
-                    return Err(CollectionError::bad_input(format!(
-                        "cannot facet on encrypted vector sidecar field '{}'; use encrypted vector search APIs instead",
-                        request.key,
-                    )));
-                }
-            }
-
-            for rule in &encryption.rules {
-                match &rule.selector {
-                    EncryptionSelector::PayloadPaths { paths } => {
-                        for encrypted_path in paths {
-                            let encrypted_json_path =
-                                encrypted_path.parse::<JsonPath>().map_err(|err| {
-                                    CollectionError::bad_input(format!(
-                                        "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                                    ))
-                                })?;
-                            if request.key.compatible(&encrypted_json_path) {
-                                return Err(CollectionError::bad_input(format!(
-                                    "cannot facet on encrypted payload field '{}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
-                                    request.key,
-                                )));
-                            }
-                        }
-                    }
-                    EncryptionSelector::MetadataKeys { keys } => {
-                        for metadata_key in keys {
-                            let metadata_path =
-                                metadata_key.parse::<JsonPath>().map_err(|err| {
-                                    CollectionError::bad_input(format!(
-                                        "metadata blind-index field path '{metadata_key}' is invalid: {err:?}",
-                                    ))
-                                })?;
-                            if request.key.compatible(&metadata_path) {
-                                if rule.binding.as_deref() == Some(METADATA_VALUE_BINDING) {
-                                    return Err(CollectionError::bad_input(format!(
-                                        "cannot facet on encrypted metadata value field '{}' because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
-                                        request.key,
-                                    )));
-                                }
-                                return Err(CollectionError::bad_input(format!(
-                                    "cannot facet on metadata blind-index field '{}' because it overlaps token field '{metadata_key}'; blind-index token fields support exact-match filters only",
-                                    request.key,
-                                )));
-                            }
-                        }
-                    }
-                    EncryptionSelector::VectorNames { .. } => {}
-                }
-            }
+            ensure_facet_key_does_not_touch_encrypted_payload(&request.key, &encryption)?;
         }
         self.ensure_filter_does_not_touch_encrypted_payload(request.filter.as_ref())
             .await?;
@@ -132,5 +70,111 @@ impl Collection {
         }
 
         Ok(FacetResponse::top_hits(aggregated_results, limit))
+    }
+}
+
+fn ensure_facet_key_does_not_touch_encrypted_payload(
+    key: &JsonPath,
+    encryption: &CollectionEncryptionConfig,
+) -> CollectionResult<()> {
+    if encryption
+        .rules
+        .iter()
+        .any(|rule| matches!(rule.selector, EncryptionSelector::VectorNames { .. }))
+    {
+        let sidecar_path = format!("\"{ENCRYPTED_VECTOR_SIDECAR_FIELD}\"")
+            .parse::<JsonPath>()
+            .map_err(|err| {
+                CollectionError::bad_input(format!(
+                    "encrypted vector sidecar field path '{ENCRYPTED_VECTOR_SIDECAR_FIELD}' is invalid: {err:?}",
+                ))
+            })?;
+        if key.compatible(&sidecar_path) {
+            return Err(CollectionError::bad_input(format!(
+                "cannot facet on encrypted vector sidecar field '{key}'; use encrypted vector search APIs instead",
+            )));
+        }
+    }
+
+    for rule in &encryption.rules {
+        match &rule.selector {
+            EncryptionSelector::PayloadPaths { paths } => {
+                for encrypted_path in paths {
+                    let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
+                        CollectionError::bad_input(format!(
+                            "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                        ))
+                    })?;
+                    if key.compatible(&encrypted_json_path) {
+                        return Err(CollectionError::bad_input(format!(
+                            "cannot facet on encrypted payload field '{key}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                        )));
+                    }
+                }
+            }
+            EncryptionSelector::MetadataKeys { keys } => {
+                for metadata_key in keys {
+                    let metadata_path = metadata_key.parse::<JsonPath>().map_err(|err| {
+                        CollectionError::bad_input(format!(
+                            "metadata blind-index field path '{metadata_key}' is invalid: {err:?}",
+                        ))
+                    })?;
+                    if key.compatible(&metadata_path) {
+                        if rule.binding.as_deref() == Some(METADATA_VALUE_BINDING) {
+                            return Err(CollectionError::bad_input(format!(
+                                "cannot facet on encrypted metadata value field '{key}' because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
+                            )));
+                        }
+                        return Err(CollectionError::bad_input(format!(
+                            "cannot facet on metadata blind-index field '{key}' because it overlaps token field '{metadata_key}'; blind-index token fields support exact-match filters only",
+                        )));
+                    }
+                }
+            }
+            EncryptionSelector::VectorNames { .. } => {}
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{CollectionEncryptionConfig, CryptoMigrationState, EncryptionRuleRef};
+
+    fn private_result_oram_encryption(path: &str) -> CollectionEncryptionConfig {
+        CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a:result-private-rk".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 7,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![EncryptionRuleRef {
+                id: "private_result_payload".to_string(),
+                selector: EncryptionSelector::PayloadPaths {
+                    paths: vec![path.to_string()],
+                },
+                instance: "docs_private_result_oram_v1".to_string(),
+                binding: Some(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING.to_string()),
+            }],
+        }
+    }
+
+    #[test]
+    fn facet_rejects_private_result_oram_payload_paths() {
+        let encryption = private_result_oram_encryption("document.body");
+        for key in ["document", "document.body", "document.body.lang"] {
+            let key = key.parse::<JsonPath>().unwrap();
+            let err = ensure_facet_key_does_not_touch_encrypted_payload(&key, &encryption)
+                .expect_err("private result ORAM payload facets must fail closed");
+            let message = err.to_string();
+            assert!(message.contains("cannot facet on encrypted payload field"));
+            assert!(message.contains("document.body"));
+        }
+
+        let public_key = "document.title".parse::<JsonPath>().unwrap();
+        ensure_facet_key_does_not_touch_encrypted_payload(&public_key, &encryption)
+            .expect("unrelated public payload facets should remain allowed");
     }
 }
