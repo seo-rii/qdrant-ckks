@@ -6926,6 +6926,92 @@ async fn encrypted_vector_rejects_plaintext_vector_writes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn private_hnsw_vector_rejects_plaintext_vector_writes_with_session_api_message() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection = encrypted_collection_fixture(
+        collection_dir.path(),
+        1,
+        private_hnsw_vector_encryption_config(),
+    )
+    .await;
+
+    let plaintext_point =
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::PointsList(vec![PointStructPersisted {
+                id: 1.into(),
+                vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                payload: None,
+            }]),
+        ));
+    let err = collection
+        .update_from_client_simple(
+            plaintext_point,
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_hnsw_session_api_error(err);
+
+    let plaintext_vector_update = CollectionUpdateOperations::VectorOperation(
+        VectorOperations::UpdateVectors(UpdateVectorsOp {
+            points: vec![PointVectorsPersisted {
+                id: 1.into(),
+                vector: VectorStructPersisted::from(vec![0.0, 1.0, 0.0, 0.0]),
+            }],
+            update_filter: None,
+        }),
+    );
+    let err = collection
+        .update_from_client_simple(
+            plaintext_vector_update,
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_hnsw_session_api_error(err);
+
+    let delete_vector =
+        CollectionUpdateOperations::VectorOperation(VectorOperations::DeleteVectors(
+            vec![1.into()].into(),
+            vec![DEFAULT_VECTOR_NAME.to_string()],
+        ));
+    let err = collection
+        .update_from_client_simple(
+            delete_vector,
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_hnsw_session_api_error(err);
+
+    let delete_vector_by_filter =
+        CollectionUpdateOperations::VectorOperation(VectorOperations::DeleteVectorsByFilter(
+            Filter::default(),
+            vec![DEFAULT_VECTOR_NAME.to_string()],
+        ));
+    let err = collection
+        .update_from_client_simple(
+            delete_vector_by_filter,
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_hnsw_session_api_error(err);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection =
