@@ -271,11 +271,27 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "leaf_labels"
                         | "client_state"
                         | "position_map"
+                        | "oram_position_map"
+                        | "token_position_map"
                         | "stash"
+                        | "node_id"
+                        | "node_ids"
+                        | "neighbor"
+                        | "neighbors"
+                        | "neighbor_ids"
+                        | "candidate_heap"
+                        | "top_k"
+                        | "topk"
+                        | "result_id"
+                        | "result_ids"
                         | "point_token"
                         | "point_tokens"
+                        | "fetch_token"
+                        | "fetch_tokens"
                         | "payload_fetch_token"
                         | "payload_fetch_tokens"
+                        | "payload_oram_leaf"
+                        | "payload_oram_leaves"
                 ) || matches!(
                     key_without_separators,
                     "xapikey"
@@ -351,10 +367,23 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "leaflabels"
                         | "clientstate"
                         | "positionmap"
+                        | "orampositionmap"
+                        | "tokenpositionmap"
+                        | "nodeid"
+                        | "nodeids"
+                        | "neighborids"
+                        | "candidateheap"
+                        | "topk"
+                        | "resultid"
+                        | "resultids"
                         | "pointtoken"
                         | "pointtokens"
+                        | "fetchtoken"
+                        | "fetchtokens"
                         | "payloadfetchtoken"
                         | "payloadfetchtokens"
+                        | "payloadoramleaf"
+                        | "payloadoramleaves"
                 ) {
                     *value = Value::String("[redacted]".to_string());
                 } else {
@@ -791,10 +820,28 @@ mod tests {
                 "leafLabels": ["qdrant-sec-private-hnsw-camel-leaf-label-log-sentinel"],
                 "client_state": {
                     "position_map": "qdrant-sec-private-hnsw-position-map-log-sentinel",
+                    "oram_position_map": "qdrant-sec-private-hnsw-oram-position-map-log-sentinel",
                     "stash": "qdrant-sec-private-hnsw-stash-log-sentinel"
                 },
+                "node_id": "qdrant-sec-private-hnsw-node-id-log-sentinel",
+                "nodeIds": ["qdrant-sec-private-hnsw-camel-node-id-log-sentinel"],
+                "neighbors": ["qdrant-sec-private-hnsw-neighbor-log-sentinel"],
+                "candidate_heap": "qdrant-sec-private-hnsw-candidate-heap-log-sentinel",
+                "top_k": ["qdrant-sec-private-hnsw-top-k-log-sentinel"],
+                "result_ids": ["qdrant-sec-private-hnsw-result-id-log-sentinel"],
                 "point_token": "qdrant-sec-private-hnsw-point-token-log-sentinel",
                 "payload_fetch_token": "qdrant-sec-private-hnsw-payload-token-log-sentinel"
+            },
+            "private_result_oram": {
+                "payload_fetch_tokens": ["qdrant-sec-private-result-payload-token-log-sentinel"],
+                "fetch_tokens": ["qdrant-sec-private-result-fetch-token-log-sentinel"],
+                "token_position_map": "qdrant-sec-private-result-token-position-map-log-sentinel",
+                "payload_oram_leaf": "qdrant-sec-private-result-payload-oram-leaf-log-sentinel",
+                "payloadOramLeaves": ["qdrant-sec-private-result-camel-payload-oram-leaf-log-sentinel"],
+                "result_ids": ["qdrant-sec-private-result-id-log-sentinel"],
+                "client_state": {
+                    "stash": "qdrant-sec-private-result-stash-log-sentinel"
+                }
             }
         });
 
@@ -813,9 +860,23 @@ mod tests {
             "qdrant-sec-private-hnsw-leaf-label-log-sentinel",
             "qdrant-sec-private-hnsw-camel-leaf-label-log-sentinel",
             "qdrant-sec-private-hnsw-position-map-log-sentinel",
+            "qdrant-sec-private-hnsw-oram-position-map-log-sentinel",
             "qdrant-sec-private-hnsw-stash-log-sentinel",
+            "qdrant-sec-private-hnsw-node-id-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-node-id-log-sentinel",
+            "qdrant-sec-private-hnsw-neighbor-log-sentinel",
+            "qdrant-sec-private-hnsw-candidate-heap-log-sentinel",
+            "qdrant-sec-private-hnsw-top-k-log-sentinel",
+            "qdrant-sec-private-hnsw-result-id-log-sentinel",
             "qdrant-sec-private-hnsw-point-token-log-sentinel",
             "qdrant-sec-private-hnsw-payload-token-log-sentinel",
+            "qdrant-sec-private-result-payload-token-log-sentinel",
+            "qdrant-sec-private-result-fetch-token-log-sentinel",
+            "qdrant-sec-private-result-token-position-map-log-sentinel",
+            "qdrant-sec-private-result-payload-oram-leaf-log-sentinel",
+            "qdrant-sec-private-result-camel-payload-oram-leaf-log-sentinel",
+            "qdrant-sec-private-result-id-log-sentinel",
+            "qdrant-sec-private-result-stash-log-sentinel",
         ] {
             assert!(!serialized.contains(sentinel));
         }
@@ -825,14 +886,16 @@ mod tests {
             "read_buckets": {
                 "session_id": "private-oram-session-a",
                 "bucket_ids": [1, 2, 3],
-                "updated_buckets": [{ "bucket_id": 7 }]
+                "updated_buckets": [{ "bucket_id": 7 }],
+                "token_position_map": { "fetch-token-a": 99 }
             }
         });
         let mut second = json!({
             "read_buckets": {
                 "session_id": "private-oram-session-b",
                 "bucket_ids": [9, 10, 11],
-                "updated_buckets": [{ "bucket_id": 12 }]
+                "updated_buckets": [{ "bucket_id": 12 }],
+                "token_position_map": { "fetch-token-b": 17 }
             }
         });
         redact_sensitive_log_fields(&mut first);
