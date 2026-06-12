@@ -3680,50 +3680,54 @@ impl Collection {
             return Ok(None);
         };
 
-        let mut plan = PayloadRedactionPlan::default();
-        for rule in &encryption.rules {
-            match (&rule.selector, rule.binding.as_deref()) {
-                (EncryptionSelector::PayloadPaths { paths }, _)
-                | (
-                    EncryptionSelector::MetadataKeys { keys: paths },
-                    Some(METADATA_VALUE_BINDING),
-                ) => {
-                    if redact_encrypted_values {
-                        for path in paths {
-                            let json_path = path.parse::<JsonPath>().map_err(|err| {
-                                CollectionError::bad_input(format!(
-                                    "encrypted payload field path '{path}' is invalid: {err:?}",
-                                ))
-                            })?;
-                            plan.encrypted_payload_paths
-                                .push((json_path, PayloadRedactionKind::AnyValue));
-                        }
-                    }
-                }
-                (
-                    EncryptionSelector::MetadataKeys { keys },
-                    Some(METADATA_EXACT_MATCH_TOKEN_BINDING),
-                ) => {
-                    for key in keys {
-                        let json_path = key.parse::<JsonPath>().map_err(|err| {
+        payload_redaction_plan_for_encryption(redact_encrypted_values, &encryption)
+    }
+}
+
+fn payload_redaction_plan_for_encryption(
+    redact_encrypted_values: bool,
+    encryption: &CollectionEncryptionConfig,
+) -> CollectionResult<Option<PayloadRedactionPlan>> {
+    let mut plan = PayloadRedactionPlan::default();
+    for rule in &encryption.rules {
+        match (&rule.selector, rule.binding.as_deref()) {
+            (EncryptionSelector::PayloadPaths { paths }, _)
+            | (EncryptionSelector::MetadataKeys { keys: paths }, Some(METADATA_VALUE_BINDING)) => {
+                if redact_encrypted_values {
+                    for path in paths {
+                        let json_path = path.parse::<JsonPath>().map_err(|err| {
                             CollectionError::bad_input(format!(
-                                "metadata blind-index field path '{key}' is invalid: {err:?}",
+                                "encrypted payload field path '{path}' is invalid: {err:?}",
                             ))
                         })?;
                         plan.encrypted_payload_paths
                             .push((json_path, PayloadRedactionKind::AnyValue));
                     }
                 }
-                (EncryptionSelector::VectorNames { .. }, _) if redact_encrypted_values => {
-                    plan.redact_vector_sidecar = true;
-                }
-                (EncryptionSelector::MetadataKeys { .. }, _) => {}
-                (EncryptionSelector::VectorNames { .. }, _) => {}
             }
+            (
+                EncryptionSelector::MetadataKeys { keys },
+                Some(METADATA_EXACT_MATCH_TOKEN_BINDING),
+            ) => {
+                for key in keys {
+                    let json_path = key.parse::<JsonPath>().map_err(|err| {
+                        CollectionError::bad_input(format!(
+                            "metadata blind-index field path '{key}' is invalid: {err:?}",
+                        ))
+                    })?;
+                    plan.encrypted_payload_paths
+                        .push((json_path, PayloadRedactionKind::AnyValue));
+                }
+            }
+            (EncryptionSelector::VectorNames { .. }, _) if redact_encrypted_values => {
+                plan.redact_vector_sidecar = true;
+            }
+            (EncryptionSelector::MetadataKeys { .. }, _) => {}
+            (EncryptionSelector::VectorNames { .. }, _) => {}
         }
-
-        Ok((!plan.is_empty()).then_some(plan))
     }
+
+    Ok((!plan.is_empty()).then_some(plan))
 }
 
 pub(super) fn apply_encrypted_payload_read_mode_to_scored_points(
@@ -4730,6 +4734,63 @@ mod tests {
         assert_eq!(
             payload.0.get("nested").unwrap().get("client").unwrap(),
             &client_marker_like,
+        );
+    }
+
+    #[test]
+    fn private_result_oram_redacted_reads_redact_configured_payload_path() {
+        let encryption = private_result_oram_encryption("document.body");
+        let redaction_plan = payload_redaction_plan_for_encryption(true, &encryption)
+            .expect("private result ORAM redaction plan should build")
+            .expect("private result ORAM redacted reads need a redaction plan");
+
+        let mut points = [ScoredPoint {
+            id: 1.into(),
+            version: 0,
+            score: 0.0,
+            payload: Some(Payload(
+                serde_json::json!({
+                    "document": {
+                        "body": "private result payload bytes sentinel",
+                        "title": "public title",
+                    },
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            )),
+            vector: None,
+            shard_key: None,
+            order_value: None,
+        }];
+
+        apply_encrypted_payload_read_mode_to_scored_points(
+            &mut points,
+            EncryptedPayloadReadMode::Redacted,
+            Some(&redaction_plan),
+        );
+
+        let payload = points[0].payload.as_ref().unwrap();
+        assert_eq!(
+            payload.0.get("document").unwrap().get("body").unwrap(),
+            &encrypted_payload_redaction_value(),
+        );
+        assert_eq!(
+            payload
+                .0
+                .get("document")
+                .unwrap()
+                .get("title")
+                .unwrap()
+                .as_str(),
+            Some("public title"),
+        );
+
+        assert!(
+            payload_redaction_plan_for_encryption(false, &encryption)
+                .unwrap()
+                .is_none(),
+            "raw private result ORAM reads are blocked before redaction planning",
         );
     }
 
