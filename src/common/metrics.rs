@@ -1589,6 +1589,81 @@ mod tests {
     }
 
     #[test]
+    fn test_private_oram_metrics_use_fixed_endpoint_labels() {
+        use std::collections::HashMap;
+
+        use segment::common::operation_time_statistics::OperationDurationStatistics;
+
+        use super::{GrpcTelemetry, MetricsData, MetricsProvider, WebApiTelemetry};
+
+        let mut rest_per_collection = HashMap::new();
+        let mut rest_methods = HashMap::new();
+        let mut rest_status_map = HashMap::new();
+        rest_status_map.insert(
+            200u16,
+            OperationDurationStatistics {
+                count: 4,
+                ..Default::default()
+            },
+        );
+        rest_methods.insert(
+            "POST /collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths"
+                .to_string(),
+            rest_status_map,
+        );
+        rest_per_collection.insert("docs".to_string(), rest_methods);
+
+        let rest_telemetry = WebApiTelemetry {
+            responses: HashMap::new(),
+            per_collection_responses: rest_per_collection,
+        };
+        let mut rest_metrics = MetricsData::empty();
+        rest_telemetry.add_metrics(&mut rest_metrics, None);
+        let rest_output = rest_metrics.format_metrics();
+
+        assert!(rest_output.contains("rest_responses_total"));
+        assert!(rest_output.contains("collection=\"docs\""));
+        assert!(rest_output.contains(
+            "endpoint=\"/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths\"",
+        ));
+        assert!(!rest_output.contains("leaf-label-sentinel"));
+        assert!(!rest_output.contains("session-id-sentinel"));
+
+        let mut grpc_per_collection = HashMap::new();
+        let mut grpc_methods = HashMap::new();
+        let mut grpc_status_map = HashMap::new();
+        grpc_status_map.insert(
+            0i32,
+            OperationDurationStatistics {
+                count: 6,
+                ..Default::default()
+            },
+        );
+        grpc_methods.insert(
+            "/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets".to_string(),
+            grpc_status_map,
+        );
+        grpc_per_collection.insert("docs".to_string(), grpc_methods);
+
+        let grpc_telemetry = GrpcTelemetry {
+            responses: HashMap::new(),
+            per_collection_responses: grpc_per_collection,
+        };
+        let mut grpc_metrics = MetricsData::empty();
+        grpc_telemetry.add_metrics(&mut grpc_metrics, None);
+        let grpc_output = grpc_metrics.format_metrics();
+
+        assert!(grpc_output.contains("grpc_responses_total"));
+        assert!(grpc_output.contains("collection=\"docs\""));
+        assert!(
+            grpc_output
+                .contains("endpoint=\"/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets\"",)
+        );
+        assert!(!grpc_output.contains("bucket-id-sentinel"));
+        assert!(!grpc_output.contains("session-id-sentinel"));
+    }
+
+    #[test]
     fn test_per_collection_skips_non_whitelisted() {
         use std::collections::HashMap;
 
