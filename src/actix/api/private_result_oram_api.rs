@@ -1386,6 +1386,132 @@ mod private_result_oram_rest_tests {
     }
 
     #[test]
+    fn active_session_rest_commit_rejects_runtime_oram_policy_drift() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateResultRouteFixture::build();
+        let settings = fixture.settings();
+        let mut drifted_settings = settings.clone();
+        drifted_settings
+            .crypto
+            .instances
+            .get_mut("payload_result_oram_v1")
+            .unwrap()
+            .options["oram"]["tree_height"] = json!(1);
+        let (_temp, dispatcher) = test_dispatcher();
+
+        actix_web::rt::System::new().block_on(async {
+            create_private_result_collection(&dispatcher).await;
+            let app = actix_test::init_service(
+                App::new()
+                    .app_data(web::Data::new(dispatcher.clone()))
+                    .app_data(web::Data::new(settings.clone()))
+                    .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
+                    .configure(config_private_result_oram_api),
+            )
+            .await;
+            let drifted_app = actix_test::init_service(
+                App::new()
+                    .app_data(web::Data::new(dispatcher.clone()))
+                    .app_data(web::Data::new(drifted_settings))
+                    .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
+                    .configure(config_private_result_oram_api),
+            )
+            .await;
+
+            macro_rules! post_json_ok_on {
+                ($app:expr, $uri:expr, $body:expr) => {{
+                    let request = actix_test::TestRequest::post()
+                        .uri($uri)
+                        .set_json(&$body)
+                        .to_request();
+                    let response = actix_test::call_service($app, request).await;
+                    let status = response.status();
+                    let body_bytes = actix_test::read_body(response).await;
+                    let body: Value = serde_json::from_slice(&body_bytes).unwrap_or_else(|err| {
+                        panic!(
+                            "failed to parse response body for {status}: {err}: {}",
+                            String::from_utf8_lossy(&body_bytes)
+                        )
+                    });
+                    assert_eq!(status, StatusCode::OK, "{body}");
+                    assert_eq!(body["status"], "ok");
+                    body["result"].clone()
+                }};
+            }
+            macro_rules! post_json_error_contains_on {
+                ($app:expr, $uri:expr, $body:expr, $status:expr, $needle:expr) => {{
+                    let request = actix_test::TestRequest::post()
+                        .uri($uri)
+                        .set_json(&$body)
+                        .to_request();
+                    let response = actix_test::call_service($app, request).await;
+                    let status = response.status();
+                    let body_bytes = actix_test::read_body(response).await;
+                    let body = String::from_utf8_lossy(&body_bytes);
+                    assert_eq!(status, $status, "{body}");
+                    assert!(body.contains($needle), "{body}");
+                    body.to_string()
+                }};
+            }
+
+            let _ = post_json_ok_on!(
+                &app,
+                "/collections/docs/private-result-oram/manifest",
+                UploadPrivateResultOramManifestRequest {
+                    manifest: fixture.manifest.clone(),
+                    signature: fixture.signature.clone(),
+                }
+            );
+            let _ = post_json_ok_on!(
+                &app,
+                "/collections/docs/private-result-oram/buckets",
+                UploadPrivateResultOramBucketsRequest {
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    buckets: fixture.buckets.clone(),
+                }
+            );
+            let session_result = post_json_ok_on!(
+                &app,
+                "/collections/docs/private-result-oram/session",
+                OpenPrivateResultOramSessionRequest {
+                    client_id: "tenant-a/sdk-instance-commit-drift-test".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                }
+            );
+            let session_id = session_result["session_id"].as_str().unwrap().to_string();
+
+            let (updated_bucket, commit_signature, new_root_hash) = fixture.commit_bucket();
+            let drift_error = post_json_error_contains_on!(
+                &drifted_app,
+                "/collections/docs/private-result-oram/oram/commit",
+                CommitPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash,
+                    updated_buckets: vec![updated_bucket.clone()],
+                    commit_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "manifest oram does not match runtime instance"
+            );
+            assert!(!drift_error.contains("tree_height"), "{drift_error}");
+            assert!(
+                !drift_error.contains(&updated_bucket.ciphertext),
+                "{drift_error}"
+            );
+
+            let close_uri =
+                format!("/collections/docs/private-result-oram/session/{session_id}/close");
+            let closed = post_json_ok_on!(&app, close_uri.as_str(), serde_json::json!({}));
+            assert_eq!(closed, json!(true));
+        });
+    }
+
+    #[test]
     fn open_session_rest_route_rejects_distributed_epoch_mode() {
         let _guard = route_e2e_guard();
         let fixture = PrivateResultRouteFixture::build();
