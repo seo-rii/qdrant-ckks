@@ -12508,6 +12508,81 @@ mod tests {
     }
 
     #[test]
+    fn crypto_runtime_capability_fingerprint_tracks_private_result_oram_policy() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+                allow_inline_key_material: false,
+                instances: HashMap::from([(
+                    "docs_private_result_oram_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: private_result_oram_options(),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let fingerprint = crypto_runtime_capability_fingerprint(&settings);
+        let raw_public_key_b64 = BASE64URL_NOPAD.encode(&[13_u8; 32]);
+        let sanitized_options = serde_json::to_string(&sanitized_crypto_instance_options(
+            settings
+                .crypto
+                .instances
+                .get("docs_private_result_oram_v1")
+                .unwrap(),
+        ))
+        .unwrap();
+        assert!(
+            !sanitized_options.contains(&raw_public_key_b64),
+            "private result ORAM verifier fingerprint view must not serialize raw public keys",
+        );
+        assert!(sanitized_options.contains("encoded_sha256_b64"));
+
+        let mut peer_with_different_oram_shape = settings.clone();
+        peer_with_different_oram_shape
+            .crypto
+            .instances
+            .get_mut("docs_private_result_oram_v1")
+            .unwrap()
+            .options["oram"]["tree_height"] = json!(23);
+        let peer_shape_fingerprint =
+            crypto_runtime_capability_fingerprint(&peer_with_different_oram_shape);
+        assert_ne!(
+            fingerprint, peer_shape_fingerprint,
+            "private result ORAM tree shape drift must change the parity fingerprint",
+        );
+        let err = validate_crypto_runtime_capability_parity(
+            &settings,
+            [("peer-private-result-oram", peer_shape_fingerprint.as_str())],
+        )
+        .expect_err("private result ORAM runtime drift must fail parity validation");
+        assert!(err.to_string().contains("peer-private-result-oram"));
+
+        let mut peer_with_different_verifier = settings.clone();
+        peer_with_different_verifier
+            .crypto
+            .instances
+            .get_mut("docs_private_result_oram_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                SIGNATURE_PUBLIC_KEYS_OPTION.to_string(),
+                json!({ "tenant-a/private-result-signing-v1": BASE64URL_NOPAD.encode(&[14_u8; 32]) }),
+            );
+        assert_ne!(
+            fingerprint,
+            crypto_runtime_capability_fingerprint(&peer_with_different_verifier),
+            "private result ORAM signing verifier drift must change the parity fingerprint",
+        );
+    }
+
+    #[test]
     fn crypto_runtime_capability_fingerprint_tracks_backend_policy() {
         let settings = Settings {
             crypto: CryptoSettings {
