@@ -1086,11 +1086,11 @@ reserved directory names, or OS error strings.
 The CLI/startup snapshot mapping preflight applies the same runtime-bound
 private result ORAM checks before accepting a recovered collection.
 Cluster runtime parity uses the existing crypto capability fingerprint for this
-provider as well. The fingerprint includes non-secret private HNSW ORAM policy
-such as tree shape, fixed budget, result privacy mode, and signing verifier
-digests, while redacting raw verifier public keys. A peer with a different ORAM
-shape or signing verifier fails runtime capability parity before it can be
-treated as an equivalent private-HNSW-capable node. The mismatch diagnostic
+provider as well. The fingerprint includes non-secret private HNSW ORAM and
+private result ORAM policy such as tree shape, fixed budget, result privacy mode,
+and signing verifier digests, while redacting raw verifier public keys. A peer
+with a different ORAM shape or signing verifier fails runtime capability parity
+before it can be treated as an equivalent private-ORAM-capable node. The mismatch diagnostic
 names the peer and fail-closed condition but does not echo the local or peer
 fingerprint strings.
 Shard transfer start operations are also blocked while a collection is configured
