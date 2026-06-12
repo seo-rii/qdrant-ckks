@@ -27,7 +27,8 @@ use segment::index::query_optimization::rescore_formula::parsed_formula::ParsedF
 use segment::json_path::{JsonPath, JsonPathItem};
 use segment::types::{
     AnyVariants, Condition, EncryptedPayloadReadMode, ExtendedPointId, Filter, Match, Payload,
-    ScoredPoint, ShardKey, ValueVariants, WithPayload, WithPayloadInterface, WithVector,
+    PayloadSelector, ScoredPoint, ShardKey, ValueVariants, WithPayload, WithPayloadInterface,
+    WithVector,
 };
 use shard::count::CountRequestInternal;
 use shard::retrieve::record_internal::RecordInternal;
@@ -276,6 +277,60 @@ fn private_result_oram_payload_operation_kind(
         | CollectionUpdateOperations::FieldIndexOperation(_) => None,
         #[cfg(feature = "staging")]
         CollectionUpdateOperations::StagingOperation(_) => None,
+    }
+}
+
+fn private_result_oram_raw_payload_read_violation<'a>(
+    with_payload: &WithPayloadInterface,
+    encryption: &'a CollectionEncryptionConfig,
+) -> CollectionResult<Option<&'a str>> {
+    if !with_payload.is_required()
+        || with_payload.encrypted_payload_read_mode() != EncryptedPayloadReadMode::Raw
+    {
+        return Ok(None);
+    }
+
+    for rule in encryption
+        .rules
+        .iter()
+        .filter(|rule| encryption_rule_uses_private_result_oram(rule))
+    {
+        let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
+            continue;
+        };
+        for payload_path in paths {
+            let protected_path = payload_path.parse::<JsonPath>().map_err(|err| {
+                CollectionError::bad_input(format!(
+                    "private result ORAM payload field path '{payload_path}' is invalid: {err:?}",
+                ))
+            })?;
+            if private_result_oram_with_payload_touches_path(with_payload, &protected_path) {
+                return Ok(Some(payload_path.as_str()));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn private_result_oram_with_payload_touches_path(
+    with_payload: &WithPayloadInterface,
+    protected_path: &JsonPath,
+) -> bool {
+    match with_payload {
+        WithPayloadInterface::Bool(enabled) => *enabled,
+        WithPayloadInterface::Encrypted(_) => true,
+        WithPayloadInterface::Fields(fields) => {
+            fields.iter().any(|field| field.compatible(protected_path))
+        }
+        WithPayloadInterface::Selector(PayloadSelector::Include(selector)) => selector
+            .include
+            .iter()
+            .any(|field| field.compatible(protected_path)),
+        WithPayloadInterface::Selector(PayloadSelector::Exclude(selector)) => !selector
+            .exclude
+            .iter()
+            .any(|field| field.check_exclude_pattern(protected_path)),
     }
 }
 
@@ -2910,6 +2965,11 @@ impl Collection {
             .map(WithPayloadInterface::encrypted_payload_read_mode)
             .unwrap_or(EncryptedPayloadReadMode::Raw);
         ensure_encrypted_payload_read_mode_is_supported(encrypted_payload_read_mode)?;
+        self.ensure_private_result_oram_payload_read_is_not_raw(
+            request.with_payload.as_ref(),
+            "scroll",
+        )
+        .await?;
 
         let local_only = shard_selection.is_shard_id();
 
@@ -3088,6 +3148,11 @@ impl Collection {
             .unwrap_or(&WithPayloadInterface::Bool(false));
         let encrypted_payload_read_mode = with_payload_interface.encrypted_payload_read_mode();
         ensure_encrypted_payload_read_mode_is_supported(encrypted_payload_read_mode)?;
+        self.ensure_private_result_oram_payload_read_is_not_raw(
+            request.with_payload.as_ref(),
+            "retrieve",
+        )
+        .await?;
         let with_payload = WithPayload::from(with_payload_interface);
         let ids_len = request.ids.len();
         let request = Arc::new(request);
@@ -3571,6 +3636,35 @@ impl PayloadRedactionPlan {
 }
 
 impl Collection {
+    pub(super) async fn ensure_private_result_oram_payload_read_is_not_raw(
+        &self,
+        with_payload: Option<&WithPayloadInterface>,
+        operation: &str,
+    ) -> CollectionResult<()> {
+        let Some(with_payload) = with_payload else {
+            return Ok(());
+        };
+        let Some(encryption) = self
+            .collection_config
+            .read()
+            .await
+            .params
+            .effective_encryption()
+        else {
+            return Ok(());
+        };
+        let Some(payload_path) =
+            private_result_oram_raw_payload_read_violation(with_payload, &encryption)?
+        else {
+            return Ok(());
+        };
+
+        Err(CollectionError::bad_input(format!(
+            "cannot {operation} private result ORAM payload field '{payload_path}' through ordinary collection payload reads; {}",
+            private_result_oram_api_required_message(payload_path),
+        )))
+    }
+
     pub(super) async fn encrypted_payload_redaction_plan_for_mode(
         &self,
         mode: EncryptedPayloadReadMode,
@@ -4028,10 +4122,14 @@ fn condition_touches_encrypted_vector<'a>(
 
 #[cfg(test)]
 mod tests {
-    use segment::types::{FieldCondition, IsEmptyCondition, Match, ValueVariants, ValuesCount};
+    use segment::types::{
+        FieldCondition, IsEmptyCondition, Match, PayloadEncryptedReadPolicy,
+        PayloadSelectorExclude, PayloadSelectorInclude, ValueVariants, ValuesCount,
+    };
 
     use super::*;
     use crate::config::{CollectionEncryptionConfig, EncryptionRuleRef};
+    use crate::operations::point_ops::PointStructPersisted;
 
     fn blind_index_token(byte: u8) -> String {
         BASE64URL_NOPAD.encode(&[byte; 32])
@@ -4185,7 +4283,28 @@ mod tests {
             .unwrap()
             .clone(),
         );
+        let point = PointStructPersisted {
+            id: 1.into(),
+            vector: VectorStructPersisted::Single(vec![0.0]),
+            payload: Some(payload.clone()),
+        };
         let operations = vec![
+            (
+                CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+                    PointInsertOperationsInternal::PointsList(vec![point.clone()]),
+                )),
+                "upsert points",
+            ),
+            (
+                CollectionUpdateOperations::PointOperation(PointOperations::SyncPoints(
+                    shard::operations::point_ops::PointSyncOperation {
+                        from_id: None,
+                        to_id: None,
+                        points: vec![point],
+                    },
+                )),
+                "sync points",
+            ),
             (
                 CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(
                     SetPayloadOp {
@@ -4224,6 +4343,12 @@ mod tests {
                 }),
                 "clear payload",
             ),
+            (
+                CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayloadByFilter(
+                    Filter::new(),
+                )),
+                "clear payload by filter",
+            ),
         ];
 
         for (operation, expected_kind) in operations {
@@ -4252,6 +4377,60 @@ mod tests {
                 peer_message.contains("/private-result-oram/session"),
                 "{peer_message}"
             );
+        }
+    }
+
+    #[test]
+    fn private_result_oram_payload_raw_reads_require_session_api() {
+        let encryption = private_result_oram_encryption("document.body");
+        let protected_path = "document.body".parse::<JsonPath>().unwrap();
+
+        let raw_read_cases = [
+            WithPayloadInterface::Bool(true),
+            WithPayloadInterface::Fields(vec!["document".parse().unwrap()]),
+            WithPayloadInterface::Fields(vec!["document.body".parse().unwrap()]),
+            WithPayloadInterface::Selector(PayloadSelector::Include(PayloadSelectorInclude::new(
+                vec!["document".parse().unwrap()],
+            ))),
+            WithPayloadInterface::Selector(PayloadSelector::Exclude(PayloadSelectorExclude::new(
+                vec!["document.title".parse().unwrap()],
+            ))),
+            WithPayloadInterface::Encrypted(PayloadEncryptedReadPolicy {
+                encrypted_payload: EncryptedPayloadReadMode::Raw,
+            }),
+        ];
+
+        for with_payload in raw_read_cases {
+            let violation =
+                private_result_oram_raw_payload_read_violation(&with_payload, &encryption).unwrap();
+            assert_eq!(violation, Some("document.body"));
+            assert!(private_result_oram_with_payload_touches_path(
+                &with_payload,
+                &protected_path
+            ));
+        }
+
+        let allowed_cases = [
+            WithPayloadInterface::Bool(false),
+            WithPayloadInterface::Fields(vec!["document.title".parse().unwrap()]),
+            WithPayloadInterface::Selector(PayloadSelector::Include(PayloadSelectorInclude::new(
+                vec!["document.title".parse().unwrap()],
+            ))),
+            WithPayloadInterface::Selector(PayloadSelector::Exclude(PayloadSelectorExclude::new(
+                vec!["document".parse().unwrap()],
+            ))),
+            WithPayloadInterface::Selector(PayloadSelector::Exclude(PayloadSelectorExclude::new(
+                vec!["document.body".parse().unwrap()],
+            ))),
+            WithPayloadInterface::Encrypted(PayloadEncryptedReadPolicy {
+                encrypted_payload: EncryptedPayloadReadMode::Redacted,
+            }),
+        ];
+
+        for with_payload in allowed_cases {
+            let violation =
+                private_result_oram_raw_payload_read_violation(&with_payload, &encryption).unwrap();
+            assert_eq!(violation, None);
         }
     }
 

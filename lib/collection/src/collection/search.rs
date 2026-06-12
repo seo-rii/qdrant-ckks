@@ -94,6 +94,13 @@ impl Collection {
         for mode in &encrypted_payload_read_modes {
             ensure_encrypted_payload_read_mode_is_supported(*mode)?;
         }
+        for search in &request.searches {
+            self.ensure_private_result_oram_payload_read_is_not_raw(
+                search.with_payload.as_ref(),
+                "search",
+            )
+            .await?;
+        }
         if let Some(encryption) = self
             .collection_config
             .read()

@@ -887,6 +887,10 @@ Ordinary point upsert, sync, `set_payload`, `overwrite_payload`,
 `private-result-oram/v1` payload path fail closed and direct callers to the
 private result ORAM session APIs; they must not fall through to the regular
 server/client payload envelope write path.
+Ordinary raw payload reads through retrieve, scroll, search, or query also fail
+closed when `with_payload` would return a `private-result-oram/v1` payload path.
+Callers may omit payloads or request redacted encrypted payload output, but raw
+result payload bytes require the private result ORAM session/read/commit APIs.
 Result ORAM snapshot restore preflight is open for configured
 `private-result-oram/v1` bindings and validates manifest/current epoch, buckets,
 Merkle metadata, and runtime Ed25519 signatures. The SDK search result now
