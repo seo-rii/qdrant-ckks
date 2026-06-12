@@ -866,6 +866,31 @@ mod private_result_oram_grpc_tests {
                     .contains(&wrong_read_signature.sig)
             );
 
+            let invalid_signature_bad_path = PrivateResultOram::read_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::ReadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: vec![0, 1, 3, 4],
+                    read_signature: Some(signature_to_proto(wrong_read_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(invalid_signature_bad_path.code(), Code::InvalidArgument);
+            assert!(
+                invalid_signature_bad_path
+                    .message()
+                    .contains("read_buckets signature verification failed")
+            );
+            assert!(
+                !invalid_signature_bad_path
+                    .message()
+                    .contains("whole ORAM paths")
+            );
+
             let unconfigured_read_key_id_sentinel = "tenant-a/private-result-signing-v1-unknown";
             let mut unconfigured_read_key_signature = fixture.read_signature(&read_bucket_ids);
             unconfigured_read_key_signature.key_id = unconfigured_read_key_id_sentinel.to_string();
