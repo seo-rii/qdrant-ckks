@@ -1079,6 +1079,97 @@ mod private_result_oram_grpc_tests {
                 );
             }
 
+            let wrong_commit_signature = fixture.signature.clone();
+            let invalid_commit_signature = PrivateResultOram::commit_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::CommitPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash: new_root_hash.clone(),
+                    updated_buckets: vec![bucket_to_proto(updated_bucket.clone())],
+                    commit_signature: Some(signature_to_proto(wrong_commit_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(invalid_commit_signature.code(), Code::InvalidArgument);
+            assert!(
+                invalid_commit_signature
+                    .message()
+                    .contains("commit signature verification failed")
+            );
+            assert!(
+                !invalid_commit_signature
+                    .message()
+                    .contains(&wrong_commit_signature.sig)
+            );
+
+            let unconfigured_commit_key_id_sentinel = "tenant-a/private-result-signing-v1-unknown";
+            let mut unconfigured_commit_key_signature = commit_signature.clone();
+            unconfigured_commit_key_signature.key_id =
+                unconfigured_commit_key_id_sentinel.to_string();
+            let unconfigured_commit_key = PrivateResultOram::commit_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::CommitPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash: new_root_hash.clone(),
+                    updated_buckets: vec![bucket_to_proto(updated_bucket.clone())],
+                    commit_signature: Some(signature_to_proto(unconfigured_commit_key_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(unconfigured_commit_key.code(), Code::InvalidArgument);
+            assert!(
+                unconfigured_commit_key
+                    .message()
+                    .contains("signature key id is not configured")
+            );
+            assert!(
+                !unconfigured_commit_key
+                    .message()
+                    .contains(unconfigured_commit_key_id_sentinel)
+            );
+
+            let commit_signature_body_sentinel = "commit-signature!sentinel";
+            let malformed_commit_signature = PrivateResultOram::commit_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::CommitPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash: new_root_hash.clone(),
+                    updated_buckets: vec![bucket_to_proto(updated_bucket.clone())],
+                    commit_signature: Some(grpc::PrivateResultOramSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: SIGNING_KEY_ID.to_string(),
+                        sig: commit_signature_body_sentinel.to_string(),
+                    }),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(malformed_commit_signature.code(), Code::InvalidArgument);
+            assert!(
+                malformed_commit_signature
+                    .message()
+                    .contains("request validation failed")
+            );
+            assert!(
+                !malformed_commit_signature
+                    .message()
+                    .contains(commit_signature_body_sentinel)
+            );
+
             let committed = PrivateResultOram::commit_private_result_oram_buckets(
                 &service,
                 Request::new(grpc::CommitPrivateResultOramBucketsRequest {
