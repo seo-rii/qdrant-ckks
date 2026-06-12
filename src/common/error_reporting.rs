@@ -93,6 +93,8 @@ pub(crate) fn redact_crypto_material_for_report(value: &str) -> String {
         "xapikey",
         "accessedleaflabel",
         "accessedleaflabels",
+        "bucketcommitment",
+        "bucketcommitments",
         "bucketid",
         "bucketids",
         "candidateheap",
@@ -121,6 +123,8 @@ pub(crate) fn redact_crypto_material_for_report(value: &str) -> String {
         "sessionid",
         "tokenpositionmap",
         "topk",
+        "updatedbucket",
+        "updatedbuckets",
         "visitednode",
         "visitednodes",
     ]
@@ -208,6 +212,7 @@ mod tests {
             "leafLabels=[private-leaf-label-sentinel]",
             "accessed_leaf_labels=[private-accessed-leaf-sentinel]",
             "bucket_id=private-bucket-sentinel",
+            "bucket_commitment=private-bucket-commitment-sentinel",
             "node_ids=[private-node-sentinel]",
             "neighbor_ids=[private-neighbor-sentinel]",
             "candidate_heap=private-candidate-sentinel",
@@ -219,6 +224,7 @@ mod tests {
             "oram_position_map=private-position-map-sentinel",
             "tokenPositionMap=private-token-position-map-sentinel",
             "client_state=private-client-state-sentinel",
+            "updatedBuckets=[private-updated-bucket-sentinel]",
         ] {
             let payload = ErrorReporter::build_report_payload(secret, "node-6", Some(secret));
 

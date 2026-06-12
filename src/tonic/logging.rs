@@ -192,7 +192,9 @@ mod tests {
         let status = tonic::Status::invalid_argument(
             "private ORAM read failed for session_id=session-sentinel \
              path_label=leaf-sentinel candidate_heap=candidate-sentinel \
-             payload_fetch_token=fetch-token-sentinel",
+             payload_fetch_token=fetch-token-sentinel \
+             updated_buckets=updated-bucket-sentinel \
+             bucket_commitment=bucket-commitment-sentinel",
         );
 
         let rendered = redacted_grpc_status_message(&status);
@@ -202,5 +204,7 @@ mod tests {
         assert!(!rendered.contains("leaf-sentinel"));
         assert!(!rendered.contains("candidate-sentinel"));
         assert!(!rendered.contains("fetch-token-sentinel"));
+        assert!(!rendered.contains("updated-bucket-sentinel"));
+        assert!(!rendered.contains("bucket-commitment-sentinel"));
     }
 }
