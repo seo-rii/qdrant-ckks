@@ -1058,6 +1058,10 @@ ciphertext, stale roots, and commitment-context mismatches fail before bucket,
 Merkle, or epoch state changes; runtime error mapping preserves only safe
 failure categories such as `ciphertext` or `commit signature` without echoing
 ciphertext bodies, bucket ids, or root hashes.
+Bucket `index_epoch` records the epoch when that encrypted bucket was last
+written. After a writeback commit, unchanged buckets may still carry an older
+bucket epoch as long as the current Merkle root commits to their existing
+bucket commitment; reads reject buckets newer than the requested session epoch.
 Collection snapshots include the `private_result_oram/` directory if it is
 present, and restore preflight accepts it only when collection encryption has a
 configured `private-result-oram/v1` binding backed by
