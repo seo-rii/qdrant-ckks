@@ -2060,9 +2060,8 @@ mod tests {
         assert_eq!(
             store
                 .read_bucket(0, new.index_epoch, bundle.bucket_count(), 128)
-                .unwrap()
-                .index_epoch,
-            old.index_epoch,
+                .unwrap(),
+            bundle.buckets[0],
         );
         let err = store
             .read_bucket(1, old.index_epoch, bundle.bucket_count(), 128)
@@ -2070,6 +2069,7 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("newer than requested epoch"));
         assert!(!rendered.contains("43"), "{rendered}");
+        assert!(!rendered.contains("1"), "{rendered}");
         let proof = store
             .read_merkle_path_batch(&[1], new.index_epoch, &new.root_hash, bundle.bucket_count())
             .unwrap();
