@@ -474,7 +474,7 @@
 - OpenAPI `Beta` path surface도 private HNSW ORAM manifest/bucket/session/read/commit/close와 private result ORAM manifest/bucket/session/read/commit/close REST endpoints를 노출한다. 암호화 envelope DTO는 SDK-owned wire contract라 현재 OpenAPI에서는 opaque object request/response로 고정한다.
 - REST/gRPC `read_paths`와 `commit` request signature key id는 session manifest의 `owner_signing_key_id`와 달라도 fail closed 한다.
 - active session의 `read_paths`와 `commit`은 session open 이후 runtime instance policy가 바뀌어도 session manifest를 현재 runtime context와 다시 비교하고 drift를 fail closed 한다.
-- REST와 gRPC route fixtures는 active session 이후 runtime `fixed_budget`, `oram`, 또는 private-result `result_privacy` policy가 drift된 settings로 `read_paths`/`commit`을 호출하면 fail closed 되는 경계를 모두 검증한다.
+- REST와 gRPC route fixtures는 active session 이후 runtime `hnsw`, `fixed_budget`, `oram`, 또는 private-result `result_privacy` policy가 drift된 settings로 `read_paths`/`commit`을 호출하면 fail closed 되는 경계를 모두 검증한다.
 - private HNSW snapshot restore preflight는 `private_payload_oram_required` manifest를 collection에 `private-result-oram/v1` payload binding과 대응하는 result ORAM snapshot store가 있을 때만 허용하고, 없으면 fail closed 한다.
 - CLI/startup snapshot mapping recovery도 crypto runtime validation 이후 private HNSW ORAM restore-layout preflight를 실행해 storage-level snapshot recovery와 같은 bucket/root consistency 검증을 적용하고, store-originated layout 오류는 collection-local `private_hnsw_oram` 경로나 bucket body를 반사하지 않도록 sanitize한다.
 - CLI/startup private HNSW ORAM restore-layout 실패는 bucket id, bucket commitment mismatch detail, store file detail을 반사하지 않는 고정 메시지로 보고한다.
