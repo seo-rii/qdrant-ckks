@@ -1488,6 +1488,31 @@ mod tests {
     }
 
     #[test]
+    fn private_oram_transfer_guard_allows_abort_cleanup_operations() {
+        let abort_transfer = ClusterOperations::AbortTransfer(AbortTransferOperation {
+            abort_transfer: collection::operations::cluster_ops::AbortShardTransfer {
+                shard_id: 1,
+                to_shard_id: None,
+                from_peer_id: 1,
+                to_peer_id: 2,
+            },
+        });
+
+        reject_private_oram_cluster_transfer_until_supported(
+            "docs",
+            &private_hnsw_collection_config(),
+            &abort_transfer,
+        )
+        .expect("private HNSW ORAM transfer cleanup abort must remain allowed");
+        reject_private_oram_cluster_transfer_until_supported(
+            "docs",
+            &private_result_oram_collection_config(),
+            &abort_transfer,
+        )
+        .expect("private result ORAM transfer cleanup abort must remain allowed");
+    }
+
+    #[test]
     fn encrypted_cluster_transfer_rejects_vector_public_material_drift() {
         let settings = crate::settings::Settings {
             crypto: crate::settings::CryptoSettings {
