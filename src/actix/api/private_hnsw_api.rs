@@ -2992,6 +2992,13 @@ mod private_hnsw_rest_tests {
             .get_mut("docs_private_hnsw_v1")
             .unwrap()
             .options["fixed_budget"]["fixed_result_k"] = serde_json::json!(2);
+        let mut hnsw_drifted_settings = settings.clone();
+        hnsw_drifted_settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["hnsw"]["m"] = serde_json::json!(3);
         let mut reserved_privacy_settings = settings.clone();
         reserved_privacy_settings
             .crypto
@@ -3014,6 +3021,14 @@ mod private_hnsw_rest_tests {
                 App::new()
                     .app_data(web::Data::new(dispatcher.clone()))
                     .app_data(web::Data::new(fixed_budget_drifted_settings))
+                    .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
+                    .configure(config_private_hnsw_api),
+            )
+            .await;
+            let hnsw_drifted_app = actix_test::init_service(
+                App::new()
+                    .app_data(web::Data::new(dispatcher.clone()))
+                    .app_data(web::Data::new(hnsw_drifted_settings))
                     .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
                     .configure(config_private_hnsw_api),
             )
@@ -3057,6 +3072,22 @@ mod private_hnsw_rest_tests {
             );
 
             let response = actix_test::call_service(
+                &hnsw_drifted_app,
+                actix_test::TestRequest::get()
+                    .uri("/collections/docs/private-hnsw/text/manifest")
+                    .to_request(),
+            )
+            .await;
+            let status = response.status();
+            let body_bytes = actix_test::read_body(response).await;
+            let body = String::from_utf8_lossy(&body_bytes);
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert!(
+                body.contains("manifest hnsw does not match runtime instance"),
+                "{body}"
+            );
+
+            let response = actix_test::call_service(
                 &reserved_privacy_app,
                 actix_test::TestRequest::get()
                     .uri("/collections/docs/private-hnsw/text/manifest")
@@ -3086,6 +3117,13 @@ mod private_hnsw_rest_tests {
             .get_mut("docs_private_hnsw_v1")
             .unwrap()
             .options["fixed_budget"]["fixed_result_k"] = serde_json::json!(2);
+        let mut hnsw_drifted_settings = settings.clone();
+        hnsw_drifted_settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["hnsw"]["m"] = serde_json::json!(3);
         let mut reserved_privacy_settings = settings.clone();
         reserved_privacy_settings
             .crypto
@@ -3108,6 +3146,14 @@ mod private_hnsw_rest_tests {
                 App::new()
                     .app_data(web::Data::new(dispatcher.clone()))
                     .app_data(web::Data::new(fixed_budget_drifted_settings))
+                    .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
+                    .configure(config_private_hnsw_api),
+            )
+            .await;
+            let hnsw_drifted_app = actix_test::init_service(
+                App::new()
+                    .app_data(web::Data::new(dispatcher.clone()))
+                    .app_data(web::Data::new(hnsw_drifted_settings))
                     .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
                     .configure(config_private_hnsw_api),
             )
@@ -3153,6 +3199,23 @@ mod private_hnsw_rest_tests {
             assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
             assert!(
                 body.contains("manifest fixed_budget does not match runtime instance"),
+                "{body}"
+            );
+
+            let response = actix_test::call_service(
+                &hnsw_drifted_app,
+                actix_test::TestRequest::post()
+                    .uri("/collections/docs/private-hnsw/text/buckets")
+                    .set_json(&bucket_request)
+                    .to_request(),
+            )
+            .await;
+            let status = response.status();
+            let body_bytes = actix_test::read_body(response).await;
+            let body = String::from_utf8_lossy(&body_bytes);
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert!(
+                body.contains("manifest hnsw does not match runtime instance"),
                 "{body}"
             );
 
