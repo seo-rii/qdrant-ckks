@@ -1606,6 +1606,51 @@ mod private_result_oram_tests {
         assert!(!rendered.contains(&malformed));
     }
 
+    #[test]
+    fn bucket_read_request_preserves_path_shape_and_allows_shared_buckets() {
+        let manifest = read_shape_manifest();
+        validate_bucket_read_request(&manifest, &[0, 1, 3, 0, 1, 4]).unwrap();
+
+        let empty = validate_bucket_read_request(&manifest, &[]).unwrap_err();
+        assert!(empty.to_string().contains("read_buckets request is empty"));
+
+        let deduped = validate_bucket_read_request(&manifest, &[0, 1, 3, 4]).unwrap_err();
+        assert!(deduped.to_string().contains("whole ORAM paths"));
+
+        let over_budget =
+            validate_bucket_read_request(&manifest, &[0, 1, 3, 0, 1, 4, 0, 2, 5]).unwrap_err();
+        assert!(over_budget.to_string().contains("fixed path budget"));
+
+        let out_of_range = validate_bucket_read_request(&manifest, &[0, 1, 7]).unwrap_err();
+        assert!(out_of_range.to_string().contains("out of range"));
+    }
+
+    fn read_shape_manifest() -> PrivateResultOramManifest {
+        PrivateResultOramManifest {
+            version: 1,
+            provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+            binding: PRIVATE_RESULT_ORAM_BINDING.to_string(),
+            collection_id: "collection-private-result-test".to_string(),
+            key_id: "tenant-a/private-result-rk".to_string(),
+            rk_id: "tenant-a/private-result-rk".to_string(),
+            rk_epoch: 7,
+            oram: OramParams {
+                kind: qdrant_sec::OramKind::PathOram,
+                bucket_size: 2,
+                block_size_bytes: 128,
+                tree_height: 2,
+                path_batch_size: 2,
+            },
+            index_epoch: 42,
+            root_hash: BASE64URL_NOPAD.encode(&[42; 32]),
+            bucket_count: 7,
+            logical_result_count: 2,
+            dummy_result_count: 0,
+            owner_signing_key_id: SIGNING_KEY_ID.to_string(),
+            created_at_unix: 1_700_000_000,
+        }
+    }
+
     fn instance_with_signature_public_key(public_key: &str) -> CryptoInstanceConfig {
         CryptoInstanceConfig {
             provider: qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
