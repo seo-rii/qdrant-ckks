@@ -1499,3 +1499,118 @@ fn private_result_oram_error(err: qdrant_sec::PrivateResultOramError) -> Storage
         _ => StorageError::bad_request("private result ORAM request validation failed"),
     }
 }
+
+#[cfg(test)]
+mod private_result_oram_tests {
+    use serde_json::json;
+
+    use super::*;
+
+    const SIGNING_KEY_ID: &str = "tenant-a/private-result-signing-v1";
+
+    #[test]
+    fn client_id_shape_rejects_oversized_or_malformed_values_without_reflecting_value() {
+        validate_private_result_oram_client_id_shape("tenant-a/sdk.instance_1@host:1").unwrap();
+
+        let oversized = format!(
+            "client-id-sentinel{}",
+            "x".repeat(PRIVATE_RESULT_ORAM_CLIENT_ID_MAX_LEN)
+        );
+        let err = validate_private_result_oram_client_id_shape(&oversized).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("client_id must be non-empty and at most 256 bytes"));
+        assert!(!rendered.contains("client-id-sentinel"));
+
+        let malformed = "client-id!sentinel";
+        let err = validate_private_result_oram_client_id_shape(malformed).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("client_id is invalid"));
+        assert!(!rendered.contains(malformed));
+    }
+
+    #[test]
+    fn session_id_shape_rejects_oversized_or_malformed_values_without_reflecting_value() {
+        validate_private_result_oram_session_id_shape("missing-session-id-sentinel").unwrap();
+        validate_private_result_oram_session_id_shape(&uuid::Uuid::new_v4().to_string()).unwrap();
+
+        let oversized = "s".repeat(PRIVATE_RESULT_ORAM_SESSION_ID_MAX_LEN + 1);
+        let err = validate_private_result_oram_session_id_shape(&oversized).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("session_id is invalid"));
+        assert!(!rendered.contains(&oversized));
+
+        let malformed = "bad/session-id";
+        let err = validate_private_result_oram_session_id_shape(malformed).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("session_id is invalid"));
+        assert!(!rendered.contains(malformed));
+    }
+
+    #[test]
+    fn root_hash_shape_rejects_oversized_or_malformed_values_without_reflecting_value() {
+        validate_base64url_32_string(&BASE64URL_NOPAD.encode(&[42; 32]), "root_hash").unwrap();
+
+        let oversized = format!("{}{}", BASE64URL_NOPAD.encode(&[42; 32]), "A");
+        let err = validate_base64url_32_string(&oversized, "root_hash").unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("root_hash must be a base64url sha256 value"));
+        assert!(!rendered.contains(&oversized));
+
+        let mut malformed = BASE64URL_NOPAD.encode(&[42; 32]);
+        malformed.replace_range(0..1, "!");
+        let err = validate_base64url_32_string(&malformed, "root_hash").unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("root_hash must be base64url without padding"));
+        assert!(!rendered.contains(&malformed));
+    }
+
+    #[test]
+    fn signature_public_key_shape_rejects_values_without_reflecting_value() {
+        let valid = BASE64URL_NOPAD.encode(&[7; 32]);
+        let instance = instance_with_signature_public_key(&valid);
+        assert_eq!(
+            signature_public_key(&instance, SIGNING_KEY_ID).unwrap(),
+            [7; 32]
+        );
+
+        let missing_key_id = "tenant-a/missing-key-sentinel";
+        let err = signature_public_key(&instance, missing_key_id).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("signature key id is not configured"));
+        assert!(!rendered.contains(missing_key_id));
+
+        let wrong_len = BASE64URL_NOPAD.encode(&[7; 33]);
+        let err = signature_public_key(
+            &instance_with_signature_public_key(&wrong_len),
+            SIGNING_KEY_ID,
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("signature public key has invalid encoded length"));
+        assert!(!rendered.contains(&wrong_len));
+
+        let mut malformed = BASE64URL_NOPAD.encode(&[7; 32]);
+        malformed.replace_range(0..1, "!");
+        let err = signature_public_key(
+            &instance_with_signature_public_key(&malformed),
+            SIGNING_KEY_ID,
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("signature public key must be base64url without padding"));
+        assert!(!rendered.contains(&malformed));
+    }
+
+    fn instance_with_signature_public_key(public_key: &str) -> CryptoInstanceConfig {
+        CryptoInstanceConfig {
+            provider: qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+            materials: HashMap::new(),
+            backend_ref: None,
+            options: json!({
+                SIGNATURE_PUBLIC_KEYS_OPTION: {
+                    SIGNING_KEY_ID: public_key,
+                }
+            }),
+        }
+    }
+}
