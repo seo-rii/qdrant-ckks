@@ -1721,6 +1721,7 @@ mod tests {
         assert!(rendered.contains("private ORAM collection docs"));
         assert!(rendered.contains("encrypted ORAM bucket transfer"));
         assert!(!rendered.contains("private_hnsw_oram"));
+        assert!(!rendered.contains("private_result_oram"));
     }
 
     #[cfg(unix)]
