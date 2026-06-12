@@ -1574,4 +1574,103 @@ mod private_result_oram_grpc_tests {
             assert!(err.message().contains("consensus-backed epoch/root CAS"));
         });
     }
+
+    #[test]
+    fn active_session_grpc_read_rejects_runtime_oram_policy_drift() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateResultRouteFixture::build();
+        let settings = fixture.settings();
+        let mut drifted_settings = settings.clone();
+        drifted_settings
+            .crypto
+            .instances
+            .get_mut("payload_result_oram_v1")
+            .unwrap()
+            .options["oram"]["tree_height"] = json!(1);
+        let (_temp, dispatcher) = test_dispatcher();
+
+        actix_web::rt::System::new().block_on(async {
+            create_private_result_collection(&dispatcher).await;
+            let service =
+                PrivateResultOramService::new(Arc::new(dispatcher.clone()), settings.clone());
+
+            PrivateResultOram::upload_private_result_oram_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                    signature: Some(signature_to_proto(fixture.signature.clone())),
+                }),
+            )
+            .await
+            .unwrap();
+
+            PrivateResultOram::upload_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    buckets: fixture
+                        .buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            )
+            .await
+            .unwrap();
+
+            let session = PrivateResultOram::open_private_result_oram_session(
+                &service,
+                Request::new(grpc::OpenPrivateResultOramSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    client_id: "tenant-a/sdk-instance-drift-test".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                }),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+
+            let drifted_service =
+                PrivateResultOramService::new(Arc::new(dispatcher.clone()), drifted_settings);
+            let read_bucket_ids = vec![0, 1, 3, 0, 1, 4];
+            let err = PrivateResultOram::read_private_result_oram_buckets(
+                &drifted_service,
+                Request::new(grpc::ReadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: Some(signature_to_proto(
+                        fixture.read_signature(&read_bucket_ids),
+                    )),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("manifest oram does not match runtime instance")
+            );
+            assert!(!err.message().contains("tree_height"));
+
+            let closed = PrivateResultOram::close_private_result_oram_session(
+                &service,
+                Request::new(grpc::ClosePrivateResultOramSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id,
+                }),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            assert!(closed.closed);
+        });
+    }
 }
