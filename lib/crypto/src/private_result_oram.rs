@@ -2290,7 +2290,7 @@ pub fn verify_private_result_oram_merkle_proof(
     let mut buckets_by_id = std::collections::BTreeMap::new();
     for bucket in buckets {
         if bucket.version != PRIVATE_RESULT_ORAM_BUCKET_VERSION
-            || bucket.index_epoch > expected_epoch
+            || bucket.index_epoch != expected_epoch
             || bucket.bucket_id >= expected_bucket_count
         {
             return Err(PrivateResultOramError::InvalidMerkleProof);
@@ -4341,6 +4341,19 @@ mod tests {
             &[bucket0.clone(), bucket1.clone()],
         )
         .unwrap();
+
+        let mut stale_epoch_bucket = bucket0.clone();
+        stale_epoch_bucket.index_epoch = 41;
+        assert_eq!(
+            verify_private_result_oram_merkle_proof(
+                &proof,
+                42,
+                &root,
+                2,
+                &[stale_epoch_bucket, bucket1.clone()],
+            ),
+            Err(PrivateResultOramError::InvalidMerkleProof)
+        );
 
         let duplicate_proof = PrivateResultOramMerkleProof {
             leaves: vec![proof.leaves[0].clone(), proof.leaves[0].clone()],
