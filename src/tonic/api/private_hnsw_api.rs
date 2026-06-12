@@ -3808,6 +3808,13 @@ mod private_hnsw_grpc_tests {
             .get_mut("docs_private_hnsw_v1")
             .unwrap()
             .options["hnsw"]["m"] = serde_json::json!(3);
+        let mut oram_drifted_settings = settings.clone();
+        oram_drifted_settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["oram"]["bucket_size"] = serde_json::json!(4);
         let mut reserved_privacy_settings = settings.clone();
         reserved_privacy_settings
             .crypto
@@ -3826,6 +3833,8 @@ mod private_hnsw_grpc_tests {
             );
             let hnsw_drifted_service =
                 PrivateHnswOramService::new(Arc::new(dispatcher.clone()), hnsw_drifted_settings);
+            let oram_drifted_service =
+                PrivateHnswOramService::new(Arc::new(dispatcher.clone()), oram_drifted_settings);
             let reserved_privacy_service = PrivateHnswOramService::new(
                 Arc::new(dispatcher.clone()),
                 reserved_privacy_settings,
@@ -3874,6 +3883,21 @@ mod private_hnsw_grpc_tests {
             );
 
             let err = PrivateHnswOram::get_private_hnsw_manifest(
+                &oram_drifted_service,
+                Request::new(grpc::GetPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("manifest oram does not match runtime instance")
+            );
+
+            let err = PrivateHnswOram::get_private_hnsw_manifest(
                 &reserved_privacy_service,
                 Request::new(grpc::GetPrivateHnswManifestRequest {
                     collection_name: COLLECTION_NAME.to_string(),
@@ -3909,6 +3933,13 @@ mod private_hnsw_grpc_tests {
             .get_mut("docs_private_hnsw_v1")
             .unwrap()
             .options["hnsw"]["m"] = serde_json::json!(3);
+        let mut oram_drifted_settings = settings.clone();
+        oram_drifted_settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["oram"]["bucket_size"] = serde_json::json!(4);
         let mut reserved_privacy_settings = settings.clone();
         reserved_privacy_settings
             .crypto
@@ -3927,6 +3958,8 @@ mod private_hnsw_grpc_tests {
             );
             let hnsw_drifted_service =
                 PrivateHnswOramService::new(Arc::new(dispatcher.clone()), hnsw_drifted_settings);
+            let oram_drifted_service =
+                PrivateHnswOramService::new(Arc::new(dispatcher.clone()), oram_drifted_settings);
             let reserved_privacy_service = PrivateHnswOramService::new(
                 Arc::new(dispatcher.clone()),
                 reserved_privacy_settings,
@@ -3979,6 +4012,18 @@ mod private_hnsw_grpc_tests {
             assert!(
                 err.message()
                     .contains("manifest hnsw does not match runtime instance")
+            );
+
+            let err = PrivateHnswOram::upload_private_hnsw_buckets(
+                &oram_drifted_service,
+                Request::new(bucket_request()),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("manifest oram does not match runtime instance")
             );
 
             let err = PrivateHnswOram::upload_private_hnsw_buckets(
