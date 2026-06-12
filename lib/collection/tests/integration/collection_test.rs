@@ -56,7 +56,8 @@ use qdrant_sec::{
     ClientPayloadValidationContext, ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_PAYLOAD_MARKER,
     ENCRYPTED_VECTOR_SIDECAR_FIELD, ExistingPayloadMode, METADATA_EXACT_MATCH_TOKEN_BINDING,
     METADATA_VALUE_BINDING, PAYLOAD_TEXT_ENVELOPE_KIND, PAYLOAD_TEXT_KEY_DOMAIN,
-    PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey, ServerPayloadValidationContext,
+    PRIVATE_HNSW_ORAM_BINDING, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
+    ServerPayloadValidationContext, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
     client_payload_signature_message, is_client_encrypted_payload_value,
     is_encrypted_payload_value, validate_client_payload_value_for_runtime,
     validate_server_payload_value_metadata,
@@ -246,6 +247,36 @@ fn vector_encryption_config() -> CollectionEncryptionConfig {
             binding: Some("vector-envelope/v1".to_string()),
         }],
     }
+}
+
+fn private_hnsw_vector_encryption_config() -> CollectionEncryptionConfig {
+    CollectionEncryptionConfig {
+        version: 1,
+        key_id: Some("tenant-a/vector-private-rk".to_string()),
+        crypto_schema_version: 1,
+        encryption_epoch: 7,
+        migration_state: CryptoMigrationState::Active,
+        rules: vec![EncryptionRuleRef {
+            id: "default_private_hnsw".to_string(),
+            selector: EncryptionSelector::VectorNames {
+                names: vec![DEFAULT_VECTOR_NAME.to_string()],
+            },
+            instance: "docs_text_private_hnsw".to_string(),
+            binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+        }],
+    }
+}
+
+fn assert_private_hnsw_session_api_error(err: CollectionError) {
+    assert!(matches!(
+        err,
+        CollectionError::BadInput { description }
+            if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                && description.contains("client-led private ORAM sessions")
+                && description.contains("/private-hnsw/")
+                && description.contains("/session")
+                && !description.contains("runtime CKKS")
+    ));
 }
 
 #[derive(Clone, Copy)]
@@ -8263,6 +8294,196 @@ async fn encrypted_vector_rejects_search_path() {
                 && (description.contains("runtime CKKS sidecar matrix entrypoint")
                     || description.contains("use CKKS sidecar vector search APIs"))
     ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn private_hnsw_vector_rejects_direct_search_paths_with_session_api_message() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection = encrypted_collection_fixture(
+        collection_dir.path(),
+        1,
+        private_hnsw_vector_encryption_config(),
+    )
+    .await;
+
+    let err = collection
+        .search(
+            SearchRequestInternal {
+                vector: vec![1.0, 0.0, 0.0, 0.0].into(),
+                with_payload: None,
+                with_vector: None,
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: None,
+                score_threshold: None,
+            }
+            .into(),
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_hnsw_session_api_error(err);
+
+    let err = collection
+        .query_batch(
+            vec![(
+                CollectionQueryRequest {
+                    prefetch: vec![],
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::Vector(VectorInternal::from(vec![1.0, 0.0, 0.0, 0.0])),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                ShardSelectorInternal::All,
+            )],
+            |_name| async { None },
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_hnsw_session_api_error(err);
+
+    let err = collection
+        .query_batch_internal(
+            vec![ShardQueryRequest {
+                prefetches: vec![],
+                query: Some(ScoringQuery::Vector(vec![1.0, 0.0, 0.0, 0.0].into())),
+                filter: None,
+                score_threshold: None,
+                limit: 1,
+                offset: 0,
+                params: None,
+                with_vector: WithVector::Bool(false),
+                with_payload: WithPayloadInterface::Bool(false),
+            }],
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_hnsw_session_api_error(err);
+
+    let err = collection
+        .query_batch(
+            vec![(
+                CollectionQueryRequest {
+                    prefetch: vec![CollectionPrefetch {
+                        prefetch: vec![CollectionPrefetch {
+                            prefetch: vec![],
+                            query: Some(Query::Vector(VectorQuery::Nearest(
+                                VectorInputInternal::Vector(VectorInternal::from(vec![
+                                    1.0, 0.0, 0.0, 0.0,
+                                ])),
+                            ))),
+                            using: DEFAULT_VECTOR_NAME.to_string(),
+                            filter: None,
+                            score_threshold: None,
+                            limit: 1,
+                            params: None,
+                            lookup_from: None,
+                        }],
+                        query: Some(Query::Sample(SampleInternal::Random)),
+                        using: DEFAULT_VECTOR_NAME.to_string(),
+                        filter: None,
+                        score_threshold: None,
+                        limit: 1,
+                        params: None,
+                        lookup_from: None,
+                    }],
+                    query: Some(Query::Fusion(FusionInternal::Dbsf)),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                ShardSelectorInternal::All,
+            )],
+            |_name| async { None },
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_hnsw_session_api_error(err);
+
+    let err = recommend_by(
+        RecommendRequestInternal {
+            positive: vec![RecommendExample::Dense(vec![1.0, 0.0, 0.0, 0.0])],
+            limit: 1,
+            ..Default::default()
+        },
+        &collection,
+        |_name| async { None },
+        None,
+        ShardSelectorInternal::All,
+        None,
+        HwMeasurementAcc::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_private_hnsw_session_api_error(err);
+
+    let err = discover(
+        DiscoverRequestInternal {
+            target: Some(RecommendExample::Dense(vec![1.0, 0.0, 0.0, 0.0])),
+            context: None,
+            filter: None,
+            params: None,
+            limit: 1,
+            offset: None,
+            with_payload: None,
+            with_vector: None,
+            using: None,
+            lookup_from: None,
+        },
+        &collection,
+        |_name| async { None },
+        None,
+        ShardSelectorInternal::All,
+        None,
+        HwMeasurementAcc::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_private_hnsw_session_api_error(err);
+
+    let err = collection
+        .search_points_matrix(
+            CollectionSearchMatrixRequest {
+                sample_size: 2,
+                limit_per_sample: 1,
+                filter: None,
+                using: DEFAULT_VECTOR_NAME.to_string(),
+            },
+            ShardSelectorInternal::All,
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_hnsw_session_api_error(err);
 }
 
 #[tokio::test(flavor = "multi_thread")]
