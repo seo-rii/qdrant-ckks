@@ -416,13 +416,13 @@ mod private_hnsw_rest_tests {
         let _guard = route_e2e_guard();
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
         let mut settings = fixture.route_settings();
-        let alternate_manifest_key_id = "tenant-a/private-hnsw-signing-v2";
+        let alternate_signing_key_id = "tenant-a/private-hnsw-signing-v2";
         settings
             .crypto
             .instances
             .get_mut("docs_private_hnsw_v1")
             .unwrap()
-            .options["signature_public_keys"][alternate_manifest_key_id] =
+            .options["signature_public_keys"][alternate_signing_key_id] =
             serde_json::json!(data_encoding::BASE64URL_NOPAD.encode(&[19_u8; 32]));
         let (_temp, dispatcher) = test_dispatcher();
         actix_web::rt::System::new().block_on(async {
@@ -757,7 +757,7 @@ mod private_hnsw_rest_tests {
             );
 
             let mut alternate_manifest_signature = fixture.manifest_signature.clone();
-            alternate_manifest_signature.key_id = alternate_manifest_key_id.to_string();
+            alternate_manifest_signature.key_id = alternate_signing_key_id.to_string();
             let alternate_manifest_key_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {
@@ -769,7 +769,7 @@ mod private_hnsw_rest_tests {
             );
             assert!(!alternate_manifest_key_error.contains("not configured"));
             assert!(
-                !alternate_manifest_key_error.contains(alternate_manifest_key_id),
+                !alternate_manifest_key_error.contains(alternate_signing_key_id),
                 "{alternate_manifest_key_error}"
             );
 
@@ -1661,6 +1661,35 @@ mod private_hnsw_rest_tests {
                 "{unknown_read_key_error}"
             );
 
+            let mut alternate_read_signature =
+                fixture.sign_read_paths(&[fixture.entry_leaf_label()], 1, true);
+            alternate_read_signature.key_id = alternate_signing_key_id.to_string();
+            let alternate_read_key_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/read_paths",
+                OramReadPathsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: vec![fixture.entry_leaf_label()],
+                    padding: OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    },
+                    client_signature: PrivateHnswClientSignature {
+                        alg: alternate_read_signature.alg,
+                        key_id: alternate_read_signature.key_id,
+                        sig: alternate_read_signature.sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "signature key_id does not match manifest owner_signing_key_id"
+            );
+            assert!(!alternate_read_key_error.contains("not configured"));
+            assert!(
+                !alternate_read_key_error.contains(alternate_signing_key_id),
+                "{alternate_read_key_error}"
+            );
+
             let invalid_read_key_id_sentinel = "read-signature-key!sentinel";
             let invalid_read_key_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",
@@ -2098,6 +2127,32 @@ mod private_hnsw_rest_tests {
             assert!(
                 !unknown_commit_key_error.contains(signature_key_id_sentinel),
                 "{unknown_commit_key_error}"
+            );
+
+            let mut alternate_commit_signature = search_run.commit_signature.clone();
+            alternate_commit_signature.key_id = alternate_signing_key_id.to_string();
+            let alternate_commit_key_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/commit",
+                OramCommitRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run.updated_buckets.clone(),
+                    commit_signature: PrivateHnswClientSignature {
+                        alg: alternate_commit_signature.alg,
+                        key_id: alternate_commit_signature.key_id,
+                        sig: alternate_commit_signature.sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "signature key_id does not match manifest owner_signing_key_id"
+            );
+            assert!(!alternate_commit_key_error.contains("not configured"));
+            assert!(
+                !alternate_commit_key_error.contains(alternate_signing_key_id),
+                "{alternate_commit_key_error}"
             );
 
             let invalid_commit_key_id_sentinel = "commit-signature-key!sentinel";
