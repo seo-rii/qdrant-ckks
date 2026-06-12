@@ -1569,12 +1569,23 @@ where
             .ok()
             .and_then(|height| height.checked_add(1))
             .ok_or(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"))?;
-        let expected_bucket_ids = batch_plan
-            .token_count
-            .checked_mul(path_len)
-            .ok_or(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"))?;
+        let mut expected_bucket_ids = Vec::with_capacity(
+            batch_plan
+                .token_count
+                .checked_mul(path_len)
+                .ok_or(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"))?,
+        );
+        for payload_fetch_token in token_chunk {
+            let old_leaf = state
+                .position(payload_fetch_token)
+                .ok_or(PrivateResultOramError::MissingPosition)?;
+            expected_bucket_ids.extend(private_result_oram_bucket_ids_for_leaf(
+                old_leaf,
+                config.tree_height,
+            )?);
+        }
         if batch_plan.bucket_ids.is_empty()
-            || batch_plan.bucket_ids.len() != expected_bucket_ids
+            || batch_plan.bucket_ids != expected_bucket_ids
             || batch_plan
                 .bucket_ids
                 .iter()
@@ -3602,6 +3613,39 @@ mod tests {
                 || Ok(0),
             ),
             Err(PrivateResultOramError::DuplicatePayloadFetchToken)
+        );
+
+        let wrong_path_plan = PrivateResultOramReadBucketPlan {
+            batches: vec![PrivateResultOramReadBucketBatchPlan {
+                bucket_ids: vec![0, 1, 4, 10],
+                token_count: 1,
+            }],
+            token_count: 1,
+            path_batch_size: 1,
+        };
+        let wrong_path_batch = PrivateResultOramEncryptedBucketBatch {
+            index_epoch: 42,
+            root_hash,
+            bucket_count,
+            proof_value: "{}".to_string(),
+            buckets: Vec::new(),
+        };
+        assert_eq!(
+            fetch_private_result_oram_tokens_encrypted_verified(
+                &keys,
+                base_context,
+                42,
+                &BASE64URL_NOPAD.encode(&[42; 32]),
+                bucket_count,
+                43,
+                &mut state,
+                config,
+                &[block.payload_fetch_token],
+                &wrong_path_plan,
+                &[wrong_path_batch],
+                || Ok(0),
+            ),
+            Err(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"))
         );
     }
 
