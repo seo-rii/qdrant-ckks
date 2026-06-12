@@ -167,6 +167,31 @@ fn reject_private_hnsw_oram_read_only_point_operation(
     )))
 }
 
+fn encrypted_vector_return_error(
+    encryption: &CollectionEncryptionConfig,
+    with_vector: &WithVector,
+) -> Option<CollectionError> {
+    let request = encrypted_vector_return_request(encryption, with_vector)?;
+    let encrypted_name = request.vector_name();
+    if encryption.rules.iter().any(|rule| {
+        encryption_rule_uses_private_hnsw_oram(rule)
+            && matches!(
+                &rule.selector,
+                EncryptionSelector::VectorNames { names }
+                    if names.iter().any(|name| name == encrypted_name)
+            )
+    }) {
+        return Some(CollectionError::bad_input(format!(
+            "{} Point-level vector reads are not exposed for this provider.",
+            private_hnsw_oram_api_required_message(encrypted_name),
+        )));
+    }
+
+    Some(CollectionError::bad_input(format!(
+        "cannot return encrypted vector '{encrypted_name}'; CKKS vector ciphertext read path returns payload sidecar only",
+    )))
+}
+
 fn reject_private_result_oram_payload_point_operation(
     operation: &CollectionUpdateOperations,
     encryption: &CollectionEncryptionConfig,
@@ -3119,11 +3144,8 @@ impl Collection {
             return Ok(());
         };
 
-        if let Some(request) = encrypted_vector_return_request(&encryption, with_vector) {
-            let encrypted_name = request.vector_name();
-            return Err(CollectionError::bad_input(format!(
-                "cannot return encrypted vector '{encrypted_name}'; CKKS vector ciphertext read path returns payload sidecar only",
-            )));
+        if let Some(err) = encrypted_vector_return_error(&encryption, with_vector) {
+            return Err(err);
         }
 
         Ok(())
@@ -4271,6 +4293,38 @@ mod tests {
         assert!(peer_message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
         assert!(peer_message.contains("/private-hnsw/embedding/session"));
         assert!(!peer_message.contains("CKKS vector encryption"));
+    }
+
+    #[test]
+    fn private_hnsw_vector_return_error_uses_session_api() {
+        let encryption = private_hnsw_encryption("embedding");
+
+        for with_vector in [
+            WithVector::Bool(true),
+            WithVector::Selector(vec!["plain".to_string(), "embedding".to_string()]),
+        ] {
+            let err = encrypted_vector_return_error(&encryption, &with_vector).unwrap();
+            let message = format!("{err}");
+            assert!(message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
+            assert!(message.contains("/private-hnsw/embedding/session"));
+            assert!(message.contains("Point-level vector reads"));
+            assert!(!message.contains("CKKS vector ciphertext read path"));
+        }
+    }
+
+    #[test]
+    fn ckks_vector_return_error_keeps_ciphertext_read_path_message() {
+        let encryption = params_with_encrypted_vector_name("embedding");
+
+        let err = encrypted_vector_return_error(
+            &encryption,
+            &WithVector::Selector(vec!["embedding".to_string()]),
+        )
+        .unwrap();
+        let message = format!("{err}");
+        assert!(message.contains("cannot return encrypted vector 'embedding'"));
+        assert!(message.contains("CKKS vector ciphertext read path"));
+        assert!(!message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
     }
 
     #[test]
