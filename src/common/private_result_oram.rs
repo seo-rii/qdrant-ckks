@@ -1802,6 +1802,118 @@ mod private_result_oram_tests {
         assert!(out_of_range.to_string().contains("out of range"));
     }
 
+    #[test]
+    fn session_registry_enforces_single_writer_and_expiration() {
+        let now = 10;
+        let expired_at = 20;
+        let mut registry = PrivateResultOramSessionRegistry::default();
+        let session = fixture_session("session-1", expired_at);
+
+        registry.open(session.clone(), now).unwrap();
+        assert!(registry.has_active_collection("collection-private-result-test", now));
+        assert!(!registry.has_active_collection("other-collection", now));
+
+        let err = registry
+            .open(
+                PrivateResultOramSession {
+                    session_id: "session-2".to_string(),
+                    ..session
+                },
+                now,
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("ConcurrentWriter"));
+
+        let err = registry
+            .with_session_mut(
+                "collection-private-result-test",
+                "session-1",
+                expired_at,
+                |_| Ok(()),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("session is missing or expired"));
+        assert!(!registry.has_active_collection("collection-private-result-test", expired_at));
+        assert!(!registry.close("collection-private-result-test", "session-1", expired_at));
+
+        registry
+            .open(fixture_session("session-2", expired_at + 10), expired_at)
+            .unwrap();
+        assert!(registry.has_active_collection("collection-private-result-test", expired_at,));
+        assert!(registry.close("collection-private-result-test", "session-2", expired_at,));
+    }
+
+    #[test]
+    fn session_registry_blocks_snapshot_and_upload_windows() {
+        let now = 10;
+        let mut registry = PrivateResultOramSessionRegistry::default();
+
+        registry
+            .begin_collection_snapshot("collection-private-result-test", now)
+            .unwrap();
+        let err = registry
+            .open(fixture_session("session-1", 20), now)
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("session open requires no active collection snapshot")
+        );
+        let err = ensure_private_result_oram_write_window_in_registry(
+            &mut registry,
+            "collection-private-result-test",
+            now,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("upload requires no active collection snapshot")
+        );
+        registry.release_collection_snapshot("collection-private-result-test");
+
+        registry
+            .begin_upload("collection-private-result-test", now)
+            .unwrap();
+        let err = registry
+            .open(fixture_session("session-1", 20), now)
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("session open requires no active upload")
+        );
+        let err = registry
+            .begin_collection_snapshot("collection-private-result-test", now)
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("snapshot requires no active private ORAM upload")
+        );
+        registry.release_upload("collection-private-result-test");
+
+        registry
+            .open(fixture_session("session-1", 20), now)
+            .unwrap();
+        let err = ensure_private_result_oram_write_window_in_registry(
+            &mut registry,
+            "collection-private-result-test",
+            now,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("upload requires no active session")
+        );
+        assert!(registry.close("collection-private-result-test", "session-1", now,));
+
+        registry
+            .begin_collection_snapshot("collection-private-result-test", now)
+            .unwrap();
+        registry.release_collection_snapshot("collection-private-result-test");
+        registry
+            .begin_upload("collection-private-result-test", now)
+            .unwrap();
+        registry.release_upload("collection-private-result-test");
+    }
+
     fn read_shape_manifest() -> PrivateResultOramManifest {
         PrivateResultOramManifest {
             version: 1,
@@ -1825,6 +1937,24 @@ mod private_result_oram_tests {
             dummy_result_count: 0,
             owner_signing_key_id: SIGNING_KEY_ID.to_string(),
             created_at_unix: 1_700_000_000,
+        }
+    }
+
+    fn fixture_session(session_id: &str, lease_expires_unix: u64) -> PrivateResultOramSession {
+        let manifest = read_shape_manifest();
+        PrivateResultOramSession {
+            session_id: session_id.to_string(),
+            _client_id: "tenant-a/sdk-instance-1".to_string(),
+            collection_id: manifest.collection_id.clone(),
+            collection_path: std::path::PathBuf::from("/tmp/qdrant-private-result-oram-test"),
+            index_epoch: manifest.index_epoch,
+            root_hash: manifest.root_hash.clone(),
+            lease_expires_unix,
+            bucket_count: manifest.bucket_count,
+            tree_height: manifest.oram.tree_height,
+            path_batch_size: manifest.oram.path_batch_size,
+            max_bucket_ciphertext_bytes: 4096,
+            manifest,
         }
     }
 
