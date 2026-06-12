@@ -284,7 +284,13 @@ impl PrivateResultOramClientState {
         let mut state = Self::new();
         for (payload_fetch_token, leaf) in position_map {
             validate_private_result_oram_leaf(leaf, tree_height)?;
-            state.position_map.insert(payload_fetch_token, leaf);
+            if state
+                .position_map
+                .insert(payload_fetch_token, leaf)
+                .is_some()
+            {
+                return Err(PrivateResultOramError::InvalidClientStateSnapshot);
+            }
         }
         Ok(state)
     }
@@ -3826,6 +3832,16 @@ mod tests {
         bad_stash.stash[0].payload_fetch_token = [99; 32];
         assert_eq!(
             PrivateResultOramClientState::from_snapshot(&bad_stash),
+            Err(PrivateResultOramError::InvalidClientStateSnapshot)
+        );
+        assert_eq!(
+            PrivateResultOramClientState::with_position_map(
+                [
+                    (entry.payload_fetch_token, 0),
+                    (entry.payload_fetch_token, 1),
+                ],
+                config.tree_height,
+            ),
             Err(PrivateResultOramError::InvalidClientStateSnapshot)
         );
     }

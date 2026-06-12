@@ -880,7 +880,9 @@ impl PrivateHnswOramClientState {
         let mut state = Self::new();
         for (node_id, leaf) in position_map {
             validate_private_hnsw_oram_leaf(leaf, tree_height)?;
-            state.position_map.insert(node_id, leaf);
+            if state.position_map.insert(node_id, leaf).is_some() {
+                return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
+            }
         }
         Ok(state)
     }
@@ -6601,6 +6603,13 @@ mod tests {
         bad_stash.stash[0].node_id = [9; 32];
         assert_eq!(
             PrivateHnswOramClientState::from_snapshot(&bad_stash),
+            Err(PrivateHnswClientError::InvalidClientStateSnapshot)
+        );
+        assert_eq!(
+            PrivateHnswOramClientState::with_position_map(
+                [(entry.node_id, 0), (entry.node_id, 1)],
+                config.tree_height,
+            ),
             Err(PrivateHnswClientError::InvalidClientStateSnapshot)
         );
     }
