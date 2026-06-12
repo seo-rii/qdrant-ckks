@@ -1364,6 +1364,37 @@ fn validate_bucket_read_request(
             ));
         }
     }
+    for path in bucket_ids.chunks(path_len) {
+        validate_bucket_read_path_shape(path)?;
+    }
+    Ok(())
+}
+
+fn validate_bucket_read_path_shape(path: &[u64]) -> StorageResult<()> {
+    if path.first().copied() != Some(0) {
+        return Err(StorageError::bad_request(
+            "private result ORAM read_buckets must contain valid ORAM paths",
+        ));
+    }
+    for window in path.windows(2) {
+        let parent = window[0];
+        let child = window[1];
+        let Some(left_child) = parent.checked_mul(2).and_then(|value| value.checked_add(1)) else {
+            return Err(StorageError::bad_request(
+                "private result ORAM read_buckets must contain valid ORAM paths",
+            ));
+        };
+        let Some(right_child) = parent.checked_mul(2).and_then(|value| value.checked_add(2)) else {
+            return Err(StorageError::bad_request(
+                "private result ORAM read_buckets must contain valid ORAM paths",
+            ));
+        };
+        if child != left_child && child != right_child {
+            return Err(StorageError::bad_request(
+                "private result ORAM read_buckets must contain valid ORAM paths",
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -1616,6 +1647,9 @@ mod private_result_oram_tests {
 
         let deduped = validate_bucket_read_request(&manifest, &[0, 1, 3, 4]).unwrap_err();
         assert!(deduped.to_string().contains("whole ORAM paths"));
+
+        let malformed_path = validate_bucket_read_request(&manifest, &[0, 2, 3]).unwrap_err();
+        assert!(malformed_path.to_string().contains("valid ORAM paths"));
 
         let over_budget =
             validate_bucket_read_request(&manifest, &[0, 1, 3, 0, 1, 4, 0, 2, 5]).unwrap_err();
