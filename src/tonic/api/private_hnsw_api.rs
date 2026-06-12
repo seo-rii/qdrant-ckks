@@ -595,10 +595,28 @@ mod private_hnsw_grpc_tests {
         assert!(err.message().contains("result_privacy"));
 
         let mut proto = manifest_to_proto(sample_manifest());
+        proto.hnsw = None;
+        let err = manifest_from_proto(proto).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("manifest.hnsw"));
+
+        let mut proto = manifest_to_proto(sample_manifest());
         proto.oram = None;
         let err = manifest_from_proto(proto).unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
         assert!(err.message().contains("manifest.oram"));
+
+        let mut proto = manifest_to_proto(sample_manifest());
+        proto.oram.as_mut().unwrap().kind = 0;
+        let err = manifest_from_proto(proto).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("kind"));
+
+        let mut proto = manifest_to_proto(sample_manifest());
+        proto.fixed_budget = None;
+        let err = manifest_from_proto(proto).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("manifest.fixed_budget"));
 
         let err = required::<grpc::PrivateHnswManifest>(None, "manifest").unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
