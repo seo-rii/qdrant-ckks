@@ -1748,6 +1748,10 @@ payload/result tokens. Collection
 telemetry has sentinel coverage so decrypted plaintext is not intentionally emitted there. Audit events
 never include request bodies; denied audit errors also redact qdrant-sec
 envelope markers and secret-like crypto fields before serialization.
+Prometheus request metrics may include fixed REST/gRPC endpoint labels and the
+collection label for private ORAM manifest, session, read, and commit APIs, but
+they do not include path labels, bucket ids, session ids, ciphertext bodies, or
+client-state fields.
 Client-side-only envelope collections must use `raw` or `redacted`; requesting
 `decrypted` fails closed because Qdrant has no client data key.
 The REST single-point `GET /collections/{collection}/points/{id}` endpoint has
