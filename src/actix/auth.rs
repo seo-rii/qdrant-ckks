@@ -9,8 +9,8 @@ use futures_util::future::LocalBoxFuture;
 use storage::audit::{audit_trust_forwarded_headers, extract_tracing_id};
 use storage::rbac::Access;
 
-use super::forwarded;
 use super::helpers::HttpError;
+use super::{forwarded, redact_private_oram_access_path};
 use crate::common::auth::{Auth, AuthError, AuthKeys, AuthType, log_denied_auth};
 
 /// Actix middleware factory that validates API keys / JWTs and inserts an
@@ -150,7 +150,12 @@ where
                     service.call(req).await
                 }
                 Err(e) => {
-                    log_denied_auth(req.path(), remote.clone(), tracing_id, &e);
+                    log_denied_auth(
+                        &redact_private_oram_access_path(req.path()),
+                        remote.clone(),
+                        tracing_id,
+                        &e,
+                    );
                     let resp = match e {
                         AuthError::Unauthorized(e) => HttpResponse::Unauthorized().body(e),
                         AuthError::Forbidden(e) => HttpResponse::Forbidden().body(e),

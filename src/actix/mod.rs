@@ -15,6 +15,7 @@ use ::api::rest::models::{ApiResponse, ApiStatus, VersionInfo};
 use actix_cors::Cors;
 use actix_multipart::form::MultipartFormConfig;
 use actix_multipart::form::tempfile::TempFileConfig;
+use actix_web::dev::ServiceRequest;
 use actix_web::http::KeepAlive;
 use actix_web::middleware::{Compress, Condition, Logger, NormalizePath};
 use actix_web::{App, HttpRequest, HttpResponse, HttpServer, Responder, error, get, web};
@@ -67,6 +68,72 @@ pub(crate) fn multipart_snapshot_upload_limit_bytes(settings: &Settings) -> usiz
 #[get("/")]
 pub async fn index() -> impl Responder {
     HttpResponse::Ok().json(VersionInfo::default())
+}
+
+const ACTIX_ACCESS_LOG_FORMAT: &str =
+    r#"%a "%{qdrant_redacted_request}xi" %s %b "%{Referer}i" "%{User-Agent}i" %T"#;
+
+fn access_log_request_line(req: &ServiceRequest) -> String {
+    let path_and_query = req
+        .uri()
+        .path_and_query()
+        .map_or_else(|| req.path(), |value| value.as_str());
+    format!(
+        "{} {} {:?}",
+        req.method(),
+        redact_private_oram_access_path(path_and_query),
+        req.version()
+    )
+}
+
+pub(crate) fn redact_private_oram_access_path(path_and_query: &str) -> String {
+    let (path, query) = path_and_query
+        .split_once('?')
+        .map_or((path_and_query, None), |(path, query)| (path, Some(query)));
+    let private_oram_path =
+        path.contains("/private-hnsw/") || path.contains("/private-result-oram");
+    let redacted_path = redact_private_oram_session_path(path);
+
+    match (private_oram_path, query) {
+        (true, Some(_)) => format!("{redacted_path}?[redacted]"),
+        (_, Some(query)) => format!("{redacted_path}?{query}"),
+        (_, None) => redacted_path,
+    }
+}
+
+fn redact_private_oram_session_path(path: &str) -> String {
+    let segments = path.split('/').collect::<Vec<_>>();
+    let session_idx = if segments.len() >= 6
+        && segments.get(1) == Some(&"collections")
+        && segments.get(3) == Some(&"private-hnsw")
+        && segments.get(5) == Some(&"session")
+    {
+        Some(5)
+    } else if segments.len() >= 5
+        && segments.get(1) == Some(&"collections")
+        && segments.get(3) == Some(&"private-result-oram")
+        && segments.get(4) == Some(&"session")
+    {
+        Some(4)
+    } else {
+        None
+    };
+
+    let Some(session_idx) = session_idx else {
+        return path.to_string();
+    };
+    if session_idx + 1 >= segments.len() {
+        return path.to_string();
+    }
+
+    let mut redacted = segments[..=session_idx].to_vec();
+    redacted.push("{session_id}");
+    if segments.last() == Some(&"close") {
+        redacted.push("close");
+    } else {
+        redacted.push("[redacted]");
+    }
+    redacted.join("/")
 }
 
 pub fn init(
@@ -135,7 +202,11 @@ pub fn init(
                 .wrap(Condition::new(settings.service.enable_cors, cors))
                 .wrap(
                     // Set up logger, but avoid logging hot status endpoints
-                    Logger::default()
+                    Logger::new(ACTIX_ACCESS_LOG_FORMAT)
+                        .custom_request_replace(
+                            "qdrant_redacted_request",
+                            access_log_request_line,
+                        )
                         .exclude("/")
                         .exclude("/metrics")
                         .exclude("/telemetry")
@@ -316,5 +387,37 @@ mod tests {
             7 * 1024 * 1024
         );
         assert_ne!(multipart_snapshot_upload_limit_bytes(&settings), usize::MAX);
+    }
+
+    #[test]
+    fn private_oram_access_paths_redact_session_ids_and_queries() {
+        assert_eq!(
+            redact_private_oram_access_path(
+                "/collections/docs/private-hnsw/text/session/session-id-sentinel/close"
+            ),
+            "/collections/docs/private-hnsw/text/session/{session_id}/close"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
+                "/collections/docs/private-hnsw/text/session/bad/session-id-sentinel/close"
+            ),
+            "/collections/docs/private-hnsw/text/session/{session_id}/close"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
+                "/collections/docs/private-result-oram/session/session-id-sentinel/close?token=query-sentinel"
+            ),
+            "/collections/docs/private-result-oram/session/{session_id}/close?[redacted]"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
+                "/collections/docs/private-hnsw/text/oram/read_paths?leaf=query-sentinel"
+            ),
+            "/collections/docs/private-hnsw/text/oram/read_paths?[redacted]"
+        );
+        assert_eq!(
+            redact_private_oram_access_path("/collections/docs/points/scroll?offset=7"),
+            "/collections/docs/points/scroll?offset=7"
+        );
     }
 }

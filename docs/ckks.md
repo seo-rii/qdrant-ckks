@@ -1741,10 +1741,11 @@ JWT RBAC claims must grant the decrypt capability explicitly:
 }
 ```
 
-Decrypted snapshot export remains unsupported; slow request logs and request
-hashes use redacted request values, including private HNSW ORAM path labels,
-private result ORAM bucket ids, session ids, client-state fields, and
-payload/result tokens. Collection
+Decrypted snapshot export remains unsupported; REST access logs and denied-auth
+audit paths template-redact private ORAM session ids and redact private ORAM
+query strings. Slow request logs and request hashes use redacted request values,
+including private HNSW ORAM path labels, private result ORAM bucket ids, session
+ids, client-state fields, and payload/result tokens. Collection
 telemetry has sentinel coverage so decrypted plaintext is not intentionally emitted there. Audit events
 never include request bodies; denied audit errors also redact qdrant-sec
 envelope markers and secret-like crypto fields before serialization.
