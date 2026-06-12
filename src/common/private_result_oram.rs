@@ -10,11 +10,13 @@ use collection::private_result_oram_store::{PrivateResultOramEpochState, Private
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_RESULT_ORAM_BINDING,
-    PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND, PrivateResultOramManifest,
+    PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND, PrivateResultOramCommitBucketRef,
+    PrivateResultOramCommitSignatureInput, PrivateResultOramManifest,
     PrivateResultOramManifestValidationContext, PrivateResultOramMerkleProof,
     PrivateResultOramReadBucketsSignatureInput, PrivateResultOramSignature,
     PrivateResultOramSignatureVerification, PrivateResultOramUploadBundle,
-    validate_private_result_oram_manifest, validate_private_result_oram_manifest_signature_shape,
+    validate_private_result_oram_commit_signature, validate_private_result_oram_manifest,
+    validate_private_result_oram_manifest_signature_shape,
     validate_private_result_oram_read_buckets_signature,
     validate_private_result_oram_upload_bundle,
 };
@@ -786,6 +788,35 @@ pub async fn do_commit_private_result_oram_buckets(
                     "private result ORAM commit updated_buckets must contain 1..={max_updated_buckets} buckets",
                 )));
             }
+            let updated_bucket_refs = updated_buckets
+                .iter()
+                .map(|bucket| PrivateResultOramCommitBucketRef {
+                    bucket_id: bucket.bucket_id,
+                    ciphertext_sha256: bucket.ciphertext_sha256.as_str(),
+                })
+                .collect::<Vec<_>>();
+            validate_session_signature_owner_key(session, &commit_signature.key_id)?;
+            validate_private_result_oram_commit_signature(
+                PrivateResultOramCommitSignatureInput {
+                    collection_id: &session.manifest.collection_id,
+                    key_id: &session.manifest.key_id,
+                    rk_id: &session.manifest.rk_id,
+                    rk_epoch: session.manifest.rk_epoch,
+                    old_epoch,
+                    new_epoch,
+                    old_root_hash: &old_root_hash,
+                    new_root_hash: &new_root_hash,
+                    updated_buckets: &updated_bucket_refs,
+                    signature_alg: &commit_signature.alg,
+                    signature_key_id: &commit_signature.key_id,
+                },
+                &commit_signature.sig,
+                PrivateResultOramSignatureVerification {
+                    expected_key_id: &commit_signature.key_id,
+                    public_key: &request_context.public_key,
+                },
+            )
+            .map_err(private_result_oram_error)?;
             let mut seen_bucket_ids = HashSet::new();
             for bucket in &updated_buckets {
                 if !seen_bucket_ids.insert(bucket.bucket_id) {
@@ -795,7 +826,6 @@ pub async fn do_commit_private_result_oram_buckets(
                 }
                 validate_base64url_32_string(&bucket.ciphertext_sha256, "ciphertext_sha256")?;
             }
-            validate_session_signature_owner_key(session, &commit_signature.key_id)?;
             let store = PrivateResultOramStore::new(&session.collection_path);
             ensure_private_result_oram_active_session_current_epoch(
                 &store,

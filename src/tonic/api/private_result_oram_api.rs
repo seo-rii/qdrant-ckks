@@ -1132,6 +1132,40 @@ mod private_result_oram_grpc_tests {
                     .contains(&wrong_commit_signature.sig)
             );
 
+            let invalid_signature_duplicate_bucket =
+                PrivateResultOram::commit_private_result_oram_buckets(
+                    &service,
+                    Request::new(grpc::CommitPrivateResultOramBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        session_id: session.session_id.clone(),
+                        old_epoch: BASE_EPOCH,
+                        new_epoch: NEXT_EPOCH,
+                        old_root_hash: fixture.manifest.root_hash.clone(),
+                        new_root_hash: new_root_hash.clone(),
+                        updated_buckets: vec![
+                            bucket_to_proto(updated_bucket.clone()),
+                            bucket_to_proto(updated_bucket.clone()),
+                        ],
+                        commit_signature: Some(signature_to_proto(wrong_commit_signature.clone())),
+                    }),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                invalid_signature_duplicate_bucket.code(),
+                Code::InvalidArgument
+            );
+            assert!(
+                invalid_signature_duplicate_bucket
+                    .message()
+                    .contains("commit signature verification failed")
+            );
+            assert!(
+                !invalid_signature_duplicate_bucket
+                    .message()
+                    .contains("duplicate bucket id")
+            );
+
             let unconfigured_commit_key_id_sentinel = "tenant-a/private-result-signing-v1-unknown";
             let mut unconfigured_commit_key_signature = commit_signature.clone();
             unconfigured_commit_key_signature.key_id =

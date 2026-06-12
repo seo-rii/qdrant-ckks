@@ -981,6 +981,22 @@ mod private_result_oram_rest_tests {
             );
             assert!(!invalid_commit_signature_error.contains(&wrong_commit_signature.sig));
 
+            let invalid_signature_duplicate_bucket_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/commit",
+                CommitPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash: new_root_hash.clone(),
+                    updated_buckets: vec![updated_bucket.clone(), updated_bucket.clone()],
+                    commit_signature: wrong_commit_signature.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "commit signature verification failed"
+            );
+            assert!(!invalid_signature_duplicate_bucket_error.contains("duplicate bucket id"));
+
             let unconfigured_commit_key_id_sentinel = "tenant-a/private-result-signing-v1-unknown";
             let mut unconfigured_commit_key_signature = commit_signature.clone();
             unconfigured_commit_key_signature.key_id =
