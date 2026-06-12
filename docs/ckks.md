@@ -891,6 +891,10 @@ Ordinary raw payload reads through retrieve, scroll, search, or query also fail
 closed when `with_payload` would return a `private-result-oram/v1` payload path.
 Callers may omit payloads or request redacted encrypted payload output, but raw
 result payload bytes require the private result ORAM session/read/commit APIs.
+Ordinary server-side selectors that would inspect a private result ORAM payload
+path, including filters, order-by, group-by, facets, and formula payload
+variables/conditions, fail closed with the same private result ORAM session API
+guidance rather than suggesting a blind-index fallback.
 Payload index/schema creation on a `private-result-oram/v1` payload path is also
 rejected by the encrypted payload index guard.
 Result ORAM snapshot restore preflight is open for configured
@@ -1757,7 +1761,8 @@ audit paths template-redact private ORAM session ids and redact private ORAM
 query strings. Slow request logs and request hashes use redacted request values,
 including private HNSW ORAM path labels, private result ORAM bucket ids, session
 ids, bucket commitments, updated bucket writebacks, client-state fields, and
-payload/result tokens. Collection
+payload/result tokens; snake_case and camelCase singular/plural aliases are
+covered for private ORAM bucket and token fields. Collection
 telemetry has sentinel coverage so decrypted plaintext is not intentionally emitted there. Audit events
 never include request bodies; denied audit errors also redact qdrant-sec
 envelope markers and secret-like crypto fields before serialization.
