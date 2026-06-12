@@ -808,6 +808,48 @@ mod private_result_oram_rest_tests {
             );
             assert!(!invalid_read_signature_error.contains(&wrong_read_signature.sig));
 
+            let unconfigured_read_key_id_sentinel = "tenant-a/private-result-signing-v1-unknown";
+            let mut unconfigured_read_key_signature = fixture.read_signature(&read_bucket_ids);
+            unconfigured_read_key_signature.key_id = unconfigured_read_key_id_sentinel.to_string();
+            let unconfigured_read_key_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/read_buckets",
+                ReadPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: unconfigured_read_key_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "signature key id is not configured"
+            );
+            assert!(
+                !unconfigured_read_key_error.contains(unconfigured_read_key_id_sentinel),
+                "{unconfigured_read_key_error}"
+            );
+
+            let signature_body_sentinel = "signature!sentinel";
+            let malformed_read_signature_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/read_buckets",
+                ReadPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: qdrant_sec::PrivateResultOramSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: SIGNING_KEY_ID.to_string(),
+                        sig: signature_body_sentinel.to_string(),
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "request validation failed"
+            );
+            assert!(
+                !malformed_read_signature_error.contains(signature_body_sentinel),
+                "{malformed_read_signature_error}"
+            );
+
             let deduped_bucket_ids = vec![0, 1, 3, 4];
             let deduped_path_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/read_buckets",

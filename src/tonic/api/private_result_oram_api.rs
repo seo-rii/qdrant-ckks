@@ -866,6 +866,64 @@ mod private_result_oram_grpc_tests {
                     .contains(&wrong_read_signature.sig)
             );
 
+            let unconfigured_read_key_id_sentinel = "tenant-a/private-result-signing-v1-unknown";
+            let mut unconfigured_read_key_signature = fixture.read_signature(&read_bucket_ids);
+            unconfigured_read_key_signature.key_id = unconfigured_read_key_id_sentinel.to_string();
+            let unconfigured_read_key = PrivateResultOram::read_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::ReadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: Some(signature_to_proto(unconfigured_read_key_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(unconfigured_read_key.code(), Code::InvalidArgument);
+            assert!(
+                unconfigured_read_key
+                    .message()
+                    .contains("signature key id is not configured")
+            );
+            assert!(
+                !unconfigured_read_key
+                    .message()
+                    .contains(unconfigured_read_key_id_sentinel)
+            );
+
+            let signature_body_sentinel = "signature!sentinel";
+            let malformed_read_signature = PrivateResultOram::read_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::ReadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: Some(grpc::PrivateResultOramSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: SIGNING_KEY_ID.to_string(),
+                        sig: signature_body_sentinel.to_string(),
+                    }),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(malformed_read_signature.code(), Code::InvalidArgument);
+            assert!(
+                malformed_read_signature
+                    .message()
+                    .contains("request validation failed")
+            );
+            assert!(
+                !malformed_read_signature
+                    .message()
+                    .contains(signature_body_sentinel)
+            );
+
             let deduped_bucket_ids = vec![0, 1, 3, 4];
             let deduped_path_read = PrivateResultOram::read_private_result_oram_buckets(
                 &service,
