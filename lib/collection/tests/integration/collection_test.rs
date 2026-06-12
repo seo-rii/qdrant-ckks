@@ -4568,6 +4568,66 @@ async fn peer_update_rechecks_encrypted_payload_invariants() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn peer_update_rejects_private_hnsw_point_and_vector_mutations() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection = encrypted_collection_fixture(
+        collection_dir.path(),
+        1,
+        private_hnsw_vector_encryption_config(),
+    )
+    .await;
+
+    let assert_private_hnsw_peer_error = |err: CollectionError| {
+        assert!(matches!(
+            err,
+            CollectionError::BadInput { description }
+                if description.contains("peer update")
+                    && description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                    && description.contains("/private-hnsw/")
+                    && !description.contains("runtime CKKS")
+        ));
+    };
+
+    let plaintext_peer_upsert =
+        CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                id: 10.into(),
+                vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                payload: None,
+            }]),
+        ));
+    let err = collection
+        .update_from_peer(
+            OperationWithClockTag::from(plaintext_peer_upsert),
+            0,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_hnsw_peer_error(err);
+
+    let peer_delete_points =
+        CollectionUpdateOperations::PointOperation(PointOperations::DeletePoints {
+            ids: vec![10.into()],
+        });
+    let err = collection
+        .update_from_peer(
+            OperationWithClockTag::from(peer_delete_points),
+            0,
+            true.into(),
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_hnsw_peer_error(err);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn peer_update_rejects_client_envelope_replay_without_verifier_manifest() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection =
