@@ -888,10 +888,14 @@ token batch through the client-held token-position map into session
 so ORAM path volume is not reduced by deduplicating overlapping paths. Server
 read validation accepts duplicate bucket ids but rejects empty,
 non-whole-path-shaped, non-canonical Path ORAM heap paths, or over-budget
-batches. The planner also rejects missing token positions, duplicate fetch
-tokens, duplicate token-position entries, and out-of-range leaves before a
-server request is built. The crypto crate also has a client-only private result
-ORAM payload block/plaintext bucket codec for fixed-size bucket contents:
+batches. The crypto crate also exposes canonical `read_buckets`
+message/sign/verify helpers that bind collection/key lineage, index epoch,
+root hash, bucket count, and the exact padded bucket-id sequence before REST or
+gRPC handlers accept a signed read request. The planner also rejects missing
+token positions, duplicate fetch tokens, duplicate token-position entries, and
+out-of-range leaves before a server request is built. The crypto crate also has
+a client-only private result ORAM payload block/plaintext bucket codec for
+fixed-size bucket contents:
 payload bytes, payload fetch token, point token, generation, and deletion state
 are encoded inside the client-encrypted bucket body and are never server
 validated as plaintext. Client AEAD helpers can seal/open those plaintext

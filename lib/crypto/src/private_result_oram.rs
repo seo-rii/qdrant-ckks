@@ -17,6 +17,8 @@ pub const PRIVATE_RESULT_ORAM_MANIFEST_SIGNATURE_DOMAIN: &str =
     "qdrant-sec/private-result-oram-manifest-signature/v1";
 pub const PRIVATE_RESULT_ORAM_COMMIT_SIGNATURE_DOMAIN: &str =
     "qdrant-sec/private-result-oram-commit-signature/v1";
+pub const PRIVATE_RESULT_ORAM_READ_BUCKETS_SIGNATURE_DOMAIN: &str =
+    "qdrant-sec/private-result-oram-read-buckets-signature/v1";
 pub const PRIVATE_RESULT_ORAM_BUCKET_COMMITMENT_DOMAIN: &str =
     "qdrant-sec/private-result-oram-bucket-commitment/v1";
 pub const PRIVATE_RESULT_ORAM_BUCKET_AEAD_DOMAIN: &[u8] =
@@ -73,6 +75,8 @@ pub enum PrivateResultOramError {
     InvalidManifestSignature,
     #[error("private result ORAM commit signature verification failed")]
     InvalidCommitSignature,
+    #[error("private result ORAM read_buckets signature verification failed")]
+    InvalidReadBucketsSignature,
     #[error("private result ORAM resource key id is invalid")]
     InvalidResourceKeyId,
     #[error("private result ORAM bucket uses unsupported version")]
@@ -668,6 +672,15 @@ pub struct PrivateResultOramCommitSignatureContext<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateResultOramReadBucketsSignatureContext<'a> {
+    pub collection_id: &'a str,
+    pub key_id: &'a str,
+    pub rk_id: &'a str,
+    pub rk_epoch: u64,
+    pub signing_key_id: &'a str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrivateResultOramBucketValidationContext {
     pub expected_index_epoch: u64,
     pub bucket_count: u64,
@@ -784,6 +797,20 @@ pub struct PrivateResultOramCommitSignatureInput<'a> {
     pub old_root_hash: &'a str,
     pub new_root_hash: &'a str,
     pub updated_buckets: &'a [PrivateResultOramCommitBucketRef<'a>],
+    pub signature_alg: &'a str,
+    pub signature_key_id: &'a str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateResultOramReadBucketsSignatureInput<'a> {
+    pub collection_id: &'a str,
+    pub key_id: &'a str,
+    pub rk_id: &'a str,
+    pub rk_epoch: u64,
+    pub index_epoch: u64,
+    pub root_hash: &'a str,
+    pub bucket_count: u64,
+    pub bucket_ids: &'a [u64],
     pub signature_alg: &'a str,
     pub signature_key_id: &'a str,
 }
@@ -1796,6 +1823,31 @@ pub fn validate_private_result_oram_commit_signature(
         .map_err(|_| PrivateResultOramError::InvalidCommitSignature)
 }
 
+pub fn validate_private_result_oram_read_buckets_signature(
+    input: PrivateResultOramReadBucketsSignatureInput<'_>,
+    signature: &str,
+    verification: PrivateResultOramSignatureVerification<'_>,
+) -> Result<(), PrivateResultOramError> {
+    validate_signature_fields(input.signature_alg, input.signature_key_id, verification)?;
+    validate_signature_input_context(input.collection_id, input.key_id, input.rk_id)?;
+    decode_base64url_32(input.root_hash, "root_hash")?;
+    if input.bucket_count == 0
+        || input.bucket_ids.is_empty()
+        || input.bucket_ids.len() > u32::MAX as usize
+        || input
+            .bucket_ids
+            .iter()
+            .any(|bucket_id| *bucket_id >= input.bucket_count)
+    {
+        return Err(PrivateResultOramError::InvalidReadBucketsSignature);
+    }
+    let signature_bytes = decode_base64url_64(signature)?;
+    let message = private_result_oram_read_buckets_signature_message(input);
+    UnparsedPublicKey::new(&ED25519, verification.public_key)
+        .verify(&message, &signature_bytes)
+        .map_err(|_| PrivateResultOramError::InvalidReadBucketsSignature)
+}
+
 pub fn sign_private_result_oram_manifest(
     key_pair: &Ed25519KeyPair,
     manifest: &PrivateResultOramManifest,
@@ -1844,6 +1896,46 @@ pub fn sign_private_result_oram_commit(
         signature_key_id: context.signing_key_id,
     };
     let message = private_result_oram_commit_signature_message(input);
+    let signature = key_pair.sign(&message);
+    Ok(PrivateResultOramSignature {
+        alg: PRIVATE_RESULT_ORAM_SIGNATURE_ALGORITHM.to_string(),
+        key_id: context.signing_key_id.to_string(),
+        sig: BASE64URL_NOPAD.encode(signature.as_ref()),
+    })
+}
+
+pub fn sign_private_result_oram_read_buckets(
+    key_pair: &Ed25519KeyPair,
+    context: PrivateResultOramReadBucketsSignatureContext<'_>,
+    index_epoch: u64,
+    root_hash: &str,
+    bucket_count: u64,
+    bucket_ids: &[u64],
+) -> Result<PrivateResultOramSignature, PrivateResultOramError> {
+    validate_read_buckets_signature_context(context)?;
+    decode_base64url_32(root_hash, "root_hash")?;
+    if bucket_count == 0
+        || bucket_ids.is_empty()
+        || bucket_ids.len() > u32::MAX as usize
+        || bucket_ids
+            .iter()
+            .any(|bucket_id| *bucket_id >= bucket_count)
+    {
+        return Err(PrivateResultOramError::InvalidReadBucketsSignature);
+    }
+    let input = PrivateResultOramReadBucketsSignatureInput {
+        collection_id: context.collection_id,
+        key_id: context.key_id,
+        rk_id: context.rk_id,
+        rk_epoch: context.rk_epoch,
+        index_epoch,
+        root_hash,
+        bucket_count,
+        bucket_ids,
+        signature_alg: PRIVATE_RESULT_ORAM_SIGNATURE_ALGORITHM,
+        signature_key_id: context.signing_key_id,
+    };
+    let message = private_result_oram_read_buckets_signature_message(input);
     let signature = key_pair.sign(&message);
     Ok(PrivateResultOramSignature {
         alg: PRIVATE_RESULT_ORAM_SIGNATURE_ALGORITHM.to_string(),
@@ -2016,6 +2108,30 @@ pub fn private_result_oram_commit_signature_message(
     for bucket in input.updated_buckets {
         push_u64(&mut message, bucket.bucket_id);
         push_str(&mut message, bucket.ciphertext_sha256);
+    }
+    push_str(&mut message, input.signature_alg);
+    push_str(&mut message, input.signature_key_id);
+    message
+}
+
+pub fn private_result_oram_read_buckets_signature_message(
+    input: PrivateResultOramReadBucketsSignatureInput<'_>,
+) -> Vec<u8> {
+    let mut message = Vec::new();
+    push_domain(
+        &mut message,
+        PRIVATE_RESULT_ORAM_READ_BUCKETS_SIGNATURE_DOMAIN.as_bytes(),
+    );
+    push_str(&mut message, input.collection_id);
+    push_str(&mut message, input.key_id);
+    push_str(&mut message, input.rk_id);
+    push_u64(&mut message, input.rk_epoch);
+    push_u64(&mut message, input.index_epoch);
+    push_str(&mut message, input.root_hash);
+    push_u64(&mut message, input.bucket_count);
+    push_u32(&mut message, input.bucket_ids.len() as u32);
+    for bucket_id in input.bucket_ids {
+        push_u64(&mut message, *bucket_id);
     }
     push_str(&mut message, input.signature_alg);
     push_str(&mut message, input.signature_key_id);
@@ -2386,6 +2502,16 @@ fn validate_manifest_context(
 
 fn validate_commit_signature_context(
     context: PrivateResultOramCommitSignatureContext<'_>,
+) -> Result<(), PrivateResultOramError> {
+    validate_id(context.collection_id, "collection_id")?;
+    validate_resource_id(context.key_id)?;
+    validate_resource_id(context.rk_id)?;
+    validate_resource_id(context.signing_key_id)?;
+    Ok(())
+}
+
+fn validate_read_buckets_signature_context(
+    context: PrivateResultOramReadBucketsSignatureContext<'_>,
 ) -> Result<(), PrivateResultOramError> {
     validate_id(context.collection_id, "collection_id")?;
     validate_resource_id(context.key_id)?;
@@ -3988,6 +4114,29 @@ mod tests {
     }
 
     #[test]
+    fn read_buckets_signature_message_is_stable() {
+        let bucket_ids = [0, 1, 3, 0, 1, 4];
+        let input = PrivateResultOramReadBucketsSignatureInput {
+            collection_id: "collection-uuid-1",
+            key_id: "tenant-a/payload-private-rk",
+            rk_id: "tenant-a/payload-private-rk",
+            rk_epoch: 7,
+            index_epoch: 42,
+            root_hash: &BASE64URL_NOPAD.encode(&[42; 32]),
+            bucket_count: 7,
+            bucket_ids: &bucket_ids,
+            signature_alg: "ed25519",
+            signature_key_id: "tenant-a/private-result-signing-v1",
+        };
+
+        let digest = Sha256::digest(private_result_oram_read_buckets_signature_message(input));
+        assert_eq!(
+            BASE64URL_NOPAD.encode(digest.as_ref()),
+            "lgqPWza4bMJhkNB3N3ceznqz8moFXvgbm-Ov3i6TkYQ"
+        );
+    }
+
+    #[test]
     fn manifest_shape_rejects_wrong_provider_and_root() {
         let mut manifest = fixture_manifest();
         validate_private_result_oram_manifest_shape(&manifest).unwrap();
@@ -4866,6 +5015,100 @@ mod tests {
         assert_eq!(
             validate_private_result_oram_commit_signature(tampered, &signature, verification),
             Err(PrivateResultOramError::InvalidCommitSignature)
+        );
+    }
+
+    #[test]
+    fn read_buckets_signature_verifies_and_tamper_fails() {
+        let key_pair = deterministic_key_pair();
+        let bucket_ids = [0, 1, 3, 0, 1, 4];
+        let context = PrivateResultOramReadBucketsSignatureContext {
+            collection_id: "collection-uuid-1",
+            key_id: "tenant-a/payload-private-rk",
+            rk_id: "tenant-a/payload-private-rk",
+            rk_epoch: 7,
+            signing_key_id: "tenant-a/private-result-signing-v1",
+        };
+        let root_hash = BASE64URL_NOPAD.encode(&[42; 32]);
+        let signature = sign_private_result_oram_read_buckets(
+            &key_pair,
+            context,
+            42,
+            &root_hash,
+            7,
+            &bucket_ids,
+        )
+        .unwrap();
+        let input = PrivateResultOramReadBucketsSignatureInput {
+            collection_id: context.collection_id,
+            key_id: context.key_id,
+            rk_id: context.rk_id,
+            rk_epoch: context.rk_epoch,
+            index_epoch: 42,
+            root_hash: &root_hash,
+            bucket_count: 7,
+            bucket_ids: &bucket_ids,
+            signature_alg: signature.alg.as_str(),
+            signature_key_id: signature.key_id.as_str(),
+        };
+        let verification = PrivateResultOramSignatureVerification {
+            expected_key_id: "tenant-a/private-result-signing-v1",
+            public_key: key_pair.public_key().as_ref(),
+        };
+        validate_private_result_oram_read_buckets_signature(input, &signature.sig, verification)
+            .unwrap();
+
+        let empty_input = PrivateResultOramReadBucketsSignatureInput {
+            bucket_ids: &[],
+            ..input
+        };
+        assert_eq!(
+            validate_private_result_oram_read_buckets_signature(
+                empty_input,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateResultOramError::InvalidReadBucketsSignature)
+        );
+
+        let out_of_range_bucket_ids = [0, 1, 7];
+        let out_of_range_input = PrivateResultOramReadBucketsSignatureInput {
+            bucket_ids: &out_of_range_bucket_ids,
+            ..input
+        };
+        assert_eq!(
+            validate_private_result_oram_read_buckets_signature(
+                out_of_range_input,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateResultOramError::InvalidReadBucketsSignature)
+        );
+
+        let malformed_root_input = PrivateResultOramReadBucketsSignatureInput {
+            root_hash: "AAAA",
+            ..input
+        };
+        assert_eq!(
+            validate_private_result_oram_read_buckets_signature(
+                malformed_root_input,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateResultOramError::InvalidManifestField("root_hash"))
+        );
+
+        let tampered = PrivateResultOramReadBucketsSignatureInput {
+            index_epoch: 43,
+            ..input
+        };
+        assert_eq!(
+            validate_private_result_oram_read_buckets_signature(
+                tampered,
+                &signature.sig,
+                verification,
+            ),
+            Err(PrivateResultOramError::InvalidReadBucketsSignature)
         );
     }
 
