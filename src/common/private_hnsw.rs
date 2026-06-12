@@ -2829,6 +2829,40 @@ mod private_hnsw_tests {
     }
 
     #[test]
+    fn session_registry_keeps_writer_lock_after_failed_action() {
+        let now = 10;
+        let mut registry = PrivateHnswSessionRegistry::default();
+        registry
+            .open(fixture_session("session-1", 20), now)
+            .unwrap();
+
+        let err = registry
+            .with_session_mut(
+                "collection-uuid-1",
+                "text",
+                "session-1",
+                now,
+                |_| -> StorageResult<()> {
+                    Err(StorageError::bad_request("synthetic failed session action"))
+                },
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("synthetic failed session action"));
+        assert!(registry.has_active_collection("collection-uuid-1", now));
+        assert!(registry.has_active_index("collection-uuid-1", "text", now));
+
+        let err = registry
+            .open(fixture_session("session-2", 20), now)
+            .unwrap_err();
+        assert!(err.to_string().contains("ConcurrentWriter"));
+
+        assert!(registry.close("collection-uuid-1", "text", "session-1", now));
+        registry
+            .open(fixture_session("session-2", 20), now)
+            .unwrap();
+    }
+
+    #[test]
     fn collection_snapshot_guard_rejects_active_collection_session() {
         let now = 10;
         let mut registry = PrivateHnswSessionRegistry::default();
