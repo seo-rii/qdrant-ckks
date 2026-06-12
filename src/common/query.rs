@@ -21,7 +21,8 @@ use collection::collection::distance_matrix::*;
 use collection::common::batching::batch_requests;
 use collection::config::{
     CollectionEncryptionConfig, EncryptedVectorReturnRequest, EncryptionSelector,
-    encrypted_vector_return_request, private_hnsw_oram_api_required_message,
+    encrypted_vector_return_request, encryption_rule_uses_private_result_oram,
+    private_hnsw_oram_api_required_message, private_result_oram_payload_selector_overlap_message,
 };
 use collection::grouping::group_by::GroupRequest;
 use collection::lookup::lookup_ids;
@@ -3913,6 +3914,15 @@ fn ensure_group_path_does_not_touch_encrypted_crypto_selectors(
                                 "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
                             )))?;
                     if group_by.compatible(&encrypted_json_path) {
+                        if encryption_rule_uses_private_result_oram(rule) {
+                            return Err(StorageError::bad_input(
+                                private_result_oram_payload_selector_overlap_message(
+                                    "group by",
+                                    group_by,
+                                    encrypted_path,
+                                ),
+                            ));
+                        }
                         return Err(StorageError::bad_input(format!(
                             "cannot group by encrypted payload field '{group_by}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
                         )));
@@ -11629,6 +11639,51 @@ mod tests {
             .expect_err("CKKS grouping by encrypted payload or metadata paths must fail");
             assert!(
                 format!("{err}").contains(expected),
+                "unexpected error for {group_by}: {err}",
+            );
+        }
+    }
+
+    #[test]
+    fn private_result_oram_grouping_rejects_payload_paths_with_session_api_message() {
+        let encryption = CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a:result-private-rk".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 7,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![EncryptionRuleRef {
+                id: "private_result_payload".to_string(),
+                selector: EncryptionSelector::PayloadPaths {
+                    paths: vec!["document.body".to_string()],
+                },
+                instance: "docs_private_result_oram_v1".to_string(),
+                binding: Some(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING.to_string()),
+            }],
+        };
+
+        for group_by in ["document", "document.body", "document.body.lang"] {
+            let group_by = group_by.parse::<JsonPath>().unwrap();
+            let err = ensure_group_path_does_not_touch_encrypted_crypto_selectors(
+                Some(&encryption),
+                &group_by,
+            )
+            .expect_err("private result ORAM grouping must fail closed");
+            let message = err.to_string();
+            assert!(
+                message.contains("cannot group by private result ORAM payload field"),
+                "unexpected error for {group_by}: {err}",
+            );
+            assert!(
+                message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER),
+                "unexpected error for {group_by}: {err}",
+            );
+            assert!(
+                message.contains("/private-result-oram/session"),
+                "unexpected error for {group_by}: {err}",
+            );
+            assert!(
+                !message.contains("configure a blind index provider"),
                 "unexpected error for {group_by}: {err}",
             );
         }

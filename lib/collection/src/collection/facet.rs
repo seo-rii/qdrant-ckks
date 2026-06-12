@@ -10,7 +10,10 @@ use segment::data_types::facets::{FacetParams, FacetResponse, FacetValue};
 use segment::json_path::JsonPath;
 
 use super::Collection;
-use crate::config::{CollectionEncryptionConfig, EncryptionSelector};
+use crate::config::{
+    CollectionEncryptionConfig, EncryptionSelector, encryption_rule_uses_private_result_oram,
+    private_result_oram_payload_selector_overlap_message,
+};
 use crate::operations::consistency_params::ReadConsistency;
 use crate::operations::shard_selector_internal::ShardSelectorInternal;
 use crate::operations::types::{CollectionError, CollectionResult};
@@ -106,6 +109,15 @@ fn ensure_facet_key_does_not_touch_encrypted_payload(
                         ))
                     })?;
                     if key.compatible(&encrypted_json_path) {
+                        if encryption_rule_uses_private_result_oram(rule) {
+                            return Err(CollectionError::bad_input(
+                                private_result_oram_payload_selector_overlap_message(
+                                    "facet on",
+                                    key,
+                                    encrypted_path,
+                                ),
+                            ));
+                        }
                         return Err(CollectionError::bad_input(format!(
                             "cannot facet on encrypted payload field '{key}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
                         )));
@@ -169,8 +181,11 @@ mod tests {
             let err = ensure_facet_key_does_not_touch_encrypted_payload(&key, &encryption)
                 .expect_err("private result ORAM payload facets must fail closed");
             let message = err.to_string();
-            assert!(message.contains("cannot facet on encrypted payload field"));
+            assert!(message.contains("cannot facet on private result ORAM payload field"));
             assert!(message.contains("document.body"));
+            assert!(message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
+            assert!(message.contains("/private-result-oram/session"));
+            assert!(!message.contains("configure a blind index provider"));
         }
 
         let public_key = "document.title".parse::<JsonPath>().unwrap();

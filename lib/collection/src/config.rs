@@ -2391,6 +2391,17 @@ pub fn private_result_oram_api_required_message(payload_path: &str) -> String {
     )
 }
 
+pub fn private_result_oram_payload_selector_overlap_message(
+    operation: &str,
+    requested_path: impl std::fmt::Display,
+    payload_path: &str,
+) -> String {
+    format!(
+        "cannot {operation} private result ORAM payload field '{requested_path}' because it overlaps private result ORAM path '{payload_path}'; {}",
+        private_result_oram_api_required_message(payload_path),
+    )
+}
+
 fn validate_crypto_identifier(value: &str) -> Result<(), validator::ValidationError> {
     if value.is_empty()
         || value.len() > 128

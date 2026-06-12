@@ -40,6 +40,7 @@ use crate::config::{
     CryptoMigrationState, EncryptionRuleRef, EncryptionSelector, encrypted_vector_return_request,
     encryption_rule_uses_private_hnsw_oram, encryption_rule_uses_private_result_oram,
     private_hnsw_oram_api_required_message, private_result_oram_api_required_message,
+    private_result_oram_payload_selector_overlap_message,
 };
 use crate::operations::consistency_params::ReadConsistency;
 use crate::operations::loggable::Loggable;
@@ -3261,6 +3262,15 @@ impl Collection {
                         if let Some(filter_path) =
                             filter_touches_encrypted_payload(filter, &encrypted_json_path)
                         {
+                            if encryption_rule_uses_private_result_oram(rule) {
+                                return Err(CollectionError::bad_input(
+                                    private_result_oram_payload_selector_overlap_message(
+                                        "filter on",
+                                        filter_path,
+                                        encrypted_path,
+                                    ),
+                                ));
+                            }
                             return Err(CollectionError::bad_input(format!(
                                 "cannot filter on encrypted payload field '{filter_path}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
                             )));
@@ -3343,8 +3353,17 @@ impl Collection {
                                 CollectionError::bad_input(format!(
                                     "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
                                 ))
-                            })?;
+                        })?;
                         if order_by.key.compatible(&encrypted_json_path) {
+                            if encryption_rule_uses_private_result_oram(rule) {
+                                return Err(CollectionError::bad_input(
+                                    private_result_oram_payload_selector_overlap_message(
+                                        "order by",
+                                        &order_by.key,
+                                        encrypted_path,
+                                    ),
+                                ));
+                            }
                             return Err(CollectionError::bad_input(format!(
                                 "cannot order by encrypted payload field '{}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
                                 order_by.key,
@@ -3410,8 +3429,17 @@ impl Collection {
                                 CollectionError::bad_input(format!(
                                     "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
                                 ))
-                            })?;
+                        })?;
                         if group_by.compatible(&encrypted_json_path) {
+                            if encryption_rule_uses_private_result_oram(rule) {
+                                return Err(CollectionError::bad_input(
+                                    private_result_oram_payload_selector_overlap_message(
+                                        "group by",
+                                        group_by,
+                                        encrypted_path,
+                                    ),
+                                ));
+                            }
                             return Err(CollectionError::bad_input(format!(
                                 "cannot group by encrypted payload field '{group_by}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
                             )));
@@ -3498,6 +3526,15 @@ impl Collection {
                             .iter()
                             .find(|payload_var| payload_var.compatible(&encrypted_json_path))
                         {
+                            if encryption_rule_uses_private_result_oram(rule) {
+                                return Err(CollectionError::bad_input(
+                                    private_result_oram_payload_selector_overlap_message(
+                                        "use",
+                                        formula_path,
+                                        encrypted_path,
+                                    ),
+                                ));
+                            }
                             return Err(CollectionError::bad_input(format!(
                                 "cannot use encrypted payload field '{formula_path}' in formula because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
                             )));
@@ -3508,6 +3545,15 @@ impl Collection {
                                 condition_touches_encrypted_payload(condition, &encrypted_json_path)
                             })
                         {
+                            if encryption_rule_uses_private_result_oram(rule) {
+                                return Err(CollectionError::bad_input(
+                                    private_result_oram_payload_selector_overlap_message(
+                                        "use formula condition on",
+                                        condition_path,
+                                        encrypted_path,
+                                    ),
+                                ));
+                            }
                             return Err(CollectionError::bad_input(format!(
                                 "cannot use formula condition on encrypted payload field '{condition_path}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
                             )));
