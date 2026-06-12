@@ -1611,6 +1611,19 @@ mod tests {
                 .to_string(),
             rest_status_map,
         );
+        let mut dynamic_rest_status_map = HashMap::new();
+        dynamic_rest_status_map.insert(
+            200u16,
+            OperationDurationStatistics {
+                count: 1,
+                ..Default::default()
+            },
+        );
+        rest_methods.insert(
+            "POST /collections/docs/private-hnsw/text/oram/read_paths/leaf-label-sentinel"
+                .to_string(),
+            dynamic_rest_status_map,
+        );
         rest_per_collection.insert("docs".to_string(), rest_methods);
 
         let rest_telemetry = WebApiTelemetry {
@@ -1642,6 +1655,18 @@ mod tests {
         grpc_methods.insert(
             "/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets".to_string(),
             grpc_status_map,
+        );
+        let mut dynamic_grpc_status_map = HashMap::new();
+        dynamic_grpc_status_map.insert(
+            0i32,
+            OperationDurationStatistics {
+                count: 1,
+                ..Default::default()
+            },
+        );
+        grpc_methods.insert(
+            "/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets/bucket-id-sentinel".to_string(),
+            dynamic_grpc_status_map,
         );
         grpc_per_collection.insert("docs".to_string(), grpc_methods);
 
