@@ -3642,6 +3642,37 @@ mod private_hnsw_rest_tests {
             .unwrap();
             assert_eq!(opened.len(), expected_bucket_count);
 
+            let duplicate_path = fixture.entry_leaf_label();
+            let duplicate_paths = vec![duplicate_path.clone(), duplicate_path.clone()];
+            let duplicate_signature = fixture.sign_read_paths(&duplicate_paths, 2, true);
+            let duplicate_request = actix_test::TestRequest::post()
+                .uri("/collections/docs/private-hnsw/text/oram/read_paths")
+                .set_json(OramReadPathsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: duplicate_paths,
+                    padding: OramReadPadding {
+                        requested_paths: 2,
+                        dummy_paths_included: true,
+                    },
+                    client_signature: PrivateHnswClientSignature {
+                        alg: duplicate_signature.alg,
+                        key_id: duplicate_signature.key_id,
+                        sig: duplicate_signature.sig,
+                    },
+                })
+                .to_request();
+            let duplicate_response = actix_test::call_service(&app, duplicate_request).await;
+            assert_eq!(duplicate_response.status(), StatusCode::BAD_REQUEST);
+            let duplicate_body = actix_test::read_body(duplicate_response).await;
+            let duplicate_body = String::from_utf8_lossy(&duplicate_body);
+            assert!(duplicate_body.contains("duplicate path label"));
+            assert!(
+                !duplicate_body.contains(&duplicate_path),
+                "{duplicate_body}"
+            );
+
             let close_request = actix_test::TestRequest::post()
                 .uri(&format!(
                     "/collections/docs/private-hnsw/text/session/{session_id}/close"
