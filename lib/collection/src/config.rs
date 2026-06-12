@@ -2373,10 +2373,21 @@ pub fn encryption_rule_uses_private_hnsw_oram(rule: &EncryptionRuleRef) -> bool 
     rule.binding.as_deref() == Some(PRIVATE_HNSW_ORAM_BINDING)
 }
 
+pub fn encryption_rule_uses_private_result_oram(rule: &EncryptionRuleRef) -> bool {
+    rule.binding.as_deref() == Some(PRIVATE_RESULT_ORAM_BINDING)
+}
+
 pub fn private_hnsw_oram_api_required_message(vector_name: &str) -> String {
     format!(
         "{} requires client-led private ORAM sessions for vector '{vector_name}'. Use /private-hnsw/{vector_name}/session and compatible SDK traversal APIs.",
         qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+    )
+}
+
+pub fn private_result_oram_api_required_message(payload_path: &str) -> String {
+    format!(
+        "{} requires client-led private result ORAM sessions for payload field '{payload_path}'. Use /private-result-oram/session and compatible SDK fetch APIs.",
+        qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
     )
 }
 

@@ -37,7 +37,8 @@ use super::Collection;
 use crate::config::{
     CollectionEncryptionConfig, CryptoMigrationCheckpoint, CryptoMigrationCheckpointStatus,
     CryptoMigrationState, EncryptionRuleRef, EncryptionSelector, encrypted_vector_return_request,
-    encryption_rule_uses_private_hnsw_oram, private_hnsw_oram_api_required_message,
+    encryption_rule_uses_private_hnsw_oram, encryption_rule_uses_private_result_oram,
+    private_hnsw_oram_api_required_message, private_result_oram_api_required_message,
 };
 use crate::operations::consistency_params::ReadConsistency;
 use crate::operations::loggable::Loggable;
@@ -162,6 +163,151 @@ fn reject_private_hnsw_oram_read_only_point_operation(
         "{prefix}; {}",
         private_hnsw_oram_api_required_message(vector_name),
     )))
+}
+
+fn reject_private_result_oram_payload_point_operation(
+    operation: &CollectionUpdateOperations,
+    encryption: &CollectionEncryptionConfig,
+    peer_update: bool,
+) -> CollectionResult<()> {
+    let Some((payload_path, operation_kind)) =
+        private_result_oram_payload_operation_violation(operation, encryption)?
+    else {
+        return Ok(());
+    };
+
+    let prefix = if peer_update {
+        format!(
+            "peer update cannot {operation_kind} for private result ORAM payload field '{payload_path}'",
+        )
+    } else {
+        format!("cannot {operation_kind} for private result ORAM payload field '{payload_path}'",)
+    };
+    Err(CollectionError::bad_input(format!(
+        "{prefix}; {}",
+        private_result_oram_api_required_message(payload_path),
+    )))
+}
+
+fn private_result_oram_payload_operation_violation<'a>(
+    operation: &CollectionUpdateOperations,
+    encryption: &'a CollectionEncryptionConfig,
+) -> CollectionResult<Option<(&'a str, &'static str)>> {
+    for rule in encryption
+        .rules
+        .iter()
+        .filter(|rule| encryption_rule_uses_private_result_oram(rule))
+    {
+        let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
+            continue;
+        };
+        for payload_path in paths {
+            let protected_path = payload_path.parse::<JsonPath>().map_err(|err| {
+                CollectionError::bad_input(format!(
+                    "private result ORAM payload field path '{payload_path}' is invalid: {err:?}",
+                ))
+            })?;
+            if let Some(operation_kind) =
+                private_result_oram_payload_operation_kind(operation, &protected_path)
+            {
+                return Ok(Some((payload_path.as_str(), operation_kind)));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn private_result_oram_payload_operation_kind(
+    operation: &CollectionUpdateOperations,
+    protected_path: &JsonPath,
+) -> Option<&'static str> {
+    match operation {
+        CollectionUpdateOperations::PointOperation(point_operation) => match point_operation {
+            PointOperations::UpsertPoints(insert_operation)
+            | PointOperations::UpsertPointsConditional(
+                shard::operations::point_ops::ConditionalInsertOperationInternal {
+                    points_op: insert_operation,
+                    condition: _,
+                    update_mode: _,
+                },
+            ) => private_result_oram_insert_touches_payload(insert_operation, protected_path)
+                .then_some("upsert points"),
+            PointOperations::SyncPoints(sync_operation) => sync_operation
+                .points
+                .iter()
+                .filter_map(|point| point.payload.as_ref())
+                .any(|payload| {
+                    private_result_oram_payload_touches_path(payload, None, protected_path)
+                })
+                .then_some("sync points"),
+            PointOperations::DeletePoints { .. } | PointOperations::DeletePointsByFilter(_) => None,
+        },
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(operation)) => {
+            private_result_oram_payload_touches_path(
+                &operation.payload,
+                operation.key.as_ref(),
+                protected_path,
+            )
+            .then_some("set payload")
+        }
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::OverwritePayload(operation)) => {
+            private_result_oram_payload_touches_path(
+                &operation.payload,
+                operation.key.as_ref(),
+                protected_path,
+            )
+            .then_some("overwrite payload")
+        }
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(operation)) => {
+            operation
+                .keys
+                .iter()
+                .any(|key| key.compatible(protected_path))
+                .then_some("delete payload")
+        }
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayload { .. }) => {
+            Some("clear payload")
+        }
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayloadByFilter(_)) => {
+            Some("clear payload by filter")
+        }
+        CollectionUpdateOperations::VectorOperation(_)
+        | CollectionUpdateOperations::FieldIndexOperation(_) => None,
+        #[cfg(feature = "staging")]
+        CollectionUpdateOperations::StagingOperation(_) => None,
+    }
+}
+
+fn private_result_oram_insert_touches_payload(
+    insert_operation: &PointInsertOperationsInternal,
+    protected_path: &JsonPath,
+) -> bool {
+    match insert_operation {
+        PointInsertOperationsInternal::PointsBatch(batch) => {
+            batch.payloads.as_ref().is_some_and(|payloads| {
+                payloads.iter().filter_map(Option::as_ref).any(|payload| {
+                    private_result_oram_payload_touches_path(payload, None, protected_path)
+                })
+            })
+        }
+        PointInsertOperationsInternal::PointsList(points) => points
+            .iter()
+            .filter_map(|point| point.payload.as_ref())
+            .any(|payload| private_result_oram_payload_touches_path(payload, None, protected_path)),
+    }
+}
+
+fn private_result_oram_payload_touches_path(
+    payload: &Payload,
+    key: Option<&JsonPath>,
+    protected_path: &JsonPath,
+) -> bool {
+    if let Some(key) = key {
+        return key.compatible(protected_path);
+    }
+
+    !protected_path.value_get(&payload.0).is_empty()
 }
 
 impl Collection {
@@ -766,6 +912,7 @@ impl Collection {
         };
 
         reject_private_hnsw_oram_read_only_point_operation(operation, &encryption, true)?;
+        reject_private_result_oram_payload_point_operation(operation, &encryption, true)?;
 
         match operation {
             CollectionUpdateOperations::PointOperation(
@@ -1411,6 +1558,7 @@ impl Collection {
         }
         if let Some(encryption) = encryption.as_ref() {
             reject_private_hnsw_oram_read_only_point_operation(&operation, encryption, false)?;
+            reject_private_result_oram_payload_point_operation(&operation, encryption, false)?;
         }
         if encryption.is_some() {
             match &operation {
@@ -3936,6 +4084,28 @@ mod tests {
         }
     }
 
+    fn private_result_oram_payload_rule(path: &str) -> EncryptionRuleRef {
+        EncryptionRuleRef {
+            id: "private_result_payload".to_string(),
+            selector: EncryptionSelector::PayloadPaths {
+                paths: vec![path.to_string()],
+            },
+            instance: "docs_private_result_oram_v1".to_string(),
+            binding: Some(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING.to_string()),
+        }
+    }
+
+    fn private_result_oram_encryption(path: &str) -> CollectionEncryptionConfig {
+        CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a:result-private-rk".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 7,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![private_result_oram_payload_rule(path)],
+        }
+    }
+
     #[test]
     fn private_hnsw_plaintext_vector_write_error_uses_session_api() {
         let rule = private_hnsw_vector_rule("embedding");
@@ -3998,6 +4168,90 @@ mod tests {
             assert!(peer_message.contains("peer update"), "{peer_message}");
             assert!(peer_message.contains(expected_kind), "{peer_message}");
             assert!(peer_message.contains("/private-hnsw/embedding/session"));
+        }
+    }
+
+    #[test]
+    fn private_result_oram_payload_writes_require_session_api() {
+        let encryption = private_result_oram_encryption("document.body");
+        let payload = Payload(
+            serde_json::json!({
+                "document": {
+                    "body": "plaintext result payload",
+                    "title": "public",
+                }
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        let operations = vec![
+            (
+                CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(
+                    SetPayloadOp {
+                        payload: payload.clone(),
+                        points: Some(vec![1.into()]),
+                        filter: None,
+                        key: None,
+                    },
+                )),
+                "set payload",
+            ),
+            (
+                CollectionUpdateOperations::PayloadOperation(PayloadOps::OverwritePayload(
+                    SetPayloadOp {
+                        payload: payload.clone(),
+                        points: Some(vec![1.into()]),
+                        filter: None,
+                        key: None,
+                    },
+                )),
+                "overwrite payload",
+            ),
+            (
+                CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(
+                    crate::operations::payload_ops::DeletePayloadOp {
+                        keys: vec!["document.body".parse().unwrap()],
+                        points: Some(vec![1.into()]),
+                        filter: None,
+                    },
+                )),
+                "delete payload",
+            ),
+            (
+                CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayload {
+                    points: vec![1.into()],
+                }),
+                "clear payload",
+            ),
+        ];
+
+        for (operation, expected_kind) in operations {
+            let err =
+                reject_private_result_oram_payload_point_operation(&operation, &encryption, false)
+                    .unwrap_err();
+            let message = format!("{err}");
+            assert!(message.contains(expected_kind), "{message}");
+            assert!(
+                message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER),
+                "{message}"
+            );
+            assert!(
+                message.contains("/private-result-oram/session"),
+                "{message}"
+            );
+            assert!(!message.contains("runtime payload encryption"), "{message}");
+
+            let peer_err =
+                reject_private_result_oram_payload_point_operation(&operation, &encryption, true)
+                    .unwrap_err();
+            let peer_message = format!("{peer_err}");
+            assert!(peer_message.contains("peer update"), "{peer_message}");
+            assert!(peer_message.contains(expected_kind), "{peer_message}");
+            assert!(
+                peer_message.contains("/private-result-oram/session"),
+                "{peer_message}"
+            );
         }
     }
 
