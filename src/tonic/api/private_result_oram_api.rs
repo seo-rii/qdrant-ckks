@@ -1576,6 +1576,139 @@ mod private_result_oram_grpc_tests {
     }
 
     #[test]
+    fn setup_grpc_routes_revalidate_runtime_oram_policy_drift() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateResultRouteFixture::build();
+        let settings = fixture.settings();
+        let mut drifted_settings = settings.clone();
+        drifted_settings
+            .crypto
+            .instances
+            .get_mut("payload_result_oram_v1")
+            .unwrap()
+            .options["oram"]["tree_height"] = json!(1);
+        let (_temp, dispatcher) = test_dispatcher();
+
+        actix_web::rt::System::new().block_on(async {
+            create_private_result_collection(&dispatcher).await;
+            let service =
+                PrivateResultOramService::new(Arc::new(dispatcher.clone()), settings.clone());
+            let drifted_service =
+                PrivateResultOramService::new(Arc::new(dispatcher.clone()), drifted_settings);
+
+            let drifted_manifest_upload = PrivateResultOram::upload_private_result_oram_manifest(
+                &drifted_service,
+                Request::new(grpc::UploadPrivateResultOramManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                    signature: Some(signature_to_proto(fixture.signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(drifted_manifest_upload.code(), Code::InvalidArgument);
+            assert!(
+                drifted_manifest_upload
+                    .message()
+                    .contains("manifest oram does not match runtime instance")
+            );
+            assert!(!drifted_manifest_upload.message().contains("tree_height"));
+
+            PrivateResultOram::upload_private_result_oram_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                    signature: Some(signature_to_proto(fixture.signature.clone())),
+                }),
+            )
+            .await
+            .unwrap();
+
+            let drifted_manifest_read = PrivateResultOram::get_private_result_oram_manifest(
+                &drifted_service,
+                Request::new(grpc::GetPrivateResultOramManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(drifted_manifest_read.code(), Code::InvalidArgument);
+            assert!(
+                drifted_manifest_read
+                    .message()
+                    .contains("manifest oram does not match runtime instance")
+            );
+            assert!(!drifted_manifest_read.message().contains("tree_height"));
+
+            let drifted_bucket_upload = PrivateResultOram::upload_private_result_oram_buckets(
+                &drifted_service,
+                Request::new(grpc::UploadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    buckets: fixture
+                        .buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(drifted_bucket_upload.code(), Code::InvalidArgument);
+            assert!(
+                drifted_bucket_upload
+                    .message()
+                    .contains("manifest oram does not match runtime instance")
+            );
+            assert!(!drifted_bucket_upload.message().contains("tree_height"));
+            assert!(
+                !drifted_bucket_upload
+                    .message()
+                    .contains(&fixture.buckets[0].ciphertext)
+            );
+
+            PrivateResultOram::upload_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    buckets: fixture
+                        .buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            )
+            .await
+            .unwrap();
+
+            let drifted_session = PrivateResultOram::open_private_result_oram_session(
+                &drifted_service,
+                Request::new(grpc::OpenPrivateResultOramSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    client_id: "tenant-a/sdk-instance-setup-drift-test".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(drifted_session.code(), Code::InvalidArgument);
+            assert!(
+                drifted_session
+                    .message()
+                    .contains("manifest oram does not match runtime instance")
+            );
+            assert!(!drifted_session.message().contains("tree_height"));
+        });
+    }
+
+    #[test]
     fn active_session_grpc_read_rejects_runtime_oram_policy_drift() {
         let _guard = route_e2e_guard();
         let fixture = PrivateResultRouteFixture::build();
