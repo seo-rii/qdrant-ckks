@@ -428,6 +428,7 @@ mod private_result_oram_grpc_tests {
     const KEY_ID: &str = "tenant-a/result-private-rk";
     const RK_EPOCH: u64 = 7;
     const SIGNING_KEY_ID: &str = "tenant-a/private-result-signing-v1";
+    const ALT_SIGNING_KEY_ID: &str = "tenant-a/private-result-signing-v2";
     const BASE_EPOCH: u64 = 42;
     const NEXT_EPOCH: u64 = 43;
 
@@ -436,11 +437,13 @@ mod private_result_oram_grpc_tests {
         signature: qdrant_sec::PrivateResultOramSignature,
         buckets: Vec<PrivateResultOramBucket>,
         signing_key: Ed25519KeyPair,
+        alt_signing_key: Ed25519KeyPair,
     }
 
     impl PrivateResultRouteFixture {
         fn build() -> Self {
             let signing_key = Ed25519KeyPair::from_seed_unchecked(&[9; 32]).unwrap();
+            let alt_signing_key = Ed25519KeyPair::from_seed_unchecked(&[10; 32]).unwrap();
             let oram = OramParams {
                 kind: OramKind::PathOram,
                 bucket_size: 2,
@@ -484,6 +487,7 @@ mod private_result_oram_grpc_tests {
                 signature,
                 buckets,
                 signing_key,
+                alt_signing_key,
             }
         }
 
@@ -515,7 +519,8 @@ mod private_result_oram_grpc_tests {
                                 "merkle_root_required": true
                             },
                             "signature_public_keys": {
-                                SIGNING_KEY_ID: BASE64URL_NOPAD.encode(self.signing_key.public_key().as_ref())
+                                SIGNING_KEY_ID: BASE64URL_NOPAD.encode(self.signing_key.public_key().as_ref()),
+                                ALT_SIGNING_KEY_ID: BASE64URL_NOPAD.encode(self.alt_signing_key.public_key().as_ref())
                             }
                         }),
                     },
@@ -567,6 +572,43 @@ mod private_result_oram_grpc_tests {
             (updated_bucket, commit_signature, new_root_hash)
         }
 
+        fn commit_signature_with_alt_key(
+            &self,
+            updated_bucket: &PrivateResultOramBucket,
+            new_root_hash: &str,
+        ) -> qdrant_sec::PrivateResultOramSignature {
+            let mut commitments = self
+                .buckets
+                .iter()
+                .map(|bucket| bucket.bucket_commitment.clone())
+                .collect::<Vec<_>>();
+            commitments[updated_bucket.bucket_id as usize] =
+                updated_bucket.bucket_commitment.clone();
+            let plan = PrivateResultOramCommitPlan {
+                old_epoch: BASE_EPOCH,
+                new_epoch: NEXT_EPOCH,
+                old_root_hash: self.manifest.root_hash.clone(),
+                new_root_hash: new_root_hash.to_string(),
+                leaf_commitments: commitments,
+                updated_buckets: vec![PrivateResultOramClientCommitBucketRef {
+                    bucket_id: updated_bucket.bucket_id,
+                    ciphertext_sha256: updated_bucket.ciphertext_sha256.clone(),
+                }],
+            };
+            sign_private_result_oram_commit(
+                &self.alt_signing_key,
+                PrivateResultOramCommitSignatureContext {
+                    collection_id: &self.manifest.collection_id,
+                    key_id: &self.manifest.key_id,
+                    rk_id: &self.manifest.rk_id,
+                    rk_epoch: self.manifest.rk_epoch,
+                    signing_key_id: ALT_SIGNING_KEY_ID,
+                },
+                &plan,
+            )
+            .unwrap()
+        }
+
         fn read_signature(&self, bucket_ids: &[u64]) -> qdrant_sec::PrivateResultOramSignature {
             sign_private_result_oram_read_buckets(
                 &self.signing_key,
@@ -576,6 +618,27 @@ mod private_result_oram_grpc_tests {
                     rk_id: &self.manifest.rk_id,
                     rk_epoch: self.manifest.rk_epoch,
                     signing_key_id: SIGNING_KEY_ID,
+                },
+                self.manifest.index_epoch,
+                &self.manifest.root_hash,
+                self.manifest.bucket_count,
+                bucket_ids,
+            )
+            .unwrap()
+        }
+
+        fn read_signature_with_alt_key(
+            &self,
+            bucket_ids: &[u64],
+        ) -> qdrant_sec::PrivateResultOramSignature {
+            sign_private_result_oram_read_buckets(
+                &self.alt_signing_key,
+                PrivateResultOramReadBucketsSignatureContext {
+                    collection_id: &self.manifest.collection_id,
+                    key_id: &self.manifest.key_id,
+                    rk_id: &self.manifest.rk_id,
+                    rk_epoch: self.manifest.rk_epoch,
+                    signing_key_id: ALT_SIGNING_KEY_ID,
                 },
                 self.manifest.index_epoch,
                 &self.manifest.root_hash,
@@ -919,6 +982,28 @@ mod private_result_oram_grpc_tests {
                     .contains(unconfigured_read_key_id_sentinel)
             );
 
+            let alt_read_signature = fixture.read_signature_with_alt_key(&read_bucket_ids);
+            let alt_read_key = PrivateResultOram::read_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::ReadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: Some(signature_to_proto(alt_read_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(alt_read_key.code(), Code::InvalidArgument);
+            assert!(
+                alt_read_key
+                    .message()
+                    .contains("signature key_id does not match manifest owner_signing_key_id")
+            );
+            assert!(!alt_read_key.message().contains(ALT_SIGNING_KEY_ID));
+
             let signature_body_sentinel = "signature!sentinel";
             let malformed_read_signature = PrivateResultOram::read_private_result_oram_buckets(
                 &service,
@@ -1196,6 +1281,31 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains(unconfigured_commit_key_id_sentinel)
             );
+
+            let alt_commit_signature =
+                fixture.commit_signature_with_alt_key(&updated_bucket, &new_root_hash);
+            let alt_commit_key = PrivateResultOram::commit_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::CommitPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash: new_root_hash.clone(),
+                    updated_buckets: vec![bucket_to_proto(updated_bucket.clone())],
+                    commit_signature: Some(signature_to_proto(alt_commit_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(alt_commit_key.code(), Code::InvalidArgument);
+            assert!(
+                alt_commit_key
+                    .message()
+                    .contains("signature key_id does not match manifest owner_signing_key_id")
+            );
+            assert!(!alt_commit_key.message().contains(ALT_SIGNING_KEY_ID));
 
             let commit_signature_body_sentinel = "commit-signature!sentinel";
             let malformed_commit_signature = PrivateResultOram::commit_private_result_oram_buckets(
