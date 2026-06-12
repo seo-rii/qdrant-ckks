@@ -12,9 +12,10 @@ use qdrant_sec::{
     OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_RESULT_ORAM_BINDING,
     PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND, PrivateResultOramManifest,
     PrivateResultOramManifestValidationContext, PrivateResultOramMerkleProof,
-    PrivateResultOramSignature, PrivateResultOramSignatureVerification,
-    PrivateResultOramUploadBundle, validate_private_result_oram_manifest,
-    validate_private_result_oram_manifest_signature_shape,
+    PrivateResultOramReadBucketsSignatureInput, PrivateResultOramSignature,
+    PrivateResultOramSignatureVerification, PrivateResultOramUploadBundle,
+    validate_private_result_oram_manifest, validate_private_result_oram_manifest_signature_shape,
+    validate_private_result_oram_read_buckets_signature,
     validate_private_result_oram_upload_bundle,
 };
 use serde::Serialize;
@@ -647,7 +648,10 @@ pub async fn do_read_private_result_oram_buckets(
     index_epoch: u64,
     root_hash: String,
     bucket_ids: Vec<u64>,
+    read_signature: PrivateResultOramSignature,
 ) -> StorageResult<PrivateResultOramReadBucketsResponse> {
+    validate_private_result_oram_manifest_signature_shape(&read_signature)
+        .map_err(private_result_oram_error)?;
     validate_private_result_oram_session_id_shape(session_id)?;
     validate_base64url_32_string(&root_hash, "root_hash")?;
     let request_context = collection_context_for_request(
@@ -655,7 +659,7 @@ pub async fn do_read_private_result_oram_buckets(
         auth,
         settings,
         collection_name,
-        None,
+        Some(&read_signature.key_id),
         "private_result_oram_buckets_read",
     )
     .await?;
@@ -675,6 +679,27 @@ pub async fn do_read_private_result_oram_buckets(
                 ));
             }
             validate_bucket_read_request(&session.manifest, &bucket_ids)?;
+            validate_session_signature_owner_key(session, &read_signature.key_id)?;
+            validate_private_result_oram_read_buckets_signature(
+                PrivateResultOramReadBucketsSignatureInput {
+                    collection_id: &session.manifest.collection_id,
+                    key_id: &session.manifest.key_id,
+                    rk_id: &session.manifest.rk_id,
+                    rk_epoch: session.manifest.rk_epoch,
+                    index_epoch,
+                    root_hash: &root_hash,
+                    bucket_count: session.bucket_count,
+                    bucket_ids: &bucket_ids,
+                    signature_alg: &read_signature.alg,
+                    signature_key_id: &read_signature.key_id,
+                },
+                &read_signature.sig,
+                PrivateResultOramSignatureVerification {
+                    expected_key_id: &read_signature.key_id,
+                    public_key: &request_context.public_key,
+                },
+            )
+            .map_err(private_result_oram_error)?;
             let store = PrivateResultOramStore::new(&session.collection_path);
             ensure_private_result_oram_active_session_current_epoch(
                 &store,
@@ -1525,6 +1550,11 @@ fn private_result_oram_error(err: qdrant_sec::PrivateResultOramError) -> Storage
         }
         qdrant_sec::PrivateResultOramError::InvalidCommitSignature => {
             StorageError::bad_request("private result ORAM commit signature verification failed")
+        }
+        qdrant_sec::PrivateResultOramError::InvalidReadBucketsSignature => {
+            StorageError::bad_request(
+                "private result ORAM read_buckets signature verification failed",
+            )
         }
         qdrant_sec::PrivateResultOramError::InvalidBucketHash => {
             StorageError::bad_request("private result ORAM bucket ciphertext validation failed")

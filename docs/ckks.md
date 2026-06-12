@@ -890,8 +890,9 @@ read validation accepts duplicate bucket ids but rejects empty,
 non-whole-path-shaped, non-canonical Path ORAM heap paths, or over-budget
 batches. The crypto crate also exposes canonical `read_buckets`
 message/sign/verify helpers that bind collection/key lineage, index epoch,
-root hash, bucket count, and the exact padded bucket-id sequence before REST or
-gRPC handlers accept a signed read request. The planner also rejects missing
+root hash, bucket count, and the exact padded bucket-id sequence; REST and gRPC
+`read_buckets` handlers now require that signature before encrypted buckets are
+read. The planner also rejects missing
 token positions, duplicate fetch tokens, duplicate token-position entries, and
 out-of-range leaves before a server request is built. The crypto crate also has
 a client-only private result ORAM payload block/plaintext bucket codec for

@@ -166,6 +166,8 @@ impl PrivateResultOram for PrivateResultOramService {
         let request = request.into_inner();
         validate_collection(&request.collection_name)?;
         let pass = new_unchecked_verification_pass();
+        let read_signature =
+            signature_from_proto(required(request.read_signature, "read_signature")?);
 
         let response = do_read_private_result_oram_buckets(
             self.dispatcher.toc(&auth, &pass),
@@ -176,6 +178,7 @@ impl PrivateResultOram for PrivateResultOramService {
             request.index_epoch,
             request.root_hash,
             request.bucket_ids,
+            read_signature,
         )
         .await?;
 
@@ -399,8 +402,9 @@ mod private_result_oram_grpc_tests {
         PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND, PrivateResultOramBucket,
         PrivateResultOramBucketCommitmentContext, PrivateResultOramClientCommitBucketRef,
         PrivateResultOramCommitPlan, PrivateResultOramCommitSignatureContext,
-        private_result_oram_bucket_commitment, private_result_oram_merkle_root_for_commitments,
-        sign_private_result_oram_commit, sign_private_result_oram_manifest,
+        PrivateResultOramReadBucketsSignatureContext, private_result_oram_bucket_commitment,
+        private_result_oram_merkle_root_for_commitments, sign_private_result_oram_commit,
+        sign_private_result_oram_manifest, sign_private_result_oram_read_buckets,
     };
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use serde_json::json;
@@ -562,6 +566,24 @@ mod private_result_oram_grpc_tests {
             .unwrap();
             (updated_bucket, commit_signature, new_root_hash)
         }
+
+        fn read_signature(&self, bucket_ids: &[u64]) -> qdrant_sec::PrivateResultOramSignature {
+            sign_private_result_oram_read_buckets(
+                &self.signing_key,
+                PrivateResultOramReadBucketsSignatureContext {
+                    collection_id: &self.manifest.collection_id,
+                    key_id: &self.manifest.key_id,
+                    rk_id: &self.manifest.rk_id,
+                    rk_epoch: self.manifest.rk_epoch,
+                    signing_key_id: SIGNING_KEY_ID,
+                },
+                self.manifest.index_epoch,
+                &self.manifest.root_hash,
+                self.manifest.bucket_count,
+                bucket_ids,
+            )
+            .unwrap()
+        }
     }
 
     fn fixture_bucket(
@@ -689,6 +711,10 @@ mod private_result_oram_grpc_tests {
             required::<grpc::PrivateResultOramSignature>(None, "commit_signature").unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
         assert!(err.message().contains("commit_signature"));
+
+        let err = required::<grpc::PrivateResultOramSignature>(None, "read_signature").unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("read_signature"));
     }
 
     #[test]
@@ -790,6 +816,7 @@ mod private_result_oram_grpc_tests {
             assert_eq!(duplicate_session.code(), Code::InvalidArgument);
             assert!(duplicate_session.message().contains("active session"));
 
+            let read_bucket_ids = vec![0, 1, 3, 0, 1, 4];
             let read = PrivateResultOram::read_private_result_oram_buckets(
                 &service,
                 Request::new(grpc::ReadPrivateResultOramBucketsRequest {
@@ -797,7 +824,10 @@ mod private_result_oram_grpc_tests {
                     session_id: session.session_id.clone(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.manifest.root_hash.clone(),
-                    bucket_ids: vec![0, 1, 3, 0, 1, 4],
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: Some(signature_to_proto(
+                        fixture.read_signature(&read_bucket_ids),
+                    )),
                 }),
             )
             .await
@@ -810,6 +840,33 @@ mod private_result_oram_grpc_tests {
             assert_eq!(read.buckets.len(), 6);
             assert_eq!(read.buckets[0].bucket_id, 0);
 
+            let wrong_read_signature = fixture.read_signature(&[0, 1, 4, 0, 1, 3]);
+            let invalid_read_signature = PrivateResultOram::read_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::ReadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: Some(signature_to_proto(wrong_read_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(invalid_read_signature.code(), Code::InvalidArgument);
+            assert!(
+                invalid_read_signature
+                    .message()
+                    .contains("read_buckets signature verification failed")
+            );
+            assert!(
+                !invalid_read_signature
+                    .message()
+                    .contains(&wrong_read_signature.sig)
+            );
+
+            let deduped_bucket_ids = vec![0, 1, 3, 4];
             let deduped_path_read = PrivateResultOram::read_private_result_oram_buckets(
                 &service,
                 Request::new(grpc::ReadPrivateResultOramBucketsRequest {
@@ -817,7 +874,10 @@ mod private_result_oram_grpc_tests {
                     session_id: session.session_id.clone(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.manifest.root_hash.clone(),
-                    bucket_ids: vec![0, 1, 3, 4],
+                    bucket_ids: deduped_bucket_ids.clone(),
+                    read_signature: Some(signature_to_proto(
+                        fixture.read_signature(&deduped_bucket_ids),
+                    )),
                 }),
             )
             .await
@@ -838,7 +898,10 @@ mod private_result_oram_grpc_tests {
                     session_id: unknown_read_session_sentinel.to_string(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.manifest.root_hash.clone(),
-                    bucket_ids: vec![0, 1, 3, 0, 1, 4],
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: Some(signature_to_proto(
+                        fixture.read_signature(&read_bucket_ids),
+                    )),
                 }),
             )
             .await
@@ -870,7 +933,10 @@ mod private_result_oram_grpc_tests {
                         session_id: invalid_session_id.to_string(),
                         index_epoch: BASE_EPOCH,
                         root_hash: fixture.manifest.root_hash.clone(),
-                        bucket_ids: vec![0, 1, 3, 0, 1, 4],
+                        bucket_ids: read_bucket_ids.clone(),
+                        read_signature: Some(signature_to_proto(
+                            fixture.read_signature(&read_bucket_ids),
+                        )),
                     }),
                 )
                 .await

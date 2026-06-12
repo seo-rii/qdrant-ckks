@@ -11690,6 +11690,8 @@ pub struct ReadPrivateResultOramBucketsRequest {
     pub root_hash: ::prost::alloc::string::String,
     #[prost(uint64, repeated, tag = "5")]
     pub bucket_ids: ::prost::alloc::vec::Vec<u64>,
+    #[prost(message, optional, tag = "6")]
+    pub read_signature: ::core::option::Option<PrivateResultOramSignature>,
 }
 #[derive(serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]

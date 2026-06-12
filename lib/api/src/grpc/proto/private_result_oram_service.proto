@@ -68,6 +68,7 @@ message ReadPrivateResultOramBucketsRequest {
   uint64 index_epoch = 3;
   string root_hash = 4;
   repeated uint64 bucket_ids = 5;
+  PrivateResultOramSignature read_signature = 6;
 }
 
 message ReadPrivateResultOramBucketsResponse {

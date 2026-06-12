@@ -61,6 +61,7 @@ pub struct ReadPrivateResultOramBucketsRequest {
     pub index_epoch: u64,
     pub root_hash: String,
     pub bucket_ids: Vec<u64>,
+    pub read_signature: qdrant_sec::PrivateResultOramSignature,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -200,6 +201,7 @@ async fn read_buckets(
         request.index_epoch,
         request.root_hash,
         request.bucket_ids,
+        request.read_signature,
     )
     .await;
     process_response(result, timing, None)
@@ -290,9 +292,10 @@ mod private_result_oram_rest_tests {
         PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND, PrivateResultOramBucket,
         PrivateResultOramBucketCommitmentContext, PrivateResultOramClientCommitBucketRef,
         PrivateResultOramCommitPlan, PrivateResultOramCommitSignatureContext,
-        PrivateResultOramManifest, private_result_oram_bucket_commitment,
-        private_result_oram_merkle_root_for_commitments, sign_private_result_oram_commit,
-        sign_private_result_oram_manifest,
+        PrivateResultOramManifest, PrivateResultOramReadBucketsSignatureContext,
+        private_result_oram_bucket_commitment, private_result_oram_merkle_root_for_commitments,
+        sign_private_result_oram_commit, sign_private_result_oram_manifest,
+        sign_private_result_oram_read_buckets,
     };
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use serde::de::DeserializeOwned;
@@ -455,6 +458,24 @@ mod private_result_oram_rest_tests {
             .unwrap();
             (updated_bucket, commit_signature, new_root_hash)
         }
+
+        fn read_signature(&self, bucket_ids: &[u64]) -> qdrant_sec::PrivateResultOramSignature {
+            sign_private_result_oram_read_buckets(
+                &self.signing_key,
+                PrivateResultOramReadBucketsSignatureContext {
+                    collection_id: &self.manifest.collection_id,
+                    key_id: &self.manifest.key_id,
+                    rk_id: &self.manifest.rk_id,
+                    rk_epoch: self.manifest.rk_epoch,
+                    signing_key_id: SIGNING_KEY_ID,
+                },
+                self.manifest.index_epoch,
+                &self.manifest.root_hash,
+                self.manifest.bucket_count,
+                bucket_ids,
+            )
+            .unwrap()
+        }
     }
 
     fn fixture_bucket(
@@ -580,11 +601,13 @@ mod private_result_oram_rest_tests {
         };
         assert_eq!(json_roundtrip(&session_request), session_request);
 
+        let read_bucket_ids = vec![0, 1, 3, 0, 1, 4];
         let read_request = ReadPrivateResultOramBucketsRequest {
             session_id: SESSION_ID.to_string(),
             index_epoch: fixture.manifest.index_epoch,
             root_hash: fixture.manifest.root_hash.clone(),
-            bucket_ids: vec![0, 1, 3, 0, 1, 4],
+            bucket_ids: read_bucket_ids.clone(),
+            read_signature: fixture.read_signature(&read_bucket_ids),
         };
         assert_eq!(json_roundtrip(&read_request), read_request);
 
@@ -752,13 +775,15 @@ mod private_result_oram_rest_tests {
                 "active session"
             );
 
+            let read_bucket_ids = vec![0, 1, 3, 0, 1, 4];
             let read_result = post_json_ok!(
                 "/collections/docs/private-result-oram/oram/read_buckets",
                 ReadPrivateResultOramBucketsRequest {
                     session_id: session_id.clone(),
                     index_epoch: fixture.manifest.index_epoch,
                     root_hash: fixture.manifest.root_hash.clone(),
-                    bucket_ids: vec![0, 1, 3, 0, 1, 4],
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: fixture.read_signature(&read_bucket_ids),
                 }
             );
             assert_eq!(
@@ -768,13 +793,30 @@ mod private_result_oram_rest_tests {
             assert_eq!(read_result["buckets"].as_array().unwrap().len(), 6);
             assert_eq!(read_result["buckets"][0]["bucket_id"], 0);
 
+            let wrong_read_signature = fixture.read_signature(&[0, 1, 4, 0, 1, 3]);
+            let invalid_read_signature_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/read_buckets",
+                ReadPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: wrong_read_signature.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "read_buckets signature verification failed"
+            );
+            assert!(!invalid_read_signature_error.contains(&wrong_read_signature.sig));
+
+            let deduped_bucket_ids = vec![0, 1, 3, 4];
             let deduped_path_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/read_buckets",
                 ReadPrivateResultOramBucketsRequest {
                     session_id: session_id.clone(),
                     index_epoch: fixture.manifest.index_epoch,
                     root_hash: fixture.manifest.root_hash.clone(),
-                    bucket_ids: vec![0, 1, 3, 4],
+                    bucket_ids: deduped_bucket_ids.clone(),
+                    read_signature: fixture.read_signature(&deduped_bucket_ids),
                 },
                 StatusCode::BAD_REQUEST,
                 "whole ORAM paths"
@@ -788,7 +830,8 @@ mod private_result_oram_rest_tests {
                     session_id: unknown_read_session_sentinel.to_string(),
                     index_epoch: fixture.manifest.index_epoch,
                     root_hash: fixture.manifest.root_hash.clone(),
-                    bucket_ids: vec![0, 1, 3, 0, 1, 4],
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: fixture.read_signature(&read_bucket_ids),
                 },
                 StatusCode::BAD_REQUEST,
                 "session is missing or expired"
@@ -810,7 +853,8 @@ mod private_result_oram_rest_tests {
                         session_id: invalid_session_id.to_string(),
                         index_epoch: fixture.manifest.index_epoch,
                         root_hash: fixture.manifest.root_hash.clone(),
-                        bucket_ids: vec![0, 1, 3, 0, 1, 4],
+                        bucket_ids: read_bucket_ids.clone(),
+                        read_signature: fixture.read_signature(&read_bucket_ids),
                     },
                     StatusCode::BAD_REQUEST,
                     "session_id is invalid"
