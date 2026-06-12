@@ -2805,6 +2805,82 @@ mod private_hnsw_tests {
         }
     }
 
+    fn fixture_runtime_context(manifest: &PrivateHnswOramManifest) -> ResolvedPrivateHnswContext {
+        ResolvedPrivateHnswContext {
+            collection_path: std::path::PathBuf::from("/tmp/qdrant-private-hnsw-test"),
+            collection_crypto_id: manifest.collection_id.clone(),
+            vector_name: manifest.vector_name.clone(),
+            expected_key_id: manifest.key_id.clone(),
+            expected_rk_id: manifest.rk_id.clone(),
+            min_rk_epoch: manifest.rk_epoch,
+            max_rk_epoch: manifest.rk_epoch,
+            expected_dim: manifest.dim,
+            expected_distance: manifest.distance,
+            expected_result_privacy: manifest.result_privacy,
+            private_result_oram_binding_configured: false,
+            expected_hnsw: manifest.hnsw.clone(),
+            expected_oram: manifest.oram.clone(),
+            expected_fixed_budget: manifest.fixed_budget.clone(),
+            signature_public_keys: HashMap::new(),
+            public_key: vec![0; 32],
+        }
+    }
+
+    #[test]
+    fn manifest_runtime_context_rejects_lineage_and_vector_policy_drift() {
+        let session = fixture_session("session-1", 20);
+        let manifest = session.manifest;
+        fixture_runtime_context(&manifest)
+            .validate_manifest_runtime_context(&manifest)
+            .unwrap();
+
+        let mut context = fixture_runtime_context(&manifest);
+        context.expected_key_id = "runtime-key-id-sentinel".to_string();
+        let rendered = context
+            .validate_manifest_runtime_context(&manifest)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("manifest key_id does not match runtime instance"));
+        assert!(!rendered.contains("runtime-key-id-sentinel"));
+
+        let mut context = fixture_runtime_context(&manifest);
+        context.expected_rk_id = "runtime-rk-id-sentinel".to_string();
+        let rendered = context
+            .validate_manifest_runtime_context(&manifest)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("manifest rk_id does not match runtime instance"));
+        assert!(!rendered.contains("runtime-rk-id-sentinel"));
+
+        let mut context = fixture_runtime_context(&manifest);
+        context.min_rk_epoch = manifest.rk_epoch + 1;
+        context.max_rk_epoch = manifest.rk_epoch + 1;
+        let rendered = context
+            .validate_manifest_runtime_context(&manifest)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("manifest rk_epoch does not match runtime instance"));
+        assert!(!rendered.contains(&(manifest.rk_epoch + 1).to_string()));
+
+        let mut context = fixture_runtime_context(&manifest);
+        context.expected_dim = 1536;
+        let rendered = context
+            .validate_manifest_runtime_context(&manifest)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("manifest dim does not match runtime vector size"));
+        assert!(!rendered.contains("1536"));
+
+        let mut context = fixture_runtime_context(&manifest);
+        context.expected_distance = DistanceKind::Dot;
+        let rendered = context
+            .validate_manifest_runtime_context(&manifest)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("manifest distance does not match runtime vector distance"));
+        assert!(!rendered.contains("Dot"));
+    }
+
     #[test]
     fn session_registry_enforces_single_writer() {
         let now = 10;
