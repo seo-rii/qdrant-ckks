@@ -3200,6 +3200,13 @@ mod private_hnsw_rest_tests {
             .get_mut("docs_private_hnsw_v1")
             .unwrap()
             .options["fixed_budget"]["fixed_result_k"] = serde_json::json!(2);
+        let mut hnsw_drifted_settings = settings.clone();
+        hnsw_drifted_settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["hnsw"]["m"] = serde_json::json!(3);
         let mut reserved_privacy_settings = settings.clone();
         reserved_privacy_settings
             .crypto
@@ -3223,6 +3230,14 @@ mod private_hnsw_rest_tests {
                 App::new()
                     .app_data(web::Data::new(dispatcher.clone()))
                     .app_data(web::Data::new(drifted_settings))
+                    .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
+                    .configure(config_private_hnsw_api),
+            )
+            .await;
+            let hnsw_drifted_app = actix_test::init_service(
+                App::new()
+                    .app_data(web::Data::new(dispatcher.clone()))
+                    .app_data(web::Data::new(hnsw_drifted_settings))
                     .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
                     .configure(config_private_hnsw_api),
             )
@@ -3324,6 +3339,29 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "manifest fixed_budget does not match runtime instance"
             );
+            let hnsw_drift_paths = vec![fixture.entry_leaf_label()];
+            let hnsw_drift_signature = fixture.sign_read_paths(&hnsw_drift_paths, 1, true);
+            post_json_error_contains!(
+                &hnsw_drifted_app,
+                "/collections/docs/private-hnsw/text/oram/read_paths",
+                OramReadPathsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: hnsw_drift_paths,
+                    padding: OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    },
+                    client_signature: PrivateHnswClientSignature {
+                        alg: hnsw_drift_signature.alg,
+                        key_id: hnsw_drift_signature.key_id,
+                        sig: hnsw_drift_signature.sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "manifest hnsw does not match runtime instance"
+            );
             let reserved_paths = vec![fixture.entry_leaf_label()];
             let reserved_signature = fixture.sign_read_paths(&reserved_paths, 1, true);
             post_json_error_contains!(
@@ -3376,6 +3414,13 @@ mod private_hnsw_rest_tests {
             .get_mut("docs_private_hnsw_v1")
             .unwrap()
             .options["fixed_budget"]["paths_per_round"] = serde_json::json!(2);
+        let mut hnsw_drifted_settings = settings.clone();
+        hnsw_drifted_settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["hnsw"]["m"] = serde_json::json!(3);
         let mut reserved_privacy_settings = settings.clone();
         reserved_privacy_settings
             .crypto
@@ -3399,6 +3444,14 @@ mod private_hnsw_rest_tests {
                 App::new()
                     .app_data(web::Data::new(dispatcher.clone()))
                     .app_data(web::Data::new(drifted_settings))
+                    .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
+                    .configure(config_private_hnsw_api),
+            )
+            .await;
+            let hnsw_drifted_app = actix_test::init_service(
+                App::new()
+                    .app_data(web::Data::new(dispatcher.clone()))
+                    .app_data(web::Data::new(hnsw_drifted_settings))
                     .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
                     .configure(config_private_hnsw_api),
             )
@@ -3496,6 +3549,26 @@ mod private_hnsw_rest_tests {
                 },
                 StatusCode::BAD_REQUEST,
                 "manifest oram does not match runtime instance"
+            );
+            let hnsw_run = fixture.run_single_search_collect_writeback();
+            post_json_error_contains!(
+                &hnsw_drifted_app,
+                "/collections/docs/private-hnsw/text/oram/commit",
+                OramCommitRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.encrypted_build.root_hash.clone(),
+                    new_root_hash: hnsw_run.commit_plan.new_root_hash,
+                    updated_buckets: hnsw_run.updated_buckets,
+                    commit_signature: PrivateHnswClientSignature {
+                        alg: hnsw_run.commit_signature.alg,
+                        key_id: hnsw_run.commit_signature.key_id,
+                        sig: hnsw_run.commit_signature.sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "manifest hnsw does not match runtime instance"
             );
             let reserved_run = fixture.run_single_search_collect_writeback();
             post_json_error_contains!(
