@@ -341,6 +341,8 @@ pub fn one_unindexed_expression_key(
 mod tests {
     use std::collections::HashMap;
 
+    use qdrant_sec::PRIVATE_RESULT_ORAM_BINDING;
+
     use super::*;
     use crate::config::{
         CollectionEncryptionConfig, CryptoMigrationState, EncryptionRuleRef, EncryptionSelector,
@@ -361,6 +363,27 @@ mod tests {
                     },
                     instance: "docs_payload_v1".to_string(),
                     binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        }
+    }
+
+    fn params_with_private_result_oram_path(path: &str) -> CollectionParams {
+        CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:result-private-rk".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "private_result_payload".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec![path.to_string()],
+                    },
+                    instance: "docs_private_result_oram_v1".to_string(),
+                    binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
                 }],
             }),
             ..CollectionParams::empty()
@@ -546,6 +569,48 @@ mod tests {
                 err,
                 CollectionError::BadInput { description }
                     if description.contains("create shard key payload index schema")
+                        && description.contains("encrypted payload field")
+                        && description.contains("document.body")
+            ));
+        }
+    }
+
+    #[test]
+    fn create_payload_index_rejects_private_result_oram_paths() {
+        let collection_params = params_with_private_result_oram_path("document.body");
+        let mut schema = HashMap::new();
+
+        for field_name in ["document", "document.body", "document.body.keyword"] {
+            let err = validate_payload_index_paths_for_encrypted_paths(
+                [&field_name.parse().unwrap()],
+                &collection_params,
+                "create",
+            )
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                CollectionError::BadInput { description }
+                    if description.contains("create payload index")
+                        && description.contains("encrypted payload field")
+                        && description.contains("document.body")
+            ));
+
+            schema.clear();
+            schema.insert(
+                field_name.parse().unwrap(),
+                PayloadFieldSchema::FieldType(PayloadSchemaType::Keyword),
+            );
+            let err = validate_payload_index_schema_for_encryption(
+                schema.iter(),
+                &collection_params,
+                "recover",
+            )
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                CollectionError::BadInput { description }
+                    if description.contains("recover payload index schema")
                         && description.contains("encrypted payload field")
                         && description.contains("document.body")
             ));
