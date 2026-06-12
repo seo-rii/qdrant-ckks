@@ -882,8 +882,8 @@ session/read/commit path rather than ordinary retrieve. The dedicated result
 ORAM REST/gRPC path can upload/read signed manifests plus encrypted bucket
 batches, open fixed-budget sessions, return Merkle-proven bucket batches, and
 apply signed writeback commits through epoch/root CAS.
-Ordinary point upsert, sync, `set_payload`, `overwrite_payload`,
-`delete_payload`, and payload clear operations that touch a
+Ordinary point upsert, sync, point delete/delete-by-filter, `set_payload`,
+`overwrite_payload`, `delete_payload`, and payload clear operations that touch a
 `private-result-oram/v1` payload path fail closed and direct callers to the
 private result ORAM session APIs; they must not fall through to the regular
 server/client payload envelope write path.

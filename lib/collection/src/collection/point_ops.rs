@@ -242,7 +242,8 @@ fn private_result_oram_payload_operation_kind(
                     private_result_oram_payload_touches_path(payload, None, protected_path)
                 })
                 .then_some("sync points"),
-            PointOperations::DeletePoints { .. } | PointOperations::DeletePointsByFilter(_) => None,
+            PointOperations::DeletePoints { .. } => Some("delete points"),
+            PointOperations::DeletePointsByFilter(_) => Some("delete points by filter"),
         },
         CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(operation)) => {
             private_result_oram_payload_touches_path(
@@ -4304,6 +4305,18 @@ mod tests {
                     },
                 )),
                 "sync points",
+            ),
+            (
+                CollectionUpdateOperations::PointOperation(PointOperations::DeletePoints {
+                    ids: vec![1.into()],
+                }),
+                "delete points",
+            ),
+            (
+                CollectionUpdateOperations::PointOperation(PointOperations::DeletePointsByFilter(
+                    Filter::new(),
+                )),
+                "delete points by filter",
             ),
             (
                 CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(
