@@ -251,6 +251,340 @@ tags:
     description: Beta features, do not depend on these yet.
 
 paths:
+  /collections/{collection_name}/private-hnsw/{vector_name}/manifest:
+    get:
+      tags:
+        - Beta
+      summary: Get private HNSW ORAM manifest
+      description: Retrieve the signed client-led private HNSW ORAM manifest for a vector.
+      operationId: get_private_hnsw_manifest
+      parameters:
+        - name: collection_name
+          in: path
+          description: Name of the collection
+          required: true
+          schema:
+            type: string
+        - name: vector_name
+          in: path
+          description: Name of the private HNSW vector
+          required: true
+          schema:
+            type: string
+      responses: #@ response(type("object"))
+    post:
+      tags:
+        - Beta
+      summary: Upload private HNSW ORAM manifest
+      description: Upload a signed manifest for a client-led private HNSW ORAM vector index.
+      operationId: upload_private_hnsw_manifest
+      requestBody:
+        description: Manifest and owner signature
+        content:
+          application/json:
+            schema:
+              type: object
+      parameters:
+        - name: collection_name
+          in: path
+          description: Name of the collection
+          required: true
+          schema:
+            type: string
+        - name: vector_name
+          in: path
+          description: Name of the private HNSW vector
+          required: true
+          schema:
+            type: string
+      responses: #@ response(type("object"))
+
+  /collections/{collection_name}/private-hnsw/{vector_name}/buckets:
+    post:
+      tags:
+        - Beta
+      summary: Upload private HNSW ORAM buckets
+      description: Upload encrypted private HNSW ORAM bucket ciphertexts for the signed manifest epoch.
+      operationId: upload_private_hnsw_buckets
+      requestBody:
+        description: Encrypted ORAM bucket upload batch
+        content:
+          application/json:
+            schema:
+              type: object
+      parameters:
+        - name: collection_name
+          in: path
+          description: Name of the collection
+          required: true
+          schema:
+            type: string
+        - name: vector_name
+          in: path
+          description: Name of the private HNSW vector
+          required: true
+          schema:
+            type: string
+      responses: #@ response(type("object"))
+
+  /collections/{collection_name}/private-hnsw/{vector_name}/session:
+    post:
+      tags:
+        - Beta
+      summary: Open private HNSW ORAM session
+      description: Open a fixed-budget client-led private HNSW ORAM traversal session.
+      operationId: open_private_hnsw_session
+      requestBody:
+        description: Session request
+        content:
+          application/json:
+            schema:
+              type: object
+      parameters:
+        - name: collection_name
+          in: path
+          description: Name of the collection
+          required: true
+          schema:
+            type: string
+        - name: vector_name
+          in: path
+          description: Name of the private HNSW vector
+          required: true
+          schema:
+            type: string
+      responses: #@ response(type("object"))
+
+  /collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths:
+    post:
+      tags:
+        - Beta
+      summary: Read private HNSW ORAM paths
+      description: Return encrypted ORAM buckets and a Merkle proof for a signed fixed-budget path batch.
+      operationId: read_private_hnsw_paths
+      requestBody:
+        description: Signed ORAM path read request
+        content:
+          application/json:
+            schema:
+              type: object
+      parameters:
+        - name: collection_name
+          in: path
+          description: Name of the collection
+          required: true
+          schema:
+            type: string
+        - name: vector_name
+          in: path
+          description: Name of the private HNSW vector
+          required: true
+          schema:
+            type: string
+      responses: #@ response(type("object"))
+
+  /collections/{collection_name}/private-hnsw/{vector_name}/oram/commit:
+    post:
+      tags:
+        - Beta
+      summary: Commit private HNSW ORAM writeback
+      description: Commit encrypted private HNSW ORAM bucket writebacks through signed epoch/root CAS.
+      operationId: commit_private_hnsw_paths
+      requestBody:
+        description: Signed ORAM writeback commit
+        content:
+          application/json:
+            schema:
+              type: object
+      parameters:
+        - name: collection_name
+          in: path
+          description: Name of the collection
+          required: true
+          schema:
+            type: string
+        - name: vector_name
+          in: path
+          description: Name of the private HNSW vector
+          required: true
+          schema:
+            type: string
+      responses: #@ response(type("object"))
+
+  /collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close:
+    post:
+      tags:
+        - Beta
+      summary: Close private HNSW ORAM session
+      description: Close a private HNSW ORAM traversal session.
+      operationId: close_private_hnsw_session
+      parameters:
+        - name: collection_name
+          in: path
+          description: Name of the collection
+          required: true
+          schema:
+            type: string
+        - name: vector_name
+          in: path
+          description: Name of the private HNSW vector
+          required: true
+          schema:
+            type: string
+        - name: session_id
+          in: path
+          description: Private HNSW ORAM session id
+          required: true
+          schema:
+            type: string
+      responses: #@ response(type("boolean"))
+
+  /collections/{collection_name}/private-result-oram/manifest:
+    get:
+      tags:
+        - Beta
+      summary: Get private result ORAM manifest
+      description: Retrieve the signed private result ORAM manifest for result-private payload fetch.
+      operationId: get_private_result_oram_manifest
+      parameters:
+        - name: collection_name
+          in: path
+          description: Name of the collection
+          required: true
+          schema:
+            type: string
+      responses: #@ response(type("object"))
+    post:
+      tags:
+        - Beta
+      summary: Upload private result ORAM manifest
+      description: Upload a signed private result ORAM manifest.
+      operationId: upload_private_result_oram_manifest
+      requestBody:
+        description: Manifest and owner signature
+        content:
+          application/json:
+            schema:
+              type: object
+      parameters:
+        - name: collection_name
+          in: path
+          description: Name of the collection
+          required: true
+          schema:
+            type: string
+      responses: #@ response(type("object"))
+
+  /collections/{collection_name}/private-result-oram/buckets:
+    post:
+      tags:
+        - Beta
+      summary: Upload private result ORAM buckets
+      description: Upload encrypted private result ORAM bucket ciphertexts for the signed manifest epoch.
+      operationId: upload_private_result_oram_buckets
+      requestBody:
+        description: Encrypted result ORAM bucket upload batch
+        content:
+          application/json:
+            schema:
+              type: object
+      parameters:
+        - name: collection_name
+          in: path
+          description: Name of the collection
+          required: true
+          schema:
+            type: string
+      responses: #@ response(type("object"))
+
+  /collections/{collection_name}/private-result-oram/session:
+    post:
+      tags:
+        - Beta
+      summary: Open private result ORAM session
+      description: Open a private result ORAM session for result-private payload fetch.
+      operationId: open_private_result_oram_session
+      requestBody:
+        description: Session request
+        content:
+          application/json:
+            schema:
+              type: object
+      parameters:
+        - name: collection_name
+          in: path
+          description: Name of the collection
+          required: true
+          schema:
+            type: string
+      responses: #@ response(type("object"))
+
+  /collections/{collection_name}/private-result-oram/oram/read_buckets:
+    post:
+      tags:
+        - Beta
+      summary: Read private result ORAM buckets
+      description: Return encrypted result ORAM buckets and a Merkle proof for a signed bucket-id batch.
+      operationId: read_private_result_oram_buckets
+      requestBody:
+        description: Signed ORAM bucket read request
+        content:
+          application/json:
+            schema:
+              type: object
+      parameters:
+        - name: collection_name
+          in: path
+          description: Name of the collection
+          required: true
+          schema:
+            type: string
+      responses: #@ response(type("object"))
+
+  /collections/{collection_name}/private-result-oram/oram/commit:
+    post:
+      tags:
+        - Beta
+      summary: Commit private result ORAM writeback
+      description: Commit encrypted private result ORAM bucket writebacks through signed epoch/root CAS.
+      operationId: commit_private_result_oram_buckets
+      requestBody:
+        description: Signed ORAM writeback commit
+        content:
+          application/json:
+            schema:
+              type: object
+      parameters:
+        - name: collection_name
+          in: path
+          description: Name of the collection
+          required: true
+          schema:
+            type: string
+      responses: #@ response(type("object"))
+
+  /collections/{collection_name}/private-result-oram/session/{session_id}/close:
+    post:
+      tags:
+        - Beta
+      summary: Close private result ORAM session
+      description: Close a private result ORAM session.
+      operationId: close_private_result_oram_session
+      parameters:
+        - name: collection_name
+          in: path
+          description: Name of the collection
+          required: true
+          schema:
+            type: string
+        - name: session_id
+          in: path
+          description: Private result ORAM session id
+          required: true
+          schema:
+            type: string
+      responses: #@ response(type("boolean"))
+
   /collections/{collection_name}/points/scroll:
     post:
       tags:

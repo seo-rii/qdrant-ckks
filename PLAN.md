@@ -470,6 +470,7 @@
 - REST/gRPC `read_paths` 성공 경로는 collection/vector, key lineage, epoch/root, path labels, padding metadata에 대한 Ed25519 client signature를 검증한 뒤 encrypted buckets를 반환하고, invalid read signature는 fail-closed로 거부한다.
 - REST/gRPC `read_paths`는 fixed-budget/session epoch-root 검증 뒤 leaf label을 canonical fixed-length base64url form으로 제한하고, Ed25519 request signature를 ORAM bucket path 계산보다 먼저 검증한다.
 - REST/gRPC `commit`은 bounded request-size/epoch checks 뒤 `old_root_hash`/`new_root_hash`를 canonical 32-byte base64url shape로 먼저 제한하고, Ed25519 request signature를 Merkle/writeback preparation보다 먼저 검증한다.
+- OpenAPI `Beta` path surface도 private HNSW ORAM manifest/bucket/session/read/commit/close와 private result ORAM manifest/bucket/session/read/commit/close REST endpoints를 노출한다. 암호화 envelope DTO는 SDK-owned wire contract라 현재 OpenAPI에서는 opaque object request/response로 고정한다.
 - REST/gRPC `read_paths`와 `commit` request signature key id는 session manifest의 `owner_signing_key_id`와 달라도 fail closed 한다.
 - active session의 `read_paths`와 `commit`은 session open 이후 runtime instance policy가 바뀌어도 session manifest를 현재 runtime context와 다시 비교하고 drift를 fail closed 한다.
 - REST와 gRPC route fixtures는 active session 이후 runtime `fixed_budget`, `oram`, 또는 private-result `result_privacy` policy가 drift된 settings로 `read_paths`/`commit`을 호출하면 fail closed 되는 경계를 모두 검증한다.
