@@ -91,6 +91,38 @@ pub(crate) fn redact_crypto_material_for_report(value: &str) -> String {
         "xamzsignature",
         "xamzsecuritytoken",
         "xapikey",
+        "accessedleaflabel",
+        "accessedleaflabels",
+        "bucketid",
+        "bucketids",
+        "candidateheap",
+        "clientstate",
+        "fetchtoken",
+        "fetchtokens",
+        "leaflabel",
+        "leaflabels",
+        "neighborid",
+        "neighborids",
+        "nodeid",
+        "nodeids",
+        "orampath",
+        "orampaths",
+        "orampositionmap",
+        "pathlabel",
+        "pathlabels",
+        "payloadfetchtoken",
+        "payloadfetchtokens",
+        "payloadoramleaf",
+        "payloadoramleaves",
+        "pointtoken",
+        "pointtokens",
+        "resultid",
+        "resultids",
+        "sessionid",
+        "tokenpositionmap",
+        "topk",
+        "visitednode",
+        "visitednodes",
     ]
     .iter()
     .any(|needle| compact.contains(needle));
@@ -162,6 +194,33 @@ mod tests {
             "Security-Token: security-token-sentinel",
         ] {
             let payload = ErrorReporter::build_report_payload(secret, "node-4", Some(secret));
+
+            assert!(payload.contains("crypto material omitted"), "{payload}");
+            assert!(!payload.contains("sentinel"), "{payload}");
+        }
+    }
+
+    #[test]
+    fn test_build_report_payload_redacts_private_oram_access_pattern_fields() {
+        for secret in [
+            "session_id=private-session-sentinel",
+            "path_label=private-path-label-sentinel",
+            "leafLabels=[private-leaf-label-sentinel]",
+            "accessed_leaf_labels=[private-accessed-leaf-sentinel]",
+            "bucket_id=private-bucket-sentinel",
+            "node_ids=[private-node-sentinel]",
+            "neighbor_ids=[private-neighbor-sentinel]",
+            "candidate_heap=private-candidate-sentinel",
+            "top_k=[private-topk-sentinel]",
+            "result_ids=[private-result-id-sentinel]",
+            "point_token=private-point-token-sentinel",
+            "payload_fetch_tokens=[private-fetch-token-sentinel]",
+            "payload_oram_leaf=private-payload-leaf-sentinel",
+            "oram_position_map=private-position-map-sentinel",
+            "tokenPositionMap=private-token-position-map-sentinel",
+            "client_state=private-client-state-sentinel",
+        ] {
+            let payload = ErrorReporter::build_report_payload(secret, "node-6", Some(secret));
 
             assert!(payload.contains("crypto material omitted"), "{payload}");
             assert!(!payload.contains("sentinel"), "{payload}");

@@ -186,4 +186,21 @@ mod tests {
         assert!(!rendered.contains("ciphertext"));
         assert!(!rendered.contains("wrapped_key_b64"));
     }
+
+    #[test]
+    fn grpc_status_log_message_redacts_private_oram_access_pattern_fields() {
+        let status = tonic::Status::invalid_argument(
+            "private ORAM read failed for session_id=session-sentinel \
+             path_label=leaf-sentinel candidate_heap=candidate-sentinel \
+             payload_fetch_token=fetch-token-sentinel",
+        );
+
+        let rendered = redacted_grpc_status_message(&status);
+
+        assert!(rendered.contains("redacted"));
+        assert!(!rendered.contains("session-sentinel"));
+        assert!(!rendered.contains("leaf-sentinel"));
+        assert!(!rendered.contains("candidate-sentinel"));
+        assert!(!rendered.contains("fetch-token-sentinel"));
+    }
 }
