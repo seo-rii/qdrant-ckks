@@ -1019,6 +1019,9 @@ request signing key must match the session manifest's `owner_signing_key_id`
 before the verifier public key is looked up; non-owner key ids therefore do not
 reach the registry lookup boundary and are rejected without echoing the
 submitted key id.
+The `read_buckets` handler verifies the canonical signed bucket-id sequence
+before returning detailed path-shape or bucket-range errors, so unauthenticated
+malformed read batches stay on the generic signature-failure path.
 Directory hardening also checks symlink/type before chmod. It also exposes
 `read_merkle_path_batch` with the canonical qdrant-sec
 `merkle_path_batch/v1` proof DTO; the REST/gRPC `read_buckets` API returns these
