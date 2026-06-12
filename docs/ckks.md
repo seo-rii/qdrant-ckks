@@ -892,7 +892,7 @@ batches. The crypto crate also exposes canonical `read_buckets`
 message/sign/verify helpers that bind collection/key lineage, index epoch,
 root hash, bucket count, and the exact padded bucket-id sequence; REST and gRPC
 `read_buckets` handlers now require that signature before encrypted buckets are
-read. The planner also rejects missing
+read or detailed path-shape errors are returned. The planner also rejects missing
 token positions, duplicate fetch tokens, duplicate token-position entries, and
 out-of-range leaves before a server request is built. The crypto crate also has
 a client-only private result ORAM payload block/plaintext bucket codec for
@@ -991,7 +991,9 @@ epochs and manifest epoch/root context before bucket/Merkle writes. It rejects
 empty writebacks before storage state changes. Its signed writeback entrypoint
 verifies the SDK Ed25519 commit signature against the stored manifest lineage
 before delegating to that helper, so an invalid commit signature leaves the
-current epoch, buckets, and Merkle metadata unchanged. SDK commit planning,
+current epoch, buckets, and Merkle metadata unchanged. The REST/gRPC commit
+handlers also verify the canonical commit signature before returning detailed
+duplicate-bucket writeback shape errors. SDK commit planning,
 signing, and verification also reject empty commit bucket lists and malformed
 updated bucket ciphertext hashes, and validate each updated bucket commitment
 against the bucket ciphertext hash plus
