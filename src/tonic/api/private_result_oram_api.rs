@@ -929,6 +929,56 @@ mod private_result_oram_grpc_tests {
             assert_eq!(duplicate_session.code(), Code::InvalidArgument);
             assert!(duplicate_session.message().contains("active session"));
 
+            let active_manifest_upload = PrivateResultOram::upload_private_result_oram_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                    signature: Some(signature_to_proto(fixture.signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(active_manifest_upload.code(), Code::InvalidArgument);
+            assert!(
+                active_manifest_upload
+                    .message()
+                    .contains("upload requires no active session")
+            );
+            assert!(
+                !active_manifest_upload
+                    .message()
+                    .contains(&session.session_id)
+            );
+
+            let active_bucket_upload = PrivateResultOram::upload_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    buckets: fixture
+                        .buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(active_bucket_upload.code(), Code::InvalidArgument);
+            assert!(
+                active_bucket_upload
+                    .message()
+                    .contains("upload requires no active session")
+            );
+            assert!(
+                !active_bucket_upload
+                    .message()
+                    .contains(&fixture.buckets[0].ciphertext)
+            );
+
             let read_bucket_ids = vec![0, 1, 3, 0, 1, 4];
             let read = PrivateResultOram::read_private_result_oram_buckets(
                 &service,

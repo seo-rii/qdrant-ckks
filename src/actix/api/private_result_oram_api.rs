@@ -866,6 +866,29 @@ mod private_result_oram_rest_tests {
                 "active session"
             );
 
+            let active_manifest_upload_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/manifest",
+                UploadPrivateResultOramManifestRequest {
+                    manifest: fixture.manifest.clone(),
+                    signature: fixture.signature.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "upload requires no active session"
+            );
+            assert!(!active_manifest_upload_error.contains(&session_id));
+
+            let active_bucket_upload_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/buckets",
+                UploadPrivateResultOramBucketsRequest {
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    buckets: fixture.buckets.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "upload requires no active session"
+            );
+            assert!(!active_bucket_upload_error.contains(&fixture.buckets[0].ciphertext));
+
             let read_bucket_ids = vec![0, 1, 3, 0, 1, 4];
             let read_result = post_json_ok!(
                 "/collections/docs/private-result-oram/oram/read_buckets",
