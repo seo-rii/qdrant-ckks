@@ -4458,6 +4458,12 @@ mod private_hnsw_grpc_tests {
                 err.message()
                     .contains("signature key_id does not match manifest owner_signing_key_id")
             );
+            assert!(!err.message().contains("not configured"));
+            assert!(
+                !err.message().contains(alternate_key_id),
+                "{}",
+                err.message()
+            );
 
             let run = fixture.run_single_search_collect_writeback();
             let mut wrong_commit_signature = run.commit_signature;
@@ -4486,6 +4492,12 @@ mod private_hnsw_grpc_tests {
             assert!(
                 err.message()
                     .contains("signature key_id does not match manifest owner_signing_key_id")
+            );
+            assert!(!err.message().contains("not configured"));
+            assert!(
+                !err.message().contains(alternate_key_id),
+                "{}",
+                err.message()
             );
 
             let closed = PrivateHnswOram::close_private_hnsw_session(
