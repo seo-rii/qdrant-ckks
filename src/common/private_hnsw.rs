@@ -2827,7 +2827,7 @@ mod private_hnsw_tests {
     }
 
     #[test]
-    fn manifest_runtime_context_rejects_lineage_and_vector_policy_drift() {
+    fn manifest_runtime_context_rejects_lineage_and_policy_drift() {
         let session = fixture_session("session-1", 20);
         let manifest = session.manifest;
         fixture_runtime_context(&manifest)
@@ -2879,6 +2879,43 @@ mod private_hnsw_tests {
             .to_string();
         assert!(rendered.contains("manifest distance does not match runtime vector distance"));
         assert!(!rendered.contains("Dot"));
+
+        let mut context = fixture_runtime_context(&manifest);
+        context.expected_result_privacy = ResultPrivacyMode::PrivatePayloadOramRequired;
+        context.private_result_oram_binding_configured = true;
+        let rendered = context
+            .validate_manifest_runtime_context(&manifest)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("manifest result_privacy does not match runtime instance"));
+        assert!(!rendered.contains("private_payload_oram_required"));
+
+        let mut context = fixture_runtime_context(&manifest);
+        context.expected_hnsw.m = 99;
+        let rendered = context
+            .validate_manifest_runtime_context(&manifest)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("manifest hnsw does not match runtime instance"));
+        assert!(!rendered.contains("99"));
+
+        let mut context = fixture_runtime_context(&manifest);
+        context.expected_oram.bucket_size = 99;
+        let rendered = context
+            .validate_manifest_runtime_context(&manifest)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("manifest oram does not match runtime instance"));
+        assert!(!rendered.contains("99"));
+
+        let mut context = fixture_runtime_context(&manifest);
+        context.expected_fixed_budget.fixed_result_k = 99;
+        let rendered = context
+            .validate_manifest_runtime_context(&manifest)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("manifest fixed_budget does not match runtime instance"));
+        assert!(!rendered.contains("99"));
     }
 
     #[test]
