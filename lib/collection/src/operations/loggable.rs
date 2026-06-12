@@ -263,6 +263,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "secret_key"
                         | "secret_key_b64"
                         | "paths"
+                        | "bucket_id"
+                        | "bucket_ids"
                         | "path_label"
                         | "path_labels"
                         | "leaf_label"
@@ -343,6 +345,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "wrappingkeyb64"
                         | "pathlabel"
                         | "pathlabels"
+                        | "bucketid"
+                        | "bucketids"
                         | "leaflabel"
                         | "leaflabels"
                         | "clientstate"
@@ -770,12 +774,17 @@ mod tests {
     }
 
     #[test]
-    fn log_value_redacts_private_hnsw_oram_access_pattern_fields() {
+    fn log_value_redacts_private_oram_access_pattern_fields() {
         let mut value = json!({
             "private_hnsw": {
                 "client_id": "qdrant-sec-private-hnsw-client-id-log-sentinel",
                 "session_id": "qdrant-sec-private-hnsw-session-id-log-sentinel",
                 "paths": ["qdrant-sec-private-hnsw-path-log-sentinel"],
+                "bucket_ids": ["qdrant-sec-private-oram-bucket-id-log-sentinel"],
+                "bucketIds": ["qdrant-sec-private-oram-camel-bucket-id-log-sentinel"],
+                "updated_buckets": [{
+                    "bucket_id": "qdrant-sec-private-oram-nested-bucket-id-log-sentinel"
+                }],
                 "path_label": "qdrant-sec-private-hnsw-path-label-log-sentinel",
                 "pathLabels": ["qdrant-sec-private-hnsw-camel-path-label-log-sentinel"],
                 "leaf_label": "qdrant-sec-private-hnsw-leaf-label-log-sentinel",
@@ -796,6 +805,9 @@ mod tests {
             "qdrant-sec-private-hnsw-client-id-log-sentinel",
             "qdrant-sec-private-hnsw-session-id-log-sentinel",
             "qdrant-sec-private-hnsw-path-log-sentinel",
+            "qdrant-sec-private-oram-bucket-id-log-sentinel",
+            "qdrant-sec-private-oram-camel-bucket-id-log-sentinel",
+            "qdrant-sec-private-oram-nested-bucket-id-log-sentinel",
             "qdrant-sec-private-hnsw-path-label-log-sentinel",
             "qdrant-sec-private-hnsw-camel-path-label-log-sentinel",
             "qdrant-sec-private-hnsw-leaf-label-log-sentinel",
@@ -808,6 +820,28 @@ mod tests {
             assert!(!serialized.contains(sentinel));
         }
         assert!(serialized.contains("[redacted]"));
+
+        let mut first = json!({
+            "read_buckets": {
+                "session_id": "private-oram-session-a",
+                "bucket_ids": [1, 2, 3],
+                "updated_buckets": [{ "bucket_id": 7 }]
+            }
+        });
+        let mut second = json!({
+            "read_buckets": {
+                "session_id": "private-oram-session-b",
+                "bucket_ids": [9, 10, 11],
+                "updated_buckets": [{ "bucket_id": 12 }]
+            }
+        });
+        redact_sensitive_log_fields(&mut first);
+        redact_sensitive_log_fields(&mut second);
+        assert_eq!(first, second);
+        assert_eq!(
+            redacted_request_hash("private-oram", &first),
+            redacted_request_hash("private-oram", &second)
+        );
     }
 
     #[test]
