@@ -1668,6 +1668,54 @@ mod tests {
             "/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets/bucket-id-sentinel".to_string(),
             dynamic_grpc_status_map,
         );
+        let mut hnsw_grpc_status_map = HashMap::new();
+        hnsw_grpc_status_map.insert(
+            0i32,
+            OperationDurationStatistics {
+                count: 3,
+                ..Default::default()
+            },
+        );
+        grpc_methods.insert(
+            "/qdrant.PrivateHnswOram/ReadPrivateHnswPaths".to_string(),
+            hnsw_grpc_status_map,
+        );
+        let mut hnsw_close_status_map = HashMap::new();
+        hnsw_close_status_map.insert(
+            0i32,
+            OperationDurationStatistics {
+                count: 1,
+                ..Default::default()
+            },
+        );
+        grpc_methods.insert(
+            "/qdrant.PrivateHnswOram/ClosePrivateHnswSession".to_string(),
+            hnsw_close_status_map,
+        );
+        let mut dynamic_hnsw_grpc_status_map = HashMap::new();
+        dynamic_hnsw_grpc_status_map.insert(
+            0i32,
+            OperationDurationStatistics {
+                count: 1,
+                ..Default::default()
+            },
+        );
+        grpc_methods.insert(
+            "/qdrant.PrivateHnswOram/ReadPrivateHnswPaths/leaf-label-sentinel".to_string(),
+            dynamic_hnsw_grpc_status_map,
+        );
+        let mut dynamic_hnsw_close_status_map = HashMap::new();
+        dynamic_hnsw_close_status_map.insert(
+            0i32,
+            OperationDurationStatistics {
+                count: 1,
+                ..Default::default()
+            },
+        );
+        grpc_methods.insert(
+            "/qdrant.PrivateHnswOram/ClosePrivateHnswSession/session-id-sentinel".to_string(),
+            dynamic_hnsw_close_status_map,
+        );
         grpc_per_collection.insert("docs".to_string(), grpc_methods);
 
         let grpc_telemetry = GrpcTelemetry {
@@ -1684,6 +1732,11 @@ mod tests {
             grpc_output
                 .contains("endpoint=\"/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets\"",)
         );
+        assert!(grpc_output.contains("endpoint=\"/qdrant.PrivateHnswOram/ReadPrivateHnswPaths\"",));
+        assert!(
+            grpc_output.contains("endpoint=\"/qdrant.PrivateHnswOram/ClosePrivateHnswSession\"",)
+        );
+        assert!(!grpc_output.contains("leaf-label-sentinel"));
         assert!(!grpc_output.contains("bucket-id-sentinel"));
         assert!(!grpc_output.contains("session-id-sentinel"));
     }
