@@ -1781,6 +1781,32 @@ mod private_result_oram_tests {
     }
 
     #[test]
+    fn manifest_runtime_policy_rejects_oram_drift_without_reflecting_values() {
+        let manifest = read_shape_manifest();
+        fixture_runtime_context(&manifest)
+            .validate_manifest_runtime_policy(&manifest)
+            .unwrap();
+
+        let mut context = fixture_runtime_context(&manifest);
+        context.expected_oram.bucket_size = 99;
+        let rendered = context
+            .validate_manifest_runtime_policy(&manifest)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("manifest oram does not match runtime instance"));
+        assert!(!rendered.contains("99"));
+
+        let mut context = fixture_runtime_context(&manifest);
+        context.expected_oram.tree_height = 99;
+        let rendered = context
+            .validate_manifest_runtime_policy(&manifest)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("manifest oram does not match runtime instance"));
+        assert!(!rendered.contains("99"));
+    }
+
+    #[test]
     fn bucket_read_request_preserves_path_shape_and_allows_shared_buckets() {
         let manifest = read_shape_manifest();
         validate_bucket_read_request(&manifest, &[0, 1, 3, 0, 1, 4]).unwrap();
@@ -1937,6 +1963,22 @@ mod private_result_oram_tests {
             dummy_result_count: 0,
             owner_signing_key_id: SIGNING_KEY_ID.to_string(),
             created_at_unix: 1_700_000_000,
+        }
+    }
+
+    fn fixture_runtime_context(
+        manifest: &PrivateResultOramManifest,
+    ) -> ResolvedPrivateResultOramContext {
+        ResolvedPrivateResultOramContext {
+            collection_path: std::path::PathBuf::from("/tmp/qdrant-private-result-oram-test"),
+            collection_crypto_id: manifest.collection_id.clone(),
+            expected_key_id: manifest.key_id.clone(),
+            expected_rk_id: manifest.rk_id.clone(),
+            min_rk_epoch: manifest.rk_epoch,
+            max_rk_epoch: manifest.rk_epoch,
+            expected_oram: manifest.oram.clone(),
+            signature_public_keys: HashMap::new(),
+            public_key: vec![0; 32],
         }
     }
 
