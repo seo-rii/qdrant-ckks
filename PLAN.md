@@ -415,11 +415,12 @@
 - REST/gRPC manifest upload unsupported signature algorithm 오류 응답은 submitted algorithm sentinel을 반사하지 않는다.
 - REST/gRPC manifest upload malformed signature 오류 응답은 submitted signature sentinel을 반사하지 않는다.
 - REST/gRPC manifest upload는 signature key lookup 전에 unsupported algorithm과 malformed signature body를 먼저 검증해 malformed signed request가 registry lookup 경계까지 가지 않는다. Crypto manifest signature validators도 manifest shape를 canonical message construction 전에 검증한다.
+- REST/gRPC private result ORAM manifest upload/read, bucket upload, session open, snapshot restore preflight는 stored manifest signature shape와 `owner_signing_key_id` 일치를 runtime `signature_public_keys` lookup 전에 검증하므로, non-owner manifest signature key id는 configured 여부와 무관하게 owner-mismatch 오류로 fail closed 되고 submitted key id를 반사하지 않는다.
 - SDK manifest/read_paths/commit signing helpers는 malformed manifest, path-count mismatch, malformed path label/root/hash, non-advancing commit epoch, empty commit을 canonical message construction 전에 거부한다.
 - REST/gRPC manifest upload store layout 오류 응답은 collection-local `private_hnsw_oram` filesystem path를 반사하지 않는다.
 - REST/gRPC manifest read corrupt store 오류 응답은 collection-local `private_hnsw_oram` filesystem path를 반사하지 않는다.
 - REST/gRPC `read_paths`와 `commit` client signature key id는 registry lookup 전에 shape validation을 통과해야 하며 invalid key id 오류는 submitted key id sentinel을 반사하지 않는다.
-- REST/gRPC `read_paths`와 `commit`은 active session manifest의 `owner_signing_key_id`를 확인한 뒤 verifier public key를 lookup하므로 non-owner key id 요청은 registry lookup 경계까지 가지 않는다.
+- REST/gRPC `read_paths`와 `commit` request signature는 runtime public key lookup 뒤 active session manifest의 `owner_signing_key_id`와 다시 비교되므로, configured non-owner key id만으로 read/writeback request를 authorize하지 않는다.
 - REST/gRPC bucket upload epoch/root 오류 응답은 submitted root hash sentinel을 반사하지 않는다.
 - REST/gRPC bucket upload Merkle root mismatch 오류 응답은 computed Merkle root를 반사하지 않는다.
 - REST/gRPC bucket upload 오류 응답은 malformed bucket ciphertext sentinel을 반사하지 않는다.

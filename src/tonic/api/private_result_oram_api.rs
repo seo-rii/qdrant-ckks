@@ -429,6 +429,7 @@ mod private_result_oram_grpc_tests {
     const RK_EPOCH: u64 = 7;
     const SIGNING_KEY_ID: &str = "tenant-a/private-result-signing-v1";
     const ALT_SIGNING_KEY_ID: &str = "tenant-a/private-result-signing-v2";
+    const UNCONFIGURED_SIGNING_KEY_ID: &str = "tenant-a/private-result-signing-v3";
     const BASE_EPOCH: u64 = 42;
     const NEXT_EPOCH: u64 = 43;
 
@@ -821,6 +822,35 @@ mod private_result_oram_grpc_tests {
                     .contains("signature key_id does not match manifest owner_signing_key_id")
             );
             assert!(!alt_manifest_key.message().contains(ALT_SIGNING_KEY_ID));
+
+            let mut unconfigured_manifest_signature = fixture.signature.clone();
+            unconfigured_manifest_signature.key_id = UNCONFIGURED_SIGNING_KEY_ID.to_string();
+            let unconfigured_manifest_key = PrivateResultOram::upload_private_result_oram_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                    signature: Some(signature_to_proto(unconfigured_manifest_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(unconfigured_manifest_key.code(), Code::InvalidArgument);
+            assert!(
+                unconfigured_manifest_key
+                    .message()
+                    .contains("signature key_id does not match manifest owner_signing_key_id")
+            );
+            assert!(
+                !unconfigured_manifest_key
+                    .message()
+                    .contains(UNCONFIGURED_SIGNING_KEY_ID)
+            );
+            assert!(
+                !unconfigured_manifest_key
+                    .message()
+                    .contains("not configured")
+            );
 
             let manifest_epoch = PrivateResultOram::upload_private_result_oram_manifest(
                 &service,

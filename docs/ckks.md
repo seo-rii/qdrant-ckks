@@ -968,6 +968,12 @@ manifest/signature write succeeds, accepts current manifest reupload only when
 the stored manifest and signature are byte-identical, and allows a post-commit
 manifest refresh when `current.json` has already advanced to the new
 epoch/root.
+Manifest upload, manifest read, session open, bucket upload, and snapshot
+restore preflight validate the stored manifest signature shape and require the
+signature `key_id` to match the manifest's `owner_signing_key_id` before looking
+up the runtime `signature_public_keys` entry. A non-owner manifest signature key
+therefore fails with the same sanitized owner-mismatch error whether or not the
+key id is configured.
 `refresh_private_result_oram_manifest_for_commit` and
 `sign_private_result_oram_manifest_refresh` mirror the private HNSW helper by
 deriving the next signed manifest only when a commit plan's old epoch/root
@@ -999,10 +1005,12 @@ updated bucket ciphertext hashes, and validate each updated bucket commitment
 against the bucket ciphertext hash plus
 collection/key lineage and the proposed bucket epoch before preparing Merkle
 metadata.
-For result ORAM `read_buckets` and `commit`, the request signing key must match
-the session manifest's `owner_signing_key_id`; a different key that is merely
-present in `signature_public_keys` is rejected without echoing the submitted key
-id.
+For result ORAM `read_buckets` and `commit`, the request signature shape and
+runtime public-key lookup are preflighted before session access. Once the active
+session is resolved, the request signing key must match the session manifest's
+`owner_signing_key_id`; a different key that is merely present in
+`signature_public_keys` is rejected before canonical signature verification and
+without echoing the submitted key id.
 Directory hardening also checks symlink/type before chmod. It also exposes
 `read_merkle_path_batch` with the canonical qdrant-sec
 `merkle_path_batch/v1` proof DTO; the REST/gRPC `read_buckets` API returns these

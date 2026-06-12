@@ -320,6 +320,7 @@ mod private_result_oram_rest_tests {
     const RK_EPOCH: u64 = 7;
     const SIGNING_KEY_ID: &str = "tenant-a/private-result-signing-v1";
     const ALT_SIGNING_KEY_ID: &str = "tenant-a/private-result-signing-v2";
+    const UNCONFIGURED_SIGNING_KEY_ID: &str = "tenant-a/private-result-signing-v3";
     const BASE_EPOCH: u64 = 42;
     const NEXT_EPOCH: u64 = 43;
     const SESSION_ID: &str = "session-1";
@@ -800,6 +801,20 @@ mod private_result_oram_rest_tests {
                 "signature key_id does not match manifest owner_signing_key_id"
             );
             assert!(!alt_manifest_key_error.contains(ALT_SIGNING_KEY_ID));
+
+            let mut unconfigured_manifest_signature = fixture.signature.clone();
+            unconfigured_manifest_signature.key_id = UNCONFIGURED_SIGNING_KEY_ID.to_string();
+            let unconfigured_manifest_key_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/manifest",
+                UploadPrivateResultOramManifestRequest {
+                    manifest: fixture.manifest.clone(),
+                    signature: unconfigured_manifest_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "signature key_id does not match manifest owner_signing_key_id"
+            );
+            assert!(!unconfigured_manifest_key_error.contains(UNCONFIGURED_SIGNING_KEY_ID));
+            assert!(!unconfigured_manifest_key_error.contains("not configured"));
 
             let manifest_result = post_json_ok!(
                 "/collections/docs/private-result-oram/manifest",

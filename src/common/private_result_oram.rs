@@ -361,6 +361,7 @@ pub async fn do_upload_private_result_oram_manifest(
 ) -> StorageResult<PrivateResultOramEpochState> {
     validate_private_result_oram_manifest_signature_shape(&signature)
         .map_err(private_result_oram_error)?;
+    validate_private_result_oram_manifest_signature_owner_key(&manifest, &signature)?;
     let resolved = resolve_private_result_oram_context(
         toc,
         auth,
@@ -425,6 +426,9 @@ pub async fn do_get_private_result_oram_manifest(
     let instance = private_result_oram_instance(settings, rule)?;
     let store = PrivateResultOramStore::new(collection.path());
     let (manifest, signature) = read_uploaded_manifest(&store)?;
+    validate_private_result_oram_manifest_signature_shape(&signature)
+        .map_err(private_result_oram_error)?;
+    validate_private_result_oram_manifest_signature_owner_key(&manifest, &signature)?;
     let public_key = signature_public_key(instance, &signature.key_id)?;
     let resolved = manifest_context_from_runtime(&collection_crypto_id, instance, public_key)?;
     validate_private_result_oram_manifest(
@@ -486,6 +490,9 @@ pub async fn do_open_private_result_oram_session(
     let instance = private_result_oram_instance(settings, rule)?;
     let store = PrivateResultOramStore::new(collection.path());
     let (manifest, signature) = read_uploaded_manifest(&store)?;
+    validate_private_result_oram_manifest_signature_shape(&signature)
+        .map_err(private_result_oram_error)?;
+    validate_private_result_oram_manifest_signature_owner_key(&manifest, &signature)?;
     let public_key = signature_public_key(instance, &signature.key_id)?;
     let resolved = ResolvedPrivateResultOramContext {
         collection_path: collection.path().to_path_buf(),
@@ -584,6 +591,9 @@ pub async fn do_upload_private_result_oram_buckets(
     let instance = private_result_oram_instance(settings, rule)?;
     let store = PrivateResultOramStore::new(collection.path());
     let (manifest, signature) = read_uploaded_manifest(&store)?;
+    validate_private_result_oram_manifest_signature_shape(&signature)
+        .map_err(private_result_oram_error)?;
+    validate_private_result_oram_manifest_signature_owner_key(&manifest, &signature)?;
     let public_key = signature_public_key(instance, &signature.key_id)?;
     let resolved = manifest_context_from_runtime(&collection_crypto_id, instance, public_key)?;
     validate_private_result_oram_manifest(
@@ -918,6 +928,9 @@ pub fn validate_recovered_private_result_oram_snapshot_signatures(
         let instance = private_result_oram_instance(settings, rule)?;
         let store = PrivateResultOramStore::new(collection_path);
         let (manifest, signature) = read_uploaded_manifest(&store)?;
+        validate_private_result_oram_manifest_signature_shape(&signature)
+            .map_err(private_result_oram_error)?;
+        validate_private_result_oram_manifest_signature_owner_key(&manifest, &signature)?;
         let public_key = signature_public_key(instance, &signature.key_id)?;
         let resolved = manifest_context_from_runtime(&collection_crypto_id, instance, public_key)?;
         validate_private_result_oram_manifest(
@@ -1067,6 +1080,18 @@ fn read_uploaded_manifest(
     store
         .read_manifest()
         .map_err(private_result_oram_manifest_read_store_error)
+}
+
+fn validate_private_result_oram_manifest_signature_owner_key(
+    manifest: &PrivateResultOramManifest,
+    signature: &PrivateResultOramSignature,
+) -> StorageResult<()> {
+    if signature.key_id != manifest.owner_signing_key_id {
+        return Err(private_result_oram_error(
+            qdrant_sec::PrivateResultOramError::SignatureKeyIdMismatch,
+        ));
+    }
+    Ok(())
 }
 
 fn ensure_private_result_oram_session_open_storage_matches(
@@ -1698,6 +1723,23 @@ mod private_result_oram_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("signature public key must be base64url without padding"));
         assert!(!rendered.contains(&malformed));
+    }
+
+    #[test]
+    fn manifest_signature_owner_key_preflight_rejects_non_owner_key() {
+        let manifest = read_shape_manifest();
+        let signature = PrivateResultOramSignature {
+            alg: "ed25519".to_string(),
+            key_id: "tenant-a/private-result-signing-v3".to_string(),
+            sig: BASE64URL_NOPAD.encode(&[9; 64]),
+        };
+
+        let err = validate_private_result_oram_manifest_signature_owner_key(&manifest, &signature)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("signature key_id does not match manifest owner_signing_key_id"));
+        assert!(!rendered.contains(&signature.key_id));
+        assert!(!rendered.contains("not configured"));
     }
 
     #[test]
