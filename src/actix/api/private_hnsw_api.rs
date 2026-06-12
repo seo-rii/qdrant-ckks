@@ -415,7 +415,15 @@ mod private_hnsw_rest_tests {
     fn sdk_fixture_uploads_reads_and_commits_through_rest_routes() {
         let _guard = route_e2e_guard();
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
-        let settings = fixture.route_settings();
+        let mut settings = fixture.route_settings();
+        let alternate_manifest_key_id = "tenant-a/private-hnsw-signing-v2";
+        settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["signature_public_keys"][alternate_manifest_key_id] =
+            serde_json::json!(data_encoding::BASE64URL_NOPAD.encode(&[19_u8; 32]));
         let (_temp, dispatcher) = test_dispatcher();
         actix_web::rt::System::new().block_on(async {
             create_private_hnsw_collection(&dispatcher).await;
@@ -746,6 +754,23 @@ mod private_hnsw_rest_tests {
             assert!(
                 !unknown_manifest_key_error.contains(signature_key_id_sentinel),
                 "{unknown_manifest_key_error}"
+            );
+
+            let mut alternate_manifest_signature = fixture.manifest_signature.clone();
+            alternate_manifest_signature.key_id = alternate_manifest_key_id.to_string();
+            let alternate_manifest_key_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: fixture.manifest.clone(),
+                    signature: alternate_manifest_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "signature key_id does not match manifest owner_signing_key_id"
+            );
+            assert!(!alternate_manifest_key_error.contains("not configured"));
+            assert!(
+                !alternate_manifest_key_error.contains(alternate_manifest_key_id),
+                "{alternate_manifest_key_error}"
             );
 
             let manifest_signature_alg_sentinel = "manifest-signature-alg-sentinel";

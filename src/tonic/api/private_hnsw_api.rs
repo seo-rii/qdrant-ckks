@@ -821,7 +821,15 @@ mod private_hnsw_grpc_tests {
     fn sdk_fixture_uploads_reads_and_commits_through_grpc_service() {
         let _guard = route_e2e_guard();
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
-        let settings = fixture.route_settings();
+        let mut settings = fixture.route_settings();
+        let alternate_manifest_key_id = "tenant-a/private-hnsw-signing-v2";
+        settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["signature_public_keys"][alternate_manifest_key_id] =
+            serde_json::json!(BASE64URL_NOPAD.encode(&[19_u8; 32]));
         let (_temp, dispatcher) = test_dispatcher();
         actix_web::rt::System::new().block_on(async {
             create_private_hnsw_collection(&dispatcher).await;
@@ -1143,6 +1151,31 @@ mod private_hnsw_grpc_tests {
             assert!(!err.message().contains("not configured"));
             assert!(
                 !err.message().contains(signature_key_id_sentinel),
+                "{}",
+                err.message()
+            );
+
+            let mut alternate_manifest_signature = fixture.manifest_signature.clone();
+            alternate_manifest_signature.key_id = alternate_manifest_key_id.to_string();
+            let err = PrivateHnswOram::upload_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                    signature: Some(signature_to_proto(alternate_manifest_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("signature key_id does not match manifest owner_signing_key_id")
+            );
+            assert!(!err.message().contains("not configured"));
+            assert!(
+                !err.message().contains(alternate_manifest_key_id),
                 "{}",
                 err.message()
             );
