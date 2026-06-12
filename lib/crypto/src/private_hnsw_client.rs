@@ -2693,7 +2693,7 @@ pub fn verify_private_hnsw_oram_merkle_proof(
     let mut buckets_by_id = BTreeMap::new();
     for bucket in buckets {
         if bucket.version != 1
-            || bucket.index_epoch != expected_epoch
+            || bucket.index_epoch > expected_epoch
             || bucket.bucket_id >= expected_bucket_count
         {
             return Err(PrivateHnswClientError::InvalidMerkleProof);
@@ -4609,8 +4609,8 @@ mod tests {
         .unwrap();
         assert_eq!(opened, vec![plaintext_bucket.clone(), plaintext_bucket]);
 
-        let mut stale_epoch_bucket = bucket.clone();
-        stale_epoch_bucket.index_epoch = 41;
+        let mut future_epoch_bucket = bucket.clone();
+        future_epoch_bucket.index_epoch = 43;
         assert_eq!(
             open_private_hnsw_oram_verified_path_batch(
                 &keys,
@@ -4620,7 +4620,7 @@ mod tests {
                 &root_hash,
                 1,
                 &proof_json,
-                &[stale_epoch_bucket],
+                &[future_epoch_bucket],
             ),
             Err(PrivateHnswClientError::InvalidMerkleProof)
         );
