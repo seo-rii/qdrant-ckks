@@ -1822,6 +1822,47 @@ mod tests {
     }
 
     #[test]
+    fn private_result_oram_restore_preflight_rejects_signature_key_mismatch() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-bad-signature-key")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let manifest = private_result_manifest(uuid.to_string());
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+
+        let store = PrivateResultOramStore::new(temp_dir.path());
+        store
+            .write_manifest(
+                &manifest,
+                &PrivateResultOramSignature {
+                    alg: "ed25519".to_string(),
+                    key_id: "tenant-a/private-result-signing-v2".to_string(),
+                    sig: BASE64URL_NOPAD.encode(&[7; 64]),
+                },
+            )
+            .unwrap();
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("signature key_id"));
+        assert!(
+            !rendered.contains("tenant-a/private-result-signing-v2"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains(&manifest.owner_signing_key_id),
+            "{rendered}"
+        );
+    }
+
+    #[test]
     fn private_hnsw_oram_restore_preflight_accepts_manifest_epoch_and_bucket() {
         let temp_dir = tempfile::Builder::new()
             .prefix("private-hnsw-restore-ok")

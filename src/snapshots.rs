@@ -751,6 +751,44 @@ mod tests {
     }
 
     #[test]
+    fn cli_snapshot_crypto_preflight_rejects_private_hnsw_manifest_owner_key_mismatch() {
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let collection_dir = TempDir::new().unwrap();
+        write_recovered_private_hnsw_snapshot_fixture(collection_dir.path(), &fixture, false);
+        let store = PrivateHnswOramStore::new(collection_dir.path(), VECTOR_NAME).unwrap();
+        let alternate_signing_key_id = "tenant-a/private-hnsw-signing-v2";
+        let mut mismatched_signature = fixture.manifest_signature.clone();
+        mismatched_signature.key_id = alternate_signing_key_id.to_string();
+        store
+            .write_manifest(&fixture.manifest, &mismatched_signature)
+            .unwrap();
+
+        let err =
+            validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
+                .expect_err("private HNSW manifest owner key mismatch must fail CLI preflight");
+
+        assert!(
+            err.contains("private HNSW ORAM snapshot layout validation failed"),
+            "{err}"
+        );
+        assert!(!err.contains("signature key_id"), "{err}");
+        assert!(!err.contains("not configured"), "{err}");
+        assert!(!err.contains(alternate_signing_key_id), "{err}");
+        assert!(
+            !err.contains(collection_dir.path().to_string_lossy().as_ref()),
+            "{err}"
+        );
+        assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR), "{err}");
+        assert!(!err.contains(&fixture.encrypted_build.root_hash), "{err}");
+        assert!(
+            !err.contains(&fixture.encrypted_build.buckets[0].ciphertext),
+            "{err}"
+        );
+        assert!(!err.contains(SIGNING_KEY_ID), "{err}");
+    }
+
+    #[test]
     fn cli_snapshot_crypto_preflight_accepts_private_result_oram_snapshot() {
         let fixture = PrivateResultSnapshotFixture::build();
         let settings = fixture.settings();
@@ -776,6 +814,41 @@ mod tests {
             err.contains("manifest signature verification failed"),
             "{err}"
         );
+        assert!(
+            !err.contains(collection_dir.path().to_string_lossy().as_ref()),
+            "{err}"
+        );
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR), "{err}");
+        assert!(!err.contains(&fixture.manifest.root_hash), "{err}");
+        assert!(!err.contains(&fixture.buckets[0].ciphertext), "{err}");
+        assert!(!err.contains(RESULT_SIGNING_KEY_ID), "{err}");
+    }
+
+    #[test]
+    fn cli_snapshot_crypto_preflight_rejects_private_result_oram_manifest_owner_key_mismatch() {
+        let fixture = PrivateResultSnapshotFixture::build();
+        let settings = fixture.settings();
+        let collection_dir = TempDir::new().unwrap();
+        write_recovered_private_result_snapshot_fixture(collection_dir.path(), &fixture, false);
+        let store = PrivateResultOramStore::new(collection_dir.path());
+        let alternate_signing_key_id = "tenant-a/private-result-signing-v2";
+        let mut mismatched_signature = fixture.signature.clone();
+        mismatched_signature.key_id = alternate_signing_key_id.to_string();
+        store
+            .write_manifest(&fixture.manifest, &mismatched_signature)
+            .unwrap();
+
+        let err =
+            validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
+                .expect_err("private result manifest owner key mismatch must fail CLI preflight");
+
+        assert!(
+            err.contains("private result ORAM snapshot layout validation failed"),
+            "{err}"
+        );
+        assert!(!err.contains("signature key_id"), "{err}");
+        assert!(!err.contains("not configured"), "{err}");
+        assert!(!err.contains(alternate_signing_key_id), "{err}");
         assert!(
             !err.contains(collection_dir.path().to_string_lossy().as_ref()),
             "{err}"
