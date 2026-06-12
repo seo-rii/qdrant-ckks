@@ -1009,12 +1009,12 @@ updated bucket ciphertext hashes, and validate each updated bucket commitment
 against the bucket ciphertext hash plus
 collection/key lineage and the proposed bucket epoch before preparing Merkle
 metadata.
-For result ORAM `read_buckets` and `commit`, the request signature shape and
-runtime public-key lookup are preflighted before session access. Once the active
-session is resolved, the request signing key must match the session manifest's
-`owner_signing_key_id`; a different key that is merely present in
-`signature_public_keys` is rejected before canonical signature verification and
-without echoing the submitted key id.
+For result ORAM `read_buckets` and `commit`, the request signature shape is
+preflighted before session access. Once the active session is resolved, the
+request signing key must match the session manifest's `owner_signing_key_id`
+before the verifier public key is looked up; non-owner key ids therefore do not
+reach the registry lookup boundary and are rejected without echoing the
+submitted key id.
 Directory hardening also checks symlink/type before chmod. It also exposes
 `read_merkle_path_batch` with the canonical qdrant-sec
 `merkle_path_batch/v1` proof DTO; the REST/gRPC `read_buckets` API returns these

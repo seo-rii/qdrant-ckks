@@ -288,6 +288,7 @@ struct ResolvedPrivateResultOramContext {
     min_rk_epoch: u64,
     max_rk_epoch: u64,
     expected_oram: OramParams,
+    signature_public_keys: HashMap<String, String>,
     public_key: Vec<u8>,
 }
 
@@ -319,6 +320,16 @@ impl ResolvedPrivateResultOramContext {
             ));
         }
         Ok(())
+    }
+
+    fn signature_public_key(&self, signature_key_id: &str) -> StorageResult<Vec<u8>> {
+        let public_key_b64 = self
+            .signature_public_keys
+            .get(signature_key_id)
+            .ok_or_else(|| {
+                StorageError::bad_request("private result ORAM signature key id is not configured")
+            })?;
+        decode_signature_public_key(public_key_b64)
     }
 }
 
@@ -671,7 +682,7 @@ pub async fn do_read_private_result_oram_buckets(
         auth,
         settings,
         collection_name,
-        Some(&read_signature.key_id),
+        None,
         "private_result_oram_buckets_read",
     )
     .await?;
@@ -691,6 +702,7 @@ pub async fn do_read_private_result_oram_buckets(
                 ));
             }
             validate_session_signature_owner_key(session, &read_signature.key_id)?;
+            let public_key = request_context.signature_public_key(&read_signature.key_id)?;
             validate_private_result_oram_read_buckets_signature(
                 PrivateResultOramReadBucketsSignatureInput {
                     collection_id: &session.manifest.collection_id,
@@ -707,7 +719,7 @@ pub async fn do_read_private_result_oram_buckets(
                 &read_signature.sig,
                 PrivateResultOramSignatureVerification {
                     expected_key_id: &read_signature.key_id,
-                    public_key: &request_context.public_key,
+                    public_key: &public_key,
                 },
             )
             .map_err(private_result_oram_error)?;
@@ -768,7 +780,7 @@ pub async fn do_commit_private_result_oram_buckets(
         auth,
         settings,
         collection_name,
-        Some(&commit_signature.key_id),
+        None,
         "private_result_oram_commit",
     )
     .await?;
@@ -806,6 +818,7 @@ pub async fn do_commit_private_result_oram_buckets(
                 })
                 .collect::<Vec<_>>();
             validate_session_signature_owner_key(session, &commit_signature.key_id)?;
+            let public_key = request_context.signature_public_key(&commit_signature.key_id)?;
             validate_private_result_oram_commit_signature(
                 PrivateResultOramCommitSignatureInput {
                     collection_id: &session.manifest.collection_id,
@@ -823,7 +836,7 @@ pub async fn do_commit_private_result_oram_buckets(
                 &commit_signature.sig,
                 PrivateResultOramSignatureVerification {
                     expected_key_id: &commit_signature.key_id,
-                    public_key: &request_context.public_key,
+                    public_key: &public_key,
                 },
             )
             .map_err(private_result_oram_error)?;
@@ -861,7 +874,7 @@ pub async fn do_commit_private_result_oram_buckets(
                     &commit_signature,
                     PrivateResultOramSignatureVerification {
                         expected_key_id: &commit_signature.key_id,
-                        public_key: &request_context.public_key,
+                        public_key: &public_key,
                     },
                 )
                 .map_err(private_result_oram_commit_writeback_store_error)?;
@@ -1062,6 +1075,7 @@ fn manifest_context_from_runtime(
     let min_rk_epoch = required_option_u64(instance, MIN_RK_EPOCH_OPTION)?;
     let max_rk_epoch = required_option_u64(instance, MAX_RK_EPOCH_OPTION)?;
     let expected_oram = required_oram_params(instance)?;
+    let signature_public_keys = signature_public_keys(instance)?;
     Ok(ResolvedPrivateResultOramContext {
         collection_path: std::path::PathBuf::new(),
         collection_crypto_id: collection_crypto_id.to_string(),
@@ -1070,6 +1084,7 @@ fn manifest_context_from_runtime(
         min_rk_epoch,
         max_rk_epoch,
         expected_oram,
+        signature_public_keys,
         public_key,
     })
 }
@@ -1335,15 +1350,38 @@ fn signature_public_key(
     instance: &CryptoInstanceConfig,
     signature_key_id: &str,
 ) -> StorageResult<Vec<u8>> {
-    let public_key_b64 = instance
+    let registry = signature_public_keys(instance)?;
+    let public_key_b64 = registry.get(signature_key_id).ok_or_else(|| {
+        StorageError::bad_request("private result ORAM signature key id is not configured")
+    })?;
+    decode_signature_public_key(public_key_b64)
+}
+
+fn signature_public_keys(
+    instance: &CryptoInstanceConfig,
+) -> StorageResult<HashMap<String, String>> {
+    instance
         .options
         .get(SIGNATURE_PUBLIC_KEYS_OPTION)
         .and_then(Value::as_object)
-        .and_then(|keys| keys.get(signature_key_id))
-        .and_then(Value::as_str)
         .ok_or_else(|| {
-            StorageError::bad_request("private result ORAM signature key id is not configured")
-        })?;
+            StorageError::bad_request(
+                "private result ORAM runtime instance must configure signature_public_keys",
+            )
+        })?
+        .iter()
+        .map(|(key_id, value)| {
+            let public_key = value.as_str().ok_or_else(|| {
+                StorageError::bad_request(
+                    "private result ORAM runtime signature public key is invalid",
+                )
+            })?;
+            Ok((key_id.clone(), public_key.to_string()))
+        })
+        .collect()
+}
+
+fn decode_signature_public_key(public_key_b64: &str) -> StorageResult<Vec<u8>> {
     let public_key = BASE64URL_NOPAD
         .decode(public_key_b64.as_bytes())
         .map_err(|_| {

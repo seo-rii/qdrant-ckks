@@ -1024,8 +1024,9 @@ mod private_result_oram_grpc_tests {
             assert!(
                 unconfigured_read_key
                     .message()
-                    .contains("signature key id is not configured")
+                    .contains("signature key_id does not match manifest owner_signing_key_id")
             );
+            assert!(!unconfigured_read_key.message().contains("not configured"));
             assert!(
                 !unconfigured_read_key
                     .message()
@@ -1324,8 +1325,9 @@ mod private_result_oram_grpc_tests {
             assert!(
                 unconfigured_commit_key
                     .message()
-                    .contains("signature key id is not configured")
+                    .contains("signature key_id does not match manifest owner_signing_key_id")
             );
+            assert!(!unconfigured_commit_key.message().contains("not configured"));
             assert!(
                 !unconfigured_commit_key
                     .message()

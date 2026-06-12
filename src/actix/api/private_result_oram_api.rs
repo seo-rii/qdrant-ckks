@@ -926,8 +926,9 @@ mod private_result_oram_rest_tests {
                     read_signature: unconfigured_read_key_signature,
                 },
                 StatusCode::BAD_REQUEST,
-                "signature key id is not configured"
+                "signature key_id does not match manifest owner_signing_key_id"
             );
+            assert!(!unconfigured_read_key_error.contains("not configured"));
             assert!(
                 !unconfigured_read_key_error.contains(unconfigured_read_key_id_sentinel),
                 "{unconfigured_read_key_error}"
@@ -1119,8 +1120,9 @@ mod private_result_oram_rest_tests {
                     commit_signature: unconfigured_commit_key_signature,
                 },
                 StatusCode::BAD_REQUEST,
-                "signature key id is not configured"
+                "signature key_id does not match manifest owner_signing_key_id"
             );
+            assert!(!unconfigured_commit_key_error.contains("not configured"));
             assert!(
                 !unconfigured_commit_key_error.contains(unconfigured_commit_key_id_sentinel),
                 "{unconfigured_commit_key_error}"
