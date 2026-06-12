@@ -1,0 +1,144 @@
+syntax = "proto3";
+
+import "private_hnsw_oram_service.proto";
+
+package qdrant;
+option csharp_namespace = "Qdrant.Client.Grpc";
+
+service PrivateResultOram {
+  rpc GetPrivateResultOramManifest(GetPrivateResultOramManifestRequest)
+      returns (GetPrivateResultOramManifestResponse) {}
+  rpc UploadPrivateResultOramManifest(UploadPrivateResultOramManifestRequest)
+      returns (PrivateResultOramEpochResponse) {}
+  rpc UploadPrivateResultOramBuckets(UploadPrivateResultOramBucketsRequest)
+      returns (PrivateResultOramEpochResponse) {}
+  rpc OpenPrivateResultOramSession(OpenPrivateResultOramSessionRequest)
+      returns (OpenPrivateResultOramSessionResponse) {}
+  rpc ReadPrivateResultOramBuckets(ReadPrivateResultOramBucketsRequest)
+      returns (ReadPrivateResultOramBucketsResponse) {}
+  rpc CommitPrivateResultOramBuckets(CommitPrivateResultOramBucketsRequest)
+      returns (PrivateResultOramEpochResponse) {}
+  rpc ClosePrivateResultOramSession(ClosePrivateResultOramSessionRequest)
+      returns (ClosePrivateResultOramSessionResponse) {}
+}
+
+message GetPrivateResultOramManifestRequest {
+  string collection_name = 1;
+}
+
+message GetPrivateResultOramManifestResponse {
+  PrivateResultOramManifest manifest = 1;
+  PrivateResultOramSignature signature = 2;
+  double time = 3;
+}
+
+message UploadPrivateResultOramManifestRequest {
+  string collection_name = 1;
+  PrivateResultOramManifest manifest = 2;
+  PrivateResultOramSignature signature = 3;
+}
+
+message UploadPrivateResultOramBucketsRequest {
+  string collection_name = 1;
+  uint64 index_epoch = 2;
+  string root_hash = 3;
+  repeated PrivateResultOramBucket buckets = 4;
+}
+
+message OpenPrivateResultOramSessionRequest {
+  string collection_name = 1;
+  string client_id = 2;
+  uint64 desired_epoch = 3;
+  bool fixed_budget = 4;
+}
+
+message OpenPrivateResultOramSessionResponse {
+  string session_id = 1;
+  string collection_id = 2;
+  uint64 index_epoch = 3;
+  string root_hash = 4;
+  PrivateResultOramManifest manifest = 5;
+  uint64 lease_expires_unix = 6;
+  double time = 7;
+}
+
+message ReadPrivateResultOramBucketsRequest {
+  string collection_name = 1;
+  string session_id = 2;
+  uint64 index_epoch = 3;
+  string root_hash = 4;
+  repeated uint64 bucket_ids = 5;
+}
+
+message ReadPrivateResultOramBucketsResponse {
+  uint64 index_epoch = 1;
+  string root_hash = 2;
+  repeated PrivateResultOramBucket buckets = 3;
+  PrivateResultOramReadProof proof = 4;
+  double time = 5;
+}
+
+message PrivateResultOramReadProof {
+  string kind = 1;
+  string value = 2;
+}
+
+message CommitPrivateResultOramBucketsRequest {
+  string collection_name = 1;
+  string session_id = 2;
+  uint64 old_epoch = 3;
+  uint64 new_epoch = 4;
+  string old_root_hash = 5;
+  string new_root_hash = 6;
+  repeated PrivateResultOramBucket updated_buckets = 7;
+  PrivateResultOramSignature commit_signature = 8;
+}
+
+message ClosePrivateResultOramSessionRequest {
+  string collection_name = 1;
+  string session_id = 2;
+}
+
+message ClosePrivateResultOramSessionResponse {
+  bool closed = 1;
+  double time = 2;
+}
+
+message PrivateResultOramEpochResponse {
+  uint64 index_epoch = 1;
+  string root_hash = 2;
+  double time = 3;
+}
+
+message PrivateResultOramManifest {
+  uint32 version = 1;
+  string provider = 2;
+  string binding = 3;
+  string collection_id = 4;
+  string key_id = 5;
+  string rk_id = 6;
+  uint64 rk_epoch = 7;
+  OramParams oram = 8;
+  uint64 index_epoch = 9;
+  string root_hash = 10;
+  uint64 bucket_count = 11;
+  uint64 logical_result_count = 12;
+  uint64 dummy_result_count = 13;
+  string owner_signing_key_id = 14;
+  uint64 created_at_unix = 15;
+}
+
+message PrivateResultOramBucket {
+  uint32 version = 1;
+  uint64 bucket_id = 2;
+  uint64 index_epoch = 3;
+  string ciphertext = 4;
+  string ciphertext_sha256 = 5;
+  string bucket_commitment = 6;
+}
+
+message PrivateResultOramSignature {
+  string alg = 1;
+  string key_id = 2;
+  string sig = 3;
+}

@@ -510,7 +510,7 @@ accepts only `key_id`, `material_fingerprint_id`, `profile`,
 accepts only `key_id`, `expected_rk_id`, `min_rk_epoch`, `max_rk_epoch`,
 `oram`, `integrity`, and `signature_public_keys` while its collection binding
 validation is open for `private-result-oram/v1`; manifest/bucket upload/read
-REST APIs are open, and bucket reads/commits are session-bound with
+REST/gRPC APIs are open, and bucket reads/commits are session-bound with
 single-writer epoch/root CAS. Unknown options
 fail startup/runtime validation instead of being silently ignored.
 Collection-facing private HNSW
@@ -987,7 +987,7 @@ collection/key lineage and the proposed bucket epoch before preparing Merkle
 metadata.
 Directory hardening also checks symlink/type before chmod. It also exposes
 `read_merkle_path_batch` with the canonical qdrant-sec
-`merkle_path_batch/v1` proof DTO; the REST `read_buckets` API returns these
+`merkle_path_batch/v1` proof DTO; the REST/gRPC `read_buckets` API returns these
 server-verifiable bucket commitment proofs without opening ciphertexts. The
 store generator rejects empty bucket batches. `read_bucket_batch_with_proof`
 preflights the current epoch/root before reading encrypted buckets, returns the
@@ -1012,25 +1012,27 @@ match the incoming bundle.
 or non-advancing writebacks, preflighting current epoch/root and stored manifest
 context, validating updated bucket ciphertext/hash plus context-bound
 commitments, preparing the Merkle update, writing updated encrypted buckets,
-writing Merkle metadata, then applying epoch/root CAS. The live private HNSW
+writing Merkle metadata, then applying epoch/root CAS. The live private result ORAM
 REST/gRPC commit handlers delegate their signed writeback to
 `commit_writeback_with_signature`, so the canonical Ed25519 commit signature,
 fixed ciphertext size, context-bound bucket commitment, Merkle update, and
-epoch/root CAS now share one storage boundary. Invalid signatures, malformed
+epoch/root CAS share the same storage boundary. Invalid signatures, malformed
 ciphertext, stale roots, and commitment-context mismatches fail before bucket,
 Merkle, or epoch state changes; runtime error mapping preserves only safe
 failure categories such as `ciphertext` or `commit signature` without echoing
 ciphertext bodies, bucket ids, or root hashes.
 Collection snapshots include the `private_result_oram/` directory if it is
-present, but current restore fail-closes when that directory or a symlink at
-that path appears because `private-result-oram/v1` binding and restore runtime
-policy are still closed. Snapshot creation also rejects nested symlinks inside
-the reserved result ORAM source tree without reflecting symlink targets or
-bucket filenames. Restore
-guard inspection failures are also fixed messages and do not reflect collection
-paths, reserved directory names, or OS error strings.
-The CLI/startup snapshot mapping preflight applies the same reserved-directory
-guard before accepting a recovered collection.
+present, and restore preflight accepts it only when collection encryption has a
+configured `private-result-oram/v1` binding backed by
+`payload/private-result-oram@v1`. The preflight verifies the stored
+manifest/signature, current epoch/root, encrypted buckets, and Merkle metadata
+against runtime policy before accepting the recovered collection. Snapshot
+creation and restore still reject symlinks inside the result ORAM source tree
+without reflecting symlink targets or bucket filenames. Restore guard
+inspection failures are fixed messages and do not reflect collection paths,
+reserved directory names, or OS error strings.
+The CLI/startup snapshot mapping preflight applies the same runtime-bound
+private result ORAM checks before accepting a recovered collection.
 Cluster runtime parity uses the existing crypto capability fingerprint for this
 provider as well. The fingerprint includes non-secret private HNSW ORAM policy
 such as tree shape, fixed budget, result privacy mode, and signing verifier
