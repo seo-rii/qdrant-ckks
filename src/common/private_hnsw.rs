@@ -2145,7 +2145,9 @@ mod private_hnsw_tests {
     fn read_path_budget_rejects_duplicate_path_labels() {
         let leaf = BASE64URL_NOPAD.encode(&5u64.to_be_bytes());
         let err = validate_unique_path_labels(&[leaf.clone(), leaf]).unwrap_err();
-        assert!(err.to_string().contains("duplicate path label"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("duplicate path label"));
+        assert!(!rendered.contains(&BASE64URL_NOPAD.encode(&5u64.to_be_bytes())));
     }
 
     #[test]
@@ -2162,15 +2164,23 @@ mod private_hnsw_tests {
         assert!(!rendered.contains(&oversized));
 
         let malformed = "not-base64!".to_string();
-        let err = validate_private_hnsw_read_path_labels(&[malformed], 3).unwrap_err();
-        assert!(err.to_string().contains("invalid path label"));
+        let err = validate_private_hnsw_read_path_labels(std::slice::from_ref(&malformed), 3)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("invalid path label"));
+        assert!(!rendered.contains(&malformed), "{rendered}");
     }
 
     #[test]
     fn path_oram_rejects_out_of_range_leaf() {
         let leaf = BASE64URL_NOPAD.encode(&8u64.to_be_bytes());
         let err = bucket_ids_for_path_batch(&[leaf], 3, 15).unwrap_err();
-        assert!(err.to_string().contains("invalid path label"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("invalid path label"));
+        assert!(
+            !rendered.contains(&BASE64URL_NOPAD.encode(&8u64.to_be_bytes())),
+            "{rendered}"
+        );
 
         let malformed = "qdrant-sec-private-hnsw-path-helper-sentinel".to_string();
         let err = bucket_ids_for_path_batch(std::slice::from_ref(&malformed), 3, 15).unwrap_err();
