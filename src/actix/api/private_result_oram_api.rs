@@ -584,7 +584,7 @@ mod private_result_oram_rest_tests {
             session_id: SESSION_ID.to_string(),
             index_epoch: fixture.manifest.index_epoch,
             root_hash: fixture.manifest.root_hash.clone(),
-            bucket_ids: vec![0, 1],
+            bucket_ids: vec![0, 1, 3, 0, 1, 4],
         };
         assert_eq!(json_roundtrip(&read_request), read_request);
 
@@ -758,28 +758,28 @@ mod private_result_oram_rest_tests {
                     session_id: session_id.clone(),
                     index_epoch: fixture.manifest.index_epoch,
                     root_hash: fixture.manifest.root_hash.clone(),
-                    bucket_ids: vec![0, 1],
+                    bucket_ids: vec![0, 1, 3, 0, 1, 4],
                 }
             );
             assert_eq!(
                 read_result["proof"]["kind"],
                 PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND
             );
-            assert_eq!(read_result["buckets"].as_array().unwrap().len(), 2);
+            assert_eq!(read_result["buckets"].as_array().unwrap().len(), 6);
             assert_eq!(read_result["buckets"][0]["bucket_id"], 0);
 
-            let duplicate_error = post_json_error_contains!(
+            let deduped_path_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/read_buckets",
                 ReadPrivateResultOramBucketsRequest {
                     session_id: session_id.clone(),
                     index_epoch: fixture.manifest.index_epoch,
                     root_hash: fixture.manifest.root_hash.clone(),
-                    bucket_ids: vec![0, 0],
+                    bucket_ids: vec![0, 1, 3, 4],
                 },
                 StatusCode::BAD_REQUEST,
-                "duplicate"
+                "whole ORAM paths"
             );
-            assert!(!duplicate_error.contains(&fixture.buckets[0].ciphertext));
+            assert!(!deduped_path_error.contains(&fixture.buckets[0].ciphertext));
 
             let unknown_read_session_sentinel = "read-session-id-sentinel";
             let unknown_read_error = post_json_error_contains!(
@@ -788,7 +788,7 @@ mod private_result_oram_rest_tests {
                     session_id: unknown_read_session_sentinel.to_string(),
                     index_epoch: fixture.manifest.index_epoch,
                     root_hash: fixture.manifest.root_hash.clone(),
-                    bucket_ids: vec![0, 1],
+                    bucket_ids: vec![0, 1, 3, 0, 1, 4],
                 },
                 StatusCode::BAD_REQUEST,
                 "session is missing or expired"
@@ -810,7 +810,7 @@ mod private_result_oram_rest_tests {
                         session_id: invalid_session_id.to_string(),
                         index_epoch: fixture.manifest.index_epoch,
                         root_hash: fixture.manifest.root_hash.clone(),
-                        bucket_ids: vec![0, 1],
+                        bucket_ids: vec![0, 1, 3, 0, 1, 4],
                     },
                     StatusCode::BAD_REQUEST,
                     "session_id is invalid"

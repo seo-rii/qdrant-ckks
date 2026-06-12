@@ -884,9 +884,13 @@ fetch tokens. A follow-on SDK helper turns those hit tokens into an exactly
 provided distinct dummy-token pool so the eventual result fetch has fixed
 logical volume. The private result ORAM client contract can now map that fixed
 token batch through the client-held token-position map into session
-`read_buckets` bucket-id batches and rejects missing token positions, duplicate
-fetch tokens, duplicate token-position entries, and out-of-range leaves before a
-server request is built. The crypto crate also has a client-only private result
+`read_buckets` bucket-id sequences that preserve shared path bucket duplicates,
+so ORAM path volume is not reduced by deduplicating overlapping paths. Server
+read validation accepts duplicate bucket ids but rejects empty,
+non-whole-path-shaped, or over-budget batches. The planner also rejects missing
+token positions, duplicate fetch tokens, duplicate token-position entries, and
+out-of-range leaves before a server request is built. The crypto crate also has
+a client-only private result
 ORAM payload block/plaintext bucket codec for fixed-size bucket contents:
 payload bytes, payload fetch token, point token, generation, and deletion state
 are encoded inside the client-encrypted bucket body and are never server

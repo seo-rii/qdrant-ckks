@@ -1341,21 +1341,26 @@ fn validate_bucket_read_request(
         .ok_or_else(|| {
             StorageError::bad_request("private result ORAM read_buckets budget is invalid")
         })?;
+    let path_len = usize::try_from(manifest.oram.tree_height)
+        .ok()
+        .and_then(|height| height.checked_add(1))
+        .ok_or_else(|| {
+            StorageError::bad_request("private result ORAM read_buckets budget is invalid")
+        })?;
+    if bucket_ids.len() % path_len != 0 {
+        return Err(StorageError::bad_request(
+            "private result ORAM read_buckets must contain whole ORAM paths",
+        ));
+    }
     if u64::try_from(bucket_ids.len()).unwrap_or(u64::MAX) > max_bucket_ids {
         return Err(StorageError::bad_request(
             "private result ORAM read_buckets request exceeds fixed path budget",
         ));
     }
-    let mut seen = HashSet::new();
     for &bucket_id in bucket_ids {
         if bucket_id >= manifest.bucket_count {
             return Err(StorageError::bad_request(
                 "private result ORAM read_buckets bucket id is out of range",
-            ));
-        }
-        if !seen.insert(bucket_id) {
-            return Err(StorageError::bad_request(
-                "private result ORAM read_buckets contains duplicate bucket id",
             ));
         }
     }

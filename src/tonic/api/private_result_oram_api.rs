@@ -797,7 +797,7 @@ mod private_result_oram_grpc_tests {
                     session_id: session.session_id.clone(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.manifest.root_hash.clone(),
-                    bucket_ids: vec![0, 1],
+                    bucket_ids: vec![0, 1, 3, 0, 1, 4],
                 }),
             )
             .await
@@ -807,25 +807,25 @@ mod private_result_oram_grpc_tests {
                 read.proof.unwrap().kind,
                 PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND
             );
-            assert_eq!(read.buckets.len(), 2);
+            assert_eq!(read.buckets.len(), 6);
             assert_eq!(read.buckets[0].bucket_id, 0);
 
-            let duplicate_read = PrivateResultOram::read_private_result_oram_buckets(
+            let deduped_path_read = PrivateResultOram::read_private_result_oram_buckets(
                 &service,
                 Request::new(grpc::ReadPrivateResultOramBucketsRequest {
                     collection_name: COLLECTION_NAME.to_string(),
                     session_id: session.session_id.clone(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.manifest.root_hash.clone(),
-                    bucket_ids: vec![0, 0],
+                    bucket_ids: vec![0, 1, 3, 4],
                 }),
             )
             .await
             .unwrap_err();
-            assert_eq!(duplicate_read.code(), Code::InvalidArgument);
-            assert!(duplicate_read.message().contains("duplicate"));
+            assert_eq!(deduped_path_read.code(), Code::InvalidArgument);
+            assert!(deduped_path_read.message().contains("whole ORAM paths"));
             assert!(
-                !duplicate_read
+                !deduped_path_read
                     .message()
                     .contains(&fixture.buckets[0].ciphertext)
             );
@@ -838,7 +838,7 @@ mod private_result_oram_grpc_tests {
                     session_id: unknown_read_session_sentinel.to_string(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.manifest.root_hash.clone(),
-                    bucket_ids: vec![0, 1],
+                    bucket_ids: vec![0, 1, 3, 0, 1, 4],
                 }),
             )
             .await
@@ -870,7 +870,7 @@ mod private_result_oram_grpc_tests {
                         session_id: invalid_session_id.to_string(),
                         index_epoch: BASE_EPOCH,
                         root_hash: fixture.manifest.root_hash.clone(),
-                        bucket_ids: vec![0, 1],
+                        bucket_ids: vec![0, 1, 3, 0, 1, 4],
                     }),
                 )
                 .await

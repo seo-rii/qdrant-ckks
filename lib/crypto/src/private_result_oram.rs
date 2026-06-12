@@ -989,7 +989,7 @@ pub fn plan_private_result_oram_read_bucket_batches_for_fetch_tokens(
     let mut seen_tokens = BTreeSet::new();
     let mut batches = Vec::new();
     for token_batch in payload_fetch_tokens.chunks(path_batch_size) {
-        let mut bucket_ids = BTreeSet::new();
+        let mut bucket_ids = Vec::new();
         for token in token_batch {
             if !seen_tokens.insert(*token) {
                 return Err(PrivateResultOramError::DuplicatePayloadFetchToken);
@@ -1004,7 +1004,7 @@ pub fn plan_private_result_oram_read_bucket_batches_for_fetch_tokens(
             )?);
         }
         batches.push(PrivateResultOramReadBucketBatchPlan {
-            bucket_ids: bucket_ids.into_iter().collect(),
+            bucket_ids,
             token_count: token_batch.len(),
         });
     }
@@ -1565,11 +1565,16 @@ where
         if batch_plan.token_count != token_chunk.len() {
             return Err(PrivateResultOramError::InvalidFetchPlanField("token_count"));
         }
+        let path_len = usize::try_from(config.tree_height)
+            .ok()
+            .and_then(|height| height.checked_add(1))
+            .ok_or(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"))?;
+        let expected_bucket_ids = batch_plan
+            .token_count
+            .checked_mul(path_len)
+            .ok_or(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"))?;
         if batch_plan.bucket_ids.is_empty()
-            || !batch_plan
-                .bucket_ids
-                .windows(2)
-                .all(|window| window[0] < window[1])
+            || batch_plan.bucket_ids.len() != expected_bucket_ids
             || batch_plan
                 .bucket_ids
                 .iter()
@@ -1583,12 +1588,11 @@ where
         {
             return Err(PrivateResultOramError::MerkleProofMismatch);
         }
-        let mut actual_bucket_ids = encrypted_batch
+        let actual_bucket_ids = encrypted_batch
             .buckets
             .iter()
             .map(|bucket| bucket.bucket_id)
             .collect::<Vec<_>>();
-        actual_bucket_ids.sort_unstable();
         if actual_bucket_ids != batch_plan.bucket_ids {
             return Err(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"));
         }
@@ -3415,7 +3419,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(read_plan.batches.len(), 1);
-        assert_eq!(read_plan.batches[0].bucket_ids, vec![0, 1, 4, 9, 10]);
+        assert_eq!(
+            read_plan.batches[0].bucket_ids,
+            vec![0, 1, 4, 9, 0, 1, 4, 10]
+        );
 
         let bucket_ids = &read_plan.batches[0].bucket_ids;
         let proof = result_proof_for_bucket_ids(bucket_ids, 42, root_hash.clone(), &commitments);
@@ -3823,7 +3830,7 @@ mod tests {
         assert_eq!(plan.path_batch_size, 2);
         assert_eq!(plan.batches.len(), 2);
         assert_eq!(plan.batches[0].token_count, 2);
-        assert_eq!(plan.batches[0].bucket_ids, vec![0, 2, 5, 6, 12, 13]);
+        assert_eq!(plan.batches[0].bucket_ids, vec![0, 2, 5, 12, 0, 2, 6, 13]);
         assert_eq!(plan.batches[1].token_count, 1);
         assert_eq!(plan.batches[1].bucket_ids, vec![0, 1, 3, 8]);
     }
