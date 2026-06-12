@@ -263,8 +263,12 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "secret_key"
                         | "secret_key_b64"
                         | "paths"
+                        | "bucket_commitment"
+                        | "bucket_commitments"
                         | "bucket_id"
                         | "bucket_ids"
+                        | "updated_bucket"
+                        | "updated_buckets"
                         | "path_label"
                         | "path_labels"
                         | "leaf_label"
@@ -361,8 +365,12 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "wrappingkeyb64"
                         | "pathlabel"
                         | "pathlabels"
+                        | "bucketcommitment"
+                        | "bucketcommitments"
                         | "bucketid"
                         | "bucketids"
+                        | "updatedbucket"
+                        | "updatedbuckets"
                         | "leaflabel"
                         | "leaflabels"
                         | "clientstate"
@@ -811,9 +819,13 @@ mod tests {
                 "paths": ["qdrant-sec-private-hnsw-path-log-sentinel"],
                 "bucket_ids": ["qdrant-sec-private-oram-bucket-id-log-sentinel"],
                 "bucketIds": ["qdrant-sec-private-oram-camel-bucket-id-log-sentinel"],
+                "bucket_commitment": "qdrant-sec-private-oram-bucket-commitment-log-sentinel",
+                "bucketCommitments": ["qdrant-sec-private-oram-camel-bucket-commitment-log-sentinel"],
                 "updated_buckets": [{
-                    "bucket_id": "qdrant-sec-private-oram-nested-bucket-id-log-sentinel"
+                    "bucket_id": "qdrant-sec-private-oram-nested-bucket-id-log-sentinel",
+                    "bucket_commitment": "qdrant-sec-private-oram-nested-bucket-commitment-log-sentinel"
                 }],
+                "updatedBuckets": ["qdrant-sec-private-oram-camel-updated-bucket-log-sentinel"],
                 "path_label": "qdrant-sec-private-hnsw-path-label-log-sentinel",
                 "pathLabels": ["qdrant-sec-private-hnsw-camel-path-label-log-sentinel"],
                 "leaf_label": "qdrant-sec-private-hnsw-leaf-label-log-sentinel",
@@ -854,7 +866,11 @@ mod tests {
             "qdrant-sec-private-hnsw-path-log-sentinel",
             "qdrant-sec-private-oram-bucket-id-log-sentinel",
             "qdrant-sec-private-oram-camel-bucket-id-log-sentinel",
+            "qdrant-sec-private-oram-bucket-commitment-log-sentinel",
+            "qdrant-sec-private-oram-camel-bucket-commitment-log-sentinel",
             "qdrant-sec-private-oram-nested-bucket-id-log-sentinel",
+            "qdrant-sec-private-oram-nested-bucket-commitment-log-sentinel",
+            "qdrant-sec-private-oram-camel-updated-bucket-log-sentinel",
             "qdrant-sec-private-hnsw-path-label-log-sentinel",
             "qdrant-sec-private-hnsw-camel-path-label-log-sentinel",
             "qdrant-sec-private-hnsw-leaf-label-log-sentinel",
@@ -886,7 +902,11 @@ mod tests {
             "read_buckets": {
                 "session_id": "private-oram-session-a",
                 "bucket_ids": [1, 2, 3],
-                "updated_buckets": [{ "bucket_id": 7 }],
+                "bucket_commitments": ["bucket-commitment-a"],
+                "updated_buckets": [
+                    { "bucket_id": 7, "bucket_commitment": "updated-bucket-a" },
+                    { "bucket_id": 8, "bucket_commitment": "updated-bucket-b" }
+                ],
                 "token_position_map": { "fetch-token-a": 99 }
             }
         });
@@ -894,7 +914,8 @@ mod tests {
             "read_buckets": {
                 "session_id": "private-oram-session-b",
                 "bucket_ids": [9, 10, 11],
-                "updated_buckets": [{ "bucket_id": 12 }],
+                "bucket_commitments": ["bucket-commitment-b", "bucket-commitment-c"],
+                "updated_buckets": [{ "bucket_id": 12, "bucket_commitment": "updated-bucket-c" }],
                 "token_position_map": { "fetch-token-b": 17 }
             }
         });
