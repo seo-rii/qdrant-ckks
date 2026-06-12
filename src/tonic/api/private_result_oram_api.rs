@@ -1641,6 +1641,30 @@ mod private_result_oram_grpc_tests {
             );
             assert!(!drifted_manifest_read.message().contains("tree_height"));
 
+            let missing_bucket_session = PrivateResultOram::open_private_result_oram_session(
+                &service,
+                Request::new(grpc::OpenPrivateResultOramSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    client_id: "tenant-a/sdk-instance-missing-buckets-test".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(missing_bucket_session.code(), Code::NotFound);
+            assert!(
+                missing_bucket_session
+                    .message()
+                    .contains("encrypted bucket data is unavailable")
+            );
+            assert!(
+                !missing_bucket_session
+                    .message()
+                    .contains("private_result_oram")
+            );
+            assert!(!missing_bucket_session.message().contains("/tmp"));
+
             let drifted_bucket_upload = PrivateResultOram::upload_private_result_oram_buckets(
                 &drifted_service,
                 Request::new(grpc::UploadPrivateResultOramBucketsRequest {

@@ -1381,6 +1381,26 @@ mod private_result_oram_rest_tests {
                 "{drifted_manifest_read_error}"
             );
 
+            let missing_bucket_session_error = post_json_error_contains_on!(
+                &app,
+                "/collections/docs/private-result-oram/session",
+                OpenPrivateResultOramSessionRequest {
+                    client_id: "tenant-a/sdk-instance-missing-buckets-test".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                },
+                StatusCode::NOT_FOUND,
+                "encrypted bucket data is unavailable"
+            );
+            assert!(
+                !missing_bucket_session_error.contains("private_result_oram"),
+                "{missing_bucket_session_error}"
+            );
+            assert!(
+                !missing_bucket_session_error.contains("/tmp"),
+                "{missing_bucket_session_error}"
+            );
+
             let drifted_bucket_upload_error = post_json_error_contains_on!(
                 &drifted_app,
                 "/collections/docs/private-result-oram/buckets",
