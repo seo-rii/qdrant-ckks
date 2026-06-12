@@ -1624,6 +1624,32 @@ mod tests {
                 .to_string(),
             dynamic_rest_status_map,
         );
+        let mut close_session_status_map = HashMap::new();
+        close_session_status_map.insert(
+            200u16,
+            OperationDurationStatistics {
+                count: 1,
+                ..Default::default()
+            },
+        );
+        rest_methods.insert(
+            "POST /collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close"
+                .to_string(),
+            close_session_status_map,
+        );
+        let mut dynamic_close_session_status_map = HashMap::new();
+        dynamic_close_session_status_map.insert(
+            200u16,
+            OperationDurationStatistics {
+                count: 1,
+                ..Default::default()
+            },
+        );
+        rest_methods.insert(
+            "POST /collections/docs/private-hnsw/text/session/session-id-sentinel/close"
+                .to_string(),
+            dynamic_close_session_status_map,
+        );
         rest_per_collection.insert("docs".to_string(), rest_methods);
 
         let rest_telemetry = WebApiTelemetry {
@@ -1638,6 +1664,9 @@ mod tests {
         assert!(rest_output.contains("collection=\"docs\""));
         assert!(rest_output.contains(
             "endpoint=\"/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths\"",
+        ));
+        assert!(rest_output.contains(
+            "endpoint=\"/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close\"",
         ));
         assert!(!rest_output.contains("leaf-label-sentinel"));
         assert!(!rest_output.contains("session-id-sentinel"));
