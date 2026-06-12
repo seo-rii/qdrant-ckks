@@ -52,6 +52,18 @@ const REST_ENDPOINT_WHITELIST: &[&str] = &[
     "/collections/{collection_name}/points/search/matrix/pairs",
     "/collections/{collection_name}/points/vectors",
     "/collections/{collection_name}/points/vectors/delete",
+    "/collections/{collection_name}/private-hnsw/{vector_name}/buckets",
+    "/collections/{collection_name}/private-hnsw/{vector_name}/manifest",
+    "/collections/{collection_name}/private-hnsw/{vector_name}/oram/commit",
+    "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
+    "/collections/{collection_name}/private-hnsw/{vector_name}/session",
+    "/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close",
+    "/collections/{collection_name}/private-result-oram/buckets",
+    "/collections/{collection_name}/private-result-oram/manifest",
+    "/collections/{collection_name}/private-result-oram/oram/commit",
+    "/collections/{collection_name}/private-result-oram/oram/read_buckets",
+    "/collections/{collection_name}/private-result-oram/session",
+    "/collections/{collection_name}/private-result-oram/session/{session_id}/close",
 ];
 
 /// Whitelist for GRPC endpoints in metrics output.
@@ -83,6 +95,20 @@ const GRPC_ENDPOINT_WHITELIST: &[&str] = &[
     "/qdrant.Points/UpdateBatch",
     "/qdrant.Points/UpdateVectors",
     "/qdrant.Points/Upsert",
+    "/qdrant.PrivateHnswOram/ClosePrivateHnswSession",
+    "/qdrant.PrivateHnswOram/CommitPrivateHnswPaths",
+    "/qdrant.PrivateHnswOram/GetPrivateHnswManifest",
+    "/qdrant.PrivateHnswOram/OpenPrivateHnswSession",
+    "/qdrant.PrivateHnswOram/ReadPrivateHnswPaths",
+    "/qdrant.PrivateHnswOram/UploadPrivateHnswBuckets",
+    "/qdrant.PrivateHnswOram/UploadPrivateHnswManifest",
+    "/qdrant.PrivateResultOram/ClosePrivateResultOramSession",
+    "/qdrant.PrivateResultOram/CommitPrivateResultOramBuckets",
+    "/qdrant.PrivateResultOram/GetPrivateResultOramManifest",
+    "/qdrant.PrivateResultOram/OpenPrivateResultOramSession",
+    "/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets",
+    "/qdrant.PrivateResultOram/UploadPrivateResultOramBuckets",
+    "/qdrant.PrivateResultOram/UploadPrivateResultOramManifest",
 ];
 
 /// For REST requests, only report timings when having this HTTP response status.
