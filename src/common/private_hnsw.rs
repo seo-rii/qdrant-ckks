@@ -493,6 +493,7 @@ pub async fn do_upload_private_hnsw_manifest(
     signature: PrivateHnswOramSignature,
 ) -> StorageResult<PrivateHnswOramEpochState> {
     validate_private_hnsw_oram_manifest_signature_shape(&signature).map_err(private_hnsw_error)?;
+    validate_private_hnsw_manifest_signature_owner_key(&manifest, &signature)?;
     let resolved = resolve_private_hnsw_context(
         toc,
         auth,
@@ -578,6 +579,8 @@ pub async fn do_get_private_hnsw_manifest(
     let instance = private_hnsw_instance(settings, rule)?;
     let store = PrivateHnswOramStore::new(collection.path(), vector_name)?;
     let (manifest, signature) = read_uploaded_manifest(&store)?;
+    validate_private_hnsw_oram_manifest_signature_shape(&signature).map_err(private_hnsw_error)?;
+    validate_private_hnsw_manifest_signature_owner_key(&manifest, &signature)?;
     let runtime_context = manifest_context_from_runtime(
         &config.params,
         &collection_crypto_id,
@@ -639,6 +642,8 @@ pub async fn do_upload_private_hnsw_buckets(
     let instance = private_hnsw_instance(settings, rule)?;
     let store = PrivateHnswOramStore::new(collection.path(), vector_name)?;
     let (manifest, signature) = read_uploaded_manifest(&store)?;
+    validate_private_hnsw_oram_manifest_signature_shape(&signature).map_err(private_hnsw_error)?;
+    validate_private_hnsw_manifest_signature_owner_key(&manifest, &signature)?;
     let runtime_context = manifest_context_from_runtime(
         &config.params,
         &collection_crypto_id,
@@ -745,6 +750,8 @@ pub async fn do_open_private_hnsw_session(
     let instance = private_hnsw_instance(settings, rule)?;
     let store = PrivateHnswOramStore::new(collection.path(), vector_name)?;
     let (manifest, signature) = read_uploaded_manifest(&store)?;
+    validate_private_hnsw_oram_manifest_signature_shape(&signature).map_err(private_hnsw_error)?;
+    validate_private_hnsw_manifest_signature_owner_key(&manifest, &signature)?;
     let runtime_context = manifest_context_from_runtime(
         &config.params,
         &collection_crypto_id,
@@ -1114,6 +1121,9 @@ pub fn validate_recovered_private_hnsw_oram_snapshot_signatures(
             }
             let store = PrivateHnswOramStore::new(collection_path, vector_name)?;
             let (manifest, signature) = read_uploaded_manifest(&store)?;
+            validate_private_hnsw_oram_manifest_signature_shape(&signature)
+                .map_err(private_hnsw_error)?;
+            validate_private_hnsw_manifest_signature_owner_key(&manifest, &signature)?;
             let runtime_context = manifest_context_from_runtime(
                 &config.params,
                 &collection_crypto_id,
@@ -1244,6 +1254,18 @@ fn read_uploaded_manifest(
     store
         .read_manifest()
         .map_err(private_hnsw_manifest_read_store_error)
+}
+
+fn validate_private_hnsw_manifest_signature_owner_key(
+    manifest: &PrivateHnswOramManifest,
+    signature: &PrivateHnswOramSignature,
+) -> StorageResult<()> {
+    if signature.key_id != manifest.owner_signing_key_id {
+        return Err(private_hnsw_error(
+            qdrant_sec::PrivateHnswOramError::SignatureKeyIdMismatch,
+        ));
+    }
+    Ok(())
 }
 
 fn ensure_private_hnsw_session_open_storage_matches(
@@ -1667,6 +1689,9 @@ fn private_hnsw_error(err: qdrant_sec::PrivateHnswOramError) -> StorageError {
         qdrant_sec::PrivateHnswOramError::UnsupportedSignatureAlgorithm(_) => {
             StorageError::bad_request("private HNSW ORAM signature algorithm must be ed25519")
         }
+        qdrant_sec::PrivateHnswOramError::SignatureKeyIdMismatch => StorageError::bad_request(
+            "private HNSW ORAM signature key_id does not match manifest owner_signing_key_id",
+        ),
         err => StorageError::bad_request(err.to_string()),
     }
 }
@@ -2519,6 +2544,23 @@ mod private_hnsw_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("public key is not base64url"));
         assert!(!rendered.contains(&malformed));
+    }
+
+    #[test]
+    fn manifest_signature_owner_key_preflight_rejects_non_owner_key() {
+        let manifest = fixture_session("session-1", 20).manifest;
+        let signature = PrivateHnswOramSignature {
+            alg: "ed25519".to_string(),
+            key_id: "tenant-a/private-hnsw-signing-v3".to_string(),
+            sig: BASE64URL_NOPAD.encode(&[9; 64]),
+        };
+
+        let err =
+            validate_private_hnsw_manifest_signature_owner_key(&manifest, &signature).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("signature key_id does not match manifest owner_signing_key_id"));
+        assert!(!rendered.contains(&signature.key_id));
+        assert!(!rendered.contains("not configured"));
     }
 
     #[test]

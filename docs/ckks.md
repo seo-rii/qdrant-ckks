@@ -723,6 +723,10 @@ upload, `read_paths`, and `commit` are also sanitized without echoing the
 submitted key id. Manifest upload validates the signature algorithm, key-id
 shape, and signature body shape before looking up the configured public key, so
 malformed signed requests do not reach the verifier registry lookup boundary.
+Manifest upload/read, bucket upload, session open, and snapshot restore
+preflight also require the stored manifest signature `key_id` to match the
+manifest's `owner_signing_key_id` before the verifier public key is looked up,
+so non-owner manifest key ids do not reach the registry lookup boundary.
 The SDK/server manifest signature validators also validate manifest shape before
 canonical manifest signature message construction. SDK signing helpers reject
 malformed manifests, path-count mismatches, malformed path labels/roots, and

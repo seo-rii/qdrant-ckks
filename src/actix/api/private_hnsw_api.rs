@@ -740,8 +740,9 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "signature key id is not configured"
+                "signature key_id does not match manifest owner_signing_key_id"
             );
+            assert!(!unknown_manifest_key_error.contains("not configured"));
             assert!(
                 !unknown_manifest_key_error.contains(signature_key_id_sentinel),
                 "{unknown_manifest_key_error}"
