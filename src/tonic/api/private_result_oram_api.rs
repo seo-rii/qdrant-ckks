@@ -830,7 +830,131 @@ mod private_result_oram_grpc_tests {
                     .contains(&fixture.buckets[0].ciphertext)
             );
 
+            let unknown_read_session_sentinel = "read-session-id-sentinel";
+            let unknown_read = PrivateResultOram::read_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::ReadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: unknown_read_session_sentinel.to_string(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: vec![0, 1],
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(unknown_read.code(), Code::InvalidArgument);
+            assert!(
+                unknown_read
+                    .message()
+                    .contains("session is missing or expired")
+            );
+            assert!(
+                !unknown_read
+                    .message()
+                    .contains(unknown_read_session_sentinel),
+                "{}",
+                unknown_read.message()
+            );
+
+            let oversized_read_session_id = "s".repeat(129);
+            let malformed_read_session_id = "bad/session-id";
+            for invalid_session_id in [
+                oversized_read_session_id.as_str(),
+                malformed_read_session_id,
+            ] {
+                let err = PrivateResultOram::read_private_result_oram_buckets(
+                    &service,
+                    Request::new(grpc::ReadPrivateResultOramBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        session_id: invalid_session_id.to_string(),
+                        index_epoch: BASE_EPOCH,
+                        root_hash: fixture.manifest.root_hash.clone(),
+                        bucket_ids: vec![0, 1],
+                    }),
+                )
+                .await
+                .unwrap_err();
+                assert_eq!(err.code(), Code::InvalidArgument);
+                assert!(err.message().contains("session_id is invalid"));
+                assert!(
+                    !err.message().contains(invalid_session_id),
+                    "{}",
+                    err.message()
+                );
+                assert!(
+                    !err.message().contains("session is missing or expired"),
+                    "{}",
+                    err.message()
+                );
+            }
+
             let (updated_bucket, commit_signature, new_root_hash) = fixture.commit_bucket();
+            let unknown_commit_session_sentinel = "commit-session-id-sentinel";
+            let unknown_commit = PrivateResultOram::commit_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::CommitPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: unknown_commit_session_sentinel.to_string(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash: new_root_hash.clone(),
+                    updated_buckets: vec![bucket_to_proto(updated_bucket.clone())],
+                    commit_signature: Some(signature_to_proto(commit_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(unknown_commit.code(), Code::InvalidArgument);
+            assert!(
+                unknown_commit
+                    .message()
+                    .contains("session is missing or expired")
+            );
+            assert!(
+                !unknown_commit
+                    .message()
+                    .contains(unknown_commit_session_sentinel),
+                "{}",
+                unknown_commit.message()
+            );
+
+            let oversized_commit_session_id = "s".repeat(129);
+            let malformed_commit_session_id = "bad/session-id";
+            for invalid_session_id in [
+                oversized_commit_session_id.as_str(),
+                malformed_commit_session_id,
+            ] {
+                let err = PrivateResultOram::commit_private_result_oram_buckets(
+                    &service,
+                    Request::new(grpc::CommitPrivateResultOramBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        session_id: invalid_session_id.to_string(),
+                        old_epoch: BASE_EPOCH,
+                        new_epoch: NEXT_EPOCH,
+                        old_root_hash: fixture.manifest.root_hash.clone(),
+                        new_root_hash: new_root_hash.clone(),
+                        updated_buckets: vec![bucket_to_proto(updated_bucket.clone())],
+                        commit_signature: Some(signature_to_proto(commit_signature.clone())),
+                    }),
+                )
+                .await
+                .unwrap_err();
+                assert_eq!(err.code(), Code::InvalidArgument);
+                assert!(err.message().contains("session_id is invalid"));
+                assert!(
+                    !err.message().contains(invalid_session_id),
+                    "{}",
+                    err.message()
+                );
+                assert!(
+                    !err.message().contains("session is missing or expired"),
+                    "{}",
+                    err.message()
+                );
+            }
+
             let committed = PrivateResultOram::commit_private_result_oram_buckets(
                 &service,
                 Request::new(grpc::CommitPrivateResultOramBucketsRequest {
@@ -877,13 +1001,65 @@ mod private_result_oram_grpc_tests {
                 &service,
                 Request::new(grpc::ClosePrivateResultOramSessionRequest {
                     collection_name: COLLECTION_NAME.to_string(),
-                    session_id: session.session_id,
+                    session_id: session.session_id.clone(),
                 }),
             )
             .await
             .unwrap()
             .into_inner();
             assert!(closed.closed);
+
+            let missing_close_session_id = "close-session-id-sentinel";
+            let missing_close = PrivateResultOram::close_private_result_oram_session(
+                &service,
+                Request::new(grpc::ClosePrivateResultOramSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: missing_close_session_id.to_string(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(missing_close.code(), Code::InvalidArgument);
+            assert!(
+                missing_close
+                    .message()
+                    .contains("session is missing or already closed")
+            );
+            assert!(
+                !missing_close.message().contains(missing_close_session_id),
+                "{}",
+                missing_close.message()
+            );
+
+            let oversized_close_session_id = "s".repeat(129);
+            let malformed_close_session_id = "bad.session-id";
+            for invalid_session_id in [
+                oversized_close_session_id.as_str(),
+                malformed_close_session_id,
+            ] {
+                let err = PrivateResultOram::close_private_result_oram_session(
+                    &service,
+                    Request::new(grpc::ClosePrivateResultOramSessionRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        session_id: invalid_session_id.to_string(),
+                    }),
+                )
+                .await
+                .unwrap_err();
+                assert_eq!(err.code(), Code::InvalidArgument);
+                assert!(err.message().contains("session_id is invalid"));
+                assert!(
+                    !err.message().contains(invalid_session_id),
+                    "{}",
+                    err.message()
+                );
+                assert!(
+                    !err.message()
+                        .contains("session is missing or already closed"),
+                    "{}",
+                    err.message()
+                );
+            }
         });
     }
 

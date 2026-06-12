@@ -781,7 +781,89 @@ mod private_result_oram_rest_tests {
             );
             assert!(!duplicate_error.contains(&fixture.buckets[0].ciphertext));
 
+            let unknown_read_session_sentinel = "read-session-id-sentinel";
+            let unknown_read_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/read_buckets",
+                ReadPrivateResultOramBucketsRequest {
+                    session_id: unknown_read_session_sentinel.to_string(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: vec![0, 1],
+                },
+                StatusCode::BAD_REQUEST,
+                "session is missing or expired"
+            );
+            assert!(
+                !unknown_read_error.contains(unknown_read_session_sentinel),
+                "{unknown_read_error}"
+            );
+
+            let oversized_read_session_id = "s".repeat(129);
+            let malformed_read_session_id = "bad/session-id";
+            for invalid_session_id in [
+                oversized_read_session_id.as_str(),
+                malformed_read_session_id,
+            ] {
+                let error = post_json_error_contains!(
+                    "/collections/docs/private-result-oram/oram/read_buckets",
+                    ReadPrivateResultOramBucketsRequest {
+                        session_id: invalid_session_id.to_string(),
+                        index_epoch: fixture.manifest.index_epoch,
+                        root_hash: fixture.manifest.root_hash.clone(),
+                        bucket_ids: vec![0, 1],
+                    },
+                    StatusCode::BAD_REQUEST,
+                    "session_id is invalid"
+                );
+                assert!(!error.contains(invalid_session_id), "{error}");
+                assert!(!error.contains("session is missing or expired"), "{error}");
+            }
+
             let (updated_bucket, commit_signature, new_root_hash) = fixture.commit_bucket();
+            let unknown_commit_session_sentinel = "commit-session-id-sentinel";
+            let unknown_commit_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/commit",
+                CommitPrivateResultOramBucketsRequest {
+                    session_id: unknown_commit_session_sentinel.to_string(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash: new_root_hash.clone(),
+                    updated_buckets: vec![updated_bucket.clone()],
+                    commit_signature: commit_signature.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "session is missing or expired"
+            );
+            assert!(
+                !unknown_commit_error.contains(unknown_commit_session_sentinel),
+                "{unknown_commit_error}"
+            );
+
+            let oversized_commit_session_id = "s".repeat(129);
+            let malformed_commit_session_id = "bad/session-id";
+            for invalid_session_id in [
+                oversized_commit_session_id.as_str(),
+                malformed_commit_session_id,
+            ] {
+                let error = post_json_error_contains!(
+                    "/collections/docs/private-result-oram/oram/commit",
+                    CommitPrivateResultOramBucketsRequest {
+                        session_id: invalid_session_id.to_string(),
+                        old_epoch: BASE_EPOCH,
+                        new_epoch: NEXT_EPOCH,
+                        old_root_hash: fixture.manifest.root_hash.clone(),
+                        new_root_hash: new_root_hash.clone(),
+                        updated_buckets: vec![updated_bucket.clone()],
+                        commit_signature: commit_signature.clone(),
+                    },
+                    StatusCode::BAD_REQUEST,
+                    "session_id is invalid"
+                );
+                assert!(!error.contains(invalid_session_id), "{error}");
+                assert!(!error.contains("session is missing or expired"), "{error}");
+            }
+
             let commit_result = post_json_ok!(
                 "/collections/docs/private-result-oram/oram/commit",
                 CommitPrivateResultOramBucketsRequest {
@@ -816,6 +898,50 @@ mod private_result_oram_rest_tests {
             let close_uri =
                 format!("/collections/docs/private-result-oram/session/{session_id}/close");
             let _ = post_json_ok!(close_uri.as_str(), serde_json::json!({}));
+
+            let missing_close_session_id = "close-session-id-sentinel";
+            let missing_close_request = actix_test::TestRequest::post()
+                .uri(&format!(
+                    "/collections/docs/private-result-oram/session/{missing_close_session_id}/close"
+                ))
+                .to_request();
+            let missing_close_response =
+                actix_test::call_service(&app, missing_close_request).await;
+            assert_eq!(missing_close_response.status(), StatusCode::BAD_REQUEST);
+            let missing_close_body = actix_test::read_body(missing_close_response).await;
+            let missing_close_body = String::from_utf8_lossy(&missing_close_body);
+            assert!(missing_close_body.contains("session is missing or already closed"));
+            assert!(
+                !missing_close_body.contains(missing_close_session_id),
+                "{missing_close_body}"
+            );
+
+            let oversized_close_session_id = "s".repeat(129);
+            let malformed_close_session_id = "bad.session-id";
+            for invalid_session_id in [
+                oversized_close_session_id.as_str(),
+                malformed_close_session_id,
+            ] {
+                let invalid_close_request = actix_test::TestRequest::post()
+                    .uri(&format!(
+                        "/collections/docs/private-result-oram/session/{invalid_session_id}/close"
+                    ))
+                    .to_request();
+                let invalid_close_response =
+                    actix_test::call_service(&app, invalid_close_request).await;
+                assert_eq!(invalid_close_response.status(), StatusCode::BAD_REQUEST);
+                let invalid_close_body = actix_test::read_body(invalid_close_response).await;
+                let invalid_close_body = String::from_utf8_lossy(&invalid_close_body);
+                assert!(invalid_close_body.contains("session_id is invalid"));
+                assert!(
+                    !invalid_close_body.contains(invalid_session_id),
+                    "{invalid_close_body}"
+                );
+                assert!(
+                    !invalid_close_body.contains("session is missing or already closed"),
+                    "{invalid_close_body}"
+                );
+            }
         });
     }
 
