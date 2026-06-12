@@ -863,16 +863,17 @@ sanitization before returning layout failures to callers. Collection-level
 snapshot manifest and bucket-contract mismatch errors also avoid reflecting
 manifest ids, vector names, dimensions, bucket ids, or bucket ciphertexts.
 
-Current result privacy support is deliberately narrow. `result_privacy:
-ids_visible` remains the only working private HNSW result mode: Qdrant remains
-blind to vectors, query vectors, visited HNSW nodes, distances, and client-side
-top-k during the private session, but a later ordinary retrieve leaks the
-retrieved point ids to Qdrant. Runtime validation now treats
-`private_payload_oram_required` as schema-valid only when the collection also
-binds a `payload/private-result-oram@v1` rule through `private-result-oram/v1`.
-The dedicated result ORAM REST path can upload/read signed manifests plus
-encrypted bucket batches, open fixed-budget sessions, return Merkle-proven
-bucket batches, and apply signed writeback commits through epoch/root CAS.
+Current result privacy support has two explicit modes. `result_privacy:
+ids_visible` keeps Qdrant blind to vectors, query vectors, visited HNSW nodes,
+distances, and client-side top-k during the private session, but a later
+ordinary retrieve leaks the retrieved point ids to Qdrant.
+`private_payload_oram_required` is accepted only when the same collection also
+binds a `payload/private-result-oram@v1` rule through `private-result-oram/v1`,
+and result payload fetches must then go through the private result ORAM
+session/read/commit path rather than ordinary retrieve. The dedicated result
+ORAM REST/gRPC path can upload/read signed manifests plus encrypted bucket
+batches, open fixed-budget sessions, return Merkle-proven bucket batches, and
+apply signed writeback commits through epoch/root CAS.
 Result ORAM snapshot restore preflight is open for configured
 `private-result-oram/v1` bindings and validates manifest/current epoch, buckets,
 Merkle metadata, and runtime Ed25519 signatures. The SDK search result now
@@ -912,7 +913,7 @@ open, and snapshot restore preflight now accept
 `payload/private-result-oram@v1`; without that binding they continue to fail
 closed. Normal Qdrant search APIs remain client-led-session-only for private
 HNSW vectors.
-The crypto crate reserves the future payload/result ORAM manifest shape through
+The crypto crate defines the payload/result ORAM manifest shape through
 `PrivateResultOramManifest`, `PrivateResultOramBucket`, and
 `private_result_oram_manifest_signature_message`. It can validate manifest
 shape, including canonical Path ORAM tree_height/bucket_count consistency,
