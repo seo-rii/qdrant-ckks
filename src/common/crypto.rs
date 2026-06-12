@@ -9944,7 +9944,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_crypto_settings_accepts_private_result_oram_provider_skeleton() {
+    fn validate_crypto_settings_accepts_private_result_oram_provider() {
         let settings = CryptoSettings {
             zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
             allow_inline_key_material: false,
@@ -9961,7 +9961,7 @@ mod tests {
         };
 
         validate_crypto_settings(&settings)
-            .expect("private result ORAM runtime provider validation should be open in E2");
+            .expect("private result ORAM runtime provider validation should accept strict config");
     }
 
     #[test]
