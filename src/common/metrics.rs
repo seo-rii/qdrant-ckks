@@ -1410,6 +1410,55 @@ mod tests {
     }
 
     #[test]
+    fn test_private_oram_endpoints_whitelisted() {
+        use super::{GRPC_ENDPOINT_WHITELIST, REST_ENDPOINT_WHITELIST};
+
+        let rest_private_oram_endpoints = [
+            "/collections/{collection_name}/private-hnsw/{vector_name}/buckets",
+            "/collections/{collection_name}/private-hnsw/{vector_name}/manifest",
+            "/collections/{collection_name}/private-hnsw/{vector_name}/oram/commit",
+            "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
+            "/collections/{collection_name}/private-hnsw/{vector_name}/session",
+            "/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close",
+            "/collections/{collection_name}/private-result-oram/buckets",
+            "/collections/{collection_name}/private-result-oram/manifest",
+            "/collections/{collection_name}/private-result-oram/oram/commit",
+            "/collections/{collection_name}/private-result-oram/oram/read_buckets",
+            "/collections/{collection_name}/private-result-oram/session",
+            "/collections/{collection_name}/private-result-oram/session/{session_id}/close",
+        ];
+        for endpoint in rest_private_oram_endpoints {
+            assert!(
+                REST_ENDPOINT_WHITELIST.binary_search(&endpoint).is_ok(),
+                "REST private ORAM endpoint `{endpoint}` must be whitelisted for metrics",
+            );
+        }
+
+        let grpc_private_oram_endpoints = [
+            "/qdrant.PrivateHnswOram/ClosePrivateHnswSession",
+            "/qdrant.PrivateHnswOram/CommitPrivateHnswPaths",
+            "/qdrant.PrivateHnswOram/GetPrivateHnswManifest",
+            "/qdrant.PrivateHnswOram/OpenPrivateHnswSession",
+            "/qdrant.PrivateHnswOram/ReadPrivateHnswPaths",
+            "/qdrant.PrivateHnswOram/UploadPrivateHnswBuckets",
+            "/qdrant.PrivateHnswOram/UploadPrivateHnswManifest",
+            "/qdrant.PrivateResultOram/ClosePrivateResultOramSession",
+            "/qdrant.PrivateResultOram/CommitPrivateResultOramBuckets",
+            "/qdrant.PrivateResultOram/GetPrivateResultOramManifest",
+            "/qdrant.PrivateResultOram/OpenPrivateResultOramSession",
+            "/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets",
+            "/qdrant.PrivateResultOram/UploadPrivateResultOramBuckets",
+            "/qdrant.PrivateResultOram/UploadPrivateResultOramManifest",
+        ];
+        for endpoint in grpc_private_oram_endpoints {
+            assert!(
+                GRPC_ENDPOINT_WHITELIST.binary_search(&endpoint).is_ok(),
+                "gRPC private ORAM endpoint `{endpoint}` must be whitelisted for metrics",
+            );
+        }
+    }
+
+    #[test]
     fn test_rest_metrics_global_mode() {
         use std::collections::HashMap;
 
