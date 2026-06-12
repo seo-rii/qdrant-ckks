@@ -788,6 +788,19 @@ mod private_result_oram_rest_tests {
             );
             assert!(!missing_manifest_upload.contains("private_result_oram"));
 
+            let mut alt_manifest_signature = fixture.signature.clone();
+            alt_manifest_signature.key_id = ALT_SIGNING_KEY_ID.to_string();
+            let alt_manifest_key_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/manifest",
+                UploadPrivateResultOramManifestRequest {
+                    manifest: fixture.manifest.clone(),
+                    signature: alt_manifest_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "signature key_id does not match manifest owner_signing_key_id"
+            );
+            assert!(!alt_manifest_key_error.contains(ALT_SIGNING_KEY_ID));
+
             let manifest_result = post_json_ok!(
                 "/collections/docs/private-result-oram/manifest",
                 UploadPrivateResultOramManifestRequest {

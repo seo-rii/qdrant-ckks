@@ -1586,6 +1586,9 @@ fn private_result_oram_error(err: qdrant_sec::PrivateResultOramError) -> Storage
                 "private result ORAM read_buckets signature verification failed",
             )
         }
+        qdrant_sec::PrivateResultOramError::SignatureKeyIdMismatch => StorageError::bad_request(
+            "private result ORAM signature key_id does not match manifest owner_signing_key_id",
+        ),
         qdrant_sec::PrivateResultOramError::InvalidBucketHash => {
             StorageError::bad_request("private result ORAM bucket ciphertext validation failed")
         }

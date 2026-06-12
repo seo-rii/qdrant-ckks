@@ -802,6 +802,26 @@ mod private_result_oram_grpc_tests {
             assert_eq!(missing_manifest.code(), Code::NotFound);
             assert!(!missing_manifest.message().contains("private_result_oram"));
 
+            let mut alt_manifest_signature = fixture.signature.clone();
+            alt_manifest_signature.key_id = ALT_SIGNING_KEY_ID.to_string();
+            let alt_manifest_key = PrivateResultOram::upload_private_result_oram_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                    signature: Some(signature_to_proto(alt_manifest_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(alt_manifest_key.code(), Code::InvalidArgument);
+            assert!(
+                alt_manifest_key
+                    .message()
+                    .contains("signature key_id does not match manifest owner_signing_key_id")
+            );
+            assert!(!alt_manifest_key.message().contains(ALT_SIGNING_KEY_ID));
+
             let manifest_epoch = PrivateResultOram::upload_private_result_oram_manifest(
                 &service,
                 Request::new(grpc::UploadPrivateResultOramManifestRequest {
