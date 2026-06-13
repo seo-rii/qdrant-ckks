@@ -6,9 +6,10 @@ use ahash::AHashMap;
 use common::budget::ResourceBudget;
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
-    DistanceKind, FixedBudgetParams, OramKind, OramParams, PRIVATE_HNSW_ORAM_BINDING,
-    PrivateHnswBucketAeadBaseContext, PrivateHnswClientKeys, PrivateHnswOramManifest,
-    PrivateHnswOramSignature, PrivateHnswParams, ResultPrivacyMode, SecretKey,
+    DistanceKind, FixedBudgetParams, OramKind, OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+    PRIVATE_HNSW_ORAM_BINDING, PRIVATE_RESULT_ORAM_BINDING, PrivateHnswBucketAeadBaseContext,
+    PrivateHnswClientKeys, PrivateHnswOramManifest, PrivateHnswOramSignature, PrivateHnswParams,
+    PrivateResultOramManifest, PrivateResultOramSignature, ResultPrivacyMode, SecretKey,
     VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, seal_private_hnsw_oram_bucket,
 };
 use segment::types::Distance;
@@ -28,7 +29,9 @@ use crate::operations::vector_params_builder::VectorParamsBuilder;
 use crate::private_hnsw_oram_store::{
     PRIVATE_HNSW_ORAM_DIR, PrivateHnswOramEpochState, PrivateHnswOramStore,
 };
-use crate::private_result_oram_store::PRIVATE_RESULT_ORAM_DIR;
+use crate::private_result_oram_store::{
+    PRIVATE_RESULT_ORAM_DIR, PrivateResultOramEpochState, PrivateResultOramStore,
+};
 use crate::shards::channel_service::ChannelService;
 use crate::shards::collection_shard_distribution::CollectionShardDistribution;
 use crate::shards::replica_set::{AbortShardTransfer, ChangePeerFromState};
@@ -238,7 +241,7 @@ async fn _test_snapshot_collection(node_type: NodeType) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_snapshot_private_result_oram_is_included_but_unconfigured_restore_fails_closed() {
+async fn test_snapshot_private_result_oram_unconfigured_store_fails_before_archive() {
     init_logger();
 
     let config = CollectionConfigInternal {
@@ -294,7 +297,6 @@ async fn test_snapshot_private_result_oram_is_included_but_unconfigured_restore_
     .await
     .unwrap();
 
-    let private_result_plaintext_sentinel = b"qdrant-sec-private-result-oram-plaintext-sentinel";
     let result_bucket_path = collection_dir
         .path()
         .join(PRIVATE_RESULT_ORAM_DIR)
@@ -313,42 +315,164 @@ async fn test_snapshot_private_result_oram_is_included_but_unconfigured_restore_
         "bucket_commitment": BASE64URL_NOPAD.encode(&[7; 32]),
     }))
     .unwrap();
-    assert!(!contains_bytes(
-        &bucket_json,
-        private_result_plaintext_sentinel
-    ));
     std::fs::write(&result_bucket_path, &bucket_json).unwrap();
 
     let snapshots_temp_dir = Builder::new().prefix("temp_dir").tempdir().unwrap();
-    let snapshot_description = collection
+    let err = collection
         .create_snapshot(snapshots_temp_dir.path(), 0)
         .await
-        .unwrap();
-    let snapshot_path = snapshots_path.path().join(&snapshot_description.name);
-    let snapshot_bytes = std::fs::read(&snapshot_path).unwrap();
-    assert!(contains_bytes(
-        &snapshot_bytes,
-        PRIVATE_RESULT_ORAM_DIR.as_bytes()
-    ));
-    assert!(!contains_bytes(
-        &snapshot_bytes,
-        private_result_plaintext_sentinel
-    ));
-
-    let recover_dir = Builder::new()
-        .prefix("test_result_oram_collection_rec")
-        .tempdir()
-        .unwrap();
-    let snapshot_data = SnapshotData::new_packed_persistent(snapshot_path);
-    let err = Collection::restore_snapshot(snapshot_data, recover_dir.path(), 0, true).unwrap_err();
+        .unwrap_err();
     let err = err.to_string();
     assert!(
         err.contains("private result ORAM snapshot store is present without a matching collection encryption rule")
     );
     assert!(!err.contains(collection_dir.path().to_string_lossy().as_ref()));
-    assert!(!err.contains(recover_dir.path().to_string_lossy().as_ref()));
     assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
     assert!(!err.contains(&ciphertext));
+    assert!(!err.contains("00000000.bucket"));
+    assert!(
+        std::fs::read_dir(snapshots_path.path())
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_snapshot_private_result_oram_missing_bucket_fails_before_archive() {
+    init_logger();
+
+    let collection_uuid = Uuid::from_u128(11);
+    let collection_name = "test_private_result_oram_snapshot".to_string();
+    let key_id = "tenant-a/result-private-rk".to_string();
+    let signing_key_id = "tenant-a/private-result-signing-v1".to_string();
+    let leaf_commitments = vec![
+        BASE64URL_NOPAD.encode(&[17; 32]),
+        BASE64URL_NOPAD.encode(&[18; 32]),
+        BASE64URL_NOPAD.encode(&[19; 32]),
+    ];
+    let root_hash = PrivateResultOramStore::merkle_root_for_commitments(&leaf_commitments).unwrap();
+    let config = CollectionConfigInternal {
+        params: CollectionParams {
+            vectors: VectorsConfig::Single(VectorParamsBuilder::new(2, Distance::Euclid).build()),
+            shard_number: NonZeroU32::new(1).unwrap(),
+            replication_factor: NonZeroU32::new(1).unwrap(),
+            write_consistency_factor: NonZeroU32::new(1).unwrap(),
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some(key_id.clone()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_private_result_oram".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_private_result_oram_v1".to_string(),
+                    binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        },
+        optimizer_config: TEST_OPTIMIZERS_CONFIG.clone(),
+        wal_config: WalConfig {
+            wal_capacity_mb: 1,
+            wal_segments_ahead: 0,
+            wal_retain_closed: 1,
+        },
+        hnsw_config: Default::default(),
+        quantization_config: Default::default(),
+        strict_mode_config: Default::default(),
+        uuid: Some(collection_uuid),
+        metadata: None,
+    };
+    let snapshots_path = Builder::new()
+        .prefix("test_private_result_missing_bucket_snapshots")
+        .tempdir()
+        .unwrap();
+    let collection_dir = Builder::new()
+        .prefix("test_private_result_missing_bucket_collection")
+        .tempdir()
+        .unwrap();
+    let mut shards = AHashMap::new();
+    shards.insert(0, HashSet::from([1]));
+    let collection = Collection::new(
+        collection_name,
+        1,
+        collection_dir.path(),
+        snapshots_path.path(),
+        &config,
+        Arc::new(SharedStorageConfig::default()),
+        CollectionShardDistribution { shards },
+        None,
+        ChannelService::default(),
+        dummy_on_replica_failure(),
+        dummy_request_shard_transfer(),
+        dummy_abort_shard_transfer(),
+        None,
+        None,
+        ResourceBudget::default(),
+        None,
+    )
+    .await
+    .unwrap();
+    let store = PrivateResultOramStore::new(collection_dir.path());
+    let manifest = PrivateResultOramManifest {
+        version: 1,
+        provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+        binding: PRIVATE_RESULT_ORAM_BINDING.to_string(),
+        collection_id: collection_uuid.to_string(),
+        key_id: key_id.clone(),
+        rk_id: key_id,
+        rk_epoch: 7,
+        oram: OramParams {
+            kind: OramKind::PathOram,
+            bucket_size: 2,
+            block_size_bytes: 128,
+            tree_height: 1,
+            path_batch_size: 1,
+        },
+        index_epoch: 42,
+        root_hash: root_hash.clone(),
+        bucket_count: 3,
+        logical_result_count: 1,
+        dummy_result_count: 2,
+        owner_signing_key_id: signing_key_id.clone(),
+        created_at_unix: 1,
+    };
+    store
+        .write_manifest(
+            &manifest,
+            &PrivateResultOramSignature {
+                alg: "ed25519".to_string(),
+                key_id: signing_key_id,
+                sig: BASE64URL_NOPAD.encode(&[7; 64]),
+            },
+        )
+        .unwrap();
+    store
+        .write_initial_epoch(&PrivateResultOramEpochState {
+            index_epoch: 42,
+            root_hash,
+        })
+        .unwrap();
+    store
+        .write_merkle_tree_from_commitments(42, manifest.root_hash.clone(), leaf_commitments)
+        .unwrap();
+
+    let snapshots_temp_dir = Builder::new().prefix("temp_dir").tempdir().unwrap();
+    let err = collection
+        .create_snapshot(snapshots_temp_dir.path(), 0)
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert!(err.contains("private result ORAM file not found"), "{err}");
+    assert!(!err.contains(collection_dir.path().to_string_lossy().as_ref()));
+    assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
+    assert!(!err.contains("00000000.bucket"));
+    assert!(!err.contains(&manifest.root_hash));
 }
 
 #[tokio::test(flavor = "multi_thread")]

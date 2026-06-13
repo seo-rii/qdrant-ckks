@@ -1077,14 +1077,16 @@ Bucket `index_epoch` records the epoch when that encrypted bucket was last
 written. After a writeback commit, unchanged buckets may still carry an older
 bucket epoch as long as the current Merkle root commits to their existing
 bucket commitment; reads reject buckets newer than the requested session epoch.
-Collection snapshots include the `private_result_oram/` directory if it is
-present, and restore preflight accepts it only when collection encryption has a
-configured `private-result-oram/v1` binding backed by
-`payload/private-result-oram@v1`. The preflight verifies the stored
-manifest/signature, current epoch/root, encrypted buckets, and Merkle metadata
-against runtime policy before accepting the recovered collection. Snapshot
-creation and restore still reject symlinks inside the result ORAM source tree
-without reflecting symlink targets or bucket filenames. Restore guard
+Collection snapshots include the `private_result_oram/` directory only when
+collection encryption has a configured `private-result-oram/v1` binding backed
+by `payload/private-result-oram@v1`. Snapshot creation preflights that
+configured store before writing the archive, and rejects orphan result ORAM
+stores, missing bucket files, and other layout drift fail closed. Restore
+preflight applies the same runtime-bound check before accepting the recovered
+collection. The preflight verifies the stored manifest/signature, current
+epoch/root, encrypted buckets, and Merkle metadata against runtime policy.
+Snapshot creation and restore still reject symlinks inside the result ORAM
+source tree without reflecting symlink targets or bucket filenames. Guard
 inspection failures are fixed messages and do not reflect collection paths,
 reserved directory names, or OS error strings.
 The CLI/startup snapshot mapping preflight applies the same runtime-bound

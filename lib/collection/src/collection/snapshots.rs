@@ -88,6 +88,12 @@ impl Collection {
                 &self.path,
             )
             .map_err(|err| sanitize_private_hnsw_snapshot_layout_error(&self.path, err))?;
+            Self::validate_private_result_oram_snapshot_restore_layout(
+                self.name(),
+                &collection_config,
+                &self.path,
+            )
+            .map_err(|err| sanitize_private_result_oram_snapshot_layout_error(&self.path, err))?;
             collection_config
         };
 
