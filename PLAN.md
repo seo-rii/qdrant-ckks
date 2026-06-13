@@ -490,7 +490,7 @@
 - CLI/startup private HNSW ORAM restore-layout 실패는 bucket id, bucket commitment mismatch detail, store file detail을 반사하지 않는 고정 메시지로 보고한다.
 - CLI/REST snapshot recovery는 private HNSW ORAM restore-layout preflight 이후 runtime `signature_public_keys`로 stored manifest Ed25519 signature를 검증하고, tampered manifest signature를 bucket/root/path 반사 없이 fail closed 한다.
 - storage-level `Collection::restore_snapshot` 자체도 shard restore 전에 private HNSW ORAM restore-layout preflight를 실행하고, layout 오류가 collection-local `private_hnsw_oram` 경로나 bucket body를 반사하지 않도록 sanitize한다.
-- storage-level snapshot recovery도 private result ORAM restore-layout preflight를 실행하고, REST recovery validator는 result ORAM manifest Ed25519 signature를 runtime registry로 검증한다. orphan `private_result_oram/` store 같은 layout 오류는 collection-local path나 reserved directory name 반사 없이 fail closed 한다.
+- CLI/startup과 storage-level snapshot recovery도 private result ORAM restore-layout preflight를 실행하고, REST recovery validator는 result ORAM manifest Ed25519 signature를 runtime registry로 검증한다. orphan `private_result_oram/` store와 bucket/root layout mismatch 같은 오류는 collection-local path, reserved directory name, bucket ciphertext 반사 없이 fail closed 한다.
 - collection-level private HNSW ORAM snapshot manifest/bucket-contract mismatch 오류도 manifest ids, vector name, dimension, bucket id, bucket ciphertext를 반사하지 않는다.
 - REST/gRPC session open의 stale requested epoch 오류는 requested/current epoch 값을 반사하지 않고, private HNSW runtime `result_privacy` unsupported-value 오류도 submitted option value를 반사하지 않는다.
 - collection/runtime vector dim/distance mismatch 오류는 실제 dim/distance 값을 반사하지 않는다.
