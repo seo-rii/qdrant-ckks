@@ -1534,6 +1534,13 @@ mod tests {
             .join(format!("{bucket_id:08}.bucket"))
     }
 
+    fn private_result_snapshot_bucket_path(collection_dir: &Path, bucket_id: u64) -> PathBuf {
+        collection_dir
+            .join(PRIVATE_RESULT_ORAM_DIR)
+            .join("buckets")
+            .join(format!("{bucket_id:08}.bucket"))
+    }
+
     #[test]
     fn snapshot_crypto_migration_state_guard_rejects_in_flight_states() {
         ensure_snapshot_crypto_migration_state_allows_snapshot(
@@ -1866,6 +1873,87 @@ mod tests {
             !rendered.contains(&manifest.owner_signing_key_id),
             "{rendered}"
         );
+    }
+
+    fn assert_private_result_oram_restore_preflight_rejects_missing_bucket(missing_bucket_id: u64) {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-missing-bucket")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let manifest = private_result_manifest(uuid.to_string());
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+        let missing_bucket_path =
+            private_result_snapshot_bucket_path(temp_dir.path(), missing_bucket_id);
+        fs::remove_file(&missing_bucket_path).unwrap();
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("private result ORAM file"), "{rendered}");
+        assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(
+            !rendered.contains(&format!("{missing_bucket_id:08}.bucket")),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
+    }
+
+    #[test]
+    fn private_result_oram_restore_preflight_rejects_missing_bucket_zero() {
+        assert_private_result_oram_restore_preflight_rejects_missing_bucket(0);
+    }
+
+    #[test]
+    fn private_result_oram_restore_preflight_rejects_missing_last_bucket() {
+        assert_private_result_oram_restore_preflight_rejects_missing_bucket(2);
+    }
+
+    #[test]
+    fn private_result_oram_restore_preflight_rejects_missing_middle_bucket() {
+        assert_private_result_oram_restore_preflight_rejects_missing_bucket(1);
+    }
+
+    #[test]
+    fn private_result_oram_storage_restore_runs_sanitized_layout_preflight() {
+        let snapshot_dir = tempfile::Builder::new()
+            .prefix("private-result-storage-restore-source")
+            .tempdir()
+            .unwrap();
+        let target_dir = tempfile::Builder::new()
+            .prefix("private-result-storage-restore-target")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let manifest = private_result_manifest(uuid.to_string());
+        fs::write(
+            snapshot_dir.path().join(COLLECTION_CONFIG_FILE),
+            config.to_bytes().unwrap(),
+        )
+        .unwrap();
+        write_private_result_snapshot_fixture(snapshot_dir.path(), &manifest);
+        fs::remove_file(private_result_snapshot_bucket_path(snapshot_dir.path(), 0)).unwrap();
+
+        let err = Collection::restore_snapshot(
+            SnapshotData::Unpacked(snapshot_dir),
+            target_dir.path(),
+            0,
+            true,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("private result ORAM file not found"), "{err}");
+        assert!(!err.contains(target_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!err.contains("00000000.bucket"));
+        assert!(!err.contains(&manifest.root_hash));
     }
 
     #[test]
