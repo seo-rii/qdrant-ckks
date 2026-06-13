@@ -6762,6 +6762,10 @@ mod tests {
         let config = oram_config();
         let entry = node_block_with_vector(1, &[1.0, 0.0], vec![]);
         let mut stash = node_block_with_vector(2, &[2.0, 0.0], vec![[1; 32]]);
+        stash.point_token = [66; 32];
+        stash.vector = b"HNSW-ORAM-STASH-VECTOR-RAW-V1!!!".to_vec();
+        stash.neighbors = vec![[88; 32], [99; 32]];
+        stash.neighbor_levels = vec![1, 0];
         stash.payload_fetch_token = Some([77; 32]);
         let mut state = PrivateHnswOramClientState::with_position_map(
             [(entry.node_id, 0), (stash.node_id, 1)],
@@ -6784,6 +6788,16 @@ mod tests {
         assert!(plaintext_json.contains("positions"));
         assert!(plaintext_json.contains("stash"));
         assert!(plaintext_json.contains("payload_fetch_token"));
+        let sensitive_stash_values = [
+            serde_json::to_string(&stash.node_id).unwrap(),
+            serde_json::to_string(&stash.point_token).unwrap(),
+            serde_json::to_string(&stash.vector).unwrap(),
+            serde_json::to_string(&stash.neighbors).unwrap(),
+            serde_json::to_string(&stash.payload_fetch_token).unwrap(),
+        ];
+        for sensitive_value in &sensitive_stash_values {
+            assert!(plaintext_json.contains(sensitive_value));
+        }
         for position in &snapshot.positions {
             assert!(plaintext_json.contains(&position.node_id));
             assert!(plaintext_json.contains(&position.leaf_label));
@@ -6802,6 +6816,8 @@ mod tests {
             "node_id",
             "leaf_label",
             "point_token",
+            "vector",
+            "neighbors",
             "payload_fetch_token",
         ] {
             assert!(!encrypted_json.contains(plaintext_marker));
@@ -6821,6 +6837,21 @@ mod tests {
                 &raw_ciphertext,
                 position.leaf_label.as_bytes()
             ));
+        }
+        for sensitive_value in &sensitive_stash_values {
+            assert!(!encrypted_json.contains(sensitive_value));
+            assert!(!contains_bytes(&raw_ciphertext, sensitive_value.as_bytes()));
+        }
+        for sensitive_bytes in [
+            stash.node_id.as_slice(),
+            stash.point_token.as_slice(),
+            stash.vector.as_slice(),
+            stash.payload_fetch_token.as_ref().unwrap().as_slice(),
+        ] {
+            assert!(!contains_bytes(&raw_ciphertext, sensitive_bytes));
+        }
+        for neighbor in &stash.neighbors {
+            assert!(!contains_bytes(&raw_ciphertext, neighbor.as_slice()));
         }
     }
 
