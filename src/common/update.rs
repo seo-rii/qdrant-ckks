@@ -2435,16 +2435,17 @@ fn encrypt_vectors_for_point(
             if !plan.contains_vector_name(DEFAULT_VECTOR_NAME) {
                 return Ok(Vec::new());
             }
-            let values = std::mem::take(values);
             let (envelope, verified_sidecar_key) = plan
                 .encrypt_dense_vector_payload_value(
                     collection_name,
                     point_id,
                     DEFAULT_VECTOR_NAME,
-                    &values,
+                    values,
                 )?
                 .expect("default vector was selected");
-            insert_encrypted_vector_sidecar(payload, DEFAULT_VECTOR_NAME, envelope)?;
+            let mut staged_payload = payload.clone();
+            insert_encrypted_vector_sidecar(&mut staged_payload, DEFAULT_VECTOR_NAME, envelope)?;
+            *payload = staged_payload;
             *vector = VectorStructPersisted::Named(HashMap::new());
             Ok(vec![verified_sidecar_key])
         }
@@ -2462,9 +2463,9 @@ fn encrypt_vectors_for_point(
                 .filter(|name| plan.contains_vector_name(name))
                 .cloned()
                 .collect();
-            let mut verified_sidecar_keys = Vec::new();
-            for vector_name in encrypted_names {
-                let vector = vectors.remove(&vector_name).expect("key came from map");
+            let mut staged_sidecars = Vec::new();
+            for vector_name in &encrypted_names {
+                let vector = vectors.get(vector_name).expect("key came from map");
                 let VectorPersisted::Dense(values) = vector else {
                     return Err(StorageError::bad_input(format!(
                         "encrypted vector '{vector_name}' only supports dense vectors; sparse and multi-dense vector encryption is not implemented",
@@ -2478,9 +2479,18 @@ fn encrypt_vectors_for_point(
                         &values,
                     )?
                     .expect("vector was selected");
-                insert_encrypted_vector_sidecar(payload, &vector_name, envelope)?;
+                staged_sidecars.push((vector_name.clone(), envelope, verified_sidecar_key));
+            }
+            let mut staged_payload = payload.clone();
+            let mut verified_sidecar_keys = Vec::with_capacity(staged_sidecars.len());
+            for (vector_name, envelope, verified_sidecar_key) in staged_sidecars {
+                insert_encrypted_vector_sidecar(&mut staged_payload, &vector_name, envelope)?;
                 verified_sidecar_keys.push(verified_sidecar_key);
             }
+            for vector_name in encrypted_names {
+                vectors.remove(&vector_name);
+            }
+            *payload = staged_payload;
             Ok(verified_sidecar_keys)
         }
     }
@@ -2503,22 +2513,35 @@ fn encrypt_vectors_for_batch(
                     "batch vector count must match point id count",
                 ));
             }
-            let batch_values = std::mem::take(batch_values);
-            ensure_batch_payloads(payloads, ids.len())?;
-            let payloads = payloads.as_mut().expect("payloads were created");
-            let mut verified_sidecar_keys = Vec::with_capacity(ids.len());
-            for ((point_id, values), payload) in ids.iter().zip(batch_values).zip(payloads) {
+            let mut staged_payloads = payloads.clone();
+            ensure_batch_payloads(&mut staged_payloads, ids.len())?;
+            let staged_payloads_ref = staged_payloads
+                .as_mut()
+                .expect("payloads were created for staged batch");
+            let mut staged_sidecars = Vec::with_capacity(ids.len());
+            for (payload_index, (point_id, values)) in
+                ids.iter().zip(batch_values.iter()).enumerate()
+            {
                 let (envelope, verified_sidecar_key) = plan
                     .encrypt_dense_vector_payload_value(
                         collection_name,
                         &point_id.to_string(),
                         DEFAULT_VECTOR_NAME,
-                        &values,
+                        values,
                     )?
                     .expect("default vector was selected");
-                insert_encrypted_vector_sidecar(payload, DEFAULT_VECTOR_NAME, envelope)?;
+                staged_sidecars.push((payload_index, envelope, verified_sidecar_key));
+            }
+            let mut verified_sidecar_keys = Vec::with_capacity(staged_sidecars.len());
+            for (payload_index, envelope, verified_sidecar_key) in staged_sidecars {
+                insert_encrypted_vector_sidecar(
+                    &mut staged_payloads_ref[payload_index],
+                    DEFAULT_VECTOR_NAME,
+                    envelope,
+                )?;
                 verified_sidecar_keys.push(verified_sidecar_key);
             }
+            *payloads = staged_payloads;
             *vectors = BatchVectorStructPersisted::Named(HashMap::new());
             Ok(verified_sidecar_keys)
         }
@@ -2539,17 +2562,15 @@ fn encrypt_vectors_for_batch(
             if encrypted_names.is_empty() {
                 return Ok(Vec::new());
             }
-            ensure_batch_payloads(payloads, ids.len())?;
-            let payloads = payloads.as_mut().expect("payloads were created");
-            let mut verified_sidecar_keys = Vec::new();
-            for vector_name in encrypted_names {
-                let values = named.remove(&vector_name).expect("key came from map");
+            let mut staged_sidecars = Vec::new();
+            for vector_name in &encrypted_names {
+                let values = named.get(vector_name).expect("key came from map");
                 if values.len() != ids.len() {
                     return Err(StorageError::bad_input(format!(
                         "batch vector count for '{vector_name}' must match point id count",
                     )));
                 }
-                for ((point_id, value), payload) in ids.iter().zip(values).zip(&mut *payloads) {
+                for (payload_index, (point_id, value)) in ids.iter().zip(values).enumerate() {
                     let VectorPersisted::Dense(values) = value else {
                         return Err(StorageError::bad_input(format!(
                             "encrypted vector '{vector_name}' only supports dense vectors; sparse and multi-dense vector encryption is not implemented",
@@ -2563,10 +2584,32 @@ fn encrypt_vectors_for_batch(
                             &values,
                         )?
                         .expect("vector was selected");
-                    insert_encrypted_vector_sidecar(payload, &vector_name, envelope)?;
-                    verified_sidecar_keys.push(verified_sidecar_key);
+                    staged_sidecars.push((
+                        payload_index,
+                        vector_name.clone(),
+                        envelope,
+                        verified_sidecar_key,
+                    ));
                 }
             }
+            let mut staged_payloads = payloads.clone();
+            ensure_batch_payloads(&mut staged_payloads, ids.len())?;
+            let staged_payloads_ref = staged_payloads
+                .as_mut()
+                .expect("payloads were created for staged batch");
+            let mut verified_sidecar_keys = Vec::with_capacity(staged_sidecars.len());
+            for (payload_index, vector_name, envelope, verified_sidecar_key) in staged_sidecars {
+                insert_encrypted_vector_sidecar(
+                    &mut staged_payloads_ref[payload_index],
+                    &vector_name,
+                    envelope,
+                )?;
+                verified_sidecar_keys.push(verified_sidecar_key);
+            }
+            for vector_name in encrypted_names {
+                named.remove(&vector_name);
+            }
+            *payloads = staged_payloads;
             Ok(verified_sidecar_keys)
         }
     }
@@ -4849,6 +4892,100 @@ esac
             StorageError::BadInput { description }
                 if description.contains("batch vector count for 'embedding'")
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vector_write_plan_keeps_point_input_on_encryption_failure() {
+        let bridge = fake_openfhe_bridge();
+        let settings = vector_runtime_settings(&bridge.path().join("openfhe-bridge"));
+        let params = encrypted_vector_params();
+        let plan = vector_write_plan_for_collection_with_crypto_id(
+            &settings,
+            "docs",
+            TEST_VECTOR_COLLECTION_CRYPTO_ID,
+            &params,
+        )
+        .unwrap()
+        .unwrap();
+        let too_wide =
+            vec![
+                1.0;
+                qdrant_sec::CkksParameters::openfhe_default_128_bit().batch_size as usize + 1
+            ];
+        let mut vector = VectorStructPersisted::Named(HashMap::from([(
+            "embedding".to_string(),
+            VectorPersisted::Dense(too_wide.clone()),
+        )]));
+        let original_payload = Some(segment::types::Payload(
+            json!({ "public": "keep" }).as_object().unwrap().clone(),
+        ));
+        let mut payload = original_payload.clone();
+
+        let err = encrypt_vectors_for_point(&plan, "docs", "point-1", &mut vector, &mut payload)
+            .expect_err("oversized vector encryption must fail");
+
+        assert!(matches!(
+            err,
+            StorageError::ServiceError { description, .. }
+                if description.contains("CKKS vector encryption failed")
+        ));
+        assert!(matches!(vector, VectorStructPersisted::Named(ref vectors)
+                if matches!(vectors.get("embedding"), Some(VectorPersisted::Dense(values)) if values == &too_wide)));
+        assert_eq!(payload, original_payload);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vector_write_plan_keeps_batch_input_on_partial_encryption_failure() {
+        let bridge = fake_openfhe_bridge();
+        let settings = vector_runtime_settings(&bridge.path().join("openfhe-bridge"));
+        let params = encrypted_vector_params();
+        let plan = vector_write_plan_for_collection_with_crypto_id(
+            &settings,
+            "docs",
+            TEST_VECTOR_COLLECTION_CRYPTO_ID,
+            &params,
+        )
+        .unwrap()
+        .unwrap();
+        let ids = vec![1.into(), 2.into()];
+        let valid = vec![0.125, -42.5];
+        let too_wide =
+            vec![
+                1.0;
+                qdrant_sec::CkksParameters::openfhe_default_128_bit().batch_size as usize + 1
+            ];
+        let mut vectors = BatchVectorStructPersisted::Named(HashMap::from([(
+            "embedding".to_string(),
+            vec![
+                VectorPersisted::Dense(valid.clone()),
+                VectorPersisted::Dense(too_wide.clone()),
+            ],
+        )]));
+        let original_payloads = Some(vec![
+            Some(segment::types::Payload(
+                json!({ "public": "keep" }).as_object().unwrap().clone(),
+            )),
+            None,
+        ]);
+        let mut payloads = original_payloads.clone();
+
+        let err = encrypt_vectors_for_batch(&plan, "docs", &ids, &mut vectors, &mut payloads)
+            .expect_err("second oversized vector must fail the whole batch transform");
+
+        assert!(matches!(
+            err,
+            StorageError::ServiceError { description, .. }
+                if description.contains("CKKS vector encryption failed")
+        ));
+        assert!(
+            matches!(vectors, BatchVectorStructPersisted::Named(ref named)
+                if matches!(named.get("embedding"), Some(values)
+                    if matches!(&values[..], [VectorPersisted::Dense(first), VectorPersisted::Dense(second)]
+                        if first == &valid && second == &too_wide)))
+        );
+        assert_eq!(payloads, original_payloads);
     }
 
     #[cfg(unix)]
