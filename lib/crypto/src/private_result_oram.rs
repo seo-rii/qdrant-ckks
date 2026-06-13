@@ -3963,7 +3963,10 @@ mod tests {
 
         let keys = result_test_keys();
         let config = result_client_config();
-        let stash = payload_block(11);
+        let mut stash = payload_block(11);
+        stash.payload_fetch_token = [44; 32];
+        stash.point_token = [55; 32];
+        stash.payload = b"RESULT-ORAM-STASH-PAYLOAD-RAW-V1!".to_vec();
         let mut state = PrivateResultOramClientState::with_position_map(
             [(stash.payload_fetch_token, 1)],
             config.tree_height,
@@ -3978,6 +3981,18 @@ mod tests {
         assert!(plaintext_json.contains("positions"));
         assert!(plaintext_json.contains("stash"));
         assert!(plaintext_json.contains("payload_fetch_token"));
+        let sensitive_stash_values = [
+            serde_json::to_string(&stash.payload_fetch_token).unwrap(),
+            serde_json::to_string(&stash.point_token).unwrap(),
+            serde_json::to_string(&stash.payload).unwrap(),
+        ];
+        for sensitive_value in &sensitive_stash_values {
+            assert!(plaintext_json.contains(sensitive_value));
+        }
+        for position in &snapshot.positions {
+            assert!(plaintext_json.contains(&position.payload_fetch_token));
+            assert!(plaintext_json.contains(&position.leaf_label));
+        }
 
         let encrypted =
             seal_private_result_oram_client_state_snapshot(&keys, context, &snapshot).unwrap();
@@ -3986,12 +4001,35 @@ mod tests {
             .decode(encrypted.ciphertext.as_bytes())
             .unwrap();
 
-        for plaintext_marker in ["positions", "stash", "payload_fetch_token", "leaf_label"] {
+        for plaintext_marker in [
+            "positions",
+            "stash",
+            "payload_fetch_token",
+            "leaf_label",
+            "point_token",
+            "payload",
+        ] {
             assert!(!encrypted_json.contains(plaintext_marker));
             assert!(!contains_bytes(
                 &raw_ciphertext,
                 plaintext_marker.as_bytes()
             ));
+        }
+        for position in &snapshot.positions {
+            assert!(!encrypted_json.contains(&position.payload_fetch_token));
+            assert!(!encrypted_json.contains(&position.leaf_label));
+            assert!(!contains_bytes(
+                &raw_ciphertext,
+                position.payload_fetch_token.as_bytes()
+            ));
+            assert!(!contains_bytes(
+                &raw_ciphertext,
+                position.leaf_label.as_bytes()
+            ));
+        }
+        for sensitive_value in &sensitive_stash_values {
+            assert!(!encrypted_json.contains(sensitive_value));
+            assert!(!contains_bytes(&raw_ciphertext, sensitive_value.as_bytes()));
         }
         assert!(!contains_bytes(&raw_ciphertext, &stash.payload_fetch_token));
         assert!(!contains_bytes(&raw_ciphertext, &stash.point_token));
