@@ -902,6 +902,11 @@ Ordinary raw payload reads through retrieve, scroll, search, or query also fail
 closed when `with_payload` would return a `private-result-oram/v1` payload path.
 Callers may omit payloads or request redacted encrypted payload output, but raw
 result payload bytes require the private result ORAM session/read/commit APIs.
+Trusted-bridge CKKS sidecar fallback paths, including point-id query resolution,
+grouped search/query, and search matrix sampling, request only the reserved
+vector sidecar field and any required group key instead of full raw payloads, so
+they do not accidentally read private result ORAM payload paths while resolving
+encrypted vector sidecars.
 Ordinary server-side selectors that would inspect a private result ORAM payload
 path, including filters, order-by, group-by, facets, and formula payload
 variables/conditions, fail closed with the same private result ORAM session API
