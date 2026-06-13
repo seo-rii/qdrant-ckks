@@ -800,6 +800,38 @@ mod tests {
     }
 
     #[test]
+    fn cli_snapshot_crypto_preflight_sanitizes_private_result_store_paths() {
+        let fixture = PrivateResultSnapshotFixture::build();
+        let settings = fixture.settings();
+        let collection_dir = TempDir::new().unwrap();
+        write_recovered_private_result_snapshot_fixture(collection_dir.path(), &fixture, false);
+        fs::remove_file(
+            collection_dir
+                .path()
+                .join(PRIVATE_RESULT_ORAM_DIR)
+                .join("buckets")
+                .join("00000000.bucket"),
+        )
+        .unwrap();
+
+        let err =
+            validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
+                .expect_err("missing result ORAM bucket must fail CLI preflight");
+
+        assert!(
+            err.contains("private result ORAM snapshot layout validation failed"),
+            "{err}"
+        );
+        assert!(
+            !err.contains(collection_dir.path().to_string_lossy().as_ref()),
+            "{err}"
+        );
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR), "{err}");
+        assert!(!err.contains(&fixture.manifest.root_hash), "{err}");
+        assert!(!err.contains(&fixture.buckets[0].ciphertext), "{err}");
+    }
+
+    #[test]
     fn cli_snapshot_crypto_preflight_rejects_private_result_oram_manifest_signature_tamper() {
         let fixture = PrivateResultSnapshotFixture::build();
         let settings = fixture.settings();
