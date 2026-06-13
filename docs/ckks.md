@@ -912,8 +912,11 @@ fails closed when `private_payload_oram_required` hits do not all carry payload
 fetch tokens. A follow-on SDK helper turns those hit tokens into an exactly
 `fixed_result_k` private result ORAM fetch-token batch, padding from a caller
 provided distinct dummy-token pool so the eventual result fetch has fixed
-logical volume. The private result ORAM client contract can now map that fixed
-token batch through the client-held token-position map into session
+logical volume. Collection runtime validation requires a compatible result ORAM
+binding whose `oram.path_batch_size` divides the private HNSW
+`fixed_budget.fixed_result_k`, so SDKs do not emit a smaller final
+`read_buckets` batch. The private result ORAM client contract can now map that
+fixed token batch through the client-held token-position map into session
 `read_buckets` bucket-id sequences that preserve shared path bucket duplicates,
 so ORAM path volume is not reduced by deduplicating overlapping paths. Server
 read validation accepts duplicate bucket ids but rejects empty,

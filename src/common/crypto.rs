@@ -7155,19 +7155,58 @@ fn ensure_private_hnsw_private_result_oram_binding(
         return Ok(());
     }
 
-    let has_private_result_oram_binding = encryption.rules.iter().any(|rule| {
-        rule.binding.as_deref() == Some(PRIVATE_RESULT_ORAM_BINDING)
-            && runtime_settings
-                .instances
-                .get(&rule.instance)
-                .is_some_and(|instance| instance.provider == PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
-    });
+    let fixed_result_k = instance
+        .options
+        .get(PRIVATE_HNSW_FIXED_BUDGET_OPTION)
+        .and_then(Value::as_object)
+        .and_then(|fixed_budget| fixed_budget.get("fixed_result_k"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let mut has_private_result_oram_binding = false;
+    let mut has_compatible_private_result_oram_binding = false;
+    for result_rule in &encryption.rules {
+        if result_rule.binding.as_deref() != Some(PRIVATE_RESULT_ORAM_BINDING) {
+            continue;
+        }
+        let Some(result_instance) = runtime_settings.instances.get(&result_rule.instance) else {
+            continue;
+        };
+        if result_instance.provider != PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER {
+            continue;
+        }
+        has_private_result_oram_binding = true;
+        let Some(result_path_batch_size) = private_result_oram_path_batch_size(result_instance)
+        else {
+            continue;
+        };
+        if fixed_result_k != 0
+            && result_path_batch_size != 0
+            && fixed_result_k % result_path_batch_size == 0
+        {
+            has_compatible_private_result_oram_binding = true;
+            break;
+        }
+    }
     if !has_private_result_oram_binding {
         return Err(StorageError::bad_input(format!(
             "collection {collection_name} private HNSW ORAM rule {rule_id} uses result_privacy=private_payload_oram_required, which requires a {PRIVATE_RESULT_ORAM_BINDING} payload rule backed by {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}",
         )));
     }
+    if !has_compatible_private_result_oram_binding {
+        return Err(StorageError::bad_input(format!(
+            "collection {collection_name} private HNSW ORAM rule {rule_id} uses result_privacy=private_payload_oram_required, which requires result ORAM oram.path_batch_size to divide private HNSW fixed_budget.fixed_result_k for fixed-size read_buckets batches",
+        )));
+    }
     Ok(())
+}
+
+fn private_result_oram_path_batch_size(instance: &CryptoInstanceConfig) -> Option<u64> {
+    instance
+        .options
+        .get(PRIVATE_RESULT_ORAM_OPTION)?
+        .as_object()?
+        .get("path_batch_size")?
+        .as_u64()
 }
 
 fn resolve_payload_key_id<'a>(
@@ -20701,6 +20740,7 @@ mod tests {
      {
         let mut hnsw_options = private_hnsw_oram_options();
         hnsw_options["result_privacy"] = json!("private_payload_oram_required");
+        hnsw_options["fixed_budget"]["fixed_result_k"] = json!(8);
         let settings = Settings {
             crypto: CryptoSettings {
                 zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
@@ -20763,6 +20803,83 @@ mod tests {
 
         validate_collection_crypto_runtime_inner(&settings, "docs", &params)
             .expect("private result HNSW mode should validate when result ORAM binding exists");
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_rejects_private_hnsw_result_oram_batch_mismatch() {
+        let mut hnsw_options = private_hnsw_oram_options();
+        hnsw_options["result_privacy"] = json!("private_payload_oram_required");
+        let settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+                allow_inline_key_material: false,
+                instances: HashMap::from([
+                    (
+                        "docs_private_hnsw_v1".to_string(),
+                        CryptoInstanceConfig {
+                            provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                            materials: HashMap::new(),
+                            backend_ref: None,
+                            options: hnsw_options,
+                        },
+                    ),
+                    (
+                        "payload_result_oram_v1".to_string(),
+                        CryptoInstanceConfig {
+                            provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+                            materials: HashMap::new(),
+                            backend_ref: None,
+                            options: private_result_oram_options(),
+                        },
+                    ),
+                ]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = with_embedding_vector(
+            CollectionParams {
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 7,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![
+                        EncryptionRuleRef {
+                            id: "embedding_private_hnsw".to_string(),
+                            selector: EncryptionSelector::VectorNames {
+                                names: vec!["embedding".to_string()],
+                            },
+                            instance: "docs_private_hnsw_v1".to_string(),
+                            binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                        },
+                        EncryptionRuleRef {
+                            id: "body_private_result".to_string(),
+                            selector: EncryptionSelector::PayloadPaths {
+                                paths: vec!["body".to_string()],
+                            },
+                            instance: "payload_result_oram_v1".to_string(),
+                            binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
+                        },
+                    ],
+                }),
+                ..CollectionParams::empty()
+            },
+            Distance::Cosine,
+        );
+
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params)
+            .expect_err("private result HNSW mode must align result ORAM read batch size");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("fixed_budget.fixed_result_k")
+                    && description.contains("oram.path_batch_size")
+                    && description.contains("fixed-size read_buckets")),
+            "unexpected error: {err:?}",
+        );
+        assert!(!format!("{err:?}").contains("10"));
+        assert!(!format!("{err:?}").contains("8"));
     }
 
     #[test]
