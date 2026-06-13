@@ -1460,7 +1460,7 @@ mod private_result_oram_rest_tests {
             );
             assert!(!empty_commit_error.contains(&commit_signature.sig));
 
-            let oversized_commit_buckets = vec![updated_bucket.clone(); 7];
+            let oversized_commit_buckets = vec![updated_bucket.clone(); 8];
             let oversized_commit_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/commit",
                 CommitPrivateResultOramBucketsRequest {

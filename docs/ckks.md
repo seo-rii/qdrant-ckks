@@ -950,10 +950,14 @@ token-fetch helper now rebuilds the expected bucket path sequence from the
 client position map before opening server batches, consumes only matching
 planned encrypted bucket batches, overlays local writebacks between batched Path
 ORAM accesses, returns payload blocks, and reseals unique writeback buckets for
-the result ORAM commit planner. The HNSW SDK finalizer maps only real HNSW hits
-back to fetched payload blocks and validates fetch-token order, point-token
-binding, and deleted-payload rejection before exposing payload bytes to the
-caller. A canonical plaintext client-state
+the result ORAM commit planner. Because a fixed HNSW result fetch may span more
+than one result ORAM `read_buckets` batch, the server commit guard accepts an
+owner-signed writeback set up to the manifest `bucket_count` while still
+rejecting empty commits, duplicate bucket ids, malformed bucket hashes, stale
+epoch/root, and invalid signatures before storage changes. The HNSW SDK
+finalizer maps only real HNSW hits back to fetched payload blocks and validates
+fetch-token order, point-token binding, and deleted-payload rejection before
+exposing payload bytes to the caller. A canonical plaintext client-state
 snapshot shape now round-trips the result ORAM token position map and stash for
 client-side backup validation, and an encrypted snapshot helper seals that backup
 under a client-derived state key with collection/key/epoch/root AAD plus
@@ -1038,8 +1042,11 @@ unsupported-version values. Its file/directory hardening helpers also avoid
 reflecting collection-local paths, temp filenames, symlink targets, or OS error
 strings. The writeback helper preflights stale current
 epochs and manifest epoch/root context before bucket/Merkle writes. It rejects
-empty writebacks before storage state changes. Its signed writeback entrypoint
-verifies the SDK Ed25519 commit signature against the stored manifest lineage
+empty writebacks before storage state changes, and REST/gRPC commit request-size
+validation allows at most the manifest `bucket_count` updated buckets so
+multi-batch fixed result fetches can be committed without exceeding a
+single-read-batch limit. Its signed writeback entrypoint verifies the SDK
+Ed25519 commit signature against the stored manifest lineage
 before delegating to that helper, so an invalid commit signature leaves the
 current epoch, buckets, and Merkle metadata unchanged. The REST/gRPC commit
 handlers also verify the canonical commit signature before returning detailed

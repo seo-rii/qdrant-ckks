@@ -83,8 +83,6 @@ struct PrivateResultOramSession {
     root_hash: String,
     lease_expires_unix: u64,
     bucket_count: u64,
-    tree_height: u32,
-    path_batch_size: u32,
     max_bucket_ciphertext_bytes: usize,
     manifest: PrivateResultOramManifest,
 }
@@ -545,8 +543,6 @@ pub async fn do_open_private_result_oram_session(
         root_hash: current_epoch.root_hash.clone(),
         lease_expires_unix: now_unix.saturating_add(SESSION_LEASE_SECS),
         bucket_count: manifest.bucket_count,
-        tree_height: manifest.oram.tree_height,
-        path_batch_size: manifest.oram.path_batch_size,
         max_bucket_ciphertext_bytes: max_bucket_ciphertext_bytes(&manifest.oram)?,
         manifest,
     };
@@ -806,9 +802,9 @@ pub async fn do_commit_private_result_oram_buckets(
             }
             let max_updated_buckets = max_updated_bucket_count(session)?;
             if updated_buckets.is_empty() || updated_buckets.len() > max_updated_buckets {
-                return Err(StorageError::bad_request(format!(
-                    "private result ORAM commit updated_buckets must contain 1..={max_updated_buckets} buckets",
-                )));
+                return Err(StorageError::bad_request(
+                    "private result ORAM commit updated_buckets must contain at least one bucket and fit the fixed writeback budget",
+                ));
             }
             let updated_bucket_refs = updated_buckets
                 .iter()
@@ -1278,15 +1274,8 @@ fn ensure_private_result_oram_read_proof_matches_buckets(
 }
 
 fn max_updated_bucket_count(session: &PrivateResultOramSession) -> StorageResult<usize> {
-    let levels = usize::try_from(session.tree_height)
-        .ok()
-        .and_then(|height| height.checked_add(1))
-        .ok_or_else(|| StorageError::bad_request("private result ORAM tree height overflows"))?;
-    let paths = usize::try_from(session.path_batch_size)
-        .map_err(|_| StorageError::bad_request("private result ORAM path batch size overflows"))?;
-    levels
-        .checked_mul(paths)
-        .ok_or_else(|| StorageError::bad_request("private result ORAM writeback size overflows"))
+    usize::try_from(session.bucket_count)
+        .map_err(|_| StorageError::bad_request("private result ORAM bucket count overflows"))
 }
 
 fn current_unix_secs() -> StorageResult<u64> {
@@ -2126,8 +2115,6 @@ mod private_result_oram_tests {
             root_hash: manifest.root_hash.clone(),
             lease_expires_unix,
             bucket_count: manifest.bucket_count,
-            tree_height: manifest.oram.tree_height,
-            path_batch_size: manifest.oram.path_batch_size,
             max_bucket_ciphertext_bytes: 4096,
             manifest,
         }

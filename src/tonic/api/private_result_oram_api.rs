@@ -1857,7 +1857,7 @@ mod private_result_oram_grpc_tests {
                     new_epoch: NEXT_EPOCH,
                     old_root_hash: fixture.manifest.root_hash.clone(),
                     new_root_hash: new_root_hash.clone(),
-                    updated_buckets: vec![bucket_to_proto(updated_bucket.clone()); 7],
+                    updated_buckets: vec![bucket_to_proto(updated_bucket.clone()); 8],
                     commit_signature: Some(signature_to_proto(commit_signature.clone())),
                 }),
             )
