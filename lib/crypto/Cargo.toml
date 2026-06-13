@@ -11,6 +11,10 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+default = []
+test-utils = []
+
 [dependencies]
 data-encoding = { workspace = true }
 nix = { workspace = true }

@@ -231,16 +231,6 @@ impl CommandOpenFheBackend {
         }
     }
 
-    /// Builds a backend without validating the bridge program path.
-    ///
-    /// This is only intended for tests that deliberately execute a helper
-    /// through a shell such as `bash script.sh`. Production/runtime code should
-    /// use `new_checked` or `new_checked_with_sha256_b64`.
-    #[doc(hidden)]
-    pub fn new_unchecked_for_tests(program: impl Into<PathBuf>) -> Self {
-        Self::new_unchecked(program)
-    }
-
     pub fn new_checked(program: impl Into<PathBuf>) -> Result<Self, CkksError> {
         let program = program.into();
         validate_checked_bridge_program(&program)?;
@@ -319,7 +309,7 @@ impl CommandOpenFheBackend {
         self
     }
 
-    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn shares_worker_pool_for_tests(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.workers, &other.workers)
     }
@@ -1528,17 +1518,6 @@ const LANDLOCK_ACCESS_FS_REFER: u64 = 1 << 13;
 const LANDLOCK_ACCESS_FS_TRUNCATE: u64 = 1 << 14;
 
 #[cfg(target_os = "linux")]
-fn linux_landlock_write_deny_supported() -> bool {
-    linux_landlock_abi_version().is_ok_and(|version| version >= 1)
-}
-
-#[cfg(target_os = "linux")]
-#[doc(hidden)]
-pub fn linux_landlock_write_deny_supported_for_tests() -> bool {
-    linux_landlock_write_deny_supported()
-}
-
-#[cfg(target_os = "linux")]
 fn linux_landlock_abi_version() -> io::Result<i64> {
     let version = unsafe {
         nix::libc::syscall(
@@ -2333,7 +2312,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn worker_process_reserves_idle_worker_until_reservation_drops() {
-        let backend = CommandOpenFheBackend::new_unchecked_for_tests("cat")
+        let backend = CommandOpenFheBackend::new_unchecked("cat")
             .with_pool_size(NonZeroUsize::new(2).unwrap());
 
         let first = backend.worker_process().unwrap();
@@ -2347,6 +2326,22 @@ mod tests {
         let third = backend.worker_process().unwrap();
 
         assert!(Arc::ptr_eq(third.worker(), &first_worker));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cloned_backend_worker_process_reuses_full_shared_pool() {
+        let backend = CommandOpenFheBackend::new_unchecked("cat")
+            .with_pool_size(NonZeroUsize::new(1).unwrap());
+        let cloned = backend.clone();
+
+        let first = backend.worker_process().unwrap();
+        let second = cloned.worker_process().unwrap();
+
+        assert!(
+            Arc::ptr_eq(first.worker(), second.worker()),
+            "a busy full pool must return the existing shared worker instead of spawning another",
+        );
     }
 
     #[cfg(target_os = "linux")]

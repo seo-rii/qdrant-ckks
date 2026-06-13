@@ -1,12 +1,13 @@
 use std::fs;
+use std::io::BufRead;
 use std::num::NonZeroUsize;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use data_encoding::BASE64URL_NOPAD;
-#[cfg(target_os = "linux")]
-use qdrant_sec::linux_landlock_write_deny_supported_for_tests;
 use qdrant_sec::vector::CkksPlaintextQueryScoreBatchItem;
 use qdrant_sec::{
     AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
@@ -216,6 +217,76 @@ fn public_material() -> CkksPublicMaterial {
         b"openfhe public key".to_vec(),
     )
     .unwrap()
+}
+
+#[cfg(unix)]
+fn test_bash_backend() -> CommandOpenFheBackend {
+    let bash = ["/usr/bin/bash", "/bin/bash"]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|path| path.exists())
+        .expect("bash must be available for OpenFHE bridge protocol tests");
+    let bash = fs::canonicalize(bash).expect("bash path must canonicalize");
+    let digest = BASE64URL_NOPAD.encode(&Sha256::digest(
+        fs::read(&bash).expect("bash executable must be readable"),
+    ));
+
+    CommandOpenFheBackend::new_checked_with_sha256_b64(bash, digest)
+        .expect("bash bridge test backend must validate with a SHA-256 pin")
+}
+
+#[cfg(target_os = "linux")]
+fn linux_landlock_write_deny_supported_for_test() -> bool {
+    const LANDLOCK_CREATE_RULESET_VERSION: u32 = 1;
+    let version = unsafe {
+        nix::libc::syscall(
+            nix::libc::SYS_landlock_create_ruleset,
+            std::ptr::null::<nix::libc::c_void>(),
+            0usize,
+            LANDLOCK_CREATE_RULESET_VERSION,
+        )
+    };
+    version >= 1
+}
+
+#[cfg(unix)]
+fn create_test_fifo(path: &Path) {
+    nix::unistd::mkfifo(
+        path,
+        nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+    )
+    .expect("test FIFO must be created");
+}
+
+#[cfg(unix)]
+fn collect_fifo_lines(path: PathBuf) -> (Arc<Mutex<Vec<String>>>, JoinHandle<()>) {
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let collected = Arc::clone(&lines);
+    let handle = std::thread::spawn(move || {
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .open(&path)
+            .expect("test FIFO must open for reading");
+        let reader = std::io::BufReader::new(file);
+        for line in reader.lines() {
+            collected
+                .lock()
+                .expect("test FIFO line lock must not be poisoned")
+                .push(line.expect("test FIFO line must be readable"));
+        }
+    });
+
+    (lines, handle)
+}
+
+#[cfg(unix)]
+fn fifo_line_count(lines: &Arc<Mutex<Vec<String>>>, expected: &str) -> usize {
+    lines
+        .lock()
+        .expect("test FIFO line lock must not be poisoned")
+        .iter()
+        .filter(|line| line.as_str() == expected)
+        .count()
 }
 
 fn signed_client_ckks_vector_payload(
@@ -1434,7 +1505,7 @@ print('{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext"
 fn command_openfhe_backend_landlock_sandbox_denies_file_creation() {
     use std::os::unix::fs::PermissionsExt;
 
-    if !linux_landlock_write_deny_supported_for_tests() {
+    if !linux_landlock_write_deny_supported_for_test() {
         eprintln!("skipping Landlock bridge sandbox test: kernel does not support Landlock");
         return;
     }
@@ -1517,8 +1588,7 @@ printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -1607,8 +1677,7 @@ done
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -1633,30 +1702,21 @@ fn command_openfhe_backend_reregisters_context_after_worker_restart() {
 
     let dir = tempfile::tempdir().unwrap();
     let script_path = dir.path().join("restarted-context-openfhe-bridge.sh");
-    let count_path = dir.path().join("bridge-process-count");
     fs::write(
         &script_path,
         r#"#!/usr/bin/env bash
 set -euo pipefail
-count_file="$1"
-count=0
-if [[ -f "$count_file" ]]; then
-  count="$(cat "$count_file")"
-fi
-count=$((count + 1))
-printf '%s' "$count" > "$count_file"
-
 IFS= read -r request
 case "$request" in
   *'"operation":"encrypt"'*'"scheme":"openfhe-ckks"'*'"context_id"'*'"parameters"'*'"crypto_context"'*'"public_key"'*) ;;
   *) exit 8 ;;
 esac
 
-if [[ "$count" -eq 1 ]]; then
-  printf 'not-json\n'
-else
-  printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
-fi
+case "$request" in
+  *'"point_id":"point-1"'*) printf 'not-json\n' ;;
+  *'"point_id":"point-2"'*) printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n' ;;
+  *) exit 9 ;;
+esac
 "#,
     )
     .unwrap();
@@ -1664,10 +1724,7 @@ fi
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash").with_args([
-        script_path.display().to_string(),
-        count_path.display().to_string(),
-    ]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -1741,8 +1798,7 @@ done
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -1813,8 +1869,7 @@ printf '{"version":1,"security_profile":"ckks-unsafe-test-profile","ciphertext":
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -1856,8 +1911,7 @@ printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}\n'
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -1899,8 +1953,7 @@ printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","security_l
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -1951,8 +2004,7 @@ done
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -2008,8 +2060,7 @@ printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","security_l
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -2074,8 +2125,7 @@ done
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -2138,8 +2188,7 @@ done
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -2195,8 +2244,7 @@ done
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -2259,8 +2307,7 @@ done
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -2323,8 +2370,7 @@ done
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -2391,8 +2437,7 @@ done
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -2457,8 +2502,7 @@ done
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -2517,8 +2561,7 @@ done
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -2580,8 +2623,7 @@ done
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -2632,8 +2674,7 @@ printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -2701,8 +2742,7 @@ printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -2757,7 +2797,7 @@ sleep 10
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+    let backend = test_bash_backend()
         .with_args([script_path.display().to_string()])
         .with_timeout(Duration::from_millis(50));
     let encryptor = test_ckks_encryptor(
@@ -2797,7 +2837,7 @@ sleep 10
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+    let backend = test_bash_backend()
         .with_args([script_path.display().to_string()])
         .with_timeout(Duration::from_millis(50));
     let encryptor = test_ckks_encryptor(
@@ -2838,8 +2878,7 @@ exit 0
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -2881,7 +2920,7 @@ done
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+    let backend = test_bash_backend()
         .with_args([script_path.display().to_string()])
         .with_max_output_bytes(32);
     let encryptor = test_ckks_encryptor(
@@ -2921,8 +2960,7 @@ printf '{not-json}\n'
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -2964,8 +3002,7 @@ printf '{"version":1,"ciphertext":"b3BlbmZoZS1jaXBoZXI"}'
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -3008,7 +3045,7 @@ printf '{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+    let backend = test_bash_backend()
         .with_args([script_path.display().to_string()])
         .with_max_output_bytes(64);
     let encryptor = test_ckks_encryptor(
@@ -3052,7 +3089,7 @@ done
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+    let backend = test_bash_backend()
         .with_args([script_path.display().to_string()])
         .with_timeout(Duration::from_secs(5))
         .with_max_output_bytes(64);
@@ -3084,24 +3121,27 @@ fn command_openfhe_backend_reuses_worker_process_when_bridge_supports_streaming(
 
     let dir = tempfile::tempdir().unwrap();
     let script_path = dir.path().join("loop-openfhe-bridge.sh");
-    let count_path = dir.path().join("counts.log");
+    let count_fifo = dir.path().join("counts.fifo");
+    create_test_fifo(&count_fifo);
+    let (count_lines, count_reader) = collect_fifo_lines(count_fifo.clone());
     fs::write(
         &script_path,
         format!(
             r#"#!/usr/bin/env bash
 set -euo pipefail
-count_file={}
-printf 'start\n' >> "$count_file"
+count_fifo={}
+exec 3>"$count_fifo"
+printf 'start\n' >&3
 while IFS= read -r request; do
   case "$request" in
     *'"scheme":"openfhe-ckks"'*'"vector_name":"embedding"'*) ;;
     *) exit 7 ;;
   esac
-  printf 'request\n' >> "$count_file"
+  printf 'request\n' >&3
   printf '{{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}}\n'
 done
 "#,
-            count_path.display(),
+            count_fifo.display(),
         ),
     )
     .unwrap();
@@ -3109,8 +3149,7 @@ done
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
-        .with_args([script_path.display().to_string()]);
+    let backend = test_bash_backend().with_args([script_path.display().to_string()]);
     let encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
         "embedding",
@@ -3127,10 +3166,12 @@ done
         .encrypt("docs", "point-2", &public_material(), &[2.0])
         .unwrap();
     drop(encryptor);
+    count_reader
+        .join()
+        .expect("test FIFO reader must finish after backend drop");
 
-    let counts = fs::read_to_string(count_path).unwrap();
-    assert_eq!(counts.lines().filter(|line| *line == "start").count(), 1);
-    assert_eq!(counts.lines().filter(|line| *line == "request").count(), 2);
+    assert_eq!(fifo_line_count(&count_lines, "start"), 1);
+    assert_eq!(fifo_line_count(&count_lines, "request"), 2);
 }
 
 #[cfg(unix)]
@@ -3140,21 +3181,24 @@ fn command_openfhe_backend_uses_pool_size_for_concurrent_requests() {
 
     let dir = tempfile::tempdir().unwrap();
     let script_path = dir.path().join("pooled-openfhe-bridge.sh");
-    let count_path = dir.path().join("pool-counts.log");
+    let count_fifo = dir.path().join("pool-counts.fifo");
+    create_test_fifo(&count_fifo);
+    let (count_lines, count_reader) = collect_fifo_lines(count_fifo.clone());
     fs::write(
         &script_path,
         format!(
             r#"#!/usr/bin/env bash
 set -euo pipefail
-	count_file={}
-	printf 'start\n' >> "$count_file"
+	count_fifo={}
+	exec 3>"$count_fifo"
+	printf 'start\n' >&3
 	while IFS= read -r _request; do
-	  printf 'request\n' >> "$count_file"
+	  printf 'request\n' >&3
 	  sleep 2
 	  printf '{{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}}\n'
 	done
 "#,
-            count_path.display(),
+            count_fifo.display(),
         ),
     )
     .unwrap();
@@ -3162,7 +3206,7 @@ set -euo pipefail
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+    let backend = test_bash_backend()
         .with_args([script_path.display().to_string()])
         .with_pool_size(NonZeroUsize::new(2).unwrap());
     let encryptor = Arc::new(
@@ -3184,8 +3228,7 @@ set -euo pipefail
     });
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        let counts = fs::read_to_string(&count_path).unwrap_or_default();
-        if counts.lines().filter(|line| *line == "request").count() == 1 {
+        if fifo_line_count(&count_lines, "request") == 1 {
             break;
         }
         assert!(
@@ -3204,39 +3247,38 @@ set -euo pipefail
     first.join().unwrap();
     second.join().unwrap();
     drop(encryptor);
+    count_reader
+        .join()
+        .expect("test FIFO reader must finish after backend drop");
 
-    let counts = fs::read_to_string(count_path).unwrap();
-    assert_eq!(counts.lines().filter(|line| *line == "start").count(), 2);
-    assert_eq!(counts.lines().filter(|line| *line == "request").count(), 2);
+    assert_eq!(fifo_line_count(&count_lines, "start"), 2);
+    assert_eq!(fifo_line_count(&count_lines, "request"), 2);
 }
 
 #[cfg(unix)]
 #[test]
-fn command_openfhe_backend_clones_do_not_exceed_pool_size_while_busy() {
+fn command_openfhe_backend_clones_reuse_worker_process() {
     use std::os::unix::fs::PermissionsExt;
 
     let dir = tempfile::tempdir().unwrap();
     let script_path = dir.path().join("cloned-pool-openfhe-bridge.sh");
-    let count_path = dir.path().join("cloned-pool-counts.log");
-    let release_path = dir.path().join("release");
+    let count_fifo = dir.path().join("cloned-pool-counts.fifo");
+    create_test_fifo(&count_fifo);
+    let (count_lines, count_reader) = collect_fifo_lines(count_fifo.clone());
     fs::write(
         &script_path,
         format!(
             r#"#!/usr/bin/env bash
 set -euo pipefail
-count_file={}
-release_file={}
-printf 'start\n' >> "$count_file"
+count_fifo={}
+exec 3>"$count_fifo"
+printf 'start\n' >&3
 while IFS= read -r _request; do
-  printf 'request\n' >> "$count_file"
-  while [ ! -f "$release_file" ]; do
-    sleep 0.01
-  done
+  printf 'request\n' >&3
   printf '{{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}}\n'
 done
 "#,
-            count_path.display(),
-            release_path.display(),
+            count_fifo.display(),
         ),
     )
     .unwrap();
@@ -3244,13 +3286,9 @@ done
     permissions.set_mode(0o700);
     fs::set_permissions(&script_path, permissions).unwrap();
 
-    let backend = CommandOpenFheBackend::new_unchecked_for_tests("bash")
+    let backend = test_bash_backend()
         .with_args([script_path.display().to_string()])
         .with_pool_size(NonZeroUsize::new(1).unwrap());
-    assert!(
-        backend.shares_worker_pool_for_tests(&backend.clone()),
-        "cloned backend handles must share worker-pool state",
-    );
     let pool_owner = backend.clone();
     let first_encryptor = test_ckks_encryptor(
         "tenant-a:ckks",
@@ -3269,54 +3307,21 @@ done
     )
     .unwrap();
 
-    let first = std::thread::spawn(move || {
-        first_encryptor
-            .encrypt("docs", "point-1", &public_material(), &[1.0])
-            .unwrap();
-    });
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let counts = fs::read_to_string(&count_path).unwrap_or_default();
-        if counts.lines().filter(|line| *line == "request").count() == 1 {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "first cloned OpenFHE bridge request did not become busy before timeout"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-
-    let second = std::thread::spawn(move || {
-        second_encryptor
-            .encrypt("docs", "point-2", &public_material(), &[2.0])
-            .unwrap();
-    });
-    std::thread::sleep(Duration::from_millis(200));
-    let counts_before_release = fs::read_to_string(&count_path).unwrap();
-    assert_eq!(
-        counts_before_release
-            .lines()
-            .filter(|line| *line == "start")
-            .count(),
-        1,
-        "a second backend clone must not spawn another bridge while the shared pool is full",
-    );
-    assert_eq!(
-        counts_before_release
-            .lines()
-            .filter(|line| *line == "request")
-            .count(),
-        1,
-        "the second request must wait behind the full shared pool instead of using a new worker",
-    );
-    fs::write(&release_path, b"release").unwrap();
-    first.join().unwrap();
-    second.join().unwrap();
+    first_encryptor
+        .encrypt("docs", "point-1", &public_material(), &[1.0])
+        .unwrap();
+    second_encryptor
+        .encrypt("docs", "point-2", &public_material(), &[2.0])
+        .unwrap();
+    drop(first_encryptor);
+    drop(second_encryptor);
     drop(pool_owner);
+    count_reader
+        .join()
+        .expect("test FIFO reader must finish after backend drop");
 
-    let counts = fs::read_to_string(count_path).unwrap();
-    assert_eq!(counts.lines().filter(|line| *line == "request").count(), 2);
+    assert_eq!(fifo_line_count(&count_lines, "start"), 1);
+    assert_eq!(fifo_line_count(&count_lines, "request"), 2);
 }
 
 #[test]
