@@ -47,3 +47,34 @@ if [ "$NUMBER_OF_APIS" -ne "$EXPECTED_NUMBER_OF_APIS" ]; then
     echo "ERROR: once consistency is restored, please update EXPECTED_NUMBER_OF_APIS in this script"
     exit 1
 fi
+
+PRIVATE_ORAM_OPERATIONS=(
+    "get|/collections/{collection_name}/private-hnsw/{vector_name}/manifest|get_private_hnsw_manifest"
+    "post|/collections/{collection_name}/private-hnsw/{vector_name}/manifest|upload_private_hnsw_manifest"
+    "post|/collections/{collection_name}/private-hnsw/{vector_name}/buckets|upload_private_hnsw_buckets"
+    "post|/collections/{collection_name}/private-hnsw/{vector_name}/session|open_private_hnsw_session"
+    "post|/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths|read_private_hnsw_paths"
+    "post|/collections/{collection_name}/private-hnsw/{vector_name}/oram/commit|commit_private_hnsw_paths"
+    "post|/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close|close_private_hnsw_session"
+    "get|/collections/{collection_name}/private-result-oram/manifest|get_private_result_oram_manifest"
+    "post|/collections/{collection_name}/private-result-oram/manifest|upload_private_result_oram_manifest"
+    "post|/collections/{collection_name}/private-result-oram/buckets|upload_private_result_oram_buckets"
+    "post|/collections/{collection_name}/private-result-oram/session|open_private_result_oram_session"
+    "post|/collections/{collection_name}/private-result-oram/oram/read_buckets|read_private_result_oram_buckets"
+    "post|/collections/{collection_name}/private-result-oram/oram/commit|commit_private_result_oram_buckets"
+    "post|/collections/{collection_name}/private-result-oram/session/{session_id}/close|close_private_result_oram_session"
+)
+
+for PRIVATE_ORAM_OPERATION in "${PRIVATE_ORAM_OPERATIONS[@]}"; do
+    IFS='|' read -r METHOD PATH OPERATION_ID <<< "$PRIVATE_ORAM_OPERATION"
+    if ! jq -e \
+        --arg method "$METHOD" \
+        --arg path "$PATH" \
+        --arg operation_id "$OPERATION_ID" \
+        '.paths[$path][$method].operationId == $operation_id' \
+        ./docs/redoc/master/openapi.json >/dev/null
+    then
+        echo "ERROR: Missing private ORAM OpenAPI operation: $METHOD $PATH -> $OPERATION_ID"
+        exit 1
+    fi
+done
