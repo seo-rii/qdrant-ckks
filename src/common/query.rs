@@ -59,7 +59,7 @@ use segment::types::{
     WithPayloadInterface, WithVector,
 };
 use segment::utils::scored_point_ties::ScoredPointTies;
-use segment::vector_storage::query::{ContextPair, ContextQuery};
+use segment::vector_storage::query::ContextPair;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use shard::query::query_enum::QueryEnum;
@@ -8810,16 +8810,16 @@ mod tests {
                 COLLECTION_NAME,
                 CollectionQueryRequest {
                     prefetch: Vec::new(),
-                    query: Some(Query::Vector(VectorQuery::Context(ContextQuery::new(
-                        vec![ContextPair {
+                    query: Some(Query::Vector(VectorQuery::Context(
+                        segment::vector_storage::query::ContextQuery::new(vec![ContextPair {
                             positive: VectorInputInternal::Vector(VectorInternal::Dense(vec![
                                 1.0, 0.0,
                             ])),
                             negative: VectorInputInternal::Vector(VectorInternal::Dense(vec![
                                 0.0, 1.0,
                             ])),
-                        }],
-                    )))),
+                        }]),
+                    ))),
                     using: VECTOR_NAME.to_string(),
                     filter: None,
                     score_threshold: None,
