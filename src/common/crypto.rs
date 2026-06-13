@@ -10135,6 +10135,64 @@ mod tests {
     }
 
     #[test]
+    fn validate_crypto_settings_rejects_private_result_oram_unknown_options_without_value_leakage()
+    {
+        let mut settings = CryptoSettings {
+            zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+            allow_inline_key_material: false,
+            instances: HashMap::from([(
+                "payload_result_oram_v1".to_string(),
+                CryptoInstanceConfig {
+                    provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+                    materials: HashMap::new(),
+                    backend_ref: None,
+                    options: private_result_oram_options(),
+                },
+            )]),
+            ..CryptoSettings::default()
+        };
+
+        let secret_value_sentinel = "qdrant-sec-private-result-runtime-secret-option-sentinel";
+        settings
+            .instances
+            .get_mut("payload_result_oram_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert("client_secret".to_string(), json!(secret_value_sentinel));
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private result ORAM must reject unknown top-level options");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "client_secret"
+                    && reason.contains("unsupported option for payload/private-result-oram@v1")),
+            "unexpected error: {err:?}",
+        );
+        assert!(!format!("{err:?}").contains(secret_value_sentinel));
+
+        settings
+            .instances
+            .get_mut("payload_result_oram_v1")
+            .unwrap()
+            .options = private_result_oram_options();
+        settings
+            .instances
+            .get_mut("payload_result_oram_v1")
+            .unwrap()
+            .options["oram"]["client_secret"] = json!(secret_value_sentinel);
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private result ORAM must reject unknown nested options");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "oram.client_secret"
+                    && reason.contains("unsupported private result ORAM option")),
+            "unexpected error: {err:?}",
+        );
+        assert!(!format!("{err:?}").contains(secret_value_sentinel));
+    }
+
+    #[test]
     fn validate_crypto_settings_rejects_private_result_oram_policy_drift() {
         let mut settings = CryptoSettings {
             zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
