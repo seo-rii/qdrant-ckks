@@ -891,6 +891,74 @@ mod private_result_oram_grpc_tests {
             );
             assert_eq!(manifest_read.signature.unwrap().key_id, SIGNING_KEY_ID);
 
+            let bucket_upload_wrong_root = BASE64URL_NOPAD.encode(&[12; 32]);
+            let bucket_upload_wrong_root_err =
+                PrivateResultOram::upload_private_result_oram_buckets(
+                    &service,
+                    Request::new(grpc::UploadPrivateResultOramBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        index_epoch: fixture.manifest.index_epoch,
+                        root_hash: bucket_upload_wrong_root.clone(),
+                        buckets: fixture
+                            .buckets
+                            .clone()
+                            .into_iter()
+                            .map(bucket_to_proto)
+                            .collect(),
+                    }),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(bucket_upload_wrong_root_err.code(), Code::InvalidArgument);
+            assert!(
+                bucket_upload_wrong_root_err
+                    .message()
+                    .contains("bucket upload epoch/root does not match current manifest epoch")
+            );
+            assert!(
+                !bucket_upload_wrong_root_err
+                    .message()
+                    .contains(&bucket_upload_wrong_root)
+            );
+            assert!(
+                !bucket_upload_wrong_root_err
+                    .message()
+                    .contains(&fixture.buckets[0].ciphertext)
+            );
+
+            let bucket_upload_root_sentinel = "AAAA";
+            let malformed_bucket_upload_root_err =
+                PrivateResultOram::upload_private_result_oram_buckets(
+                    &service,
+                    Request::new(grpc::UploadPrivateResultOramBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        index_epoch: fixture.manifest.index_epoch,
+                        root_hash: bucket_upload_root_sentinel.to_string(),
+                        buckets: fixture
+                            .buckets
+                            .clone()
+                            .into_iter()
+                            .map(bucket_to_proto)
+                            .collect(),
+                    }),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                malformed_bucket_upload_root_err.code(),
+                Code::InvalidArgument
+            );
+            assert!(
+                malformed_bucket_upload_root_err
+                    .message()
+                    .contains("root_hash must be a base64url sha256 value")
+            );
+            assert!(
+                !malformed_bucket_upload_root_err
+                    .message()
+                    .contains(bucket_upload_root_sentinel)
+            );
+
             let bucket_epoch = PrivateResultOram::upload_private_result_oram_buckets(
                 &service,
                 Request::new(grpc::UploadPrivateResultOramBucketsRequest {

@@ -833,6 +833,33 @@ mod private_result_oram_rest_tests {
             );
             assert_eq!(manifest_read["signature"]["key_id"], SIGNING_KEY_ID);
 
+            let bucket_upload_wrong_root = BASE64URL_NOPAD.encode(&[12; 32]);
+            let bucket_upload_wrong_root_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/buckets",
+                UploadPrivateResultOramBucketsRequest {
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: bucket_upload_wrong_root.clone(),
+                    buckets: fixture.buckets.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "bucket upload epoch/root does not match current manifest epoch"
+            );
+            assert!(!bucket_upload_wrong_root_error.contains(&bucket_upload_wrong_root));
+            assert!(!bucket_upload_wrong_root_error.contains(&fixture.buckets[0].ciphertext));
+
+            let bucket_upload_root_sentinel = "AAAA";
+            let malformed_bucket_upload_root_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/buckets",
+                UploadPrivateResultOramBucketsRequest {
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: bucket_upload_root_sentinel.to_string(),
+                    buckets: fixture.buckets.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "root_hash must be a base64url sha256 value"
+            );
+            assert!(!malformed_bucket_upload_root_error.contains(bucket_upload_root_sentinel));
+
             let buckets_result = post_json_ok!(
                 "/collections/docs/private-result-oram/buckets",
                 UploadPrivateResultOramBucketsRequest {

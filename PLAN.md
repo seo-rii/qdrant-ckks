@@ -462,6 +462,7 @@
 - SDK verified encrypted search는 upper-layer client cache hit 경로에서도 Merkle proof를 bucket decrypt, state remap, ORAM writeback보다 먼저 검증한다.
 - REST access log와 denied-auth audit path는 private ORAM close-session URL의 session id를 템플릿으로 치환하고 private ORAM query string을 redacted 처리한다. slow request log/request hash redaction은 private HNSW ORAM path labels, private result ORAM bucket ids, bucket commitments, updated bucket writebacks, session ids, client-state aliases, point/payload fetch tokens를 숨기며 snake_case/camelCase 단수·복수 alias fixture로 회귀를 고정한다.
 - private result ORAM nested request 객체 안의 `session_id`/`sessionId`, `bucket_ids`/`bucketIds`, `bucket_commitments`/`bucketCommitments`, `updated_buckets`/`updatedBuckets`도 slow-request log와 request hash에서 redacted projection으로 동일화한다.
+- REST/gRPC private result ORAM bucket upload preflight도 mismatched 또는 malformed root hash를 submitted root hash와 bucket ciphertext 반사 없이 fail closed 한다.
 - REST/gRPC private result ORAM `read_buckets`와 `commit`은 mismatched 또는 malformed root hash를 fail closed 하면서 submitted root hash, commit signature body, updated bucket ciphertext를 오류에 반사하지 않는다.
 - REST/gRPC `read_paths` 오류 응답은 mismatched root hash sentinel, malformed path label sentinel, stored bucket ciphertext를 반사하지 않는다. path-to-bucket derivation helper도 하위 leaf-label decode 오류를 그대로 반사하지 않는다.
 - REST/gRPC `read_paths` missing encrypted bucket/proof 오류 응답은 collection-local `private_hnsw_oram` filesystem path를 반사하지 않는다.
