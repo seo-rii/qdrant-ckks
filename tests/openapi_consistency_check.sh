@@ -14,14 +14,20 @@ set -ex
 # Ensure current path is project root
 cd "$(dirname "$0")/../"
 
+OPENAPI_DIFF="./docs/redoc/master/.diff.openapi.json"
+cleanup() {
+    rm -f "$OPENAPI_DIFF"
+}
+trap cleanup EXIT
+
 # Keep current version of file to check
-cp ./docs/redoc/master/{,.diff.}openapi.json
+cp ./docs/redoc/master/openapi.json "$OPENAPI_DIFF"
 
 # Regenerate OpenAPI files
 tools/generate_openapi_models.sh
 
 # Ensure generated files are the same as files in this repository
-if diff -Zwa ./docs/redoc/master/{,.diff.}openapi.json
+if diff -Zwa ./docs/redoc/master/openapi.json "$OPENAPI_DIFF"
 then
     set +x
     echo "No diffs found."
@@ -31,9 +37,6 @@ else
     echo "ERROR: See: https://github.com/qdrant/qdrant/blob/master/docs/DEVELOPMENT.md#rest"
     exit 1
 fi
-
-# Cleanup
-rm -f ./docs/redoc/master/.diff.openapi.json
 
 NUMBER_OF_APIS=$(cat ./docs/redoc/master/openapi.json | jq '[.paths[] | length] | add')
 
