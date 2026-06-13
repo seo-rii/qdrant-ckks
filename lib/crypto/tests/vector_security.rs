@@ -3257,6 +3257,89 @@ set -euo pipefail
 
 #[cfg(unix)]
 #[test]
+fn command_openfhe_backend_fails_fast_when_pool_is_busy() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("busy-pool-openfhe-bridge.sh");
+    let count_fifo = dir.path().join("busy-pool-counts.fifo");
+    create_test_fifo(&count_fifo);
+    let (count_lines, count_reader) = collect_fifo_lines(count_fifo.clone());
+    fs::write(
+        &script_path,
+        format!(
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+count_fifo={}
+exec 3>"$count_fifo"
+printf 'start\n' >&3
+while IFS= read -r _request; do
+  printf 'request\n' >&3
+  sleep 2
+  printf '{{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}}\n'
+done
+"#,
+            count_fifo.display(),
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let backend = test_bash_backend()
+        .with_args([script_path.display().to_string()])
+        .with_pool_size(NonZeroUsize::new(1).unwrap());
+    let encryptor = Arc::new(
+        test_ckks_encryptor(
+            "tenant-a:ckks",
+            "embedding",
+            CkksParameters::openfhe_default_128_bit(),
+            SecretKey::from_bytes([29u8; 32]),
+            backend,
+        )
+        .unwrap(),
+    );
+
+    let first_encryptor = Arc::clone(&encryptor);
+    let first = std::thread::spawn(move || {
+        first_encryptor
+            .encrypt("docs", "point-1", &public_material(), &[1.0])
+            .unwrap();
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if fifo_line_count(&count_lines, "request") == 1 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "first OpenFHE bridge request did not become busy before timeout"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let err = encryptor
+        .encrypt("docs", "point-2", &public_material(), &[2.0])
+        .expect_err("a busy full OpenFHE pool must fail fast");
+    assert!(
+        matches!(err, CkksError::Backend(ref message) if message.contains("worker pool is exhausted")),
+        "unexpected busy pool error: {err:?}",
+    );
+    assert_eq!(fifo_line_count(&count_lines, "request"), 1);
+
+    first.join().unwrap();
+    drop(encryptor);
+    count_reader
+        .join()
+        .expect("test FIFO reader must finish after backend drop");
+
+    assert_eq!(fifo_line_count(&count_lines, "start"), 1);
+    assert_eq!(fifo_line_count(&count_lines, "request"), 1);
+}
+
+#[cfg(unix)]
+#[test]
 fn command_openfhe_backend_clones_reuse_worker_process() {
     use std::os::unix::fs::PermissionsExt;
 
