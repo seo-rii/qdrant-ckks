@@ -284,6 +284,11 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "neighbors"
                         | "neighbor_ids"
                         | "candidate_heap"
+                        | "client_signature"
+                        | "commit_signature"
+                        | "manifest_signature"
+                        | "read_signature"
+                        | "request_signature"
                         | "top_k"
                         | "topk"
                         | "result_id"
@@ -381,6 +386,11 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "nodeids"
                         | "neighborids"
                         | "candidateheap"
+                        | "clientsignature"
+                        | "commitsignature"
+                        | "manifestsignature"
+                        | "readsignature"
+                        | "requestsignature"
                         | "topk"
                         | "resultid"
                         | "resultids"
@@ -850,6 +860,12 @@ mod tests {
                 "neighborIds": ["qdrant-sec-private-hnsw-camel-neighbor-id-log-sentinel"],
                 "candidate_heap": "qdrant-sec-private-hnsw-candidate-heap-log-sentinel",
                 "candidateHeap": "qdrant-sec-private-hnsw-camel-candidate-heap-log-sentinel",
+                "client_signature": "qdrant-sec-private-hnsw-client-signature-log-sentinel",
+                "clientSignature": "qdrant-sec-private-hnsw-camel-client-signature-log-sentinel",
+                "commit_signature": "qdrant-sec-private-hnsw-commit-signature-log-sentinel",
+                "commitSignature": "qdrant-sec-private-hnsw-camel-commit-signature-log-sentinel",
+                "manifest_signature": "qdrant-sec-private-hnsw-manifest-signature-log-sentinel",
+                "manifestSignature": "qdrant-sec-private-hnsw-camel-manifest-signature-log-sentinel",
                 "top_k": ["qdrant-sec-private-hnsw-top-k-log-sentinel"],
                 "topK": ["qdrant-sec-private-hnsw-camel-top-k-log-sentinel"],
                 "result_ids": ["qdrant-sec-private-hnsw-result-id-log-sentinel"],
@@ -866,6 +882,11 @@ mod tests {
                 "bucketIds": ["qdrant-sec-private-result-camel-bucket-id-log-sentinel"],
                 "bucket_commitments": ["qdrant-sec-private-result-bucket-commitment-log-sentinel"],
                 "bucketCommitments": ["qdrant-sec-private-result-camel-bucket-commitment-log-sentinel"],
+                "read_signature": "qdrant-sec-private-result-read-signature-log-sentinel",
+                "readSignature": "qdrant-sec-private-result-camel-read-signature-log-sentinel",
+                "commit_signature": "qdrant-sec-private-result-commit-signature-log-sentinel",
+                "commitSignature": "qdrant-sec-private-result-camel-commit-signature-log-sentinel",
+                "requestSignature": "qdrant-sec-private-result-camel-request-signature-log-sentinel",
                 "updated_buckets": [{
                     "bucket_id": "qdrant-sec-private-result-updated-bucket-id-log-sentinel",
                     "bucket_commitment": "qdrant-sec-private-result-updated-bucket-commitment-log-sentinel"
@@ -922,6 +943,12 @@ mod tests {
             "qdrant-sec-private-hnsw-camel-neighbor-id-log-sentinel",
             "qdrant-sec-private-hnsw-candidate-heap-log-sentinel",
             "qdrant-sec-private-hnsw-camel-candidate-heap-log-sentinel",
+            "qdrant-sec-private-hnsw-client-signature-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-client-signature-log-sentinel",
+            "qdrant-sec-private-hnsw-commit-signature-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-commit-signature-log-sentinel",
+            "qdrant-sec-private-hnsw-manifest-signature-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-manifest-signature-log-sentinel",
             "qdrant-sec-private-hnsw-top-k-log-sentinel",
             "qdrant-sec-private-hnsw-camel-top-k-log-sentinel",
             "qdrant-sec-private-hnsw-result-id-log-sentinel",
@@ -936,6 +963,11 @@ mod tests {
             "qdrant-sec-private-result-camel-bucket-id-log-sentinel",
             "qdrant-sec-private-result-bucket-commitment-log-sentinel",
             "qdrant-sec-private-result-camel-bucket-commitment-log-sentinel",
+            "qdrant-sec-private-result-read-signature-log-sentinel",
+            "qdrant-sec-private-result-camel-read-signature-log-sentinel",
+            "qdrant-sec-private-result-commit-signature-log-sentinel",
+            "qdrant-sec-private-result-camel-commit-signature-log-sentinel",
+            "qdrant-sec-private-result-camel-request-signature-log-sentinel",
             "qdrant-sec-private-result-updated-bucket-id-log-sentinel",
             "qdrant-sec-private-result-updated-bucket-commitment-log-sentinel",
             "qdrant-sec-private-result-camel-updated-bucket-id-log-sentinel",
@@ -959,6 +991,8 @@ mod tests {
                 "session_id": "private-oram-session-a",
                 "bucket_ids": [1, 2, 3],
                 "bucket_commitments": ["bucket-commitment-a"],
+                "read_signature": "read-signature-a",
+                "commit_signature": "commit-signature-a",
                 "updated_buckets": [
                     { "bucket_id": 7, "bucket_commitment": "updated-bucket-a" },
                     { "bucket_id": 8, "bucket_commitment": "updated-bucket-b" }
@@ -971,6 +1005,8 @@ mod tests {
                 "session_id": "private-oram-session-b",
                 "bucket_ids": [9, 10, 11],
                 "bucket_commitments": ["bucket-commitment-b", "bucket-commitment-c"],
+                "read_signature": "read-signature-b",
+                "commit_signature": "commit-signature-b",
                 "updated_buckets": [{ "bucket_id": 12, "bucket_commitment": "updated-bucket-c" }],
                 "token_position_map": { "fetch-token-b": 17 }
             }
