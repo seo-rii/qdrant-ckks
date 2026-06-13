@@ -3880,6 +3880,13 @@ mod tests {
             snapshot
         );
 
+        let mut wrong_epoch = encrypted.clone();
+        wrong_epoch.index_epoch = 43;
+        assert_eq!(
+            open_private_result_oram_client_state_snapshot(&keys, context, &wrong_epoch),
+            Err(PrivateResultOramError::ClientStateOpenFailed)
+        );
+
         let wrong_root = BASE64URL_NOPAD.encode(&[43; 32]);
         assert_eq!(
             open_private_result_oram_client_state_snapshot(
