@@ -2349,8 +2349,13 @@ mod tests {
             temp_dir.path(),
         )
         .unwrap_err();
+        let rendered = err.to_string();
 
-        assert!(err.to_string().contains("non-symlink regular file"));
+        assert!(rendered.contains("non-symlink regular file"));
+        assert!(!rendered.contains("outside.bucket"));
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!rendered.contains("00000000.bucket"));
+        assert!(!rendered.contains(&manifest.root_hash));
     }
 
     #[cfg(unix)]
@@ -2375,11 +2380,12 @@ mod tests {
             temp_dir.path(),
         )
         .unwrap_err();
+        let rendered = err.to_string();
 
-        assert!(
-            err.to_string()
-                .contains("must not be group/world accessible")
-        );
+        assert!(rendered.contains("must not be group/world accessible"));
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!rendered.contains("00000000.bucket"));
+        assert!(!rendered.contains(&manifest.root_hash));
     }
 
     #[test]
