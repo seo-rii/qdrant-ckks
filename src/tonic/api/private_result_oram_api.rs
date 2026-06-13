@@ -1136,6 +1136,63 @@ mod private_result_oram_grpc_tests {
             assert_eq!(read.buckets.len(), 6);
             assert_eq!(read.buckets[0].bucket_id, 0);
 
+            let read_wrong_root = BASE64URL_NOPAD.encode(&[9; 32]);
+            let read_wrong_root_err = PrivateResultOram::read_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::ReadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: read_wrong_root.clone(),
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: Some(signature_to_proto(
+                        fixture.read_signature(&read_bucket_ids),
+                    )),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(read_wrong_root_err.code(), Code::InvalidArgument);
+            assert!(
+                read_wrong_root_err
+                    .message()
+                    .contains("session epoch/root mismatch")
+            );
+            assert!(!read_wrong_root_err.message().contains(&read_wrong_root));
+            assert!(
+                !read_wrong_root_err
+                    .message()
+                    .contains(&fixture.buckets[0].ciphertext)
+            );
+
+            let read_root_sentinel = "AAAA";
+            let malformed_read_root_err = PrivateResultOram::read_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::ReadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: read_root_sentinel.to_string(),
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: Some(signature_to_proto(
+                        fixture.read_signature(&read_bucket_ids),
+                    )),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(malformed_read_root_err.code(), Code::InvalidArgument);
+            assert!(
+                malformed_read_root_err
+                    .message()
+                    .contains("root_hash must be a base64url sha256 value")
+            );
+            assert!(
+                !malformed_read_root_err
+                    .message()
+                    .contains(read_root_sentinel)
+            );
+
             let wrong_read_signature = fixture.read_signature(&[0, 1, 4, 0, 1, 3]);
             let invalid_read_signature = PrivateResultOram::read_private_result_oram_buckets(
                 &service,
@@ -1448,6 +1505,130 @@ mod private_result_oram_grpc_tests {
                     err.message()
                 );
             }
+
+            let commit_wrong_old_root = BASE64URL_NOPAD.encode(&[10; 32]);
+            let commit_wrong_old_root_err = PrivateResultOram::commit_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::CommitPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: commit_wrong_old_root.clone(),
+                    new_root_hash: new_root_hash.clone(),
+                    updated_buckets: vec![bucket_to_proto(updated_bucket.clone())],
+                    commit_signature: Some(signature_to_proto(commit_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(commit_wrong_old_root_err.code(), Code::InvalidArgument);
+            assert!(
+                commit_wrong_old_root_err
+                    .message()
+                    .contains("commit old epoch/root does not match active session")
+            );
+            assert!(
+                !commit_wrong_old_root_err
+                    .message()
+                    .contains(&commit_wrong_old_root)
+            );
+            assert!(
+                !commit_wrong_old_root_err
+                    .message()
+                    .contains(&updated_bucket.ciphertext)
+            );
+
+            let commit_old_root_sentinel = "AAAA";
+            let malformed_commit_old_root_err =
+                PrivateResultOram::commit_private_result_oram_buckets(
+                    &service,
+                    Request::new(grpc::CommitPrivateResultOramBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        session_id: session.session_id.clone(),
+                        old_epoch: BASE_EPOCH,
+                        new_epoch: NEXT_EPOCH,
+                        old_root_hash: commit_old_root_sentinel.to_string(),
+                        new_root_hash: new_root_hash.clone(),
+                        updated_buckets: vec![bucket_to_proto(updated_bucket.clone())],
+                        commit_signature: Some(signature_to_proto(commit_signature.clone())),
+                    }),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(malformed_commit_old_root_err.code(), Code::InvalidArgument);
+            assert!(
+                malformed_commit_old_root_err
+                    .message()
+                    .contains("old_root_hash must be a base64url sha256 value")
+            );
+            assert!(
+                !malformed_commit_old_root_err
+                    .message()
+                    .contains(commit_old_root_sentinel)
+            );
+
+            let commit_wrong_new_root = BASE64URL_NOPAD.encode(&[11; 32]);
+            let commit_wrong_new_root_err = PrivateResultOram::commit_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::CommitPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash: commit_wrong_new_root.clone(),
+                    updated_buckets: vec![bucket_to_proto(updated_bucket.clone())],
+                    commit_signature: Some(signature_to_proto(commit_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(commit_wrong_new_root_err.code(), Code::InvalidArgument);
+            assert!(
+                commit_wrong_new_root_err
+                    .message()
+                    .contains("commit signature verification failed")
+            );
+            assert!(
+                !commit_wrong_new_root_err
+                    .message()
+                    .contains(&commit_wrong_new_root)
+            );
+            assert!(
+                !commit_wrong_new_root_err
+                    .message()
+                    .contains(&commit_signature.sig)
+            );
+
+            let commit_new_root_sentinel = "AAAA";
+            let malformed_commit_new_root_err =
+                PrivateResultOram::commit_private_result_oram_buckets(
+                    &service,
+                    Request::new(grpc::CommitPrivateResultOramBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        session_id: session.session_id.clone(),
+                        old_epoch: BASE_EPOCH,
+                        new_epoch: NEXT_EPOCH,
+                        old_root_hash: fixture.manifest.root_hash.clone(),
+                        new_root_hash: commit_new_root_sentinel.to_string(),
+                        updated_buckets: vec![bucket_to_proto(updated_bucket.clone())],
+                        commit_signature: Some(signature_to_proto(commit_signature.clone())),
+                    }),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(malformed_commit_new_root_err.code(), Code::InvalidArgument);
+            assert!(
+                malformed_commit_new_root_err
+                    .message()
+                    .contains("new_root_hash must be a base64url sha256 value")
+            );
+            assert!(
+                !malformed_commit_new_root_err
+                    .message()
+                    .contains(commit_new_root_sentinel)
+            );
 
             let wrong_commit_signature = fixture.signature.clone();
             let invalid_commit_signature = PrivateResultOram::commit_private_result_oram_buckets(

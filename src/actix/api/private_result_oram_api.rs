@@ -1034,6 +1034,37 @@ mod private_result_oram_rest_tests {
             assert_eq!(read_result["buckets"].as_array().unwrap().len(), 6);
             assert_eq!(read_result["buckets"][0]["bucket_id"], 0);
 
+            let read_wrong_root = BASE64URL_NOPAD.encode(&[9; 32]);
+            let read_wrong_root_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/read_buckets",
+                ReadPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: read_wrong_root.clone(),
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: fixture.read_signature(&read_bucket_ids),
+                },
+                StatusCode::BAD_REQUEST,
+                "session epoch/root mismatch"
+            );
+            assert!(!read_wrong_root_error.contains(&read_wrong_root));
+            assert!(!read_wrong_root_error.contains(&fixture.buckets[0].ciphertext));
+
+            let read_root_sentinel = "AAAA";
+            let malformed_read_root_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/read_buckets",
+                ReadPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: read_root_sentinel.to_string(),
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: fixture.read_signature(&read_bucket_ids),
+                },
+                StatusCode::BAD_REQUEST,
+                "root_hash must be a base64url sha256 value"
+            );
+            assert!(!malformed_read_root_error.contains(read_root_sentinel));
+
             let wrong_read_signature = fixture.read_signature(&[0, 1, 4, 0, 1, 3]);
             let invalid_read_signature_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/read_buckets",
@@ -1234,6 +1265,76 @@ mod private_result_oram_rest_tests {
                 assert!(!error.contains(invalid_session_id), "{error}");
                 assert!(!error.contains("session is missing or expired"), "{error}");
             }
+
+            let commit_wrong_old_root = BASE64URL_NOPAD.encode(&[10; 32]);
+            let commit_wrong_old_root_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/commit",
+                CommitPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: commit_wrong_old_root.clone(),
+                    new_root_hash: new_root_hash.clone(),
+                    updated_buckets: vec![updated_bucket.clone()],
+                    commit_signature: commit_signature.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "commit old epoch/root does not match active session"
+            );
+            assert!(!commit_wrong_old_root_error.contains(&commit_wrong_old_root));
+            assert!(!commit_wrong_old_root_error.contains(&updated_bucket.ciphertext));
+
+            let commit_old_root_sentinel = "AAAA";
+            let malformed_commit_old_root_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/commit",
+                CommitPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: commit_old_root_sentinel.to_string(),
+                    new_root_hash: new_root_hash.clone(),
+                    updated_buckets: vec![updated_bucket.clone()],
+                    commit_signature: commit_signature.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "old_root_hash must be a base64url sha256 value"
+            );
+            assert!(!malformed_commit_old_root_error.contains(commit_old_root_sentinel));
+
+            let commit_wrong_new_root = BASE64URL_NOPAD.encode(&[11; 32]);
+            let commit_wrong_new_root_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/commit",
+                CommitPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash: commit_wrong_new_root.clone(),
+                    updated_buckets: vec![updated_bucket.clone()],
+                    commit_signature: commit_signature.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "commit signature verification failed"
+            );
+            assert!(!commit_wrong_new_root_error.contains(&commit_wrong_new_root));
+            assert!(!commit_wrong_new_root_error.contains(&commit_signature.sig));
+
+            let commit_new_root_sentinel = "AAAA";
+            let malformed_commit_new_root_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/commit",
+                CommitPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash: commit_new_root_sentinel.to_string(),
+                    updated_buckets: vec![updated_bucket.clone()],
+                    commit_signature: commit_signature.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "new_root_hash must be a base64url sha256 value"
+            );
+            assert!(!malformed_commit_new_root_error.contains(commit_new_root_sentinel));
 
             let wrong_commit_signature = fixture.signature.clone();
             let invalid_commit_signature_error = post_json_error_contains!(
