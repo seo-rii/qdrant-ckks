@@ -964,27 +964,6 @@ pub fn validate_client_payload_value_after_runtime_verification(
     Ok(())
 }
 
-/// Validate a client envelope replayed by an already-trusted peer.
-///
-/// This intentionally does not verify the Ed25519 signature because peer
-/// forwarding currently does not carry the runtime verifier material. It still
-/// fail-closes malformed envelopes and checks the signed metadata shape,
-/// collection/point/field AAD, key id, RK id/epoch and required signature
-/// presence before target storage accepts the replay.
-pub fn validate_client_payload_value_for_peer_replay(
-    value: &Value,
-    context: ClientPayloadValidationContext<'_>,
-) -> Result<(), PayloadEncryptionError> {
-    let validated = validate_client_payload_value_inner(value, context)?;
-    client_payload_envelope_key_from_validated(validated).ok_or_else(|| {
-        PayloadEncryptionError::ExpectedEncryptedEnvelope {
-            field: context.field_path.to_string(),
-            found: json_type_name(value),
-        }
-    })?;
-    Ok(())
-}
-
 fn validate_client_payload_value_inner(
     value: &Value,
     context: ClientPayloadValidationContext<'_>,
