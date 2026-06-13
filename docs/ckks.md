@@ -915,7 +915,9 @@ provided distinct dummy-token pool so the eventual result fetch has fixed
 logical volume. Collection runtime validation requires a compatible result ORAM
 binding whose `oram.path_batch_size` divides the private HNSW
 `fixed_budget.fixed_result_k`, so SDKs do not emit a smaller final
-`read_buckets` batch. The private result ORAM client contract can now map that
+`read_buckets` batch. The result ORAM client fetch planner and verified fetch
+wrapper also reject token batches that are not an exact multiple of
+`oram.path_batch_size`. The private result ORAM client contract can now map that
 fixed token batch through the client-held token-position map into session
 `read_buckets` bucket-id sequences that preserve shared path bucket duplicates,
 so ORAM path volume is not reduced by deduplicating overlapping paths. Server
