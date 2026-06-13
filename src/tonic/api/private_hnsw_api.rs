@@ -2422,6 +2422,40 @@ mod private_hnsw_grpc_tests {
                 err.message()
             );
 
+            let read_signature_alg_sentinel = "rsa-pss-hnsw-read-sentinel";
+            let unsupported_read_paths = vec![fixture.entry_leaf_label()];
+            let mut unsupported_read_signature =
+                fixture.sign_read_paths(&unsupported_read_paths, 1, true);
+            unsupported_read_signature.alg = read_signature_alg_sentinel.to_string();
+            let err = PrivateHnswOram::read_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramReadPathsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: unsupported_read_paths,
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    }),
+                    client_signature: Some(signature_to_proto(unsupported_read_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("signature algorithm must be ed25519")
+            );
+            assert!(
+                !err.message().contains(read_signature_alg_sentinel),
+                "{}",
+                err.message()
+            );
+
             let unknown_read_session_sentinel = "read-session-id-sentinel";
             let unknown_read_paths = vec![fixture.entry_leaf_label()];
             let unknown_read_signature = fixture.sign_read_paths(&unknown_read_paths, 1, true);
@@ -2901,6 +2935,41 @@ mod private_hnsw_grpc_tests {
             assert!(err.message().contains("signature must encode 64 bytes"));
             assert!(
                 !err.message().contains(signature_body_sentinel),
+                "{}",
+                err.message()
+            );
+
+            let commit_signature_alg_sentinel = "rsa-pss-hnsw-commit-sentinel";
+            let mut unsupported_commit_signature = search_run.commit_signature.clone();
+            unsupported_commit_signature.alg = commit_signature_alg_sentinel.to_string();
+            let err = PrivateHnswOram::commit_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramCommitRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run
+                        .updated_buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                    commit_signature: Some(signature_to_proto(unsupported_commit_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("signature algorithm must be ed25519")
+            );
+            assert!(
+                !err.message().contains(commit_signature_alg_sentinel),
                 "{}",
                 err.message()
             );

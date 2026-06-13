@@ -740,6 +740,8 @@ so non-owner key ids do not reach the registry lookup boundary. The `read_paths`
 and `commit` crypto validators also reject malformed collection/vector/key
 lineage, `requested_paths`/path-count mismatches, and non-advancing commit
 epochs before signature body parsing or canonical message construction.
+Unsupported request signature algorithms on these paths are rejected without
+echoing the submitted algorithm value.
 After bounded session epoch/root and fixed-budget preflight, the REST/gRPC
 `read_paths` and `commit` handlers verify the client signature before returning
 detailed path-label or duplicate-bucket errors, so unauthenticated malformed
@@ -825,7 +827,8 @@ bounds `old_root_hash` and `new_root_hash` to canonical 32-byte base64url
 strings, then verifies the Ed25519 request signature before preparing
 Merkle/writeback metadata.
 Malformed client signature shape errors for `read_paths` and `commit` are also
-sanitized so submitted signature bodies are not echoed.
+sanitized so submitted signature bodies and unsupported algorithm values are not
+echoed.
 Commit error handling follows the same boundary: malformed updated bucket
 ciphertext, malformed new root hashes, and old epoch/root mismatches are
 rejected without echoing the submitted ciphertext, new root hash, or old root

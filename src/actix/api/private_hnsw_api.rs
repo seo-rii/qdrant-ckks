@@ -1759,6 +1759,36 @@ mod private_hnsw_rest_tests {
                 "{malformed_read_signature_error}"
             );
 
+            let read_signature_alg_sentinel = "rsa-pss-hnsw-read-sentinel";
+            let unsupported_read_paths = vec![fixture.entry_leaf_label()];
+            let mut unsupported_read_signature =
+                fixture.sign_read_paths(&unsupported_read_paths, 1, true);
+            unsupported_read_signature.alg = read_signature_alg_sentinel.to_string();
+            let unsupported_read_signature_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/read_paths",
+                OramReadPathsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: unsupported_read_paths,
+                    padding: OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    },
+                    client_signature: PrivateHnswClientSignature {
+                        alg: unsupported_read_signature.alg,
+                        key_id: unsupported_read_signature.key_id,
+                        sig: unsupported_read_signature.sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "signature algorithm must be ed25519"
+            );
+            assert!(
+                !unsupported_read_signature_error.contains(read_signature_alg_sentinel),
+                "{unsupported_read_signature_error}"
+            );
+
             let unknown_read_session_sentinel = "read-session-id-sentinel";
             let unknown_read_paths = vec![fixture.entry_leaf_label()];
             let unknown_read_signature = fixture.sign_read_paths(&unknown_read_paths, 1, true);
@@ -2217,6 +2247,32 @@ mod private_hnsw_rest_tests {
             assert!(
                 !malformed_commit_signature_error.contains(signature_body_sentinel),
                 "{malformed_commit_signature_error}"
+            );
+
+            let commit_signature_alg_sentinel = "rsa-pss-hnsw-commit-sentinel";
+            let mut unsupported_commit_signature = search_run.commit_signature.clone();
+            unsupported_commit_signature.alg = commit_signature_alg_sentinel.to_string();
+            let unsupported_commit_signature_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/commit",
+                OramCommitRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: search_run.updated_buckets.clone(),
+                    commit_signature: PrivateHnswClientSignature {
+                        alg: unsupported_commit_signature.alg,
+                        key_id: unsupported_commit_signature.key_id,
+                        sig: unsupported_commit_signature.sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "signature algorithm must be ed25519"
+            );
+            assert!(
+                !unsupported_commit_signature_error.contains(commit_signature_alg_sentinel),
+                "{unsupported_commit_signature_error}"
             );
 
             let unknown_commit_session_sentinel = "commit-session-id-sentinel";
