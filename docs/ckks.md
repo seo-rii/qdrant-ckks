@@ -508,9 +508,12 @@ accepts only `key_id`, `material_fingerprint_id`, `profile`,
 `result_privacy`, `distance`, `dim`, `hnsw`, `oram`, `fixed_budget`,
 `integrity`, and `signature_public_keys`; `payload/private-result-oram@v1`
 accepts only `key_id`, `expected_rk_id`, `min_rk_epoch`, `max_rk_epoch`,
-`oram`, `integrity`, and `signature_public_keys` while its collection binding
-validation is open for `private-result-oram/v1`; manifest/bucket upload/read
-REST/gRPC APIs are open, and bucket reads/commits are session-bound with
+`oram`, `integrity`, and `signature_public_keys`; its
+`private-result-oram/v1` collection binding validation requires a matching
+payload rule backed by that provider, no server materials/backend, pinned RK
+epoch, Path ORAM shape policy, integrity policy, and signing verifiers.
+Manifest/bucket upload, session open/close, signed `read_buckets`, and signed
+commit REST/gRPC APIs are open, and bucket reads/commits are session-bound with
 single-writer epoch/root CAS. Unknown options
 fail startup/runtime validation instead of being silently ignored.
 Collection-facing private HNSW
@@ -961,15 +964,15 @@ The crypto crate defines the payload/result ORAM manifest shape through
 shape, including canonical Path ORAM tree_height/bucket_count consistency,
 logical plus dummy count against ORAM bucket capacity, Ed25519 signatures,
 collection/key/epoch context, and root hash pinning;
-`private_result_oram_commit_signature_message` also fixes the future bucket
-writeback CAS signature input. `validate_private_result_oram_bucket_shape`
+`private_result_oram_commit_signature_message` defines the signed bucket
+writeback CAS input used by commit handlers. `validate_private_result_oram_bucket_shape`
 checks bucket version, epoch, range, ciphertext size, ciphertext SHA-256, and
 bucket commitment encoding. `private_result_oram_bucket_commitment` binds a
 bucket commitment to collection/key lineage, bucket id, index epoch, and
 `ciphertext_sha256`, while encoded ciphertext length is bounded before decode
 and `private_result_oram_merkle_root_for_commitments`
 fixes the root hash calculation over those commitments.
-`plan_private_result_oram_commit` prepares the future writeback plan by checking
+`plan_private_result_oram_commit` prepares signed writeback plans by checking
 old-root consistency, bucket epoch/range uniqueness, the next root, and commit
 signature bucket refs. `plan_private_result_oram_commit_for_manifest` uses the
 signed manifest epoch/root/bucket_count as the old commit context and rejects
@@ -981,13 +984,13 @@ helpers. `PrivateResultOramUploadBundle` and
 `package_private_result_oram_upload_bundle` package a signed manifest with a
 complete ordered bucket set whose commitments match the manifest root.
 `validate_private_result_oram_upload_bundle` and the bundle's
-`validate_initial_upload_contract` method let future SDKs preflight decoded
-result bundles before any runtime upload API exists: they validate manifest
+`validate_initial_upload_contract` method let SDKs and runtime upload handlers
+preflight decoded result bundles with one contract: they validate manifest
 shape, ordered bucket ids, bucket ciphertext hash/size, context-bound bucket
 commitments, and the manifest Merkle root.
 `validate_private_result_oram_upload_bundle_with_signature` and the bundle's
 `validate_initial_upload_contract_with_signature` method add the owner Ed25519
-verification context to that preflight so future upload APIs do not have to
+verification context to that preflight so runtime upload handlers do not have to
 stitch shape validation and manifest signature verification together by hand.
 The collection-local result ORAM store uses the shape helper for initial bundle
 ingest, then applies its runtime ciphertext size cap before writing files. Its
@@ -1008,9 +1011,9 @@ key id is configured.
 `refresh_private_result_oram_manifest_for_commit` and
 `sign_private_result_oram_manifest_refresh` mirror the private HNSW helper by
 deriving the next signed manifest only when a commit plan's old epoch/root
-matches the current result ORAM manifest. The
-collection crate also has a `PrivateResultOramStore` skeleton for the future
-payload/result layer. It writes `private_result_oram/manifest.json`,
+matches the current result ORAM manifest. The collection crate implements
+`PrivateResultOramStore` for the payload/result layer. It writes
+`private_result_oram/manifest.json`,
 `manifest.sig`, encrypted bucket files, Merkle commitment metadata, and
 `epochs/current.json` with the same private directory hardening and epoch CAS
 contract used by private HNSW ORAM. Its upload bundle preflight validates
