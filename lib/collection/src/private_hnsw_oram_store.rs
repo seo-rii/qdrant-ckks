@@ -3142,6 +3142,27 @@ mod tests {
     }
 
     #[test]
+    fn merkle_tree_validation_rejects_root_mismatch_without_computed_root() {
+        let tree = PrivateHnswOramMerkleTree {
+            version: 1,
+            index_epoch: 42,
+            root_hash: root_hash(99),
+            bucket_count: 2,
+            leaf_hashes: vec![root_hash(1), root_hash(2)],
+        };
+        let computed_root =
+            PrivateHnswOramStore::merkle_root_for_commitments(&tree.leaf_hashes).unwrap();
+        assert_ne!(computed_root, tree.root_hash);
+
+        let err = validate_merkle_tree(&tree).unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("root_hash mismatch"));
+        assert!(!rendered.contains(&computed_root), "{rendered}");
+        assert!(!rendered.contains(&tree.root_hash), "{rendered}");
+    }
+
+    #[test]
     fn merkle_commit_updates_root_and_rejects_wrong_new_root() {
         let temp = TempDir::new().unwrap();
         let store = fixture_store(&temp);
