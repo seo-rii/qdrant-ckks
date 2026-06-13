@@ -832,6 +832,46 @@ mod tests {
     }
 
     #[test]
+    fn cli_snapshot_crypto_preflight_rejects_private_result_bucket_commitment_mismatch() {
+        let fixture = PrivateResultSnapshotFixture::build();
+        let settings = fixture.settings();
+        let collection_dir = TempDir::new().unwrap();
+        write_recovered_private_result_snapshot_fixture(collection_dir.path(), &fixture, false);
+        let store = PrivateResultOramStore::new(collection_dir.path());
+        let block_size = usize::try_from(fixture.manifest.oram.block_size_bytes).unwrap();
+        let bucket_size = usize::try_from(fixture.manifest.oram.bucket_size).unwrap();
+        let max_ciphertext_bytes = block_size * bucket_size + 4096;
+        let mut bucket = fixture.buckets[0].clone();
+        bucket.bucket_commitment = BASE64URL_NOPAD.encode(&[99; 32]);
+        store
+            .write_bucket(
+                &bucket,
+                fixture.manifest.index_epoch,
+                fixture.manifest.bucket_count,
+                max_ciphertext_bytes,
+            )
+            .unwrap();
+
+        let err =
+            validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
+                .expect_err("private result bucket commitment mismatch must fail CLI preflight");
+
+        assert!(
+            err.contains("private result ORAM snapshot layout validation failed"),
+            "{err}"
+        );
+        assert!(!err.contains("bucket commitment"), "{err}");
+        assert!(
+            !err.contains(collection_dir.path().to_string_lossy().as_ref()),
+            "{err}"
+        );
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR), "{err}");
+        assert!(!err.contains(&fixture.manifest.root_hash), "{err}");
+        assert!(!err.contains(&fixture.buckets[0].ciphertext), "{err}");
+        assert!(!err.contains(RESULT_SIGNING_KEY_ID), "{err}");
+    }
+
+    #[test]
     fn cli_snapshot_crypto_preflight_rejects_private_result_oram_manifest_signature_tamper() {
         let fixture = PrivateResultSnapshotFixture::build();
         let settings = fixture.settings();
