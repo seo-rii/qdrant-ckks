@@ -16,6 +16,7 @@ default = []
 test-utils = []
 
 [dependencies]
+constant_time_eq = "0.4.2"
 data-encoding = { workspace = true }
 nix = { workspace = true }
 ring = { workspace = true }

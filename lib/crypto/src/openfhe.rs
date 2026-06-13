@@ -447,7 +447,7 @@ fn validate_bridge_sha256_digest(
     expected: &[u8],
     actual: &[u8],
 ) -> Result<(), CkksError> {
-    if actual[..] != expected[..] {
+    if !constant_time_eq::constant_time_eq(actual, expected) {
         return Err(CkksError::Backend(format!(
             "OpenFHE bridge sha256 pin does not match: {}",
             path.display(),
