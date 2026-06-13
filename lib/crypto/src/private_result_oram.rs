@@ -3793,6 +3793,171 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_verified_token_fetch_supports_multi_batch_writeback() {
+        let keys = result_test_keys();
+        let base_context = result_bucket_base_context();
+        let config = result_client_config();
+        let bucket_count = private_result_oram_bucket_count(config.tree_height).unwrap();
+        let blocks = [
+            (2, payload_block(10)),
+            (3, payload_block(11)),
+            (4, payload_block(12)),
+            (5, payload_block(13)),
+        ];
+
+        let mut plaintext_store = BTreeMap::new();
+        for bucket_id in 0..bucket_count {
+            plaintext_store.insert(
+                bucket_id,
+                empty_private_result_oram_plaintext_bucket(bucket_id, config).unwrap(),
+            );
+        }
+        for (leaf, block) in &blocks {
+            let leaf_bucket_id =
+                *private_result_oram_bucket_ids_for_leaf(*leaf, config.tree_height)
+                    .unwrap()
+                    .last()
+                    .unwrap();
+            let bucket = plaintext_store.get_mut(&leaf_bucket_id).unwrap();
+            let slot = bucket
+                .blocks
+                .iter_mut()
+                .find(|slot| slot.is_none())
+                .unwrap();
+            *slot = Some(block.clone());
+        }
+
+        let encrypted_store = plaintext_store
+            .values()
+            .map(|bucket| {
+                let encrypted = seal_private_result_oram_plaintext_bucket(
+                    &keys,
+                    base_context,
+                    42,
+                    bucket,
+                    config,
+                )
+                .unwrap();
+                (bucket.bucket_id, encrypted)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let commitments = (0..bucket_count)
+            .map(|bucket_id| {
+                encrypted_store
+                    .get(&bucket_id)
+                    .unwrap()
+                    .bucket_commitment
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+        let root_hash = private_result_oram_merkle_root_for_commitments(&commitments).unwrap();
+        let manifest = PrivateResultOramManifest {
+            oram: OramParams {
+                kind: OramKind::PathOram,
+                bucket_size: config.bucket_size as u32,
+                block_size_bytes: config.block_size_bytes as u32,
+                tree_height: config.tree_height,
+                path_batch_size: 2,
+            },
+            bucket_count,
+            root_hash: root_hash.clone(),
+            logical_result_count: 4,
+            dummy_result_count: 0,
+            ..fixture_manifest()
+        };
+
+        let payload_fetch_tokens = blocks
+            .iter()
+            .map(|(_, block)| block.payload_fetch_token)
+            .collect::<Vec<_>>();
+        let token_positions = blocks
+            .iter()
+            .map(|(leaf, block)| PrivateResultOramFetchTokenPosition {
+                payload_fetch_token: block.payload_fetch_token,
+                leaf: *leaf,
+            })
+            .collect::<Vec<_>>();
+        let read_plan = plan_private_result_oram_read_bucket_batches_for_fetch_tokens(
+            &manifest,
+            &payload_fetch_tokens,
+            &token_positions,
+        )
+        .unwrap();
+        assert_eq!(read_plan.batches.len(), 2);
+
+        let encrypted_batches = read_plan
+            .batches
+            .iter()
+            .map(|batch| {
+                let proof = result_proof_for_bucket_ids(
+                    &batch.bucket_ids,
+                    42,
+                    root_hash.clone(),
+                    &commitments,
+                );
+                PrivateResultOramEncryptedBucketBatch {
+                    index_epoch: 42,
+                    root_hash: root_hash.clone(),
+                    bucket_count,
+                    proof_value: serde_json::to_string(&proof).unwrap(),
+                    buckets: batch
+                        .bucket_ids
+                        .iter()
+                        .map(|bucket_id| encrypted_store.get(bucket_id).unwrap().clone())
+                        .collect(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut state = PrivateResultOramClientState::with_position_map(
+            token_positions
+                .iter()
+                .map(|position| (position.payload_fetch_token, position.leaf)),
+            config.tree_height,
+        )
+        .unwrap();
+        let mut remaps = [0, 1, 6, 7].into_iter();
+
+        let result = fetch_private_result_oram_tokens_encrypted_verified(
+            &keys,
+            base_context,
+            42,
+            &root_hash,
+            bucket_count,
+            43,
+            &mut state,
+            config,
+            &payload_fetch_tokens,
+            &read_plan,
+            &encrypted_batches,
+            || {
+                remaps
+                    .next()
+                    .ok_or(PrivateResultOramError::InvalidFetchPlanField("leaf"))
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.accesses.len(), 4);
+        let single_batch_writeback_budget =
+            usize::try_from(manifest.oram.path_batch_size * (manifest.oram.tree_height + 1))
+                .unwrap();
+        assert!(result.updated_buckets.len() > single_batch_writeback_budget);
+        assert!(result.updated_buckets.len() <= usize::try_from(bucket_count).unwrap());
+
+        let commit_plan = plan_private_result_oram_commit_for_manifest(
+            &manifest,
+            43,
+            &commitments,
+            &result.updated_buckets,
+        )
+        .unwrap();
+        assert_eq!(
+            commit_plan.updated_buckets.len(),
+            result.updated_buckets.len()
+        );
+    }
+
+    #[test]
     fn encrypted_verified_token_fetch_rejects_bad_metadata_and_duplicate_tokens() {
         let keys = result_test_keys();
         let base_context = result_bucket_base_context();
