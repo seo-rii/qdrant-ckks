@@ -1016,6 +1016,7 @@ mod private_result_oram_rest_tests {
                 "upload requires no active session"
             );
             assert!(!active_bucket_upload_error.contains(&fixture.buckets[0].ciphertext));
+            assert!(!active_bucket_upload_error.contains(&session_id));
 
             let active_snapshot_error = crate::common::collections::do_create_snapshot(
                 dispatcher.toc(&auth, &pass).clone(),

@@ -1172,6 +1172,7 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains(&fixture.buckets[0].ciphertext)
             );
+            assert!(!active_bucket_upload.message().contains(&session.session_id));
 
             let active_snapshot_error = crate::common::collections::do_create_snapshot(
                 dispatcher.toc(&auth, &pass).clone(),
