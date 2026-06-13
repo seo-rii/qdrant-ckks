@@ -7,7 +7,7 @@ use ring::hkdf;
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 const VERSION: u8 = 1;
 const ALGORITHM: &str = "AES-256-GCM";
@@ -76,7 +76,7 @@ pub enum EncryptionError {
 }
 
 pub struct SecretKey {
-    bytes: [u8; KEY_LEN],
+    bytes: Zeroizing<[u8; KEY_LEN]>,
 }
 
 struct SecretKeyLen;
@@ -93,18 +93,24 @@ impl SecretKey {
         let mut bytes = [0u8; KEY_LEN];
         rng.fill(&mut bytes)
             .map_err(|_| EncryptionError::RandomFailure)?;
-        Ok(Self { bytes })
+        Ok(Self {
+            bytes: Zeroizing::new(bytes),
+        })
     }
 
     pub fn from_bytes(bytes: [u8; KEY_LEN]) -> Self {
-        Self { bytes }
+        Self {
+            bytes: Zeroizing::new(bytes),
+        }
     }
 
     pub fn try_from_slice(bytes: &[u8]) -> Result<Self, EncryptionError> {
         let bytes: [u8; KEY_LEN] = bytes
             .try_into()
             .map_err(|_| EncryptionError::InvalidKeyLength)?;
-        Ok(Self { bytes })
+        Ok(Self {
+            bytes: Zeroizing::new(bytes),
+        })
     }
 
     pub fn derive_subkey(&self, domain: &[u8]) -> Result<Self, EncryptionError> {
@@ -117,7 +123,9 @@ impl SecretKey {
         let mut bytes = [0u8; KEY_LEN];
         okm.fill(&mut bytes)
             .map_err(|_| EncryptionError::KeyDerivationFailed)?;
-        Ok(Self { bytes })
+        Ok(Self {
+            bytes: Zeroizing::new(bytes),
+        })
     }
 
     pub fn as_bytes(&self) -> &[u8; KEY_LEN] {
@@ -130,12 +138,6 @@ impl Debug for SecretKey {
         f.debug_struct("SecretKey")
             .field("bytes", &"[redacted; 32 bytes]")
             .finish()
-    }
-}
-
-impl Drop for SecretKey {
-    fn drop(&mut self) {
-        self.bytes.zeroize();
     }
 }
 
@@ -876,6 +878,17 @@ mod tests {
         .unwrap()
         .with_resource_key_metadata(rk_id, rk_epoch)
         .unwrap()
+    }
+
+    #[test]
+    fn secret_key_debug_redacts_key_material() {
+        let key = SecretKey::from_bytes([0x41; KEY_LEN]);
+
+        let rendered = format!("{key:?}");
+
+        assert_eq!(rendered, r#"SecretKey { bytes: "[redacted; 32 bytes]" }"#);
+        assert!(!rendered.contains("AAAA"));
+        assert!(!rendered.contains("[65"));
     }
 
     #[test]
