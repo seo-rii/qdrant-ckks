@@ -94,7 +94,6 @@ struct WorkerProcess {
     registered_contexts: Mutex<HashSet<String>>,
     terminated: AtomicBool,
     reserved: AtomicBool,
-    request_lock: Mutex<()>,
     stdout_thread: Mutex<Option<JoinHandle<()>>>,
     stderr_thread: Mutex<Option<JoinHandle<io::Result<()>>>>,
 }
@@ -1053,11 +1052,11 @@ impl CommandOpenFheBackend {
         decode_response: impl Fn(&[u8]) -> Result<T, CkksError>,
     ) -> Result<T, CkksError> {
         for attempt in 0..=1 {
+            // `worker_process` returns only after atomically reserving a worker.
+            // The reservation is held for the whole request, so stdin/stdout
+            // access does not need a second worker-local request mutex.
             let worker_reservation = self.worker_process()?;
             let worker_process = Arc::clone(worker_reservation.worker());
-            let _request_guard = worker_process.request_lock.lock().map_err(|_| {
-                CkksError::Backend("OpenFHE bridge request mutex was poisoned".to_string())
-            })?;
             if worker_process.stderr_truncated.load(Ordering::Relaxed) {
                 self.discard_worker(&worker_process, false)?;
                 return Err(CkksError::Backend(format!(
@@ -1416,7 +1415,6 @@ impl CommandOpenFheBackend {
             registered_contexts: Mutex::new(HashSet::new()),
             terminated: AtomicBool::new(false),
             reserved: AtomicBool::new(true),
-            request_lock: Mutex::new(()),
             stdout_thread: Mutex::new(Some(stdout_thread)),
             stderr_thread: Mutex::new(Some(stderr_thread)),
         });
