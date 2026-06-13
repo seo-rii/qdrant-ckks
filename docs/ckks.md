@@ -2086,7 +2086,9 @@ security levels, negative noise budgets, or non-finite noise budgets.
 The subprocess backend still enforces a positive `timeout_ms` and caps
 stdout/stderr collection so a hung or noisy bridge cannot block Qdrant
 indefinitely or force unbounded memory growth. Returned errors do not include
-the request body or bridge stderr.
+the request body or bridge stderr. Process-pool backends also fail fast when
+all configured workers are already busy, rather than queuing additional
+plaintext-bearing bridge requests behind a busy worker.
 
 The OpenFHE bridge is part of the trusted computing base because it receives
 plaintext embeddings before producing CKKS ciphertext and returns finite

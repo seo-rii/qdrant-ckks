@@ -101,7 +101,6 @@ struct WorkerProcess {
 
 struct WorkerReservation {
     worker_process: Arc<WorkerProcess>,
-    reserved: bool,
 }
 
 enum BridgeStdoutEvent {
@@ -188,17 +187,7 @@ impl WorkerProcess {
 
 impl WorkerReservation {
     fn reserved(worker_process: Arc<WorkerProcess>) -> Self {
-        Self {
-            worker_process,
-            reserved: true,
-        }
-    }
-
-    fn unreserved(worker_process: Arc<WorkerProcess>) -> Self {
-        Self {
-            worker_process,
-            reserved: false,
-        }
+        Self { worker_process }
     }
 
     fn worker(&self) -> &Arc<WorkerProcess> {
@@ -208,9 +197,7 @@ impl WorkerReservation {
 
 impl Drop for WorkerReservation {
     fn drop(&mut self) {
-        if self.reserved {
-            self.worker_process.release_request();
-        }
+        self.worker_process.release_request();
     }
 }
 
@@ -1303,11 +1290,11 @@ impl CommandOpenFheBackend {
             }
         }
 
-        if workers.len() == self.pool_size.get()
-            && let Some(worker_process) =
-                workers.get(self.next_worker.fetch_add(1, Ordering::Relaxed) % self.pool_size.get())
-        {
-            return Ok(WorkerReservation::unreserved(Arc::clone(worker_process)));
+        if workers.len() == self.pool_size.get() {
+            return Err(CkksError::Backend(format!(
+                "OpenFHE bridge worker pool is exhausted; all {} workers are busy",
+                self.pool_size.get(),
+            )));
         }
 
         let spawn_program = bridge_spawn_program(
@@ -2330,18 +2317,21 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn cloned_backend_worker_process_reuses_full_shared_pool() {
+    fn cloned_backend_worker_process_fails_fast_when_shared_pool_is_busy() {
         let backend = CommandOpenFheBackend::new_unchecked("cat")
             .with_pool_size(NonZeroUsize::new(1).unwrap());
         let cloned = backend.clone();
 
-        let first = backend.worker_process().unwrap();
-        let second = cloned.worker_process().unwrap();
-
-        assert!(
-            Arc::ptr_eq(first.worker(), second.worker()),
-            "a busy full pool must return the existing shared worker instead of spawning another",
-        );
+        let _first = backend.worker_process().unwrap();
+        match cloned.worker_process() {
+            Ok(_) => {
+                panic!("a busy full pool must fail fast instead of serializing on a busy worker")
+            }
+            Err(CkksError::Backend(message)) => {
+                assert!(message.contains("worker pool is exhausted"), "{message}");
+            }
+            Err(err) => panic!("unexpected busy full pool error: {err:?}"),
+        }
     }
 
     #[cfg(target_os = "linux")]
