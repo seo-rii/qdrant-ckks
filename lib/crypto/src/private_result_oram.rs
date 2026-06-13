@@ -25,6 +25,8 @@ pub const PRIVATE_RESULT_ORAM_BUCKET_AEAD_DOMAIN: &[u8] =
     b"qdrant-sec/private-result-oram-bucket-aead/v1";
 pub const PRIVATE_RESULT_ORAM_CLIENT_STATE_AEAD_DOMAIN: &[u8] =
     b"qdrant-sec/private-result-oram-client-state-aead/v1";
+const PRIVATE_RESULT_ORAM_CLIENT_KDF_CONTEXT_DOMAIN: &[u8] =
+    b"qdrant-sec/private-result-oram-client-kdf-context/v1";
 
 const PRIVATE_RESULT_ORAM_SIGNATURE_ALGORITHM: &str = "ed25519";
 const PRIVATE_RESULT_ORAM_BUCKET_AEAD_CONTEXT_DOMAIN: &str =
@@ -394,11 +396,54 @@ pub struct PrivateResultOramClientKeys {
 }
 
 impl PrivateResultOramClientKeys {
+    /// Legacy domain-only derivation kept for existing fixtures and clients.
+    ///
+    /// New private result ORAM indexes should derive from the manifest so the
+    /// client keys are bound to collection/resource-key epoch context.
     pub fn derive_from_resource_key(resource_key: &SecretKey) -> Result<Self, EncryptionError> {
         Ok(Self {
             bucket_aead: resource_key.derive_subkey(PRIVATE_RESULT_ORAM_BUCKET_AEAD_DOMAIN)?,
             client_state: resource_key
                 .derive_subkey(PRIVATE_RESULT_ORAM_CLIENT_STATE_AEAD_DOMAIN)?,
+        })
+    }
+
+    pub fn derive_from_resource_key_for_manifest(
+        resource_key: &SecretKey,
+        manifest: &PrivateResultOramManifest,
+    ) -> Result<Self, EncryptionError> {
+        Self::derive_from_resource_key_with_context(
+            resource_key,
+            &manifest.collection_id,
+            &manifest.rk_id,
+            manifest.rk_epoch,
+        )
+    }
+
+    pub fn derive_from_resource_key_with_context(
+        resource_key: &SecretKey,
+        collection_id: &str,
+        rk_id: &str,
+        rk_epoch: u64,
+    ) -> Result<Self, EncryptionError> {
+        let bucket_aead = derive_private_result_oram_context_subkey(
+            resource_key,
+            PRIVATE_RESULT_ORAM_BUCKET_AEAD_DOMAIN,
+            collection_id,
+            rk_id,
+            rk_epoch,
+        )?;
+        let client_state = derive_private_result_oram_context_subkey(
+            resource_key,
+            PRIVATE_RESULT_ORAM_CLIENT_STATE_AEAD_DOMAIN,
+            collection_id,
+            rk_id,
+            rk_epoch,
+        )?;
+
+        Ok(Self {
+            bucket_aead,
+            client_state,
         })
     }
 
@@ -409,6 +454,21 @@ impl PrivateResultOramClientKeys {
     pub fn client_state_key(&self) -> &SecretKey {
         &self.client_state
     }
+}
+
+fn derive_private_result_oram_context_subkey(
+    resource_key: &SecretKey,
+    domain: &[u8],
+    collection_id: &str,
+    rk_id: &str,
+    rk_epoch: u64,
+) -> Result<SecretKey, EncryptionError> {
+    let rk_epoch = rk_epoch.to_be_bytes();
+    resource_key.derive_subkey_with_context(
+        domain,
+        PRIVATE_RESULT_ORAM_CLIENT_KDF_CONTEXT_DOMAIN,
+        &[collection_id.as_bytes(), rk_id.as_bytes(), &rk_epoch],
+    )
 }
 
 impl Debug for PrivateResultOramClientKeys {
@@ -3067,6 +3127,55 @@ mod tests {
                 .as_bytes()
         );
         assert!(format!("{keys:?}").contains("[redacted; 32 bytes]"));
+    }
+
+    #[test]
+    fn result_oram_client_key_derivation_binds_manifest_context() {
+        let resource_key = SecretKey::from_bytes([7; 32]);
+        let manifest = fixture_manifest();
+        let first = PrivateResultOramClientKeys::derive_from_resource_key_for_manifest(
+            &resource_key,
+            &manifest,
+        )
+        .unwrap();
+        let second = PrivateResultOramClientKeys::derive_from_resource_key_for_manifest(
+            &resource_key,
+            &manifest,
+        )
+        .unwrap();
+        let legacy = PrivateResultOramClientKeys::derive_from_resource_key(&resource_key).unwrap();
+        let mut other_collection = manifest.clone();
+        other_collection.collection_id = "collection-uuid-2".to_string();
+        let other_collection_keys =
+            PrivateResultOramClientKeys::derive_from_resource_key_for_manifest(
+                &resource_key,
+                &other_collection,
+            )
+            .unwrap();
+        let mut other_epoch = manifest;
+        other_epoch.rk_epoch += 1;
+        let other_epoch_keys = PrivateResultOramClientKeys::derive_from_resource_key_for_manifest(
+            &resource_key,
+            &other_epoch,
+        )
+        .unwrap();
+
+        assert_eq!(
+            first.bucket_aead_key().as_bytes(),
+            second.bucket_aead_key().as_bytes()
+        );
+        assert_ne!(
+            first.bucket_aead_key().as_bytes(),
+            legacy.bucket_aead_key().as_bytes()
+        );
+        assert_ne!(
+            first.bucket_aead_key().as_bytes(),
+            other_collection_keys.bucket_aead_key().as_bytes()
+        );
+        assert_ne!(
+            first.bucket_aead_key().as_bytes(),
+            other_epoch_keys.bucket_aead_key().as_bytes()
+        );
     }
 
     #[test]

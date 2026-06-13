@@ -941,8 +941,12 @@ caller. A canonical plaintext client-state
 snapshot shape now round-trips the result ORAM token position map and stash for
 client-side backup validation, and an encrypted snapshot helper seals that backup
 under a client-derived state key with collection/key/epoch/root AAD plus
-ciphertext hash checks. Server-side HNSW manifest upload, bucket upload, session
-open, and snapshot restore preflight now accept
+ciphertext hash checks. New SDK code should derive
+`PrivateResultOramClientKeys` from the signed result manifest rather than the
+legacy domain-only helper; the manifest-bound derivation length-prefixes
+collection id, RK id, and RK epoch into the HKDF info context before deriving
+bucket and client-state subkeys. Server-side HNSW manifest upload, bucket upload,
+session open, and snapshot restore preflight now accept
 `private_payload_oram_required` only when the same collection also has a
 `private-result-oram/v1` payload rule backed by
 `payload/private-result-oram@v1`; without that binding they continue to fail
@@ -1249,6 +1253,12 @@ tamper or epoch/root context mismatch before returning the snapshot. The
 encrypted backup DTO does not serialize plaintext position-map entries, leaf
 labels, stash blocks, point tokens, or payload fetch tokens outside the AEAD
 ciphertext.
+New SDK code should derive `PrivateHnswClientKeys` from the signed manifest
+rather than the legacy domain-only helper. The manifest-bound derivation
+length-prefixes collection id, vector name, RK id, and RK epoch into the HKDF
+info context before deriving node, bucket, position-map, payload-token, and
+blind-result subkeys, so accidental RK reuse across private HNSW indexes does
+not produce the same client subkeys.
 
 The client CKKS vector sidecar signature message is canonical and
 length-prefixed for SDK interop. The byte string is:

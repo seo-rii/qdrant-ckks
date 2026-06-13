@@ -29,6 +29,8 @@ pub const PRIVATE_HNSW_BUCKET_AEAD_DOMAIN: &[u8] = b"qdrant-sec/private-hnsw-buc
 pub const PRIVATE_HNSW_POSITION_MAP_DOMAIN: &[u8] = b"qdrant-sec/private-hnsw-position-map/v1";
 pub const PRIVATE_HNSW_PAYLOAD_TOKEN_DOMAIN: &[u8] = b"qdrant-sec/private-hnsw-payload-token/v1";
 pub const PRIVATE_HNSW_BLIND_RESULT_DOMAIN: &[u8] = b"qdrant-sec/private-hnsw-blind-result/v1";
+const PRIVATE_HNSW_CLIENT_KDF_CONTEXT_DOMAIN: &[u8] =
+    b"qdrant-sec/private-hnsw-client-kdf-context/v1";
 
 const NODE_BLOCK_MAGIC: &[u8; 4] = b"QPHO";
 const NODE_BLOCK_VERSION: u16 = 1;
@@ -199,6 +201,11 @@ pub struct PrivateHnswClientKeys {
 }
 
 impl PrivateHnswClientKeys {
+    /// Legacy domain-only derivation kept for existing fixtures and clients.
+    ///
+    /// New private HNSW indexes should use `derive_from_resource_key_for_manifest`
+    /// or `derive_from_resource_key_with_context` so the derived client keys are
+    /// bound to the collection/vector/resource-key epoch boundary.
     pub fn derive_from_resource_key(resource_key: &SecretKey) -> Result<Self, EncryptionError> {
         Ok(Self {
             node_aead: resource_key.derive_subkey(PRIVATE_HNSW_NODE_AEAD_DOMAIN)?,
@@ -206,6 +213,76 @@ impl PrivateHnswClientKeys {
             position_map: resource_key.derive_subkey(PRIVATE_HNSW_POSITION_MAP_DOMAIN)?,
             payload_token: resource_key.derive_subkey(PRIVATE_HNSW_PAYLOAD_TOKEN_DOMAIN)?,
             blind_result: resource_key.derive_subkey(PRIVATE_HNSW_BLIND_RESULT_DOMAIN)?,
+        })
+    }
+
+    pub fn derive_from_resource_key_for_manifest(
+        resource_key: &SecretKey,
+        manifest: &PrivateHnswOramManifest,
+    ) -> Result<Self, EncryptionError> {
+        Self::derive_from_resource_key_with_context(
+            resource_key,
+            &manifest.collection_id,
+            &manifest.vector_name,
+            &manifest.rk_id,
+            manifest.rk_epoch,
+        )
+    }
+
+    pub fn derive_from_resource_key_with_context(
+        resource_key: &SecretKey,
+        collection_id: &str,
+        vector_name: &str,
+        rk_id: &str,
+        rk_epoch: u64,
+    ) -> Result<Self, EncryptionError> {
+        let node_aead = derive_private_hnsw_context_subkey(
+            resource_key,
+            PRIVATE_HNSW_NODE_AEAD_DOMAIN,
+            collection_id,
+            vector_name,
+            rk_id,
+            rk_epoch,
+        )?;
+        let bucket_aead = derive_private_hnsw_context_subkey(
+            resource_key,
+            PRIVATE_HNSW_BUCKET_AEAD_DOMAIN,
+            collection_id,
+            vector_name,
+            rk_id,
+            rk_epoch,
+        )?;
+        let position_map = derive_private_hnsw_context_subkey(
+            resource_key,
+            PRIVATE_HNSW_POSITION_MAP_DOMAIN,
+            collection_id,
+            vector_name,
+            rk_id,
+            rk_epoch,
+        )?;
+        let payload_token = derive_private_hnsw_context_subkey(
+            resource_key,
+            PRIVATE_HNSW_PAYLOAD_TOKEN_DOMAIN,
+            collection_id,
+            vector_name,
+            rk_id,
+            rk_epoch,
+        )?;
+        let blind_result = derive_private_hnsw_context_subkey(
+            resource_key,
+            PRIVATE_HNSW_BLIND_RESULT_DOMAIN,
+            collection_id,
+            vector_name,
+            rk_id,
+            rk_epoch,
+        )?;
+
+        Ok(Self {
+            node_aead,
+            bucket_aead,
+            position_map,
+            payload_token,
+            blind_result,
         })
     }
 
@@ -228,6 +305,27 @@ impl PrivateHnswClientKeys {
     pub fn blind_result_key(&self) -> &SecretKey {
         &self.blind_result
     }
+}
+
+fn derive_private_hnsw_context_subkey(
+    resource_key: &SecretKey,
+    domain: &[u8],
+    collection_id: &str,
+    vector_name: &str,
+    rk_id: &str,
+    rk_epoch: u64,
+) -> Result<SecretKey, EncryptionError> {
+    let rk_epoch = rk_epoch.to_be_bytes();
+    resource_key.derive_subkey_with_context(
+        domain,
+        PRIVATE_HNSW_CLIENT_KDF_CONTEXT_DOMAIN,
+        &[
+            collection_id.as_bytes(),
+            vector_name.as_bytes(),
+            rk_id.as_bytes(),
+            &rk_epoch,
+        ],
+    )
 }
 
 impl Debug for PrivateHnswClientKeys {
@@ -4291,6 +4389,50 @@ mod tests {
         assert_ne!(
             first.payload_token_key().as_bytes(),
             first.blind_result_key().as_bytes()
+        );
+    }
+
+    #[test]
+    fn client_key_derivation_binds_manifest_context() {
+        let resource_key = SecretKey::from_bytes([7; 32]);
+        let manifest = fixture_manifest();
+        let first =
+            PrivateHnswClientKeys::derive_from_resource_key_for_manifest(&resource_key, &manifest)
+                .unwrap();
+        let second =
+            PrivateHnswClientKeys::derive_from_resource_key_for_manifest(&resource_key, &manifest)
+                .unwrap();
+        let legacy = PrivateHnswClientKeys::derive_from_resource_key(&resource_key).unwrap();
+        let mut other_vector = manifest.clone();
+        other_vector.vector_name = "title".to_string();
+        let other_vector_keys = PrivateHnswClientKeys::derive_from_resource_key_for_manifest(
+            &resource_key,
+            &other_vector,
+        )
+        .unwrap();
+        let mut other_epoch = manifest;
+        other_epoch.rk_epoch += 1;
+        let other_epoch_keys = PrivateHnswClientKeys::derive_from_resource_key_for_manifest(
+            &resource_key,
+            &other_epoch,
+        )
+        .unwrap();
+
+        assert_eq!(
+            first.bucket_aead_key().as_bytes(),
+            second.bucket_aead_key().as_bytes()
+        );
+        assert_ne!(
+            first.bucket_aead_key().as_bytes(),
+            legacy.bucket_aead_key().as_bytes()
+        );
+        assert_ne!(
+            first.bucket_aead_key().as_bytes(),
+            other_vector_keys.bucket_aead_key().as_bytes()
+        );
+        assert_ne!(
+            first.bucket_aead_key().as_bytes(),
+            other_epoch_keys.bucket_aead_key().as_bytes()
         );
     }
 

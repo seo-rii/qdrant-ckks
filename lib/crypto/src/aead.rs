@@ -17,6 +17,7 @@ const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
 const MAX_KEY_ID_LEN: usize = 128;
 const HKDF_SALT: &[u8] = b"qdrant-sec-aead-master-key-v1";
+const HKDF_CONTEXT_INFO_DOMAIN: &[u8] = b"qdrant-sec/hkdf-context-info/v1";
 const BASE64URL_NOPAD_12_BYTE_LEN: usize = 16;
 const ENCRYPTED_ENVELOPE_CIPHERTEXT_MAX_BYTES: usize = 16 * 1024 * 1024;
 const ENCRYPTED_ENVELOPE_CIPHERTEXT_MAX_B64_LEN: usize =
@@ -128,9 +129,41 @@ impl SecretKey {
         })
     }
 
+    pub fn derive_subkey_with_context(
+        &self,
+        domain: &[u8],
+        context_domain: &[u8],
+        context_fields: &[&[u8]],
+    ) -> Result<Self, EncryptionError> {
+        let salt = hkdf::Salt::new(hkdf::HKDF_SHA256, HKDF_SALT);
+        let prk = salt.extract(self.as_bytes());
+        let mut info = Zeroizing::new(Vec::new());
+        append_hkdf_info_field(&mut info, HKDF_CONTEXT_INFO_DOMAIN);
+        append_hkdf_info_field(&mut info, domain);
+        append_hkdf_info_field(&mut info, context_domain);
+        for field in context_fields {
+            append_hkdf_info_field(&mut info, field);
+        }
+        let info = [&info[..]];
+        let okm = prk
+            .expand(&info, SecretKeyLen)
+            .map_err(|_| EncryptionError::KeyDerivationFailed)?;
+        let mut bytes = [0u8; KEY_LEN];
+        okm.fill(&mut bytes)
+            .map_err(|_| EncryptionError::KeyDerivationFailed)?;
+        Ok(Self {
+            bytes: Zeroizing::new(bytes),
+        })
+    }
+
     pub fn as_bytes(&self) -> &[u8; KEY_LEN] {
         &self.bytes
     }
+}
+
+fn append_hkdf_info_field(info: &mut Vec<u8>, field: &[u8]) {
+    info.extend_from_slice(&(field.len() as u64).to_be_bytes());
+    info.extend_from_slice(field);
 }
 
 impl Debug for SecretKey {
@@ -889,6 +922,55 @@ mod tests {
         assert_eq!(rendered, r#"SecretKey { bytes: "[redacted; 32 bytes]" }"#);
         assert!(!rendered.contains("AAAA"));
         assert!(!rendered.contains("[65"));
+    }
+
+    #[test]
+    fn context_bound_subkey_derivation_binds_all_context_parts() {
+        let key = SecretKey::from_bytes([0x41; KEY_LEN]);
+        let epoch7 = 7u64.to_be_bytes();
+        let epoch8 = 8u64.to_be_bytes();
+        let first = key
+            .derive_subkey_with_context(
+                b"qdrant-sec/test-subkey/v1",
+                b"qdrant-sec/test-context/v1",
+                &[b"deployment-a", b"collection-a", &epoch7],
+            )
+            .unwrap();
+        let second = key
+            .derive_subkey_with_context(
+                b"qdrant-sec/test-subkey/v1",
+                b"qdrant-sec/test-context/v1",
+                &[b"deployment-a", b"collection-a", &epoch7],
+            )
+            .unwrap();
+        let different_collection = key
+            .derive_subkey_with_context(
+                b"qdrant-sec/test-subkey/v1",
+                b"qdrant-sec/test-context/v1",
+                &[b"deployment-a", b"collection-b", &epoch7],
+            )
+            .unwrap();
+        let different_epoch = key
+            .derive_subkey_with_context(
+                b"qdrant-sec/test-subkey/v1",
+                b"qdrant-sec/test-context/v1",
+                &[b"deployment-a", b"collection-a", &epoch8],
+            )
+            .unwrap();
+        let different_context_domain = key
+            .derive_subkey_with_context(
+                b"qdrant-sec/test-subkey/v1",
+                b"qdrant-sec/other-context/v1",
+                &[b"deployment-a", b"collection-a", &epoch7],
+            )
+            .unwrap();
+        let legacy = key.derive_subkey(b"qdrant-sec/test-subkey/v1").unwrap();
+
+        assert_eq!(first.as_bytes(), second.as_bytes());
+        assert_ne!(first.as_bytes(), different_collection.as_bytes());
+        assert_ne!(first.as_bytes(), different_epoch.as_bytes());
+        assert_ne!(first.as_bytes(), different_context_domain.as_bytes());
+        assert_ne!(first.as_bytes(), legacy.as_bytes());
     }
 
     #[test]
