@@ -192,8 +192,11 @@ mod tests {
         let status = tonic::Status::invalid_argument(
             "private ORAM read failed for session_id=session-sentinel \
              sessionId=session-camel-sentinel \
+             paths=raw-path-sentinel \
+             read_paths=read-path-sentinel \
              path_label=leaf-sentinel candidate_heap=candidate-sentinel \
              pathLabels=leaf-camel-sentinel \
+             neighbors=neighbors-sentinel \
              client_signature=client-signature-sentinel \
              readSignature=read-signature-camel-sentinel \
              commitSignature=commit-signature-camel-sentinel \
@@ -210,8 +213,11 @@ mod tests {
         assert!(rendered.contains("redacted"));
         assert!(!rendered.contains("session-sentinel"));
         assert!(!rendered.contains("session-camel-sentinel"));
+        assert!(!rendered.contains("raw-path-sentinel"));
+        assert!(!rendered.contains("read-path-sentinel"));
         assert!(!rendered.contains("leaf-sentinel"));
         assert!(!rendered.contains("leaf-camel-sentinel"));
+        assert!(!rendered.contains("neighbors-sentinel"));
         assert!(!rendered.contains("candidate-sentinel"));
         assert!(!rendered.contains("client-signature-sentinel"));
         assert!(!rendered.contains("read-signature-camel-sentinel"));
