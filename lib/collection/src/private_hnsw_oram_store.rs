@@ -1947,6 +1947,20 @@ mod tests {
         assert!(rendered.contains("exceeds maximum size"));
         assert!(!rendered.contains("ciphertext_sha256 mismatch"));
         assert!(!rendered.contains(&encoded_oversized.ciphertext));
+
+        let out_of_range = fixture_bucket(99, 42, b"out of range private hnsw bucket");
+        let err = store
+            .validate_bucket_for_write(&out_of_range, 42, 16, 64)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("out of range"));
+        assert!(!rendered.contains("99"), "{rendered}");
+        assert!(!rendered.contains("16"), "{rendered}");
+        let err = store.write_bucket(&out_of_range, 42, 16, 64).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("out of range"));
+        assert!(!rendered.contains("99"), "{rendered}");
+        assert!(!rendered.contains("16"), "{rendered}");
     }
 
     #[test]
