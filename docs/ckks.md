@@ -1149,6 +1149,9 @@ finish, and replica-state progress from resharding states fail closed.
 Shard-key layout changes are blocked for the same reason: `create_sharding_key`
 and `drop_sharding_key` would add or remove shard placement without migrating
 collection-local private ORAM buckets or transferring epoch/root ownership.
+Replica removal is also blocked: `drop_replica` and direct replica-set remove
+meta-ops would change local shard ownership without a private ORAM bucket
+ownership protocol.
 Manual shard snapshot creation, streaming, partial snapshot manifests, and shard
 snapshot recovery fail closed for the same reason: shard snapshots do not yet
 carry the collection-local private ORAM bucket store with epoch/root parity. Use

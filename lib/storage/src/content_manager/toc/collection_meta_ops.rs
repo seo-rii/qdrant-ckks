@@ -11,7 +11,7 @@ use collection::shards::collection_shard_distribution::CollectionShardDistributi
 use collection::shards::replica_set::replica_set_state::ReplicaState;
 use collection::shards::shard::PeerId;
 use collection::shards::transfer::ShardTransfer;
-use collection::shards::{CollectionId, transfer};
+use collection::shards::{CollectionId, replica_set, transfer};
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use common::fs::safe_delete_in_tmp;
 
@@ -191,6 +191,12 @@ impl TableOfContent {
         let collection = self
             .get_collection_unchecked(&operation.collection_name)
             .await?;
+        let collection_config = collection.config_snapshot().await;
+        reject_private_oram_replica_remove_until_supported(
+            &operation.collection_name,
+            &collection_config.params,
+            replica_changes.as_deref(),
+        )?;
         let mut recreate_optimizers = false;
 
         if let Some(diff) = optimizers_config {
@@ -936,6 +942,32 @@ fn reject_private_oram_shard_key_change_until_supported(
     )))
 }
 
+fn reject_private_oram_replica_remove_until_supported(
+    collection_id: &str,
+    params: &CollectionParams,
+    replica_changes: Option<&[replica_set::Change]>,
+) -> Result<(), StorageError> {
+    if !collection_params_use_private_oram_bucket_store(params)
+        || !replica_changes_remove_shard_replica(replica_changes)
+    {
+        return Ok(());
+    }
+
+    Err(StorageError::bad_input(format!(
+        "private ORAM replica removal is not supported for collection {collection_id}: \
+         collection-local ORAM bucket migration and consensus-backed epoch/root ownership are not \
+         implemented for replica removal",
+    )))
+}
+
+fn replica_changes_remove_shard_replica(replica_changes: Option<&[replica_set::Change]>) -> bool {
+    replica_changes.is_some_and(|changes| {
+        changes
+            .iter()
+            .any(|change| matches!(change, replica_set::Change::Remove(_, _)))
+    })
+}
+
 fn collection_params_use_private_oram_bucket_store(params: &CollectionParams) -> bool {
     params.encryption.as_ref().is_some_and(|encryption| {
         encryption.rules.iter().any(|rule| {
@@ -1046,6 +1078,7 @@ mod tests {
     };
     use collection::operations::cluster_ops::ReshardingDirection;
     use collection::operations::types::PeerMetadata;
+    use collection::shards::replica_set;
     use collection::shards::replica_set::replica_set_state::ReplicaState;
     use collection::shards::resharding::ReshardKey;
     use collection::shards::shard::PeerId;
@@ -1057,6 +1090,7 @@ mod tests {
     use super::{
         PRIVATE_HNSW_ORAM_BINDING, PRIVATE_RESULT_ORAM_BINDING,
         collection_params_require_crypto_runtime_transfer_parity,
+        reject_private_oram_replica_remove_until_supported,
         reject_private_oram_resharding_replica_state_until_supported,
         reject_private_oram_resharding_until_supported,
         reject_private_oram_shard_key_change_until_supported,
@@ -1411,6 +1445,72 @@ mod tests {
             "drop_shard_key",
         )
         .expect("ordinary collection drop_shard_key must stay open");
+    }
+
+    #[test]
+    fn private_oram_consensus_replica_remove_fails_closed_until_bucket_migration_exists() {
+        let private_hnsw_params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/vector-private-rk".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "text_private_hnsw".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["text".to_string()],
+                    },
+                    instance: "docs_private_hnsw_v1".to_string(),
+                    binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let private_result_params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/result-private-rk".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_private_result_oram".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_private_result_oram_v1".to_string(),
+                    binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let changes = [replica_set::Change::Remove(1, 2)];
+
+        for (label, params) in [
+            ("private HNSW ORAM", &private_hnsw_params),
+            ("private result ORAM", &private_result_params),
+        ] {
+            let err =
+                reject_private_oram_replica_remove_until_supported("docs", params, Some(&changes))
+                    .expect_err("private ORAM replica removal must fail closed");
+            assert!(
+                err.to_string().contains("replica removal")
+                    && err
+                        .to_string()
+                        .contains("consensus-backed epoch/root ownership"),
+                "unexpected {label} replica removal error: {err}",
+            );
+        }
+
+        reject_private_oram_replica_remove_until_supported(
+            "docs",
+            &CollectionParams::empty(),
+            Some(&changes),
+        )
+        .expect("ordinary collection replica removal must stay open");
+        reject_private_oram_replica_remove_until_supported("docs", &private_result_params, None)
+            .expect("private ORAM update without replica changes must stay open");
     }
 
     #[test]

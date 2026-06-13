@@ -327,6 +327,11 @@ pub async fn do_update_collection_cluster(
         &collection_state.config,
         &operation,
     )?;
+    reject_private_oram_cluster_replica_remove_until_supported(
+        &collection_name,
+        &collection_state.config,
+        &operation,
+    )?;
     let peer_metadata_by_id = consensus_state.persistent.read().peer_metadata_by_id();
     validate_encrypted_cluster_data_movement_parity(
         &collection_name,
@@ -1199,6 +1204,26 @@ fn cluster_operation_changes_shard_keys(operation: &ClusterOperations) -> bool {
     )
 }
 
+fn reject_private_oram_cluster_replica_remove_until_supported(
+    collection_name: &str,
+    config: &CollectionConfigInternal,
+    operation: &ClusterOperations,
+) -> Result<(), StorageError> {
+    if !matches!(operation, ClusterOperations::DropReplica(_))
+        || !collection_uses_private_oram_bucket_store(config)
+    {
+        return Ok(());
+    }
+
+    Err(StorageError::BadRequest {
+        description: format!(
+            "cannot drop shard replica for private ORAM collection {collection_name}: \
+             collection-local ORAM bucket migration and consensus-backed epoch/root ownership are \
+             not implemented for replica removal",
+        ),
+    })
+}
+
 fn cluster_operation_starts_shard_transfer(operation: &ClusterOperations) -> bool {
     matches!(
         operation,
@@ -1229,6 +1254,7 @@ mod tests {
 
     use collection::operations::cluster_ops::{
         CreateShardingKey, CreateShardingKeyOperation, DropShardingKey, DropShardingKeyOperation,
+        Replica,
     };
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_sec::{CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, VECTOR_OPENFHE_CKKS_PROVIDER};
@@ -1511,6 +1537,15 @@ mod tests {
         ]
     }
 
+    fn private_oram_drop_replica_operation() -> ClusterOperations {
+        ClusterOperations::DropReplica(DropReplicaOperation {
+            drop_replica: Replica {
+                shard_id: 1,
+                peer_id: 2,
+            },
+        })
+    }
+
     fn private_hnsw_collection_config() -> CollectionConfigInternal {
         CollectionConfigInternal {
             params: collection::config::CollectionParams {
@@ -1589,6 +1624,30 @@ mod tests {
             quantization_config: None,
             strict_mode_config: None,
             uuid: Some(Uuid::from_u128(12)),
+            metadata: None,
+        }
+    }
+
+    fn ordinary_collection_config() -> CollectionConfigInternal {
+        CollectionConfigInternal {
+            params: collection::config::CollectionParams::empty(),
+            hnsw_config: Default::default(),
+            optimizer_config: collection::optimizers_builder::OptimizersConfig {
+                deleted_threshold: 0.1,
+                vacuum_min_vector_number: 1000,
+                default_segment_number: 0,
+                max_segment_size: None,
+                #[expect(deprecated)]
+                memmap_threshold: None,
+                indexing_threshold: Some(100_000),
+                flush_interval_sec: 60,
+                max_optimization_threads: Some(0),
+                prevent_unoptimized: None,
+            },
+            wal_config: collection::config::WalConfig::default(),
+            quantization_config: None,
+            strict_mode_config: None,
+            uuid: Some(Uuid::from_u128(13)),
             metadata: None,
         }
     }
@@ -1678,31 +1737,43 @@ mod tests {
         for operation in private_oram_shard_key_change_operations() {
             reject_private_oram_cluster_shard_key_change_until_supported(
                 "docs",
-                &CollectionConfigInternal {
-                    params: collection::config::CollectionParams::empty(),
-                    hnsw_config: Default::default(),
-                    optimizer_config: collection::optimizers_builder::OptimizersConfig {
-                        deleted_threshold: 0.1,
-                        vacuum_min_vector_number: 1000,
-                        default_segment_number: 0,
-                        max_segment_size: None,
-                        #[expect(deprecated)]
-                        memmap_threshold: None,
-                        indexing_threshold: Some(100_000),
-                        flush_interval_sec: 60,
-                        max_optimization_threads: Some(0),
-                        prevent_unoptimized: None,
-                    },
-                    wal_config: collection::config::WalConfig::default(),
-                    quantization_config: None,
-                    strict_mode_config: None,
-                    uuid: Some(Uuid::from_u128(13)),
-                    metadata: None,
-                },
+                &ordinary_collection_config(),
                 &operation,
             )
             .expect("ordinary collection shard-key layout changes must stay open");
         }
+    }
+
+    #[test]
+    fn private_oram_drop_replica_guard_blocks_until_bucket_migration_supported() {
+        let operation = private_oram_drop_replica_operation();
+
+        for (label, config) in [
+            ("private HNSW ORAM", private_hnsw_collection_config()),
+            (
+                "private result ORAM",
+                private_result_oram_collection_config(),
+            ),
+        ] {
+            let err = reject_private_oram_cluster_replica_remove_until_supported(
+                "docs", &config, &operation,
+            )
+            .expect_err("private ORAM replica removal must fail closed");
+            assert!(
+                err.to_string().contains("replica removal")
+                    && err
+                        .to_string()
+                        .contains("consensus-backed epoch/root ownership"),
+                "unexpected {label} replica removal error: {err}",
+            );
+        }
+
+        reject_private_oram_cluster_replica_remove_until_supported(
+            "docs",
+            &ordinary_collection_config(),
+            &operation,
+        )
+        .expect("ordinary collection replica removal must stay open");
     }
 
     #[test]
