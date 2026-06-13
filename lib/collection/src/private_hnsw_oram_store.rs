@@ -630,6 +630,11 @@ impl PrivateHnswOramStore {
                 "private HNSW ORAM Merkle commit new epoch must be greater than old epoch",
             ));
         }
+        if updated_buckets.is_empty() {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM Merkle commit must update at least one bucket",
+            ));
+        }
         let mut tree = self.read_merkle_tree()?;
         validate_merkle_tree_context(&tree, old_epoch, old_root_hash, bucket_count)?;
         let mut seen_bucket_ids = BTreeSet::new();
@@ -3026,6 +3031,11 @@ mod tests {
             PrivateHnswOramStore::merkle_root_for_commitments(&updated_commitments).unwrap();
 
         let err = store
+            .prepare_merkle_commit(42, &old_root, 43, &old_root, 4, &[])
+            .unwrap_err();
+        assert!(err.to_string().contains("must update at least one bucket"));
+
+        let err = store
             .prepare_merkle_commit(
                 42,
                 &old_root,
@@ -3047,6 +3057,11 @@ mod tests {
             .unwrap();
         assert_eq!(proof.root_hash, new_root);
         assert_eq!(proof.leaves[0].leaf_hash, updated_commitments[2]);
+
+        let err = store
+            .prepare_merkle_commit(42, &old_root, 43, &new_root, 4, &[])
+            .unwrap_err();
+        assert!(err.to_string().contains("must update at least one bucket"));
     }
 
     #[test]
