@@ -29,6 +29,8 @@ pub enum ControlPlaneError {
     InvalidIdentifier(String),
     #[error("envelope key id is invalid: {0}")]
     InvalidEnvelopeKeyId(String),
+    #[error("ciphertext envelope body must not be empty")]
+    InvalidEnvelopeBody,
     #[error("ciphertext envelope version must be at least 1")]
     InvalidEnvelopeVersion,
     #[error("stored ciphertext envelope is malformed")]
@@ -162,7 +164,7 @@ fn validate_envelope_fields(
         validate_identifier(binding)?;
     }
     if body.is_empty() {
-        return Err(ControlPlaneError::InvalidIdentifier("body".to_string()));
+        return Err(ControlPlaneError::InvalidEnvelopeBody);
     }
 
     Ok(())
@@ -433,7 +435,21 @@ mod tests {
             .insert("body".to_string(), Value::String(String::new()));
         assert!(matches!(
             CiphertextEnvelope::from_stored_value(&empty_body),
-            Err(ControlPlaneError::InvalidIdentifier(body)) if body == "body"
+            Err(ControlPlaneError::InvalidEnvelopeBody)
+        ));
+
+        assert!(matches!(
+            CiphertextEnvelope::new(
+                1,
+                CryptoCapability::PayloadValue,
+                PAYLOAD_AES_GCM_PROVIDER,
+                "sha256:test",
+                "tenant-a:payload-v1",
+                Some(PAYLOAD_FIELD_BINDING.to_string()),
+                Map::new(),
+                "",
+            ),
+            Err(ControlPlaneError::InvalidEnvelopeBody)
         ));
 
         let mut unknown_field = envelope.to_stored_value();
