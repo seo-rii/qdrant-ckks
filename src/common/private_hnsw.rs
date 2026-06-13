@@ -2111,6 +2111,12 @@ fn validate_root_hash_string(value: &str, field: &str) -> StorageResult<()> {
 
 #[cfg(test)]
 mod private_hnsw_tests {
+    use std::collections::BTreeMap;
+
+    use collection::config::{CryptoMigrationState, WalConfig};
+    use collection::operations::types::VectorsConfig;
+    use collection::operations::vector_params_builder::VectorParamsBuilder;
+    use collection::optimizers_builder::OptimizersConfig;
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_sec::{
         FixedBudgetParams, OramKind, OramParams, PrivateHnswBucketAeadBaseContext,
@@ -2123,8 +2129,10 @@ mod private_hnsw_tests {
     };
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use sha2::{Digest, Sha256};
+    use uuid::Uuid;
 
     use super::*;
+    use crate::settings::CryptoSettings;
 
     #[test]
     fn path_oram_leaf_labels_map_to_heap_bucket_paths() {
@@ -2604,6 +2612,50 @@ mod private_hnsw_tests {
     }
 
     #[test]
+    fn recovered_snapshot_signature_preflight_verifies_manifest_signature() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-recovered-signature")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let mut manifest = fixture_session("session-1", 20).manifest;
+        manifest.collection_id = uuid.to_string();
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[7; 32]).unwrap();
+        let signature = sign_private_hnsw_oram_manifest(&key_pair, &manifest)
+            .expect("fixture manifest should sign");
+        let settings = recovered_snapshot_settings(&manifest, key_pair.public_key().as_ref());
+        let config = recovered_snapshot_config(uuid, &manifest);
+        let store = PrivateHnswOramStore::new(temp_dir.path(), "text").unwrap();
+        store.write_manifest(&manifest, &signature).unwrap();
+
+        validate_recovered_private_hnsw_oram_snapshot_signatures(
+            &settings,
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap();
+
+        let mut tampered_signature = signature.clone();
+        tampered_signature.sig = BASE64URL_NOPAD.encode(&[9; 64]);
+        store
+            .write_manifest(&manifest, &tampered_signature)
+            .unwrap();
+        let err = validate_recovered_private_hnsw_oram_snapshot_signatures(
+            &settings,
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("manifest signature verification failed"));
+        assert!(!rendered.contains(&tampered_signature.sig));
+        assert!(!rendered.contains(&manifest.root_hash));
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_BINDING));
+    }
+
+    #[test]
     fn active_session_current_epoch_preflight_rejects_stale_store_epoch() {
         let temp = tempfile::TempDir::new().unwrap();
         let store = PrivateHnswOramStore::new(temp.path(), "text").unwrap();
@@ -2824,6 +2876,87 @@ mod private_hnsw_tests {
             signature_public_keys: HashMap::new(),
             public_key: vec![0; 32],
         }
+    }
+
+    fn recovered_snapshot_config(
+        uuid: Uuid,
+        manifest: &PrivateHnswOramManifest,
+    ) -> CollectionConfigInternal {
+        CollectionConfigInternal {
+            params: CollectionParams {
+                vectors: VectorsConfig::Multi(BTreeMap::from([(
+                    manifest.vector_name.clone().into(),
+                    VectorParamsBuilder::new(u64::from(manifest.dim), Distance::Cosine).build(),
+                )])),
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some(manifest.key_id.clone()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: manifest.rk_epoch,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "docs_text_private_hnsw".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec![manifest.vector_name.clone()],
+                        },
+                        instance: "docs_text_private_hnsw".to_string(),
+                        binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            },
+            hnsw_config: segment::types::HnswConfig::default(),
+            optimizer_config: OptimizersConfig {
+                deleted_threshold: 0.1,
+                vacuum_min_vector_number: 1000,
+                default_segment_number: 0,
+                max_segment_size: None,
+                #[expect(deprecated)]
+                memmap_threshold: None,
+                indexing_threshold: Some(100_000),
+                flush_interval_sec: 60,
+                max_optimization_threads: Some(0),
+                prevent_unoptimized: None,
+            },
+            wal_config: WalConfig::default(),
+            quantization_config: None,
+            strict_mode_config: None,
+            uuid: Some(uuid),
+            metadata: None,
+        }
+    }
+
+    fn recovered_snapshot_settings(
+        manifest: &PrivateHnswOramManifest,
+        public_key: &[u8],
+    ) -> Settings {
+        let mut settings = Settings::new(None).unwrap();
+        settings.crypto = CryptoSettings {
+            zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+            instances: HashMap::from([(
+                "docs_text_private_hnsw".to_string(),
+                CryptoInstanceConfig {
+                    provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                    materials: HashMap::new(),
+                    backend_ref: None,
+                    options: serde_json::json!({
+                        KEY_ID_OPTION: manifest.key_id,
+                        EXPECTED_RK_ID_OPTION: manifest.rk_id,
+                        MIN_RK_EPOCH_OPTION: manifest.rk_epoch,
+                        MAX_RK_EPOCH_OPTION: manifest.rk_epoch,
+                        RESULT_PRIVACY_OPTION: "ids_visible",
+                        HNSW_OPTION: manifest.hnsw,
+                        ORAM_OPTION: manifest.oram,
+                        FIXED_BUDGET_OPTION: manifest.fixed_budget,
+                        SIGNATURE_PUBLIC_KEYS_OPTION: {
+                            "tenant-a/private-hnsw-signing-v1": BASE64URL_NOPAD.encode(public_key),
+                        },
+                    }),
+                },
+            )]),
+            ..CryptoSettings::default()
+        };
+        settings
     }
 
     #[test]
