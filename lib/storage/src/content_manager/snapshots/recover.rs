@@ -12,6 +12,7 @@ use collection::operations::snapshot_ops::{SnapshotPriority, SnapshotRecover};
 use collection::operations::types::CollectionError;
 use collection::operations::verification::new_unchecked_verification_pass;
 use collection::private_hnsw_oram_store::PRIVATE_HNSW_ORAM_DIR;
+use collection::private_result_oram_store::PRIVATE_RESULT_ORAM_DIR;
 use collection::shards::check_shard_path;
 use collection::shards::replica_set::replica_set_state::{
     MANUAL_RECOVERY_SHARD_STATE_VERSION, ReplicaState,
@@ -187,12 +188,11 @@ async fn _do_recover_from_snapshot(
 
     let snapshot_config = CollectionConfigInternal::load(tmp_collection_dir.path())?;
     snapshot_config.validate_and_warn();
-    Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+    validate_private_oram_snapshot_restore_layouts(
         collection_pass.name(),
         &snapshot_config,
         tmp_collection_dir.path(),
-    )
-    .map_err(|err| sanitize_private_hnsw_snapshot_layout_error(tmp_collection_dir.path(), err))?;
+    )?;
     if let Some(validate_snapshot_config) = &snapshot_config_validator {
         validate_snapshot_config(
             collection_pass.name(),
@@ -490,6 +490,26 @@ async fn _do_recover_from_snapshot(
     Ok(true)
 }
 
+fn validate_private_oram_snapshot_restore_layouts(
+    collection_name: &str,
+    snapshot_config: &CollectionConfigInternal,
+    collection_path: &std::path::Path,
+) -> Result<(), StorageError> {
+    Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+        collection_name,
+        snapshot_config,
+        collection_path,
+    )
+    .map_err(|err| sanitize_private_hnsw_snapshot_layout_error(collection_path, err))?;
+    Collection::validate_private_result_oram_snapshot_restore_layout(
+        collection_name,
+        snapshot_config,
+        collection_path,
+    )
+    .map_err(|err| sanitize_private_result_oram_snapshot_layout_error(collection_path, err))?;
+    Ok(())
+}
+
 fn sanitize_private_hnsw_snapshot_layout_error(
     collection_path: &std::path::Path,
     err: CollectionError,
@@ -498,6 +518,18 @@ fn sanitize_private_hnsw_snapshot_layout_error(
     let collection_path = collection_path.to_string_lossy();
     if rendered.contains(collection_path.as_ref()) || rendered.contains(PRIVATE_HNSW_ORAM_DIR) {
         return StorageError::bad_input("private HNSW ORAM snapshot layout validation failed");
+    }
+    StorageError::from(err)
+}
+
+fn sanitize_private_result_oram_snapshot_layout_error(
+    collection_path: &std::path::Path,
+    err: CollectionError,
+) -> StorageError {
+    let rendered = err.to_string();
+    let collection_path = collection_path.to_string_lossy();
+    if rendered.contains(collection_path.as_ref()) || rendered.contains(PRIVATE_RESULT_ORAM_DIR) {
+        return StorageError::bad_input("private result ORAM snapshot layout validation failed");
     }
     StorageError::from(err)
 }
@@ -553,14 +585,20 @@ fn validate_existing_collection_crypto_identity(
 #[cfg(test)]
 mod tests {
     use collection::config::{
-        CollectionEncryptionConfig, CollectionParams, CryptoMigrationState, EncryptionRuleRef,
-        EncryptionSelector,
+        CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams,
+        CryptoMigrationState, EncryptionRuleRef, EncryptionSelector, WalConfig,
     };
     use collection::operations::types::CollectionError;
+    use collection::optimizers_builder::OptimizersConfig;
+    use collection::private_result_oram_store::PRIVATE_RESULT_ORAM_DIR;
+    use segment::types::HnswConfig;
     use uuid::Uuid;
 
     use super::{
-        sanitize_private_hnsw_snapshot_layout_error, validate_existing_collection_crypto_identity,
+        sanitize_private_hnsw_snapshot_layout_error,
+        sanitize_private_result_oram_snapshot_layout_error,
+        validate_existing_collection_crypto_identity,
+        validate_private_oram_snapshot_restore_layouts,
     };
 
     fn encrypted_params() -> CollectionParams {
@@ -581,6 +619,21 @@ mod tests {
                 }],
             }),
             ..CollectionParams::empty()
+        }
+    }
+
+    fn test_optimizers_config() -> OptimizersConfig {
+        OptimizersConfig {
+            deleted_threshold: 0.1,
+            vacuum_min_vector_number: 1000,
+            default_segment_number: 0,
+            max_segment_size: None,
+            #[expect(deprecated)]
+            memmap_threshold: None,
+            indexing_threshold: Some(100_000),
+            flush_interval_sec: 60,
+            max_optimization_threads: Some(0),
+            prevent_unoptimized: None,
         }
     }
 
@@ -613,6 +666,66 @@ mod tests {
             ),
         );
         assert!(safe.to_string().contains("unconfigured vector store"));
+    }
+
+    #[test]
+    fn private_result_oram_snapshot_recovery_layout_error_is_sanitized() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-storage-recover-sanitize")
+            .tempdir()
+            .unwrap();
+        let leaked_path = temp_dir
+            .path()
+            .join(PRIVATE_RESULT_ORAM_DIR)
+            .join("buckets")
+            .join("00000000.bucket");
+        let err = sanitize_private_result_oram_snapshot_layout_error(
+            temp_dir.path(),
+            CollectionError::not_found(format!("private result ORAM bucket {leaked_path:?}")),
+        );
+
+        let rendered = err.to_string();
+        assert!(rendered.contains("private result ORAM snapshot layout validation failed"));
+        assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
+
+        let safe = sanitize_private_result_oram_snapshot_layout_error(
+            temp_dir.path(),
+            CollectionError::bad_request(
+                "private result ORAM snapshot store is present without a matching collection encryption rule",
+            ),
+        );
+        assert!(
+            safe.to_string()
+                .contains("without a matching collection encryption rule")
+        );
+    }
+
+    #[test]
+    fn private_oram_snapshot_recovery_layouts_reject_result_store_without_binding() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-storage-recover-layout")
+            .tempdir()
+            .unwrap();
+        std::fs::create_dir(temp_dir.path().join(PRIVATE_RESULT_ORAM_DIR)).unwrap();
+        let config = CollectionConfigInternal {
+            params: CollectionParams::empty(),
+            hnsw_config: HnswConfig::default(),
+            optimizer_config: test_optimizers_config(),
+            wal_config: WalConfig::default(),
+            quantization_config: None,
+            strict_mode_config: None,
+            uuid: None,
+            metadata: None,
+        };
+
+        let err = validate_private_oram_snapshot_restore_layouts("docs", &config, temp_dir.path())
+            .expect_err("orphan private result ORAM snapshot store must fail closed")
+            .to_string();
+
+        assert!(err.contains("without a matching collection encryption rule"));
+        assert!(!err.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
     }
 
     #[test]

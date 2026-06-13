@@ -862,14 +862,15 @@ sanitized before reporting, so collection-local `private_hnsw_oram` paths and
 stored bucket bodies are not reflected; CLI layout failures are fixed messages
 that also avoid bucket ids and bucket commitment mismatch details.
 CLI and REST snapshot recovery also validate stored private HNSW ORAM manifest
-signatures against the runtime `signature_public_keys` registry after the
-restore-layout preflight passes, so tampered manifest signatures fail closed
-without exposing bucket roots, ciphertexts, or store paths.
-Storage-level `Collection::restore_snapshot` also runs the private HNSW ORAM
-restore-layout preflight before shard restore begins and applies the same
-sanitization before returning layout failures to callers. Collection-level
-snapshot manifest and bucket-contract mismatch errors also avoid reflecting
-manifest ids, vector names, dimensions, bucket ids, or bucket ciphertexts.
+and private result ORAM manifest signatures against the runtime
+`signature_public_keys` registry after the restore-layout preflight passes, so
+tampered manifest signatures fail closed without exposing bucket roots,
+ciphertexts, or store paths. Storage-level snapshot recovery also runs private
+HNSW ORAM and private result ORAM restore-layout preflight before shard restore
+begins and applies the same sanitization before returning layout failures to
+callers. Collection-level snapshot manifest and bucket-contract mismatch errors
+also avoid reflecting manifest ids, vector names, dimensions, bucket ids, or
+bucket ciphertexts.
 
 Current result privacy support has two explicit modes. `result_privacy:
 ids_visible` keeps Qdrant blind to vectors, query vectors, visited HNSW nodes,
