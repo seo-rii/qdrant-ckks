@@ -1392,6 +1392,40 @@ mod private_result_oram_rest_tests {
             );
             assert!(!malformed_commit_new_root_error.contains(commit_new_root_sentinel));
 
+            let empty_commit_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/commit",
+                CommitPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash: new_root_hash.clone(),
+                    updated_buckets: vec![],
+                    commit_signature: commit_signature.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "commit updated_buckets must contain"
+            );
+            assert!(!empty_commit_error.contains(&commit_signature.sig));
+
+            let oversized_commit_buckets = vec![updated_bucket.clone(); 7];
+            let oversized_commit_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/commit",
+                CommitPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash: new_root_hash.clone(),
+                    updated_buckets: oversized_commit_buckets,
+                    commit_signature: commit_signature.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "commit updated_buckets must contain"
+            );
+            assert!(!oversized_commit_error.contains(&updated_bucket.ciphertext));
+            assert!(!oversized_commit_error.contains("duplicate bucket id"));
+
             let wrong_commit_signature = fixture.signature.clone();
             let invalid_commit_signature_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/commit",

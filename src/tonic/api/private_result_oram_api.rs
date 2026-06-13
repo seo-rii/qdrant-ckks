@@ -1746,6 +1746,57 @@ mod private_result_oram_grpc_tests {
                     .contains(commit_new_root_sentinel)
             );
 
+            let empty_commit = PrivateResultOram::commit_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::CommitPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash: new_root_hash.clone(),
+                    updated_buckets: vec![],
+                    commit_signature: Some(signature_to_proto(commit_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(empty_commit.code(), Code::InvalidArgument);
+            assert!(
+                empty_commit
+                    .message()
+                    .contains("commit updated_buckets must contain")
+            );
+            assert!(!empty_commit.message().contains(&commit_signature.sig));
+
+            let oversized_commit = PrivateResultOram::commit_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::CommitPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash: new_root_hash.clone(),
+                    updated_buckets: vec![bucket_to_proto(updated_bucket.clone()); 7],
+                    commit_signature: Some(signature_to_proto(commit_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(oversized_commit.code(), Code::InvalidArgument);
+            assert!(
+                oversized_commit
+                    .message()
+                    .contains("commit updated_buckets must contain")
+            );
+            assert!(
+                !oversized_commit
+                    .message()
+                    .contains(&updated_bucket.ciphertext)
+            );
+            assert!(!oversized_commit.message().contains("duplicate bucket id"));
+
             let wrong_commit_signature = fixture.signature.clone();
             let invalid_commit_signature = PrivateResultOram::commit_private_result_oram_buckets(
                 &service,
