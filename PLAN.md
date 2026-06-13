@@ -465,6 +465,7 @@
 - SDK verified encrypted search는 upper-layer client cache hit 경로에서도 Merkle proof를 bucket decrypt, state remap, ORAM writeback보다 먼저 검증한다.
 - REST access log와 denied-auth audit path는 private ORAM close-session URL의 session id를 템플릿으로 치환하고 private ORAM query string을 redacted 처리한다. slow request log/request hash redaction은 private HNSW ORAM path labels, private result ORAM bucket ids, bucket commitments, updated bucket writebacks, session ids, client-state aliases, point/payload fetch tokens를 숨기며 snake_case/camelCase 단수·복수 alias fixture로 회귀를 고정한다.
 - private result ORAM nested request 객체 안의 `session_id`/`sessionId`, `bucket_ids`/`bucketIds`, `bucket_commitments`/`bucketCommitments`, `updated_buckets`/`updatedBuckets`도 slow-request log와 request hash에서 redacted projection으로 동일화한다.
+- panic telemetry와 gRPC status logging redaction도 private ORAM session/path/bucket/node/neighbor/candidate/result/token/client-state/update bucket snake_case·camelCase alias sentinel을 반사하지 않는지 검증한다.
 - REST request metrics fixture도 private result ORAM `read_buckets`와 close-session endpoint에서 fixed endpoint label만 방출하고 dynamic bucket id/session id sentinel을 방출하지 않는지 검증한다.
 - REST/gRPC private result ORAM bucket upload preflight도 mismatched 또는 malformed root hash를 submitted root hash와 bucket ciphertext 반사 없이 fail closed 한다.
 - REST/gRPC private result ORAM bucket upload ciphertext/hash mismatch 오류도 submitted bucket ciphertext body를 반사하지 않고 generic ciphertext validation failure로 멈춘다.

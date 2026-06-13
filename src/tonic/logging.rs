@@ -191,20 +191,30 @@ mod tests {
     fn grpc_status_log_message_redacts_private_oram_access_pattern_fields() {
         let status = tonic::Status::invalid_argument(
             "private ORAM read failed for session_id=session-sentinel \
+             sessionId=session-camel-sentinel \
              path_label=leaf-sentinel candidate_heap=candidate-sentinel \
+             pathLabels=leaf-camel-sentinel \
              payload_fetch_token=fetch-token-sentinel \
+             payloadFetchTokens=fetch-token-camel-sentinel \
              updated_buckets=updated-bucket-sentinel \
-             bucket_commitment=bucket-commitment-sentinel",
+             updatedBuckets=updated-bucket-camel-sentinel \
+             bucket_commitment=bucket-commitment-sentinel \
+             bucketIds=bucket-id-camel-sentinel",
         );
 
         let rendered = redacted_grpc_status_message(&status);
 
         assert!(rendered.contains("redacted"));
         assert!(!rendered.contains("session-sentinel"));
+        assert!(!rendered.contains("session-camel-sentinel"));
         assert!(!rendered.contains("leaf-sentinel"));
+        assert!(!rendered.contains("leaf-camel-sentinel"));
         assert!(!rendered.contains("candidate-sentinel"));
         assert!(!rendered.contains("fetch-token-sentinel"));
+        assert!(!rendered.contains("fetch-token-camel-sentinel"));
         assert!(!rendered.contains("updated-bucket-sentinel"));
+        assert!(!rendered.contains("updated-bucket-camel-sentinel"));
         assert!(!rendered.contains("bucket-commitment-sentinel"));
+        assert!(!rendered.contains("bucket-id-camel-sentinel"));
     }
 }
