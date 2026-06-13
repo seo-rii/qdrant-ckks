@@ -5091,6 +5091,13 @@ mod tests {
             Err(PrivateResultOramError::InvalidBucketField("bucket_id"))
         );
 
+        let mut duplicate = decoded.clone();
+        duplicate.buckets[1] = duplicate.buckets[0].clone();
+        assert_eq!(
+            validate_private_result_oram_upload_bundle(&duplicate),
+            Err(PrivateResultOramError::InvalidBucketField("bucket_id"))
+        );
+
         let mut wrong_hash = decoded.clone();
         wrong_hash.buckets[0].ciphertext_sha256 = commitment(99);
         assert_eq!(
