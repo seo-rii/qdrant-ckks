@@ -3897,6 +3897,28 @@ mod tests {
             Err(PrivateResultOramError::InvalidClientStateCiphertextHash)
         );
 
+        let mut malformed_ciphertext = encrypted.clone();
+        malformed_ciphertext.ciphertext = "client-state-ciphertext!sentinel".to_string();
+        assert_eq!(
+            open_private_result_oram_client_state_snapshot(&keys, context, &malformed_ciphertext),
+            Err(PrivateResultOramError::InvalidClientStateCiphertextEncoding)
+        );
+
+        let mut short_ciphertext = encrypted.clone();
+        short_ciphertext.ciphertext = BASE64URL_NOPAD.encode(&[0, 1, 2, 3]);
+        short_ciphertext.ciphertext_sha256 = base64url_sha256(&[0, 1, 2, 3]);
+        assert_eq!(
+            open_private_result_oram_client_state_snapshot(&keys, context, &short_ciphertext),
+            Err(PrivateResultOramError::InvalidClientStateCiphertextEncoding)
+        );
+
+        let mut malformed_hash = encrypted.clone();
+        malformed_hash.ciphertext_sha256 = "AAAA".to_string();
+        assert_eq!(
+            open_private_result_oram_client_state_snapshot(&keys, context, &malformed_hash),
+            Err(PrivateResultOramError::InvalidClientStateCiphertextHash)
+        );
+
         let mut wrong_encoded_version = encrypted.clone();
         let mut raw = BASE64URL_NOPAD
             .decode(wrong_encoded_version.ciphertext.as_bytes())
@@ -3907,6 +3929,19 @@ mod tests {
         assert_eq!(
             open_private_result_oram_client_state_snapshot(&keys, context, &wrong_encoded_version),
             Err(PrivateResultOramError::UnsupportedClientStateCiphertextVersion(2))
+        );
+
+        let mut tampered_ciphertext = encrypted.clone();
+        let mut raw = BASE64URL_NOPAD
+            .decode(tampered_ciphertext.ciphertext.as_bytes())
+            .unwrap();
+        let last = raw.last_mut().unwrap();
+        *last ^= 0x80;
+        tampered_ciphertext.ciphertext = BASE64URL_NOPAD.encode(&raw);
+        tampered_ciphertext.ciphertext_sha256 = base64url_sha256(&raw);
+        assert_eq!(
+            open_private_result_oram_client_state_snapshot(&keys, context, &tampered_ciphertext),
+            Err(PrivateResultOramError::ClientStateOpenFailed)
         );
 
         let mut malformed_snapshot = snapshot;
