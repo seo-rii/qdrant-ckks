@@ -1845,6 +1845,67 @@ mod tests {
         assert!(!err.to_string().contains(PRIVATE_RESULT_ORAM_DIR));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn private_result_oram_restore_preflight_rejects_bucket_symlink() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-bucket-symlink")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let manifest = private_result_manifest(uuid.to_string());
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+        let bucket_path = private_result_snapshot_bucket_path(temp_dir.path(), 0);
+        fs::remove_file(&bucket_path).unwrap();
+        std::os::unix::fs::symlink(temp_dir.path().join("outside-result.bucket"), &bucket_path)
+            .unwrap();
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("non-symlink regular file"));
+        assert!(!rendered.contains("outside-result.bucket"));
+        assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!rendered.contains("00000000.bucket"));
+        assert!(!rendered.contains(&manifest.root_hash));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_result_oram_restore_preflight_rejects_world_readable_bucket_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-world-readable-bucket")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let manifest = private_result_manifest(uuid.to_string());
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+        let bucket_path = private_result_snapshot_bucket_path(temp_dir.path(), 0);
+        fs::set_permissions(&bucket_path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("must not be group/world accessible"));
+        assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!rendered.contains("00000000.bucket"));
+        assert!(!rendered.contains(&manifest.root_hash));
+    }
+
     #[test]
     fn private_result_oram_restore_preflight_accepts_manifest_epoch_and_buckets() {
         let temp_dir = tempfile::Builder::new()
