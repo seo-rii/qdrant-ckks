@@ -782,6 +782,16 @@ mod private_result_oram_grpc_tests {
     }
 
     #[test]
+    fn proto_enum_conversions_reject_unknown_values_without_reflecting_value() {
+        let unsupported = 987_654;
+
+        let err = oram_kind_from_proto(unsupported).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("kind"));
+        assert!(!err.message().contains(&unsupported.to_string()));
+    }
+
+    #[test]
     fn private_result_oram_uploads_and_reads_through_grpc_service() {
         let _guard = route_e2e_guard();
         let fixture = PrivateResultRouteFixture::build();
