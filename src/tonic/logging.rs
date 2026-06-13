@@ -194,6 +194,9 @@ mod tests {
              sessionId=session-camel-sentinel \
              path_label=leaf-sentinel candidate_heap=candidate-sentinel \
              pathLabels=leaf-camel-sentinel \
+             client_signature=client-signature-sentinel \
+             readSignature=read-signature-camel-sentinel \
+             commitSignature=commit-signature-camel-sentinel \
              payload_fetch_token=fetch-token-sentinel \
              payloadFetchTokens=fetch-token-camel-sentinel \
              updated_buckets=updated-bucket-sentinel \
@@ -210,6 +213,9 @@ mod tests {
         assert!(!rendered.contains("leaf-sentinel"));
         assert!(!rendered.contains("leaf-camel-sentinel"));
         assert!(!rendered.contains("candidate-sentinel"));
+        assert!(!rendered.contains("client-signature-sentinel"));
+        assert!(!rendered.contains("read-signature-camel-sentinel"));
+        assert!(!rendered.contains("commit-signature-camel-sentinel"));
         assert!(!rendered.contains("fetch-token-sentinel"));
         assert!(!rendered.contains("fetch-token-camel-sentinel"));
         assert!(!rendered.contains("updated-bucket-sentinel"));
