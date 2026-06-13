@@ -3184,17 +3184,22 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("must update at least one bucket"));
 
+        let wrong_new_root = root_hash(99);
+        assert_ne!(wrong_new_root, new_root);
         let err = store
             .prepare_merkle_commit(
                 42,
                 &old_root,
                 43,
-                &root_hash(99),
+                &wrong_new_root,
                 4,
                 std::slice::from_ref(&updated_bucket),
             )
             .unwrap_err();
-        assert!(err.to_string().contains("new_root_hash mismatch"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("new_root_hash mismatch"));
+        assert!(!rendered.contains(&wrong_new_root), "{rendered}");
+        assert!(!rendered.contains(&new_root), "{rendered}");
 
         store
             .prepare_merkle_commit(42, &old_root, 43, &new_root, 4, &[updated_bucket])
