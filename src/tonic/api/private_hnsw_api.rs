@@ -2067,6 +2067,11 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+            assert!(
+                !err.message().contains(&session.session_id),
+                "{}",
+                err.message()
+            );
             assert_eq!(
                 uploaded_store.read_manifest().unwrap(),
                 (fixture.manifest.clone(), fixture.manifest_signature.clone())
@@ -2095,6 +2100,11 @@ mod private_hnsw_grpc_tests {
             assert!(
                 !err.message()
                     .contains("active-session-bucket-upload-ciphertext-sentinel"),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&session.session_id),
                 "{}",
                 err.message()
             );

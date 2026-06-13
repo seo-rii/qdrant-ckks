@@ -1441,6 +1441,10 @@ mod private_hnsw_rest_tests {
                 !active_manifest_upload_error.contains(&refreshed_manifest.root_hash),
                 "{active_manifest_upload_error}"
             );
+            assert!(
+                !active_manifest_upload_error.contains(&session_id),
+                "{active_manifest_upload_error}"
+            );
             assert_eq!(
                 uploaded_store.read_manifest().unwrap(),
                 (fixture.manifest.clone(), fixture.manifest_signature.clone())
@@ -1462,6 +1466,10 @@ mod private_hnsw_rest_tests {
             assert!(
                 !active_bucket_upload_error
                     .contains("active-session-bucket-upload-ciphertext-sentinel"),
+                "{active_bucket_upload_error}"
+            );
+            assert!(
+                !active_bucket_upload_error.contains(&session_id),
                 "{active_bucket_upload_error}"
             );
             assert_eq!(
