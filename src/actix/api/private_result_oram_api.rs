@@ -305,7 +305,7 @@ mod private_result_oram_rest_tests {
         CollectionMetaOperations, CreateCollection, CreateCollectionOperation,
     };
     use storage::dispatcher::Dispatcher;
-    use storage::rbac::{Access, Auth};
+    use storage::rbac::{Access, AccessRequirements, Auth};
     use uuid::Uuid;
 
     use super::*;
@@ -843,6 +843,87 @@ mod private_result_oram_rest_tests {
             );
             assert_eq!(buckets_result["index_epoch"], fixture.manifest.index_epoch);
 
+            let auth = Auth::new_internal(Access::full("private result ORAM route test"));
+            let collection_pass = auth
+                .check_collection_access(
+                    COLLECTION_NAME,
+                    AccessRequirements::new(),
+                    "private_result_active_snapshot_upload_guard_test",
+                )
+                .unwrap();
+            let pass = new_unchecked_verification_pass();
+            let collection = dispatcher
+                .toc(&auth, &pass)
+                .get_collection(&collection_pass)
+                .await
+                .unwrap();
+            let config = collection.config_snapshot().await;
+            let snapshot_guard =
+                crate::common::private_result_oram::begin_private_result_oram_collection_snapshot(
+                    collection.name(),
+                    &config,
+                )
+                .unwrap()
+                .unwrap();
+            let active_snapshot_session_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/session",
+                OpenPrivateResultOramSessionRequest {
+                    client_id: "tenant-a/sdk-instance-active-snapshot".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                },
+                StatusCode::BAD_REQUEST,
+                "active collection snapshot"
+            );
+            assert!(
+                !active_snapshot_session_error.contains(&fixture.manifest.root_hash),
+                "{active_snapshot_session_error}"
+            );
+            assert!(
+                !active_snapshot_session_error.contains("private_result_oram"),
+                "{active_snapshot_session_error}"
+            );
+            let active_snapshot_manifest_upload_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/manifest",
+                UploadPrivateResultOramManifestRequest {
+                    manifest: fixture.manifest.clone(),
+                    signature: fixture.signature.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "active collection snapshot"
+            );
+            assert!(
+                !active_snapshot_manifest_upload_error.contains(&fixture.manifest.root_hash),
+                "{active_snapshot_manifest_upload_error}"
+            );
+            assert!(
+                !active_snapshot_manifest_upload_error.contains("private_result_oram"),
+                "{active_snapshot_manifest_upload_error}"
+            );
+            let mut active_snapshot_bucket_upload = fixture.buckets.clone();
+            active_snapshot_bucket_upload[0].ciphertext =
+                "active-result-snapshot-bucket-ciphertext-sentinel".to_string();
+            let active_snapshot_bucket_upload_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/buckets",
+                UploadPrivateResultOramBucketsRequest {
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    buckets: active_snapshot_bucket_upload,
+                },
+                StatusCode::BAD_REQUEST,
+                "active collection snapshot"
+            );
+            assert!(
+                !active_snapshot_bucket_upload_error
+                    .contains("active-result-snapshot-bucket-ciphertext-sentinel"),
+                "{active_snapshot_bucket_upload_error}"
+            );
+            assert!(
+                !active_snapshot_bucket_upload_error.contains("private_result_oram"),
+                "{active_snapshot_bucket_upload_error}"
+            );
+            drop(snapshot_guard);
+
             let session_result = post_json_ok!(
                 "/collections/docs/private-result-oram/session",
                 OpenPrivateResultOramSessionRequest {
@@ -889,8 +970,6 @@ mod private_result_oram_rest_tests {
             );
             assert!(!active_bucket_upload_error.contains(&fixture.buckets[0].ciphertext));
 
-            let auth = Auth::new_internal(Access::full("private result ORAM snapshot test"));
-            let pass = new_unchecked_verification_pass();
             let active_snapshot_error = crate::common::collections::do_create_snapshot(
                 dispatcher.toc(&auth, &pass).clone(),
                 &auth,

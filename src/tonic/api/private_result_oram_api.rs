@@ -413,7 +413,7 @@ mod private_result_oram_grpc_tests {
         CollectionMetaOperations, CreateCollection, CreateCollectionOperation,
     };
     use storage::dispatcher::Dispatcher;
-    use storage::rbac::{Access, Auth};
+    use storage::rbac::{Access, AccessRequirements, Auth};
     use tonic::Code;
     use uuid::Uuid;
 
@@ -910,6 +910,83 @@ mod private_result_oram_grpc_tests {
             .into_inner();
             assert_eq!(bucket_epoch.index_epoch, BASE_EPOCH);
 
+            let auth = Auth::new_internal(Access::full("private result ORAM route test"));
+            let collection_pass = auth
+                .check_collection_access(
+                    COLLECTION_NAME,
+                    AccessRequirements::new(),
+                    "private_result_active_snapshot_upload_guard_test",
+                )
+                .unwrap();
+            let pass = new_unchecked_verification_pass();
+            let collection = dispatcher
+                .toc(&auth, &pass)
+                .get_collection(&collection_pass)
+                .await
+                .unwrap();
+            let config = collection.config_snapshot().await;
+            let snapshot_guard =
+                crate::common::private_result_oram::begin_private_result_oram_collection_snapshot(
+                    collection.name(),
+                    &config,
+                )
+                .unwrap()
+                .unwrap();
+            let err = PrivateResultOram::open_private_result_oram_session(
+                &service,
+                Request::new(grpc::OpenPrivateResultOramSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    client_id: "tenant-a/sdk-instance-active-snapshot".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("active collection snapshot"));
+            assert!(!err.message().contains(&fixture.manifest.root_hash));
+            assert!(!err.message().contains("private_result_oram"));
+            let err = PrivateResultOram::upload_private_result_oram_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                    signature: Some(signature_to_proto(fixture.signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("active collection snapshot"));
+            assert!(!err.message().contains(&fixture.manifest.root_hash));
+            assert!(!err.message().contains("private_result_oram"));
+            let mut active_snapshot_bucket_upload = fixture.buckets.clone();
+            active_snapshot_bucket_upload[0].ciphertext =
+                "active-result-snapshot-bucket-ciphertext-sentinel".to_string();
+            let err = PrivateResultOram::upload_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    buckets: active_snapshot_bucket_upload
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("active collection snapshot"));
+            assert!(
+                !err.message()
+                    .contains("active-result-snapshot-bucket-ciphertext-sentinel")
+            );
+            assert!(!err.message().contains("private_result_oram"));
+            drop(snapshot_guard);
+
             let session = PrivateResultOram::open_private_result_oram_session(
                 &service,
                 Request::new(grpc::OpenPrivateResultOramSessionRequest {
@@ -989,8 +1066,6 @@ mod private_result_oram_grpc_tests {
                     .contains(&fixture.buckets[0].ciphertext)
             );
 
-            let auth = Auth::new_internal(Access::full("private result ORAM snapshot test"));
-            let pass = new_unchecked_verification_pass();
             let active_snapshot_error = crate::common::collections::do_create_snapshot(
                 dispatcher.toc(&auth, &pass).clone(),
                 &auth,
