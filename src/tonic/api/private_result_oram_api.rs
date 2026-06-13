@@ -813,6 +813,33 @@ mod private_result_oram_grpc_tests {
             assert_eq!(missing_manifest.code(), Code::NotFound);
             assert!(!missing_manifest.message().contains("private_result_oram"));
 
+            let unsupported_manifest_alg_sentinel = "rsa-pss-result-manifest-sentinel";
+            let mut unsupported_alg_manifest_signature = fixture.signature.clone();
+            unsupported_alg_manifest_signature.alg = unsupported_manifest_alg_sentinel.to_string();
+            let unsupported_manifest_alg = PrivateResultOram::upload_private_result_oram_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                    signature: Some(signature_to_proto(unsupported_alg_manifest_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(unsupported_manifest_alg.code(), Code::InvalidArgument);
+            assert!(
+                unsupported_manifest_alg
+                    .message()
+                    .contains("request validation failed")
+            );
+            assert!(
+                !unsupported_manifest_alg
+                    .message()
+                    .contains(unsupported_manifest_alg_sentinel),
+                "{}",
+                unsupported_manifest_alg.message()
+            );
+
             let mut alt_manifest_signature = fixture.signature.clone();
             alt_manifest_signature.key_id = ALT_SIGNING_KEY_ID.to_string();
             let alt_manifest_key = PrivateResultOram::upload_private_result_oram_manifest(
