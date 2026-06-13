@@ -989,6 +989,54 @@ mod private_result_oram_grpc_tests {
                     .contains(&fixture.buckets[0].ciphertext)
             );
 
+            let auth = Auth::new_internal(Access::full("private result ORAM snapshot test"));
+            let pass = new_unchecked_verification_pass();
+            let active_snapshot_error = crate::common::collections::do_create_snapshot(
+                dispatcher.toc(&auth, &pass).clone(),
+                &auth,
+                COLLECTION_NAME,
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+            assert!(
+                active_snapshot_error.contains("requires no active private ORAM session"),
+                "{active_snapshot_error}"
+            );
+            assert!(
+                !active_snapshot_error.contains(&fixture.manifest.root_hash),
+                "{active_snapshot_error}"
+            );
+            assert!(
+                !active_snapshot_error.contains(&fixture.buckets[0].ciphertext),
+                "{active_snapshot_error}"
+            );
+            assert!(
+                !active_snapshot_error.contains("private_result_oram"),
+                "{active_snapshot_error}"
+            );
+            let active_full_snapshot_error =
+                crate::common::snapshots::do_create_full_snapshot(&dispatcher, auth.clone())
+                    .await
+                    .unwrap_err()
+                    .to_string();
+            assert!(
+                active_full_snapshot_error.contains("requires no active private ORAM session"),
+                "{active_full_snapshot_error}"
+            );
+            assert!(
+                !active_full_snapshot_error.contains(&fixture.manifest.root_hash),
+                "{active_full_snapshot_error}"
+            );
+            assert!(
+                !active_full_snapshot_error.contains(&fixture.buckets[0].ciphertext),
+                "{active_full_snapshot_error}"
+            );
+            assert!(
+                !active_full_snapshot_error.contains("private_result_oram"),
+                "{active_full_snapshot_error}"
+            );
+
             let read_bucket_ids = vec![0, 1, 3, 0, 1, 4];
             let read = PrivateResultOram::read_private_result_oram_buckets(
                 &service,
