@@ -1005,6 +1005,18 @@ fn private_result_oram_error(err: qdrant_sec::PrivateResultOramError) -> Collect
         PrivateResultOramError::UnsupportedBucketVersion(_) => {
             "private result ORAM bucket version is unsupported"
         }
+        PrivateResultOramError::UnsupportedBucketCiphertextVersion(_) => {
+            "private result ORAM bucket ciphertext uses unsupported version"
+        }
+        PrivateResultOramError::UnsupportedPayloadBlockVersion(_) => {
+            "private result ORAM payload block uses unsupported version"
+        }
+        PrivateResultOramError::UnsupportedClientStateSnapshotVersion(_) => {
+            "private result ORAM client state snapshot uses unsupported version"
+        }
+        PrivateResultOramError::UnsupportedClientStateCiphertextVersion(_) => {
+            "private result ORAM client state uses unsupported ciphertext version"
+        }
         PrivateResultOramError::BucketOutOfRange { .. } => {
             "private result ORAM bucket is out of range"
         }
@@ -1242,9 +1254,10 @@ mod tests {
         OramKind, OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_RESULT_ORAM_BINDING,
         PrivateResultOramBucketCommitmentContext, PrivateResultOramClientCommitBucketRef,
         PrivateResultOramCommitPlan, PrivateResultOramCommitSignatureContext,
-        PrivateResultOramSignatureVerification, private_result_oram_bucket_commitment,
-        private_result_oram_merkle_root_for_commitments, sign_private_result_oram_commit,
-        sign_private_result_oram_manifest, verify_private_result_oram_merkle_proof,
+        PrivateResultOramError, PrivateResultOramSignatureVerification,
+        private_result_oram_bucket_commitment, private_result_oram_merkle_root_for_commitments,
+        sign_private_result_oram_commit, sign_private_result_oram_manifest,
+        verify_private_result_oram_merkle_proof,
     };
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use tempfile::TempDir;
@@ -1272,6 +1285,80 @@ mod tests {
                 2 => 3,
                 _ => unreachable!("remainder modulo 3"),
             }
+    }
+
+    #[test]
+    fn private_result_oram_error_mapping_redacts_structured_values() {
+        let cases = [
+            (
+                private_result_oram_error(PrivateResultOramError::UnsupportedManifestVersion(
+                    65_000,
+                )),
+                vec!["65000"],
+            ),
+            (
+                private_result_oram_error(PrivateResultOramError::UnsupportedSignatureAlgorithm(
+                    "rsa-pss-777777".to_string(),
+                )),
+                vec!["rsa-pss-777777", "777777"],
+            ),
+            (
+                private_result_oram_error(PrivateResultOramError::UnsupportedBucketVersion(65_000)),
+                vec!["65000"],
+            ),
+            (
+                private_result_oram_error(
+                    PrivateResultOramError::UnsupportedBucketCiphertextVersion(77),
+                ),
+                vec!["77"],
+            ),
+            (
+                private_result_oram_error(PrivateResultOramError::UnsupportedPayloadBlockVersion(
+                    65_000,
+                )),
+                vec!["65000"],
+            ),
+            (
+                private_result_oram_error(
+                    PrivateResultOramError::UnsupportedClientStateSnapshotVersion(65_000),
+                ),
+                vec!["65000"],
+            ),
+            (
+                private_result_oram_error(
+                    PrivateResultOramError::UnsupportedClientStateCiphertextVersion(65_000),
+                ),
+                vec!["65000"],
+            ),
+            (
+                private_result_oram_error(PrivateResultOramError::BucketOutOfRange {
+                    bucket_id: 777_777,
+                    bucket_count: 888_888,
+                }),
+                vec!["777777", "888888"],
+            ),
+            (
+                private_result_oram_error(PrivateResultOramError::StaleBucketEpoch {
+                    bucket_id: 777_777,
+                    expected_epoch: 888_888,
+                    actual_epoch: 999_999,
+                }),
+                vec!["777777", "888888", "999999"],
+            ),
+            (
+                private_result_oram_error(PrivateResultOramError::DuplicateUpdatedBucket {
+                    bucket_id: 777_777,
+                }),
+                vec!["777777"],
+            ),
+        ];
+
+        for (err, needles) in cases {
+            let rendered = err.to_string();
+            for needle in needles {
+                assert!(!rendered.contains(needle), "{rendered}");
+            }
+        }
     }
 
     fn fixture_store(temp: &TempDir) -> PrivateResultOramStore {
