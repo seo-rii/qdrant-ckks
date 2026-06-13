@@ -54,7 +54,7 @@ pub const PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND: &str = "merkle_path_batch/v1";
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum PrivateHnswClientError {
-    #[error("private HNSW client encryption failed: {0}")]
+    #[error("private HNSW client encryption failed")]
     Encryption(#[from] EncryptionError),
     #[error("private HNSW node block has invalid neighbor shape")]
     InvalidNeighborShape,
@@ -3702,6 +3702,10 @@ mod tests {
     #[test]
     fn private_hnsw_client_error_display_does_not_reflect_structured_values() {
         let cases = [
+            PrivateHnswClientError::Encryption(EncryptionError::UnsupportedAlgorithm(
+                "aead-alg-sentinel".to_string(),
+            ))
+            .to_string(),
             PrivateHnswClientError::TooManyNeighbors {
                 actual: 77,
                 limit: 55,
@@ -3737,6 +3741,7 @@ mod tests {
         ];
 
         for rendered in cases {
+            assert!(!rendered.contains("aead-alg-sentinel"), "{rendered}");
             for leaked in [
                 "77", "55", "99", "88", "123", "4096", "2048", "66", "777", "44", "33", "456",
                 "42", "43", "22",

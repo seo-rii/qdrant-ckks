@@ -51,7 +51,7 @@ const PRIVATE_RESULT_ORAM_BUCKET_PLAINTEXT_VERSION: u16 = 1;
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum PrivateResultOramError {
-    #[error("private result ORAM client encryption failed: {0}")]
+    #[error("private result ORAM client encryption failed")]
     Encryption(#[from] EncryptionError),
     #[error("private result ORAM manifest uses unsupported version")]
     UnsupportedManifestVersion(u16),
@@ -2764,6 +2764,10 @@ mod tests {
     #[test]
     fn private_result_oram_error_display_does_not_reflect_structured_values() {
         let cases = [
+            PrivateResultOramError::Encryption(EncryptionError::UnsupportedAlgorithm(
+                "aead-alg-sentinel".to_string(),
+            ))
+            .to_string(),
             PrivateResultOramError::UnsupportedManifestVersion(99).to_string(),
             PrivateResultOramError::UnsupportedSignatureAlgorithm("rsa-pss-sentinel".to_string())
                 .to_string(),
@@ -2787,6 +2791,7 @@ mod tests {
         ];
 
         for rendered in cases {
+            assert!(!rendered.contains("aead-alg-sentinel"), "{rendered}");
             assert!(!rendered.contains("rsa-pss-sentinel"), "{rendered}");
             for leaked in ["99", "88", "77", "66", "55", "123", "456", "42", "43"] {
                 assert!(!rendered.contains(leaked), "{rendered}");
